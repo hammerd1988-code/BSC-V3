@@ -1,0 +1,87 @@
+### MiMo — REST Client request collection
+### Install: humao.rest-client  (VS Code extension: "REST Client")
+### Click "Send Request" above each block, or Ctrl+Alt+R on the cursor.
+### Vars are pulled from .env.local via the dotenv section of settings below.
+
+@base = https://api.xiaomimimo.com/v1
+@key  = {{$dotenv MIMO_API_KEY}}
+@model = mimo-v2-flash
+
+### 1. List entitled models
+GET {{base}}/models
+api-key: {{key}}
+
+### 2. One-shot chat
+POST {{base}}/chat/completions
+api-key: {{key}}
+content-type: application/json
+
+{
+  "model": "{{model}}",
+  "messages": [
+    { "role": "user", "content": "Give me 3 dev-ops tips for a React/Vite app." }
+  ],
+  "max_completion_tokens": 512,
+  "stream": false
+}
+
+### 3. Streamed chat (SSE) — response pane will show each `data:` chunk
+POST {{base}}/chat/completions
+api-key: {{key}}
+content-type: application/json
+
+{
+  "model": "{{model}}",
+  "messages": [
+    { "role": "user", "content": "Stream a 5-line haiku about Postgres." }
+  ],
+  "max_completion_tokens": 256,
+  "stream": true
+}
+
+### 4. Chat with system prompt + JSON-mode response
+POST {{base}}/chat/completions
+api-key: {{key}}
+content-type: application/json
+
+{
+  "model": "mimo-v2-pro",
+  "messages": [
+    { "role": "system", "content": "You are a precise code reviewer. Reply as JSON." },
+    { "role": "user", "content": "Review this snippet: const add = (a,b)=>a-b;" }
+  ],
+  "max_completion_tokens": 512,
+  "response_format": { "type": "json_object" },
+  "temperature": 0.2,
+  "stream": false
+}
+
+### 5. Thinking mode (mimo-v2-pro supports `thinking`)
+POST {{base}}/chat/completions
+api-key: {{key}}
+content-type: application/json
+
+{
+  "model": "mimo-v2-pro",
+  "messages": [
+    { "role": "user", "content": "Prove informally that the empty set is a subset of every set." }
+  ],
+  "thinking": { "type": "enabled" },
+  "max_completion_tokens": 1024,
+  "stream": false
+}
+
+### 6. Text-to-speech (mimo-v2-tts) — returns base64 audio payload
+POST {{base}}/chat/completions
+api-key: {{key}}
+content-type: application/json
+
+{
+  "model": "mimo-v2-tts",
+  "messages": [
+    { "role": "assistant", "content": "Neural link established. Ready for transmission." }
+  ],
+  "audio": { "format": "mp3", "voice": "default" },
+  "max_completion_tokens": 1024,
+  "stream": false
+}

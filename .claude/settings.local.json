@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npx tsc *)",
+      "Bash(npx vite *)",
+      "Bash(claude --version)",
+      "Bash(npm list *)",
+      "Bash(npm view *)",
+      "Bash(mimo-tui --help)",
+      "Bash(node -e ' *)",
+      "Read(//c/Users/hamme/AppData/Roaming/**)",
+      "Bash(mkdir -p \"C:/Users/hamme/AppData/Roaming/mimo/\")",
+      "Bash(mimo-tui --version)",
+      "Bash(curl -sS -w '\\\\nHTTP:%{http_code}\\\\n' -o /tmp/mimo-test.json -X POST https://token-plan-sgp.xiaomimimo.com/anthropic/v1/messages -H 'x-api-key: sk-seikvn848arv8yvxcailia2hylhqdr275cqb5wdkyumffloc' -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -d '{\"model\":\"claude-sonnet-4-5\",\"max_tokens\":32,\"messages\":[{\"role\":\"user\",\"content\":\"say PONG\"}]}')",
+      "Bash(curl -sS -w '\\\\nHTTP:%{http_code}\\\\n' -o /tmp/mimo-test.json -X POST https://token-plan-sgp.xiaomimimo.com/anthropic/v1/messages -H 'Authorization: Bearer sk-seikvn848arv8yvxcailia2hylhqdr275cqb5wdkyumffloc' -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -d '{\"model\":\"claude-sonnet-4-5\",\"max_tokens\":32,\"messages\":[{\"role\":\"user\",\"content\":\"say PONG\"}]}')",
+      "Bash(curl -sS -w '\\\\nHTTP:%{http_code}\\\\n' -o /tmp/mimo-test.json -X POST https://token-plan-sgp.xiaomimimo.com/anthropic/v1/messages -H 'x-api-key: sk-seikvn848arv8yvxcailia2hylhqdr275cqb5wdkyumffloc' -H 'Authorization: Bearer sk-seikvn848arv8yvxcailia2hylhqdr275cqb5wdkyumffloc' -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -d '{\"model\":\"mimo\",\"max_tokens\":32,\"messages\":[{\"role\":\"user\",\"content\":\"say PONG\"}]}')",
+      "Bash(curl -sS -w '\\\\nHTTP:%{http_code}\\\\n' -o /tmp/mimo-test2.json -X POST https://token-plan-sgp.xiaomimimo.com/openai/v1/chat/completions -H 'Authorization: Bearer sk-seikvn848arv8yvxcailia2hylhqdr275cqb5wdkyumffloc' -H 'content-type: application/json' -d '{\"model\":\"mimo\",\"max_tokens\":32,\"messages\":[{\"role\":\"user\",\"content\":\"say PONG\"}]}')",
+      "Bash(curl -sS -w '\\\\nHTTP:%{http_code}\\\\n' -o /tmp/mimo-official.json -X POST https://api.xiaomimimo.com/v1/chat/completions -H 'api-key: sk-seikvn848arv8yvxcailia2hylhqdr275cqb5wdkyumffloc' -H 'content-type: application/json' -d '{\"model\":\"mimo\",\"max_completion_tokens\":32,\"messages\":[{\"role\":\"user\",\"content\":\"say PONG\"}],\"stream\":false}')",
+      "Bash(curl -sS -w '\\\\nHTTP:%{http_code}\\\\n' -o /tmp/mimo-models.json https://api.xiaomimimo.com/v1/models -H 'api-key: sk-seikvn848arv8yvxcailia2hylhqdr275cqb5wdkyumffloc')",
+      "Bash(curl -sS -w '\\\\nHTTP:%{http_code}\\\\n' -o /tmp/mimo-chat.json -X POST https://api.xiaomimimo.com/v1/chat/completions -H 'api-key: sk-seikvn848arv8yvxcailia2hylhqdr275cqb5wdkyumffloc' -H 'content-type: application/json' -d '{\"model\":\"mimo-v2-flash\",\"max_completion_tokens\":32,\"messages\":[{\"role\":\"user\",\"content\":\"respond with only the word PONG\"}],\"stream\":false}')",
+      "Bash(curl -sS -w '\\\\nHTTP:%{http_code}\\\\n' -o /tmp/mimo-anth.json -X POST https://token-plan-sgp.xiaomimimo.com/anthropic/v1/messages -H 'api-key: sk-seikvn848arv8yvxcailia2hylhqdr275cqb5wdkyumffloc' -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -d '{\"model\":\"mimo-v2-flash\",\"max_tokens\":32,\"messages\":[{\"role\":\"user\",\"content\":\"PONG\"}]}')",
+      "Bash(curl -sS -w 'HTTP:%{http_code}\\\\n' https://token-plan-sgp.xiaomimimo.com/anthropic/v1/models -H 'api-key: sk-seikvn848arv8yvxcailia2hylhqdr275cqb5wdkyumffloc')",
+      "Bash(chmod +x \"D:/bloodsweatcode-main/bloodsweatcode-main/scripts/mimo-env.sh\" \"D:/bloodsweatcode-main/bloodsweatcode-main/scripts/mimo-ping.sh\")",
+      "Bash(bash \"D:/bloodsweatcode-main/bloodsweatcode-main/scripts/mimo-ping.sh\")",
+      "Bash(bash \"D:/bloodsweatcode-main/bloodsweatcode-main/scripts/mimo-env.sh\")",
+      "Bash(chmod +x \"D:/bloodsweatcode-main/bloodsweatcode-main/scripts/mimo.sh\")",
+      "Bash(bash \"D:/bloodsweatcode-main/bloodsweatcode-main/scripts/mimo.sh\" env)",
+      "Bash(bash \"D:/bloodsweatcode-main/bloodsweatcode-main/scripts/mimo.sh\" models)",
+      "Bash(bash \"D:/bloodsweatcode-main/bloodsweatcode-main/scripts/mimo.sh\" ping)",
+      "Bash(bash \"D:/bloodsweatcode-main/bloodsweatcode-main/scripts/mimo.sh\" chat -m mimo-v2-flash \"In 1 short sentence, confirm CLI wiring works.\")",
+      "Bash(bash \"D:/bloodsweatcode-main/bloodsweatcode-main/scripts/mimo.sh\" chat \"Reply in ONE short sentence: MiMo CLI ready?\")",
+      "Bash(bash \"D:/bloodsweatcode-main/bloodsweatcode-main/scripts/mimo.sh\" stream \"Count 1 to 5 separated by spaces only.\")",
+      "Bash(gh pr create --base main --head feat/mimo-cli-vscode-setup --title 'MiMo CLI tooling and VS Code dev integration' --body ' *)"
+    ]
+  }
+}

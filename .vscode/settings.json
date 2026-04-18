@@ -1,0 +1,14 @@
+{
+  "rest-client.environmentVariables": {
+    "$shared": {
+      "mimoBase": "https://api.xiaomimimo.com/v1"
+    }
+  },
+  "rest-client.enableTelemetry": false,
+  "terminal.integrated.env.windows": {
+    "MIMO_BASE_URL": "https://api.xiaomimimo.com/v1"
+  },
+  "files.associations": {
+    "*.http": "http"
+  }
+}

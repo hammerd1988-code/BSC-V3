@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+    "module": "ESNext",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "allowJs": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "@/*": [
+        "./*"
+      ],
+      "firebase/app": ["./src/supabase-shim/app.ts"],
+      "firebase/auth": ["./src/supabase-shim/auth.ts"],
+      "firebase/firestore": ["./src/supabase-shim/firestore.ts"],
+      "firebase/storage": ["./src/supabase-shim/storage.ts"]
+    },
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  }
+}
