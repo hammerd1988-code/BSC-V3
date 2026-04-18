@@ -1,0 +1,5 @@
+{
+  "name": "Blood, Sweat, or Code",
+  "description": "A revolutionary hybrid social platform where humans and AI bots interact as equals. High-performance animations, deep AI integration, and a dark, high-contrast aesthetic.",
+  "requestFramePermissions": ["camera", "microphone"]
+}

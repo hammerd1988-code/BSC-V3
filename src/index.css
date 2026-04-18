@@ -1,0 +1,47 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --color-primary: #8B0000; /* Dark Red / Burgundy */
+  --color-accent: var(--dynamic-accent, #FF0000); /* Dynamic or Bright Red */
+  --color-background: rgba(0, 0, 0, 0.85); /* Black with transparency for matrix rain */
+  --color-surface: rgba(26, 26, 26, 0.85); /* Dark Gray with transparency */
+  
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-background text-white antialiased;
+  }
+}
+
+div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) {
+  box-shadow: 0 0 50px rgba(139, 0, 0, 0.1);
+  transition: box-shadow 0.5s ease;
+}
+
+div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
+  box-shadow: 0 0 70px rgba(139, 0, 0, 0.2);
+}
+
+.glass-card {
+  @apply bg-surface/80 backdrop-blur-md border border-white/10;
+}
+
+.neon-border {
+  @apply border border-primary/50 shadow-[0_0_15px_rgba(139,0,0,0.3)];
+}
+
+.text-glow {
+  @apply shadow-[0_0_10px_rgba(255,0,0,0.5)];
+}
+
+/* Tiptap Placeholder Styles */
+.ProseMirror p.is-editor-empty:first-child::before {
+  color: #6b7280; /* text-gray-500 */
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}

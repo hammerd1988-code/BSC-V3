@@ -1,0 +1,75 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "mimo: ping",
+      "type": "shell",
+      "command": "bash ./scripts/mimo.sh ping",
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "clear": true, "reveal": "always" },
+      "detail": "Smoke-test the MiMo API. Expects PONG."
+    },
+    {
+      "label": "mimo: list models",
+      "type": "shell",
+      "command": "bash ./scripts/mimo.sh models",
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "clear": true, "reveal": "always" }
+    },
+    {
+      "label": "mimo: chat (prompt)",
+      "type": "shell",
+      "command": "bash ./scripts/mimo.sh chat -m ${input:mimoModel} \"${input:mimoPrompt}\"",
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "clear": true, "reveal": "always" },
+      "detail": "Prompt MiMo and print the reply inline."
+    },
+    {
+      "label": "mimo: stream (prompt)",
+      "type": "shell",
+      "command": "bash ./scripts/mimo.sh stream -m ${input:mimoModel} \"${input:mimoPrompt}\"",
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "clear": true, "reveal": "always" },
+      "detail": "Stream MiMo reply token-by-token (SSE)."
+    },
+    {
+      "label": "mimo: explain current file",
+      "type": "shell",
+      "command": "bash ./scripts/mimo.sh explain \"${relativeFile}\"",
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "clear": true, "reveal": "always" },
+      "detail": "Ask MiMo to explain the currently open editor file."
+    },
+    {
+      "label": "mimo: review current file",
+      "type": "shell",
+      "command": "bash ./scripts/mimo.sh review \"${relativeFile}\"",
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "clear": true, "reveal": "always" },
+      "detail": "Ask MiMo for a senior code review of the open file."
+    },
+    {
+      "label": "mimo: launch TUI",
+      "type": "shell",
+      "command": "mimo-tui",
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "clear": true, "reveal": "always" },
+      "detail": "Launch the @titenq/mimo-tui terminal UI."
+    }
+  ],
+  "inputs": [
+    {
+      "id": "mimoPrompt",
+      "type": "promptString",
+      "description": "Prompt for MiMo",
+      "default": "Summarize this repo in 3 bullet points."
+    },
+    {
+      "id": "mimoModel",
+      "type": "pickString",
+      "description": "MiMo model",
+      "default": "mimo-v2-flash",
+      "options": ["mimo-v2-flash", "mimo-v2-pro", "mimo-v2-omni", "mimo-v2-tts"]
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+import tailwindcss from '@tailwindcss/vite';
+import react from '@vitejs/plugin-react';
+import path from 'path';
+import {defineConfig, loadEnv} from 'vite';
+
+export default defineConfig(({mode}) => {
+  const env = loadEnv(mode, '.', '');
+  return {
+    plugins: [react(), tailwindcss()],
+    define: {
+      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+    },
+    // Expose Vercel/v0 integration env vars (NEXT_PUBLIC_*) to Vite's import.meta.env
+    envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
+    resolve: {
+      alias: {
+        '@': path.resolve(__dirname, '.'),
+        'firebase/app': path.resolve(__dirname, 'src/supabase-shim/app.ts'),
+        'firebase/auth': path.resolve(__dirname, 'src/supabase-shim/auth.ts'),
+        'firebase/firestore': path.resolve(__dirname, 'src/supabase-shim/firestore.ts'),
+        'firebase/storage': path.resolve(__dirname, 'src/supabase-shim/storage.ts'),
+      },
+    },
+    server: {
+      port: 3000,
+      strictPort: false,
+      hmr: process.env.DISABLE_HMR !== 'true',
+      // Proxy API + Socket.io to Express when running dev:full
+      proxy: {
+        '/api': 'http://localhost:3001',
+        '/socket.io': { target: 'http://localhost:3001', ws: true },
+      },
+    },
+  };
+});
