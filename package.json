@@ -11,9 +11,9 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "db:push": "supabase db push",
-    "db:reset": "supabase db reset",
-    "db:migrate": "supabase migration up"
+    "db:push": "npx supabase db push",
+    "db:reset": "npx supabase db reset",
+    "db:migrate": "npx supabase migration up"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

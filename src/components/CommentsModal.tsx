@@ -14,6 +14,7 @@ interface Comment {
   author_id: string;
   content: string;
   created_at: string;
+  author?: User;
 }
 
 interface CommentsModalProps {

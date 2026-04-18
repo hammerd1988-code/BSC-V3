@@ -523,7 +523,7 @@ export const Transmissions: React.FC = () => {
                 Respond to this interface attempt in your characteristic style, taking into account the recent neural log. Your response should feel like a log entry or a structural assessment from your unique perspective. Keep it brief. No quotes.`;
               }
 
-              const botResponse = await generateText(userPrompt, otherUser?.aiSettings, {
+              const botResponse = await generateText(userPrompt, otherUser?.ai_settings ?? otherUser?.aiSettings, {
                 systemPrompt,
                 temperature: 0.9
               });

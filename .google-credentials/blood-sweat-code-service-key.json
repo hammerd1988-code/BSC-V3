@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "gen-lang-client-0606401128",
+  "private_key_id": "b4c3a28d544ec3cbcae9c97a7b9c24e3974c8d63",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDi1Id2YNWT0g4V\nNef1mf6/w7sjvd7j2rtCHItWBhPrAosCtyU69jpZPSTvWx6/tKgIj3VxIJvm/ysJ\nQeZQbk8YyRQhBiheEzPh34UVsyZJj9Q3zUeVpbT2uaKyWj95oiAPyvLeTthCFaJF\nNUjk83YqvX6bIF4fxMu2bEL+Oa+2I5jsSIcZsqgpgDqcAOqWgvxV51V81zrzPgWF\nz8/YpzKest5KMWW0a5pnlzvBF/XVHFVn96Za8Y4+9Zt6ewwRdmj23mUGImIgPjHo\nF8uRfa0IRMie26sz/s7FZCU34yurl2UJ6f8ngzrbRAN0tdMxOUXYaXJMChq72008\n3FAFkRMdAgMBAAECggEAJBgWkCc7hSClPgnMZeAB0gj20+qoN5C8QHpjT6Z67+gB\nL8bt5TJ+OWoJ4Q6aV34LSQVu9jfupvTOp9P1LrJG4tZIXjLpJIMgu94CAuB1hLoe\n1lxTekQahjIm6gODWzsJqAmu2OIp9mYT4rhmZ4w4LvflWBDv+VUq51XV2Tdbtvsp\naMQrhz+/NFwoAoHNVgmM+MN9cWRd4RI5voFMxJItMm7fsFO0T+IfLfQHo1HoD+7E\n9/e1QtSkwu+H14DpvYZS6LxI+ljgWOBC2IJ+CFPNdbZ0zd/t+/k88NVhOpwg6mcM\njuLBqESa1pzxMTus8PXbFBpeRvm5aLHoyvlQvo4KEQKBgQD3Juh8w25wSSu6YUIx\nmY1UQWs4BCDPV5hNEq6NNsmJHQK+TLIEQacUMmmvpEOHOOLAwBIeOUqhCE1AZ+Sx\n7pFsOJAYJRNwqlY/UmPKRCviFeD+JXa8hVJmJiI6bSR1mfy93ElB7aJZql27cGSp\nM+UWoUFw4RjkV8kFnscN321a1QKBgQDq82BaLoQt9MtakZOIt9wEDdhyob/aOSuG\nR62+EDkonTFB37xRZEYNAwiDpa84U3fsTI+euh9rNGqlsrI1TasBmjpGrW/wt8pf\nuzd1jdYDnaO2urksM8e4doyBS/Ub9HdkAQEEC/qzn9Z9SC79H+Ki3NUyBt8vSUTy\nhjtdLfzrKQKBgBL3HF3+jSn2o3Fg5zhxJQQzJOwefPoMKba4WUaizqJD5KL/taVX\n+F83Yx7ERx5IQjYyRvGkydJDldH8ZvM0cFpSmNQRfEVn/MhNJTUvOALYVPSLoWnj\n/Sezg2riVyrjDx7umXyCpLOmvByXClJllg2/gAsOat+S0O0qevHYlEalAoGAFtyR\nrpTCJdqhAvIRYgdJ8FcMjbLxgSF4+7rzy/+2IB6TkW5c26qfKlr2NCEmGJv+mk6k\n1vQTZJIYIoFt18Pz9Nb1/rSXpNutZH1KGzUu8vEe4gPvSr7LG0blyxsCAbNa/q8e\nUy97OIlADLa+Y8D7g49ra0/B3c8KV3L6ScnUx2kCgYEAibipMdTbvjHASUopK7Nk\nS3ja0Ibys5HxK1gUXGTGtHr7aLcJdNLxA8Y/ry2pZLbvqWiFMmpKrtZf+hWH5rsQ\nUbGQnE0npdBo7eOCzSSrrg4i23fIj9ahBK467mgaYjJ1jc2AOf/cuPFKdp/1FfbH\nfdQKIze3C4gf2mhiejHmjEw=\n-----END PRIVATE KEY-----\n",
+  "client_email": "blood-sweat-code-service@gen-lang-client-0606401128.iam.gserviceaccount.com",
+  "client_id": "112710186397497340717",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/blood-sweat-code-service%40gen-lang-client-0606401128.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

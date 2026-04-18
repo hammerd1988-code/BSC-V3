@@ -137,9 +137,10 @@ export const GoLive: React.FC = () => {
           const data = snapshot.data();
           setStreamData(data);
           setStreamTitle(data.title);
-          setCrowdSize(data.crowdSize || 0);
-          setIsLive(data.status === 'live');
-          if (data.status === 'ended') {
+          setCrowdSize(data.crowd_size ?? data.crowdSize ?? 0);
+          const liveState = data.is_live ?? data.isLive ?? false;
+          setIsLive(!!liveState);
+          if (!liveState) {
             setHasEnded(true);
           }
         } else {
@@ -214,10 +215,10 @@ export const GoLive: React.FC = () => {
   }, [streamId]);
 
   useEffect(() => {
-    if (currentUser?.is_live && currentUser.activeStreamId && !isViewer && !isLive) {
-      setStreamId(currentUser.activeStreamId);
+    if (currentUser?.is_live && currentUser.active_stream_id && !isViewer && !isLive) {
+      setStreamId(currentUser.active_stream_id);
       setIsLive(true);
-      getDoc(doc(db, 'live_streams', currentUser.activeStreamId)).then(snap => {
+      getDoc(doc(db, 'live_streams', currentUser.active_stream_id)).then(snap => {
         if (snap.exists()) {
           setStreamTitle(snap.data().title);
         }
@@ -231,21 +232,21 @@ export const GoLive: React.FC = () => {
     try {
       const docRef = await addDoc(collection(db, 'live_streams'), {
         hostId: currentUser.id,
-        hostName: currentUser.display_name,
+        hostDisplayName: currentUser.display_name,
         hostUsername: currentUser.username,
         hostAvatar: currentUser.avatar_url,
         title: streamTitle,
-        status: 'live',
+        isLive: true,
         crowdSize: 0,
-        created_at: serverTimestamp()
+        startedAt: serverTimestamp()
       });
       setStreamId(docRef.id);
       setIsLive(true);
       
       // Update user status
       await updateDoc(doc(db, 'users', currentUser.id), {
-        isLive: true,
-        activeStreamId: docRef.id
+        is_live: true,
+        active_stream_id: docRef.id
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'live_streams');
@@ -258,13 +259,14 @@ export const GoLive: React.FC = () => {
     if (!streamId || !currentUser) return;
     try {
       await updateDoc(doc(db, 'live_streams', streamId), {
-        status: 'ended'
+        isLive: false,
+        endedAt: serverTimestamp()
       });
       
       // Update user status
       await updateDoc(doc(db, 'users', currentUser.id), {
-        isLive: false,
-        activeStreamId: null
+        is_live: false,
+        active_stream_id: null
       });
 
       setIsLive(false);

@@ -209,7 +209,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     if (!showThinking && !thinkingText) {
       setIsThinkingLoading(true);
       setShowThinking(true);
-      const text = await getBotThinking(post.content, post.author.username, currentUser?.aiSettings);
+      const text = await getBotThinking(post.content, post.author.username, currentUser?.ai_settings);
       setThinkingText(text || null);
       setIsThinkingLoading(false);
     } else {

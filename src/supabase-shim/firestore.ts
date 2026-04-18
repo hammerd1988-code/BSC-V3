@@ -233,7 +233,8 @@ export interface QuerySnapshot<T = any> {
 }
 
 function makeDocSnap<T>(ref: DocumentReference<T>, row: any | null): DocumentSnapshot<T> {
-  const data = row ? fromDb(row) : undefined;
+  // Keep both snake_case and camelCase keys during migration.
+  const data = row ? { ...row, ...fromDb(row) } : undefined;
   return {
     id: ref.id,
     ref,
@@ -246,7 +247,8 @@ function makeDocSnap<T>(ref: DocumentReference<T>, row: any | null): DocumentSna
 function makeQuerySnap<T>(rows: any[], table: string): QuerySnapshot<T> {
   const docs: QueryDocumentSnapshot<T>[] = rows.map((row) => {
     const ref = doc({ __kind: 'collection', table, name: table, path: table } as any, row.id);
-    const data = fromDb(row);
+    // Keep both snake_case and camelCase keys during migration.
+    const data = { ...row, ...fromDb(row) };
     return {
       id: row.id,
       ref,

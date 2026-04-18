@@ -360,8 +360,8 @@ export const Feed: React.FC = () => {
     if (!currentUser) return;
     const q = query(
       collection(db, 'live_streams'), 
-      where('status', '==', 'live'),
-      orderBy('createdAt', 'desc'),
+      where('isLive', '==', true),
+      orderBy('startedAt', 'desc'),
       limit(10)
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {

@@ -26,16 +26,16 @@ export interface User {
   avatar_url?: string | null;
   bio?: string | null;
   type: 'human' | 'bot';
-  role: 'user' | 'admin' | 'moderator';
-  followers_count: number;
-  following_count: number;
-  reputation_score: number;
-  cred_balance: number;
-  is_online: boolean;
+  role?: 'user' | 'admin' | 'moderator';
+  followers_count?: number;
+  following_count?: number;
+  reputation_score?: number;
+  cred_balance?: number;
+  is_online?: boolean;
   last_seen?: string | null;
-  is_live: boolean;
-  created_at: string;
-  updated_at: string;
+  is_live?: boolean;
+  created_at?: string;
+  updated_at?: string;
 
   // Optional UI/feature fields (may not be persisted to DB)
   cover_url?: string | null;
@@ -51,6 +51,22 @@ export interface User {
   friends?: string[];
   ai_settings?: AiSettings | null;
   status_message?: string;
+
+  // camelCase compatibility aliases during migration
+  displayName?: string;
+  avatarUrl?: string | null;
+  coverUrl?: string | null;
+  customAccent?: string | null;
+  sponsoredEntity?: SponsoredEntity | null;
+  activeStreamId?: string | null;
+  blockedUsers?: string[];
+  aiSettings?: AiSettings | null;
+  followersCount?: number;
+  followingCount?: number;
+  reputationScore?: number;
+  credBalance?: number;
+  isLive?: boolean;
+  isOnline?: boolean;
 }
 
 export interface Post {
@@ -72,6 +88,21 @@ export interface Post {
   // Optional joined/denormalized data (populated client-side)
   author?: User;
   is_liked?: boolean;
+
+  // camelCase / legacy aliases used in some UI paths
+  authorId?: string;
+  mediaUrl?: string | null;
+  mediaType?: 'image' | 'video' | null;
+  commentsCount?: number;
+  sharesCount?: number;
+  isBoosted?: boolean;
+  neuralTags?: string[];
+  lastCommentAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  likes_count?: number;
+  isLiked?: boolean;
+  likesCount?: number;
 }
 
 export interface Comment {
@@ -93,18 +124,27 @@ export interface PostLike {
 
 export interface Transmission {
   id: string;
-  participant_ids: string[];
+  participant_ids: any[];
   last_transmit?: any;
   unread_counts: Record<string, number>;
-  typing_status: Record<string, boolean>;
-  created_at: string;
-  updated_at: string;
+  typing_status?: Record<string, boolean>;
+  created_at?: string;
+  updated_at?: string;
+
+  // camelCase compatibility aliases during migration
+  participantIds?: any[];
+  lastTransmit?: any;
+  unreadCounts?: Record<string, number>;
+  typingStatus?: Record<string, boolean>;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface Transmit {
   id: string;
   transmission_id: string;
   sender_id: string;
+  receiver_id?: string;
   content: string;
   type: 'text' | 'media' | 'call';
   media_url?: string | null;
@@ -113,6 +153,17 @@ export interface Transmit {
   burn_duration?: number | null;
   expires_at?: string | null;
   created_at: string;
+
+  // camelCase aliases
+  transmissionId?: string;
+  senderId?: string;
+  receiverId?: string;
+  mediaUrl?: string | null;
+  mediaType?: 'image' | 'video' | null;
+  readAt?: string | null;
+  burnDuration?: number | null;
+  expiresAt?: string | null;
+  createdAt?: string;
 }
 
 export interface Stream {
@@ -200,12 +251,24 @@ export type BountyCategory =
 
 export interface LiveStream {
   id: string;
-  hostId: string;
-  hostName: string;
-  hostUsername: string;
-  hostAvatar: string;
-  title: string;
-  status: 'live' | 'ended';
-  crowdSize: number;
-  createdAt: string;
+  host_id?: string;
+  host_display_name?: string;
+  host_username?: string;
+  host_avatar?: string;
+  title?: string;
+  is_live?: boolean;
+  crowd_size?: number;
+  started_at?: string;
+  ended_at?: string | null;
+
+  // camelCase compatibility aliases during migration
+  hostId?: string;
+  hostName?: string;
+  hostUsername?: string;
+  hostAvatar?: string;
+  status?: 'live' | 'ended';
+  crowdSize?: number;
+  createdAt?: string;
+  startedAt?: string;
+  endedAt?: string | null;
 }

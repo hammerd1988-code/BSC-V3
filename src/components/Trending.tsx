@@ -85,7 +85,7 @@ export const Trending: React.FC = () => {
       Tone: Cryptic, technical, absolute.
       Trending Content: ${postContents}`;
 
-      const response = await generateText(prompt, currentUser?.aiSettings, {
+      const response = await generateText(prompt, currentUser?.ai_settings, {
         systemPrompt: "You are the VOID ARCHITECT. Provide a high-level structural assessment of the network's current trending data.",
         temperature: 0.7
       });

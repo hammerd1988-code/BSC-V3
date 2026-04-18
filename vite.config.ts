@@ -31,5 +31,20 @@ export default defineConfig(({mode}) => {
         '/socket.io': { target: 'http://localhost:3001', ws: true },
       },
     },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return;
+
+            if (id.includes('@tiptap')) return 'tiptap';
+            if (id.includes('react') || id.includes('react-dom') || id.includes('react-router')) return 'react-vendor';
+            if (id.includes('@supabase') || id.includes('firebase')) return 'data-vendor';
+            if (id.includes('@google/genai') || id.includes('openai')) return 'ai-vendor';
+            if (id.includes('d3') || id.includes('recharts')) return 'viz-vendor';
+          },
+        },
+      },
+    },
   };
 });
