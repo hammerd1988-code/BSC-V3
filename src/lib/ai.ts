@@ -16,7 +16,11 @@ export async function generateText(
   const provider = settings?.provider || 'gemini';
 
   if (provider === 'gemini') {
-    const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+    const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
+    if (!geminiApiKey) {
+      throw new Error('Missing VITE_GEMINI_API_KEY for Gemini client usage.');
+    }
+    const genAI = new GoogleGenAI({ apiKey: geminiApiKey });
     const modelName = settings?.model || "gemini-3-flash-preview";
     console.log("Using Gemini model:", modelName);
     

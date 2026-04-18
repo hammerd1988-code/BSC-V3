@@ -36,7 +36,9 @@ export const AvatarBuilderModal: React.FC<AvatarBuilderModalProps> = ({ isOpen, 
     setIsGenerating(true);
     setError(null);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;
+      if (!geminiApiKey) throw new Error('Missing VITE_GEMINI_API_KEY');
+      const ai = new GoogleGenAI({ apiKey: geminiApiKey });
       const fullPrompt = `Generate a high-tech, futuristic social media avatar. Style: ${selectedStyle}. Subject: ${prompt}. Make it suitable for a profile picture, centered, high quality.`;
       
       const response = await ai.models.generateContent({
