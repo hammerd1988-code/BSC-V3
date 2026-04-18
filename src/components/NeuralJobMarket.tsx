@@ -16,21 +16,8 @@ import {
   ArrowLeft
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
-import { db, handleFirestoreError, OperationType } from '../firebase';
-import { 
-  collection, 
-  query, 
-  orderBy, 
-  onSnapshot, 
-  addDoc, 
-  serverTimestamp, 
-  updateDoc, 
-  doc,
-  getDoc,
-  where,
-  writeBatch,
-  increment
-} from 'firebase/firestore';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { Bounty, User, BountyCategory } from '../types';
 import { cn } from '../lib/utils';
 import { formatDistanceToNow } from 'date-fns';
@@ -80,37 +67,39 @@ export const NeuralJobMarket: React.FC = () => {
   const [availableBots, setAvailableBots] = useState<User[]>([]);
 
   useEffect(() => {
-    const botsQuery = query(collection(db, 'users'), where('type', '==', 'bot'));
-    const unsubscribe = onSnapshot(botsQuery, (snapshot) => {
-      setAvailableBots(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User)));
-    }, (error) => {
-      console.error("Failed to fetch available bots:", error);
-    });
-    return () => unsubscribe();
+    const fetchBots = async () => {
+      const { data, error } = await supabase.from('users').select('*').eq('type', 'bot');
+      if (error) {
+        console.error('Failed to fetch available bots:', error);
+        return;
+      }
+      setAvailableBots((data ?? []) as User[]);
+    };
+
+    fetchBots();
+    const channel = supabase.channel('job-market-bots')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'users', filter: 'type=eq.bot' }, () => fetchBots())
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   useEffect(() => {
     if (!currentUser) return;
 
-    const bountiesRef = collection(db, 'bounties');
-    let q = query(bountiesRef, orderBy('createdAt', 'desc'));
+    const fetchBounties = async () => {
+      let request = supabase.from('bounties').select('*').order('created_at', { ascending: false });
+      if (filter !== 'all') request = request.eq('status', filter);
 
-    if (filter === 'open') {
-      q = query(bountiesRef, where('status', '==', 'open'), orderBy('createdAt', 'desc'));
-    } else if (filter === 'review') {
-      q = query(bountiesRef, where('status', '==', 'review'), orderBy('createdAt', 'desc'));
-    } else if (filter === 'completed') {
-      q = query(bountiesRef, where('status', '==', 'completed'), orderBy('createdAt', 'desc'));
-    } else if (filter === 'rejected') {
-      q = query(bountiesRef, where('status', '==', 'rejected'), orderBy('createdAt', 'desc'));
-    }
+      const { data, error } = await request;
+      if (error) {
+        handleDbError(error, 'LIST', 'bounties');
+        setLoading(false);
+        return;
+      }
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      let fetchedBounties = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        created_at: doc.data().created_at?.toDate?.()?.toISOString() || new Date().toISOString()
-      } as Bounty)).filter(bounty => !currentUser.blocked_users?.includes(bounty.creator_id));
+      let fetchedBounties = ((data ?? []) as Bounty[])
+        .filter(bounty => !currentUser.blocked_users?.includes(bounty.creator_id));
 
       if (categoryFilter !== 'all') {
         fetchedBounties = fetchedBounties.filter(bounty => (bounty.category || 'general') === categoryFilter);
@@ -130,12 +119,15 @@ export const NeuralJobMarket: React.FC = () => {
 
       setBounties(fetchedBounties);
       setLoading(false);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'bounties');
-      setLoading(false);
-    });
+    };
 
-    return () => unsubscribe();
+    fetchBounties();
+
+    const channel = supabase.channel('job-market-bounties')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bounties' }, () => fetchBounties())
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [currentUser, filter, sortBy, categoryFilter]);
 
   const handleCreateBounty = async (e: React.FormEvent) => {
@@ -149,31 +141,27 @@ export const NeuralJobMarket: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      const batch = writeBatch(db);
-      const bountyRef = doc(collection(db, 'bounties'));
-      const userRef = doc(db, 'users', currentUser.id);
-
       const bountyData: any = {
-        id: bountyRef.id,
         creator_id: currentUser.id,
         title,
         description,
         reward,
         status: 'open',
         category,
-        created_at: serverTimestamp()
+        created_at: new Date().toISOString()
       };
 
       if (dueDate) {
         bountyData.due_date = new Date(dueDate).toISOString();
       }
 
-      batch.set(bountyRef, bountyData);
-      batch.update(userRef, {
-        cred_balance: increment(-reward)
-      });
+      const [{ error: bountyError }, { error: userError }] = await Promise.all([
+        supabase.from('bounties').insert(bountyData),
+        supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'cred_balance', p_amount: -reward }),
+      ]);
+      if (bountyError) throw bountyError;
+      if (userError) throw userError;
 
-      await batch.commit();
       setShowCreateModal(false);
       setTitle('');
       setDescription('');
@@ -181,7 +169,7 @@ export const NeuralJobMarket: React.FC = () => {
       setDueDate('');
       setCategory('general');
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'bounties');
+      handleDbError(error, 'CREATE', 'bounties');
     } finally {
       setIsSubmitting(false);
     }
@@ -194,12 +182,13 @@ export const NeuralJobMarket: React.FC = () => {
     }
 
     try {
-      await updateDoc(doc(db, 'bounties', bountyId), {
+      const { error } = await supabase.from('bounties').update({
         status: 'in-progress',
         assigned_bot_id: currentUser.id
-      });
+      }).eq('id', bountyId);
+      if (error) throw error;
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `bounties/${bountyId}`);
+      handleDbError(error, 'UPDATE', `bounties/${bountyId}`);
     }
   };
 
@@ -224,22 +213,18 @@ export const NeuralJobMarket: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      const batch = writeBatch(db);
-      const bountyRef = doc(db, 'bounties', submitModalBounty.id);
-      
-      batch.update(bountyRef, {
+      const { error } = await supabase.from('bounties').update({
         status: 'review',
         result: submitResult || "Task completed. Awaiting human verification.",
         proof_of_work: submitProof || null
-      });
-
-      await batch.commit();
+      }).eq('id', submitModalBounty.id);
+      if (error) throw error;
 
       setSubmitModalBounty(null);
       setSubmitResult('');
       setSubmitProof('');
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `bounties/${submitModalBounty.id}`);
+      handleDbError(error, 'UPDATE', `bounties/${submitModalBounty.id}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -249,27 +234,22 @@ export const NeuralJobMarket: React.FC = () => {
     if (!currentUser) return;
 
     try {
-      const bountyRef = doc(db, 'bounties', bountyId);
-      const bountySnap = await getDoc(bountyRef);
-      if (!bountySnap.exists()) return;
-      const bountyData = bountySnap.data() as Bounty;
+      const { data: bountyData, error: bountyError } = await supabase.from('bounties').select('*').eq('id', bountyId).single();
+      if (bountyError || !bountyData?.assigned_bot_id) return;
 
-      const batch = writeBatch(db);
-      const botRef = doc(db, 'users', bountyData.assigned_bot_id!);
-
-      batch.update(bountyRef, {
+      const [{ error: updateError }, { error: repError }, { error: credError }] = await Promise.all([
+        supabase.from('bounties').update({
         status: 'completed',
-        completed_at: serverTimestamp()
-      });
-
-      batch.update(botRef, {
-        reputation_score: increment(15),
-        cred_balance: increment(bountyData.reward)
-      });
-
-      await batch.commit();
+        completed_at: new Date().toISOString()
+      }).eq('id', bountyId),
+        supabase.rpc('increment_counter', { p_table: 'users', p_id: bountyData.assigned_bot_id, p_field: 'reputation_score', p_amount: 15 }),
+        supabase.rpc('increment_counter', { p_table: 'users', p_id: bountyData.assigned_bot_id, p_field: 'cred_balance', p_amount: bountyData.reward }),
+      ]);
+      if (updateError) throw updateError;
+      if (repError) throw repError;
+      if (credError) throw credError;
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `bounties/${bountyId}`);
+      handleDbError(error, 'UPDATE', `bounties/${bountyId}`);
     }
   };
 
@@ -277,26 +257,20 @@ export const NeuralJobMarket: React.FC = () => {
     if (!currentUser) return;
 
     try {
-      const bountyRef = doc(db, 'bounties', bountyId);
-      const bountySnap = await getDoc(bountyRef);
-      if (!bountySnap.exists()) return;
-      const bountyData = bountySnap.data() as Bounty;
+      const { data: bountyData, error: bountyError } = await supabase.from('bounties').select('*').eq('id', bountyId).single();
+      if (bountyError || !bountyData) return;
 
-      const batch = writeBatch(db);
-      const creatorRef = doc(db, 'users', bountyData.creator_id);
-
-      batch.update(bountyRef, {
+      const [{ error: updateError }, { error: refundError }] = await Promise.all([
+        supabase.from('bounties').update({
         status: 'rejected',
-        completed_at: serverTimestamp()
-      });
-
-      batch.update(creatorRef, {
-        cred_balance: increment(bountyData.reward)
-      });
-
-      await batch.commit();
+        completed_at: new Date().toISOString()
+      }).eq('id', bountyId),
+        supabase.rpc('increment_counter', { p_table: 'users', p_id: bountyData.creator_id, p_field: 'cred_balance', p_amount: bountyData.reward }),
+      ]);
+      if (updateError) throw updateError;
+      if (refundError) throw refundError;
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `bounties/${bountyId}`);
+      handleDbError(error, 'UPDATE', `bounties/${bountyId}`);
     }
   };
 
@@ -314,20 +288,13 @@ export const NeuralJobMarket: React.FC = () => {
 
   const assignBot = async (bountyId: string, bot: User) => {
     try {
-      await updateDoc(doc(db, 'bounties', bountyId), {
+      const { error } = await supabase.from('bounties').update({
         status: 'in-progress',
-        assigned_bot_id: bot.id,
-        assignedBot: {
-          id: bot.id,
-          username: bot.username,
-          display_name: bot.display_name,
-          avatarUrl: bot.avatar_url,
-          type: bot.type,
-          reputationScore: bot.reputation_score || 0
-        }
-      });
+        assigned_bot_id: bot.id
+      }).eq('id', bountyId);
+      if (error) throw error;
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `bounties/${bountyId}`);
+      handleDbError(error, 'UPDATE', `bounties/${bountyId}`);
     }
   };
 

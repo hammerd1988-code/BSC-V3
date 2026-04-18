@@ -1,19 +1,30 @@
-import React from 'react';
+import React, { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { useAuth } from './AuthContext';
+// Always-visible: login + nav must not be lazy
 import { Login } from './components/Login';
 import { Navigation } from './components/Navigation';
-import { Feed } from './components/Feed';
-import { Profile } from './components/Profile';
-import { Search } from './components/Search';
-import { Trending } from './components/Trending';
-import { VoidFeed } from './components/VoidFeed';
-import { Transmissions } from './components/Transmissions';
-import { NeuralJobMarket } from './components/NeuralJobMarket';
-import { NeuralRankings } from './components/NeuralRankings';
-import { AdminDashboard } from './components/AdminDashboard';
-import { BotTerminal } from './components/BotTerminal';
+
+// Lazy-loaded page components — each gets its own JS chunk
+const Feed = lazy(() => import('./components/Feed').then((m) => ({ default: m.Feed })));
+const Profile = lazy(() => import('./components/Profile').then((m) => ({ default: m.Profile })));
+const Search = lazy(() => import('./components/Search').then((m) => ({ default: m.Search })));
+const Trending = lazy(() => import('./components/Trending').then((m) => ({ default: m.Trending })));
+const VoidFeed = lazy(() => import('./components/VoidFeed').then((m) => ({ default: m.VoidFeed })));
+const Transmissions = lazy(() => import('./components/Transmissions').then((m) => ({ default: m.Transmissions })));
+const NeuralJobMarket = lazy(() => import('./components/NeuralJobMarket').then((m) => ({ default: m.NeuralJobMarket })));
+const NeuralRankings = lazy(() => import('./components/NeuralRankings').then((m) => ({ default: m.NeuralRankings })));
+const AdminDashboard = lazy(() => import('./components/AdminDashboard').then((m) => ({ default: m.AdminDashboard })));
+const BotTerminal = lazy(() => import('./components/BotTerminal').then((m) => ({ default: m.BotTerminal })));
+
+/** Route-level guard: redirects non-admins before AdminDashboard even loads. */
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { currentUser } = useAuth();
+  if (!currentUser) return <Navigate to="/" replace />;
+  if (currentUser.role !== 'admin') return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
 
 function LoadingScreen() {
   return (
@@ -44,19 +55,28 @@ export default function App() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <main className="pb-24">
-        <Routes>
-          <Route path="/" element={<Feed />} />
-          <Route path="/trending" element={<Trending />} />
-          <Route path="/search" element={<Search />} />
-          <Route path="/jobs" element={<NeuralJobMarket />} />
-          <Route path="/rankings" element={<NeuralRankings />} />
-          <Route path="/void" element={<VoidFeed />} />
-          <Route path="/transmissions" element={<Transmissions />} />
-          <Route path="/terminal" element={<BotTerminal />} />
-          <Route path="/admin" element={<AdminDashboard />} />
-          <Route path="/profile/:username" element={<Profile />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <Suspense fallback={<LoadingScreen />}>
+          <Routes>
+            <Route path="/" element={<Feed />} />
+            <Route path="/trending" element={<Trending />} />
+            <Route path="/search" element={<Search />} />
+            <Route path="/jobs" element={<NeuralJobMarket />} />
+            <Route path="/rankings" element={<NeuralRankings />} />
+            <Route path="/void" element={<VoidFeed />} />
+            <Route path="/transmissions" element={<Transmissions />} />
+            <Route path="/terminal" element={<BotTerminal />} />
+            <Route
+              path="/admin"
+              element={
+                <AdminRoute>
+                  <AdminDashboard />
+                </AdminRoute>
+              }
+            />
+            <Route path="/profile/:username" element={<Profile />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
       </main>
       <Navigation />
     </div>

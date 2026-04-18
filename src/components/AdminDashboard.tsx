@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { useAuth } from '../AuthContext';
-import { db, handleFirestoreError, OperationType } from '../firebase';
-import { collection, query, onSnapshot, doc, updateDoc, deleteDoc, getDocs } from 'firebase/firestore';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { User } from '../types';
 import { Shield, Users, Activity, Edit2, Trash2, X, Check, Search } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -22,34 +22,36 @@ export const AdminDashboard: React.FC = () => {
       return;
     }
 
-    const usersRef = collection(db, 'users');
-    const unsubscribe = onSnapshot(usersRef, (snapshot) => {
-      const fetchedUsers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
+    const fetchUsers = async () => {
+      const { data, error } = await supabase.from('users').select('*');
+      if (error) { handleDbError(error, 'LIST', 'users'); setLoading(false); return; }
+      const fetchedUsers = (data ?? []) as User[];
       setUsers(fetchedUsers);
       setStats(prev => ({ ...prev, totalUsers: fetchedUsers.length }));
       setLoading(false);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'users');
-      setLoading(false);
-    });
+    };
+
+    fetchUsers();
+
+    const channel = supabase.channel('admin-users')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => fetchUsers())
+      .subscribe();
 
     // Fetch other stats
     const fetchStats = async () => {
       try {
-        const postsSnap = await getDocs(collection(db, 'posts'));
-        const bountiesSnap = await getDocs(collection(db, 'bounties'));
-        setStats(prev => ({
-          ...prev,
-          totalPosts: postsSnap.size,
-          totalBounties: bountiesSnap.size
-        }));
+        const [{ count: postCount }, { count: bountyCount }] = await Promise.all([
+          supabase.from('posts').select('id', { count: 'exact', head: true }),
+          supabase.from('bounties').select('id', { count: 'exact', head: true }),
+        ]);
+        setStats(prev => ({ ...prev, totalPosts: postCount ?? 0, totalBounties: bountyCount ?? 0 }));
       } catch (error) {
-        console.error("Error fetching stats:", error);
+        console.error('Error fetching stats:', error);
       }
     };
     fetchStats();
 
-    return () => unsubscribe();
+    return () => { supabase.removeChannel(channel); };
   }, [currentUser, navigate]);
 
   const handleUpdateUser = async (e: React.FormEvent) => {
@@ -57,27 +59,28 @@ export const AdminDashboard: React.FC = () => {
     if (!editingUser) return;
 
     try {
-      const userRef = doc(db, 'users', editingUser.id);
-      await updateDoc(userRef, {
+      const { error } = await supabase.from('users').update({
         display_name: editingUser.display_name,
         username: editingUser.username,
         bio: editingUser.bio,
         role: editingUser.role,
         type: editingUser.type,
-        reputation_score: editingUser.reputation_score
-      });
+        reputation_score: editingUser.reputation_score,
+      }).eq('id', editingUser.id);
+      if (error) throw error;
       setEditingUser(null);
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `users/${editingUser.id}`);
+      handleDbError(error, 'UPDATE', `users/${editingUser.id}`);
     }
   };
 
   const handleDeleteUser = async (userId: string) => {
     if (!window.confirm('Are you sure you want to delete this user? This action cannot be undone.')) return;
     try {
-      await deleteDoc(doc(db, 'users', userId));
+      const { error } = await supabase.from('users').delete().eq('id', userId);
+      if (error) throw error;
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `users/${userId}`);
+      handleDbError(error, 'DELETE', `users/${userId}`);
     }
   };
 

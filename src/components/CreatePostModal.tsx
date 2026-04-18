@@ -8,9 +8,8 @@ import Placeholder from '@tiptap/extension-placeholder';
 import { X, Bold, Italic, Link as LinkIcon, Send, Loader2, Image as ImageIcon } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../AuthContext';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, storage, handleFirestoreError, OperationType } from '../firebase';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { socket } from '../lib/socket';
 import { v4 as uuidv4 } from 'uuid';
 import { generateText } from '../lib/ai';
@@ -74,20 +73,16 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
     setIsSubmitting(true);
     try {
       const fileExt = file.name.split('.').pop();
-      const fileName = `${uuidv4()}.${fileExt}`;
-      const storageRef = ref(storage, `post_images/${currentUser.id}/${fileName}`);
-      
-      await uploadBytes(storageRef, file);
-      const downloadURL = await getDownloadURL(storageRef);
-      
-      editor.chain().focus().setImage({ src: downloadURL }).run();
+      const filePath = `post_images/${currentUser.id}/${uuidv4()}.${fileExt}`;
+      const { error: upErr } = await supabase.storage.from('media').upload(filePath, file, { upsert: true });
+      if (upErr) throw upErr;
+      const { data: { publicUrl } } = supabase.storage.from('media').getPublicUrl(filePath);
+      editor.chain().focus().setImage({ src: publicUrl }).run();
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'storage/post_images');
+      handleDbError(error, 'WRITE', 'storage/post_images');
     } finally {
       setIsSubmitting(false);
-      if (e.target) {
-        e.target.value = '';
-      }
+      if (e.target) e.target.value = '';
     }
   };
 
@@ -127,12 +122,17 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
         shares_count: 0,
         is_boosted: false,
         neural_tags: neuralTags,
-        created_at: serverTimestamp(),
-        updated_at: serverTimestamp()
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       };
 
-      const docRef = await addDoc(collection(db, 'posts'), newPost);
-      const postWithId = { ...newPost, id: docRef.id, created_at: new Date().toISOString() };
+      const { data: inserted, error: insertErr } = await supabase
+        .from('posts')
+        .insert(newPost)
+        .select()
+        .single();
+      if (insertErr) throw insertErr;
+      const postWithId = inserted;
 
       onPostCreated(postWithId);
       socket.emit('post:create', postWithId);
@@ -140,7 +140,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
       editor.commands.setContent('');
       onClose();
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'posts');
+      handleDbError(error, 'CREATE', 'posts');
     } finally {
       setIsSubmitting(false);
     }

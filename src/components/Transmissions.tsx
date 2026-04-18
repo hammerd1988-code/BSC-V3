@@ -8,25 +8,8 @@ import { formatDistanceToNow, isSameDay } from 'date-fns';
 import { useAuth } from '../AuthContext';
 import { useCall } from '../CallContext';
 import { generateText } from '../lib/ai';
-import { db, handleFirestoreError, OperationType, storage } from '../firebase';
-import { 
-  collection, 
-  query, 
-  where, 
-  onSnapshot, 
-  addDoc, 
-  updateDoc, 
-  doc, 
-  serverTimestamp, 
-  orderBy, 
-  getDocs,
-  setDoc,
-  increment,
-  getDoc,
-  deleteDoc,
-  writeBatch
-} from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { NewTransmissionModal } from './NewTransmissionModal';
 import { CustomVideoPlayer } from './CustomVideoPlayer';
 import { v4 as uuidv4 } from 'uuid';
@@ -169,49 +152,46 @@ export const Transmissions: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
 
-    const q = query(
-      collection(db, 'transmissions'),
-      where('participantIds', 'array-contains', currentUser.id)
-    );
-
-    const unsubscribe = onSnapshot(q, async (snapshot) => {
+    const fetchTransmissions = async () => {
       try {
+        const { data, error } = await supabase
+          .from('transmissions')
+          .select('*')
+          .contains('participant_ids', [currentUser.id]);
+
+        if (error) throw error;
+
+        const transmissionRows = (data ?? []) as Transmission[];
         const otherUserIds = Array.from(new Set(
-          snapshot.docs.map(docSnap => {
-            const data = docSnap.data() as Transmission;
-            return data.participant_ids.find(id => id !== currentUser.id);
-          }).filter(Boolean) as string[]
+          transmissionRows.map(t => t.participant_ids?.find(id => id !== currentUser.id)).filter(Boolean) as string[]
         ));
 
-        // Fetch missing users in parallel
         const missingIds = otherUserIds.filter(id => !userCache.current[id]);
         if (missingIds.length > 0) {
-          const userDocs = await Promise.all(
+          const users = await Promise.all(
             missingIds.map(async (id) => {
-              // Check if it's a bot ID first
               if (id.startsWith('bot-')) {
-                const username = id.replace('bot-', '');
-                const botUser = getBotByUsername(username);
-                if (botUser) return { id, exists: () => true, data: () => botUser };
+                const botUser = getBotByUsername(id.replace('bot-', ''));
+                if (botUser) return { id, user: botUser };
               }
-              // Special case for void-architect-bot
               if (id === 'void-architect-bot') {
                 const botUser = getBotByUsername('void_architect');
-                if (botUser) return { id, exists: () => true, data: () => botUser };
+                if (botUser) return { id, user: botUser };
               }
-              return getDoc(doc(db, 'users', id));
+              const { data: user } = await supabase.from('users').select('*').eq('id', id).maybeSingle();
+              return { id, user: user as User | null };
             })
           );
-          userDocs.forEach((userDoc: any, index) => {
-            if (userDoc.exists()) {
-              userCache.current[userDoc.id] = userDoc.data() as User;
+
+          users.forEach(({ id, user }) => {
+            if (user) {
+              userCache.current[id] = user;
             } else {
-              // Cache a dummy user to prevent infinite fetching
-              userCache.current[missingIds[index]] = {
-                id: missingIds[index],
+              userCache.current[id] = {
+                id,
                 username: 'unknown',
                 display_name: 'Unknown User',
-                avatarUrl: `https://picsum.photos/seed/${missingIds[index]}/200`,
+                avatar_url: `https://picsum.photos/seed/${id}/200`,
                 bio: '',
                 type: 'human',
                 role: 'user',
@@ -222,29 +202,25 @@ export const Transmissions: React.FC = () => {
                 is_online: false,
                 is_live: false,
                 created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
-              };
+                updated_at: new Date().toISOString(),
+              } as User;
             }
           });
         }
 
-        const transmissionData = snapshot.docs.map(docSnap => {
-          const data = docSnap.data() as Transmission;
-          data.id = docSnap.id;
-          
-          const otherUserId = data.participant_ids.find(id => id !== currentUser.id);
-          if (otherUserId && userCache.current[otherUserId]) {
-            // Store participant user IDs separately - don't overwrite participant_ids array
-            (data as any).participant_users = [currentUser, userCache.current[otherUserId]];
-          }
-          
-          return data;
-        }).filter(t => {
-          const otherUserId = t.participant_ids.find(id => id !== currentUser.id);
-          return !otherUserId || !currentUser.blocked_users?.includes(otherUserId);
-        });
-        
-        // Sort by last transmit date
+        const transmissionData = transmissionRows
+          .map((row: any) => {
+            const otherUserId = row.participant_ids?.find((id: string) => id !== currentUser.id);
+            if (otherUserId && userCache.current[otherUserId]) {
+              row.participant_users = [currentUser, userCache.current[otherUserId]];
+            }
+            return row as Transmission;
+          })
+          .filter(t => {
+            const otherUserId = t.participant_ids?.find(id => id !== currentUser.id);
+            return !otherUserId || !currentUser.blocked_users?.includes(otherUserId);
+          });
+
         transmissionData.sort((a, b) => {
           const dateA = a.last_transmit?.created_at ? parseDate(a.last_transmit.created_at).getTime() : 0;
           const dateB = b.last_transmit?.created_at ? parseDate(b.last_transmit.created_at).getTime() : 0;
@@ -255,14 +231,16 @@ export const Transmissions: React.FC = () => {
         setLoading(false);
       } catch (error) {
         setLoading(false);
-        handleFirestoreError(error, OperationType.WRITE, 'transmissions');
+        handleDbError(error, 'LIST', 'transmissions');
       }
-    }, (error) => {
-      setLoading(false);
-      handleFirestoreError(error, OperationType.LIST, 'transmissions');
-    });
+    };
 
-    return () => unsubscribe();
+    fetchTransmissions();
+    const channel = supabase.channel(`transmissions-${currentUser.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transmissions' }, () => fetchTransmissions())
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [currentUser]);
 
   // Handle targetUserId from search params
@@ -272,54 +250,51 @@ export const Transmissions: React.FC = () => {
     const initTargetTransmission = async () => {
       hasInitializedTarget.current = true;
       try {
-          const existing = transmissions.find(t => t.participant_ids.includes(targetUserId));
-          if (existing) {
-            setActiveId(existing.id);
-          } else {
-            // Double check if it really doesn't exist (to avoid race conditions)
-            const q = query(
-              collection(db, 'transmissions'),
-              where('participant_ids', 'array-contains', currentUser.id)
-            );
-            const snap = await getDocs(q);
-            const realExisting = snap.docs.find(d => (d.data() as Transmission).participant_ids.includes(targetUserId));
-          
-          if (realExisting) {
-            setActiveId(realExisting.id);
-          } else {
-            // Fetch target user to ensure we have their data for the optimistic UI
-            if (!userCache.current[targetUserId]) {
-              if (targetUserId.startsWith('bot-')) {
-                const username = targetUserId.replace('bot-', '');
-                const botUser = getBotByUsername(username);
-                if (botUser) userCache.current[targetUserId] = botUser;
-              } else if (targetUserId === 'void-architect-bot') {
-                const botUser = getBotByUsername('void_architect');
-                if (botUser) userCache.current[targetUserId] = botUser;
-              } else {
-                const userDoc = await getDoc(doc(db, 'users', targetUserId));
-                if (userDoc.exists()) {
-                  userCache.current[targetUserId] = userDoc.data() as User;
-                }
-              }
-            }
+        const existing = transmissions.find(t => t.participant_ids.includes(targetUserId));
+        if (existing) {
+          setActiveId(existing.id);
+          return;
+        }
 
-            // Create new transmission
-            const newTransmissionRef = doc(collection(db, 'transmissions'));
-            const newTransmission: Transmission = {
-              id: newTransmissionRef.id,
-              participant_ids: [currentUser.id, targetUserId],
-              unread_counts: {
-                [currentUser.id]: 0,
-                [targetUserId]: 0
-              }
-            };
-            await setDoc(newTransmissionRef, newTransmission);
-            setActiveId(newTransmissionRef.id);
+        const { data: allMine, error: fetchError } = await supabase
+          .from('transmissions')
+          .select('*')
+          .contains('participant_ids', [currentUser.id]);
+        if (fetchError) throw fetchError;
+
+        const realExisting = (allMine ?? []).find((t: any) => t.participant_ids?.includes(targetUserId));
+        if (realExisting) {
+          setActiveId((realExisting as any).id);
+          return;
+        }
+
+        if (!userCache.current[targetUserId]) {
+          if (targetUserId.startsWith('bot-')) {
+            const botUser = getBotByUsername(targetUserId.replace('bot-', ''));
+            if (botUser) userCache.current[targetUserId] = botUser;
+          } else if (targetUserId === 'void-architect-bot') {
+            const botUser = getBotByUsername('void_architect');
+            if (botUser) userCache.current[targetUserId] = botUser;
+          } else {
+            const { data: user } = await supabase.from('users').select('*').eq('id', targetUserId).maybeSingle();
+            if (user) userCache.current[targetUserId] = user as User;
           }
         }
+
+        const newTransmission: Transmission = {
+          id: crypto.randomUUID(),
+          participant_ids: [currentUser.id, targetUserId],
+          unread_counts: {
+            [currentUser.id]: 0,
+            [targetUserId]: 0
+          }
+        };
+
+        const { error: createError } = await supabase.from('transmissions').insert(newTransmission);
+        if (createError) throw createError;
+        setActiveId(newTransmission.id);
       } catch (error) {
-        handleFirestoreError(error, OperationType.WRITE, 'transmissions');
+        handleDbError(error, 'CREATE', 'transmissions');
       }
     };
 
@@ -333,52 +308,54 @@ export const Transmissions: React.FC = () => {
       return;
     }
 
-    const q = query(
-      collection(db, 'transmissions', activeId, 'transmits'),
-      orderBy('created_at', 'asc')
-    );
+    const fetchTransmits = async () => {
+      const { data, error } = await supabase
+        .from('transmits')
+        .select('*')
+        .eq('transmission_id', activeId)
+        .order('created_at', { ascending: true });
 
-    const unsubscribe = onSnapshot(q, async (snapshot) => {
-      const transmitData: Transmit[] = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...(doc.data() as any)
-      } as Transmit));
+      if (error) {
+        handleDbError(error, 'LIST', 'transmits');
+        return;
+      }
+
+      const transmitData = (data ?? []) as Transmit[];
       setTransmits(transmitData);
-      
-      // Mark as read if we are the receiver
-      try {
-        const transmissionDoc = await getDoc(doc(db, 'transmissions', activeId));
-        if (transmissionDoc.exists()) {
-          const data = transmissionDoc.data() as Transmission;
-          
-          // Mark unread count as 0
-          if (data.unread_counts?.[currentUser.id] > 0) {
-            await updateDoc(doc(db, 'transmissions', activeId), {
-              [`unread_counts.${currentUser.id}`]: 0
-            });
-          }
 
-          // Mark individual messages as read
-          const unreadTransmits = transmitData.filter(t => t.receiver_id === currentUser.id && !t.read_at);
-          if (unreadTransmits.length > 0) {
-            const batch = writeBatch(db);
-            const now = new Date().toISOString();
-            unreadTransmits.forEach(t => {
-              batch.update(doc(db, 'transmissions', activeId, 'transmits', t.id), {
-                readAt: now
-              });
-            });
-            await batch.commit();
-          }
+      try {
+        const { data: transmissionRow } = await supabase
+          .from('transmissions')
+          .select('unread_counts')
+          .eq('id', activeId)
+          .maybeSingle();
+
+        if (transmissionRow?.unread_counts?.[currentUser.id] > 0) {
+          const unreadCounts = { ...(transmissionRow.unread_counts || {}), [currentUser.id]: 0 };
+          await supabase.from('transmissions').update({ unread_counts: unreadCounts }).eq('id', activeId);
+        }
+
+        const unreadIds = transmitData
+          .filter(t => t.receiver_id === currentUser.id && !t.read_at)
+          .map(t => t.id);
+
+        if (unreadIds.length > 0) {
+          await supabase
+            .from('transmits')
+            .update({ read_at: new Date().toISOString() })
+            .in('id', unreadIds);
         }
       } catch (error) {
-        console.error("Error marking as read:", error);
+        console.error('Error marking as read:', error);
       }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'transmits');
-    });
+    };
 
-    return () => unsubscribe();
+    fetchTransmits();
+    const channel = supabase.channel(`transmits-${activeId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transmits', filter: `transmission_id=eq.${activeId}` }, () => fetchTransmits())
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [activeId, currentUser]);
 
   const startCall = () => {
@@ -397,11 +374,11 @@ export const Transmissions: React.FC = () => {
     if (!isTyping) {
       setIsTyping(true);
       try {
-        await updateDoc(doc(db, 'transmissions', activeId), {
-          [`typingStatus.${currentUser.id}`]: true
-        });
+        const { data } = await supabase.from('transmissions').select('typing_status').eq('id', activeId).maybeSingle();
+        const nextTyping = { ...(data?.typing_status || {}), [currentUser.id]: true };
+        await supabase.from('transmissions').update({ typing_status: nextTyping }).eq('id', activeId);
       } catch (err) {
-        console.error("Typing start error:", err);
+        console.error('Typing start error:', err);
       }
     }
 
@@ -410,11 +387,11 @@ export const Transmissions: React.FC = () => {
     typingTimeoutRef.current = setTimeout(async () => {
       setIsTyping(false);
       try {
-        await updateDoc(doc(db, 'transmissions', activeId), {
-          [`typingStatus.${currentUser.id}`]: false
-        });
+        const { data } = await supabase.from('transmissions').select('typing_status').eq('id', activeId).maybeSingle();
+        const nextTyping = { ...(data?.typing_status || {}), [currentUser.id]: false };
+        await supabase.from('transmissions').update({ typing_status: nextTyping }).eq('id', activeId);
       } catch (err) {
-        console.error("Typing end error:", err);
+        console.error('Typing end error:', err);
       }
     }, 2000);
   };
@@ -426,11 +403,11 @@ export const Transmissions: React.FC = () => {
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     setIsTyping(false);
     try {
-      await updateDoc(doc(db, 'transmissions', activeId!), {
-        [`typingStatus.${currentUser.id}`]: false
-      });
+      const { data } = await supabase.from('transmissions').select('typing_status').eq('id', activeId!).maybeSingle();
+      const nextTyping = { ...(data?.typing_status || {}), [currentUser.id]: false };
+      await supabase.from('transmissions').update({ typing_status: nextTyping }).eq('id', activeId!);
     } catch (err) {
-      console.error("Typing end error on send:", err);
+      console.error('Typing end error on send:', err);
     }
 
     const otherUserId = activeTransmission.participant_ids.find(id => id !== currentUser.id);
@@ -457,34 +434,45 @@ export const Transmissions: React.FC = () => {
     if (!mediaUrl && type !== 'call') setNewTransmit('');
 
     try {
-      const transmitRef = collection(db, 'transmissions', activeTransmission.id, 'transmits');
       const createdAt = new Date().toISOString();
-      
-      await addDoc(transmitRef, {
-        transmissionId: activeTransmission.id,
-        senderId: currentUser.id,
-        receiverId: otherUserId,
+
+      const { error: transmitError } = await supabase.from('transmits').insert({
+        transmission_id: activeTransmission.id,
+        sender_id: currentUser.id,
+        receiver_id: otherUserId,
         content: transmitContent,
         type,
         created_at: createdAt,
-        ...(mediaUrl && { mediaUrl }),
-        ...(mediaType && { mediaType }),
-        ...(burnDuration && { burnDuration }),
-        ...(expiresAt && { expiresAt })
+        ...(mediaUrl && { media_url: mediaUrl }),
+        ...(mediaType && { media_type: mediaType }),
+        ...(burnDuration && { burn_duration: burnDuration }),
+        ...(expiresAt && { expires_at: expiresAt })
       });
+      if (transmitError) throw transmitError;
 
       // Update transmission metadata
-      await updateDoc(doc(db, 'transmissions', activeTransmission.id), {
-        lastTransmit: {
+      const { data: transmissionData } = await supabase
+        .from('transmissions')
+        .select('unread_counts')
+        .eq('id', activeTransmission.id)
+        .maybeSingle();
+
+      const unreadCounts = {
+        ...(transmissionData?.unread_counts || {}),
+        [otherUserId]: ((transmissionData?.unread_counts || {})[otherUserId] || 0) + 1,
+      };
+
+      await supabase.from('transmissions').update({
+        last_transmit: {
           content: mediaUrl ? (mediaType === 'image' ? 'Sent an image' : 'Sent a video') : transmitContent,
-          senderId: currentUser.id,
+          sender_id: currentUser.id,
           created_at: createdAt
         },
-        [`unreadCounts.${otherUserId}`]: increment(1)
-      });
+        unread_counts: unreadCounts
+      }).eq('id', activeTransmission.id);
 
       // Automated Bot Reply Logic
-      const otherUser = activeTransmission.participant_ids?.find(p => p.id !== currentUser.id) || userCache.current[otherUserId];
+      const otherUser = userCache.current[otherUserId];
       
       if (otherUser?.type === 'bot' || otherUserId === 'void-architect-bot') {
         setIsBotTyping(true);
@@ -536,33 +524,43 @@ export const Transmissions: React.FC = () => {
             }
 
             const replyCreatedAt = new Date().toISOString();
-            const transmitRef = collection(db, 'transmissions', activeTransmission.id, 'transmits');
-            
-            await addDoc(transmitRef, {
-              transmissionId: activeTransmission.id,
-              senderId: botId,
-              receiverId: currentUser.id,
+
+            await supabase.from('transmits').insert({
+              transmission_id: activeTransmission.id,
+              sender_id: botId,
+              receiver_id: currentUser.id,
               content: replyText,
               created_at: replyCreatedAt
             });
 
-            await updateDoc(doc(db, 'transmissions', activeTransmission.id), {
-              lastTransmit: {
+            const { data: latestTx } = await supabase
+              .from('transmissions')
+              .select('unread_counts')
+              .eq('id', activeTransmission.id)
+              .maybeSingle();
+
+            const nextUnread = {
+              ...(latestTx?.unread_counts || {}),
+              [currentUser.id]: ((latestTx?.unread_counts || {})[currentUser.id] || 0) + 1,
+            };
+
+            await supabase.from('transmissions').update({
+              last_transmit: {
                 content: replyText,
-                senderId: botId,
+                sender_id: botId,
                 created_at: replyCreatedAt
               },
-              [`unreadCounts.${currentUser.id}`]: increment(1)
-            });
+              unread_counts: nextUnread
+            }).eq('id', activeTransmission.id);
           } catch (err) {
-            console.error("Bot Reply Error:", err);
+            console.error('Bot Reply Error:', err);
           } finally {
             setIsBotTyping(false);
           }
         }, 2000);
       }
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `transmissions/${activeTransmission.id}/transmits`);
+      handleDbError(error, 'CREATE', `transmits/${activeTransmission.id}`);
     }
   };
 
@@ -574,14 +572,16 @@ export const Transmissions: React.FC = () => {
     try {
       const fileExt = file.name.split('.').pop();
       const fileName = `${uuidv4()}.${fileExt}`;
-      const storageRef = ref(storage, `transmissions/${activeTransmission.id}/${fileName}`);
-      
-      await uploadBytes(storageRef, file);
-      const downloadURL = await getDownloadURL(storageRef);
+      const filePath = `transmissions/${activeTransmission.id}/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage.from('media').upload(filePath, file, { upsert: true });
+      if (uploadError) throw uploadError;
+      const { data: publicUrlData } = supabase.storage.from('media').getPublicUrl(filePath);
+      const downloadURL = publicUrlData.publicUrl;
       
       await handleSend(downloadURL, 'image');
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'storage/transmissions');
+      handleDbError(error, 'WRITE', 'storage/transmissions');
     } finally {
       setIsUploading(false);
       if (e.target) e.target.value = '';
@@ -602,14 +602,16 @@ export const Transmissions: React.FC = () => {
     try {
       const fileExt = file.name.split('.').pop();
       const fileName = `${uuidv4()}.${fileExt}`;
-      const storageRef = ref(storage, `transmissions/${activeTransmission.id}/${fileName}`);
-      
-      await uploadBytes(storageRef, file);
-      const downloadURL = await getDownloadURL(storageRef);
+      const filePath = `transmissions/${activeTransmission.id}/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage.from('media').upload(filePath, file, { upsert: true });
+      if (uploadError) throw uploadError;
+      const { data: publicUrlData } = supabase.storage.from('media').getPublicUrl(filePath);
+      const downloadURL = publicUrlData.publicUrl;
       
       await handleSend(downloadURL, 'video');
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'storage/transmissions');
+      handleDbError(error, 'WRITE', 'storage/transmissions');
     } finally {
       setIsUploading(false);
       if (e.target) e.target.value = '';
@@ -622,26 +624,18 @@ export const Transmissions: React.FC = () => {
     if (!window.confirm("Are you sure you want to terminate this neural link? All data will be purged.")) return;
 
     try {
-      const batch = writeBatch(db);
-      
-      // Delete all transmits
-      const transmitsSnap = await getDocs(collection(db, 'transmissions', activeTransmission.id, 'transmits'));
-      transmitsSnap.docs.forEach(doc => batch.delete(doc.ref));
-      
-      // Delete transmission doc
-      batch.delete(doc(db, 'transmissions', activeTransmission.id));
-      
-      await batch.commit();
+      await supabase.from('transmits').delete().eq('transmission_id', activeTransmission.id);
+      await supabase.from('transmissions').delete().eq('id', activeTransmission.id);
       setActiveId(null);
       setShowOptions(false);
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `transmissions/${activeTransmission.id}`);
+      handleDbError(error, 'DELETE', `transmissions/${activeTransmission.id}`);
     }
   };
   const handleDeleteTransmit = async (transmitId: string) => {
     if (!activeTransmission || !currentUser) return;
     try {
-      await deleteDoc(doc(db, 'transmissions', activeTransmission.id, 'transmits', transmitId));
+      await supabase.from('transmits').delete().eq('id', transmitId);
       
       // If this was the last transmit, we should ideally update the transmission doc
       // But for simplicity in this turn, we'll just delete the doc.
@@ -649,7 +643,7 @@ export const Transmissions: React.FC = () => {
       
       setDeletingTransmitId(null);
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `transmissions/${activeTransmission.id}/transmits/${transmitId}`);
+      handleDbError(error, 'DELETE', `transmits/${activeTransmission.id}/${transmitId}`);
     }
   };
 

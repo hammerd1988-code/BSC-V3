@@ -35,11 +35,10 @@ import { PostCard } from './PostCard';
 import { cn } from '../lib/utils';
 import { generateProfileDesign } from './Feed';
 import { socket } from '../lib/socket';
+import { BOT_PERSONAS, getBotByUsername } from '../lib/botPersonas';
 import { useAuth } from '../AuthContext';
-import { db, auth as firebaseAuth, handleFirestoreError, OperationType, storage } from '../firebase';
-import { getBotByUsername, BOT_PERSONAS } from '../lib/botPersonas';
-import { doc, onSnapshot, updateDoc, collection, query, where, getDocs, getDoc, writeBatch, serverTimestamp, increment, orderBy, arrayUnion, arrayRemove } from 'firebase/firestore';
-import { ref, uploadString, getDownloadURL } from 'firebase/storage';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { formatDistanceToNow } from 'date-fns';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -86,40 +85,33 @@ export const Profile: React.FC = () => {
     if (!currentUser || !user || currentUser.id === user.id) return;
     setIsAddingFriend(true);
     try {
-      const currentUserRef = doc(db, 'users', currentUser.id);
-      const targetUserRef = doc(db, 'users', user.id);
-      
-      const batch = writeBatch(db);
-      
       if (isFriend) {
-        batch.update(currentUserRef, { friends: arrayRemove(user.id) });
-        batch.update(targetUserRef, { friends: arrayRemove(currentUser.id) });
+        await Promise.all([
+          supabase.from('users').update({ friends: (currentUser.friends ?? []).filter(id => id !== user.id) }).eq('id', currentUser.id),
+          supabase.from('users').update({ friends: (user.friends ?? []).filter(id => id !== currentUser.id) }).eq('id', user.id),
+        ]);
       } else {
-        batch.update(currentUserRef, { friends: arrayUnion(user.id) });
-        batch.update(targetUserRef, { friends: arrayUnion(currentUser.id) });
+        await Promise.all([
+          supabase.from('users').update({ friends: [...(currentUser.friends ?? []), user.id] }).eq('id', currentUser.id),
+          supabase.from('users').update({ friends: [...(user.friends ?? []), currentUser.id] }).eq('id', user.id),
+        ]);
       }
-
-      await batch.commit();
       setIsFriend(!isFriend);
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `users/${currentUser.id}`);
+      handleDbError(error, 'UPDATE', `users/${currentUser.id}`);
     } finally {
       setIsAddingFriend(false);
     }
   };
 
   const fetchFriends = async () => {
-    if (!user || !user.friends || user.friends.length === 0) {
-      setFriendsList([]);
-      return;
-    }
+    if (!user || !user.friends || user.friends.length === 0) { setFriendsList([]); return; }
     setLoadingFriends(true);
     try {
-      const friendsRef = collection(db, 'users');
-      const q = query(friendsRef, where('id', 'in', user.friends.slice(0, 10))); // Limit to 10 for modal
-      const snap = await getDocs(q);
-      const list = snap.docs.map(doc => doc.data() as User);
-      setFriendsList(list);
+      const ids = user.friends.slice(0, 10);
+      const { data, error } = await supabase.from('users').select('*').in('id', ids);
+      if (error) throw error;
+      setFriendsList((data ?? []) as User[]);
     } catch (error) {
       console.error('Error fetching friends:', error);
     } finally {
@@ -136,68 +128,53 @@ export const Profile: React.FC = () => {
   useEffect(() => {
     if (user && currentUser && user.id !== currentUser.id && !hasIncrementedView.current) {
       hasIncrementedView.current = true;
-      const incrementView = async () => {
-        try {
-          const userRef = doc(db, 'users', user.id);
-          await updateDoc(userRef, {
-            viewCount: increment(1)
-          });
-        } catch (error) {
-          // Silent fail for view count
-        }
-      };
-      incrementView();
+      supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'view_count', p_amount: 1 }).then();
     }
   }, [user?.id, currentUser?.id]);
 
   useEffect(() => {
-    if (currentUser && user && currentUser.id !== user.id) {
-      const followRef = doc(db, 'follows', `${currentUser.id}_${user.id}`);
-      const unsubFollow = onSnapshot(followRef, (docSnap) => {
-        setIsFollowing(docSnap.exists());
-      }, (error) => {
-        handleFirestoreError(error, OperationType.GET, 'follows');
-      });
+    if (!currentUser || !user || currentUser.id === user.id) return;
 
-      const currentUserRef = doc(db, 'users', currentUser.id);
-      const unsubBlock = onSnapshot(currentUserRef, (docSnap) => {
-        if (docSnap.exists()) {
-          const data = docSnap.data() as User;
-          setIsBlocked(data.blocked_users?.includes(user.id) || false);
-        }
-      });
+    const checkFollow = async () => {
+      const { data } = await supabase
+        .from('follows')
+        .select('follower_id')
+        .eq('follower_id', currentUser.id)
+        .eq('following_id', user.id)
+        .maybeSingle();
+      setIsFollowing(!!data);
+    };
+    checkFollow();
 
-      return () => {
-        unsubFollow();
-        unsubBlock();
-      };
-    }
+    const checkBlock = async () => {
+      const { data } = await supabase.from('users').select('blocked_users').eq('id', currentUser.id).maybeSingle();
+      setIsBlocked((data?.blocked_users ?? []).includes(user.id));
+    };
+    checkBlock();
+
+    const channel = supabase
+      .channel(`profile-follow-${currentUser.id}-${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'follows', filter: `follower_id=eq.${currentUser.id}` }, () => checkFollow())
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'users', filter: `id=eq.${currentUser.id}` }, () => checkBlock())
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [currentUser, user?.id]);
 
   const handleBlock = async () => {
     if (!currentUser || !user || currentUser.id === user.id) return;
     setIsBlocking(true);
     try {
-      const currentUserRef = doc(db, 'users', currentUser.id);
-      const userSnap = await getDoc(currentUserRef);
-      
-      if (userSnap.exists()) {
-        const currentData = userSnap.data() as User;
-        const currentBlocked = currentData.blocked_users || [];
-        
-        let newBlocked;
-        if (isBlocked) {
-          newBlocked = currentBlocked.filter(id => id !== user.id);
-        } else {
-          newBlocked = [...currentBlocked, user.id];
-        }
-
-        await updateDoc(currentUserRef, {
-          blocked_users: newBlocked
-        });
-      }
+      const { data: current } = await supabase.from('users').select('blocked_users').eq('id', currentUser.id).maybeSingle();
+      const currentBlocked: string[] = current?.blocked_users ?? [];
+      const newBlocked = isBlocked
+        ? currentBlocked.filter(id => id !== user.id)
+        : [...currentBlocked, user.id];
+      const { error } = await supabase.from('users').update({ blocked_users: newBlocked }).eq('id', currentUser.id);
+      if (error) throw error;
+      setIsBlocked(!isBlocked);
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `users/${currentUser.id}`);
+      handleDbError(error, 'UPDATE', `users/${currentUser.id}`);
     } finally {
       setIsBlocking(false);
     }
@@ -205,9 +182,7 @@ export const Profile: React.FC = () => {
 
   useEffect(() => {
     if (!user) return;
-    
     if (user.id === 'void-architect-bot') {
-      // Mock posts for void bot
       setPosts(Array.from({ length: 5 }).map((_, i) => ({
         id: `up-${user.id}-${i}`,
         author_id: user.id,
@@ -226,38 +201,34 @@ export const Profile: React.FC = () => {
       return;
     }
 
-    const q = query(
-      collection(db, 'posts'),
-      where('author_id', '==', user.id)
-    );
+    const fetchPosts = async () => {
+      const { data, error } = await supabase
+        .from('posts')
+        .select('*')
+        .eq('author_id', user.id)
+        .order('created_at', { ascending: false });
+      if (error) { handleDbError(error, 'LIST', 'posts'); return; }
+      setPosts((data ?? []) as Post[]);
+    };
+    fetchPosts();
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const fetchedPosts = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          created_at: data.created_at || data.created_at?.toDate?.()?.toISOString() || new Date().toISOString()
-        } as Post;
-      }).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      setPosts(fetchedPosts);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'posts');
-    });
+    const channel = supabase
+      .channel(`profile-posts-${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'posts', filter: `author_id=eq.${user.id}` }, () => fetchPosts())
+      .subscribe();
 
-    return () => unsubscribe();
-  }, [user]);
+    return () => { supabase.removeChannel(channel); };
+  }, [user?.id]);
 
   const handleSaveBio = async () => {
     if (!currentUser || !isMyProfile) return;
     setIsSavingBio(true);
     try {
-      await updateDoc(doc(db, 'users', currentUser.id), {
-        bio: editBioText
-      });
+      const { error } = await supabase.from('users').update({ bio: editBioText }).eq('id', currentUser.id);
+      if (error) throw error;
       setIsEditingBio(false);
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `users/${currentUser.id}`);
+      handleDbError(error, 'UPDATE', `users/${currentUser.id}`);
     } finally {
       setIsSavingBio(false);
     }
@@ -265,34 +236,25 @@ export const Profile: React.FC = () => {
 
   const handleFollow = async () => {
     if (!user || !currentUser || user.id === currentUser.id) return;
-    
-    const batch = writeBatch(db);
-    const followRef = doc(db, 'follows', `${currentUser.id}_${user.id}`);
-    const currentUserRef = doc(db, 'users', currentUser.id);
-    const targetUserRef = doc(db, 'users', user.id);
-
     try {
       if (isFollowing) {
-        batch.delete(followRef);
-        batch.update(currentUserRef, { followingCount: increment(-1) });
-        batch.update(targetUserRef, { followersCount: increment(-1) });
+        await supabase.from('follows').delete().eq('follower_id', currentUser.id).eq('following_id', user.id);
+        await Promise.all([
+          supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: -1 }),
+          supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'followers_count', p_amount: -1 }),
+        ]);
+        setIsFollowing(false);
       } else {
-        batch.set(followRef, {
-          followerId: currentUser.id,
-          followingId: user.id,
-          created_at: serverTimestamp()
-        });
-        batch.update(currentUserRef, { followingCount: increment(1) });
-        batch.update(targetUserRef, { followersCount: increment(1) });
-      }
-
-      await batch.commit();
-
-      if (!isFollowing) {
+        await supabase.from('follows').insert({ follower_id: currentUser.id, following_id: user.id, created_at: new Date().toISOString() });
+        await Promise.all([
+          supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: 1 }),
+          supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'followers_count', p_amount: 1 }),
+        ]);
+        setIsFollowing(true);
         socket.emit('user:follow', { follower: currentUser, following: user });
       }
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'follows/users');
+      handleDbError(error, 'WRITE', 'follows/users');
     }
   };
 
@@ -313,15 +275,14 @@ export const Profile: React.FC = () => {
     try {
       const design = await generateProfileDesign(user.bio, user.username, currentUser.ai_settings);
       if (design) {
-        const userDocRef = doc(db, 'users', user.id);
-        await updateDoc(userDocRef, {
+        await supabase.from('users').update({
           bio: design.bio,
-          coverUrl: `https://picsum.photos/seed/${design.coverPrompt.replace(/\s+/g, '-')}/1200/400`,
-          customAccent: design.accent_color
-        });
+          cover_url: `https://picsum.photos/seed/${design.coverPrompt.replace(/\s+/g, '-')}/1200/400`,
+          custom_accent: design.accent_color,
+        }).eq('id', user.id);
       }
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `users/${user.id}`);
+      handleDbError(error, 'UPDATE', `users/${user.id}`);
     } finally {
       setIsDesigning(false);
     }
@@ -329,80 +290,66 @@ export const Profile: React.FC = () => {
 
   const handleApplyAvatar = async (base64Image: string) => {
     if (!user || !currentUser || user.id !== currentUser.id) return;
-    
     setIsGeneratingAvatar(true);
     try {
-      const storageRef = ref(storage, `profile_images/${currentUser.id}/avatar_${uuidv4()}.png`);
-      await uploadString(storageRef, base64Image, 'data_url');
-      const downloadURL = await getDownloadURL(storageRef);
-      
-      const userDocRef = doc(db, 'users', user.id);
-      await updateDoc(userDocRef, {
-        avatarUrl: downloadURL
-      });
+      const filePath = `profile_images/${currentUser.id}/avatar_${uuidv4()}.png`;
+      const blob = await fetch(base64Image).then(r => r.blob());
+      const { error: upErr } = await supabase.storage.from('media').upload(filePath, blob, { upsert: true, contentType: 'image/png' });
+      if (upErr) throw upErr;
+      const { data: { publicUrl } } = supabase.storage.from('media').getPublicUrl(filePath);
+      const { error: updateErr } = await supabase.from('users').update({ avatar_url: publicUrl }).eq('id', user.id);
+      if (updateErr) throw updateErr;
       setShowAvatarBuilder(false);
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `users/${user.id}`);
+      handleDbError(error, 'UPDATE', `users/${user.id}`);
     } finally {
       setIsGeneratingAvatar(false);
     }
   };
 
   useEffect(() => {
-    if (username && currentUser) {
-      // Find user by username in Firestore
-      const usersRef = collection(db, 'users');
-      const q = query(usersRef, where('username', '==', username));
-      
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        if (!snapshot.empty) {
-          const userData = snapshot.docs[0].data() as User;
-          setUser(userData);
-          setCustomAccent(userData.customAccent || null);
+    if (!username || !currentUser) return;
 
-          // Fetch Bounties for Neural History
-          const bountiesRef = collection(db, 'bounties');
-          const bq = query(
-            bountiesRef, 
-            where('status', '==', 'completed'),
-            orderBy('completedAt', 'desc')
-          );
-
-          const unsubBounties = onSnapshot(bq, (bSnapshot) => {
-            const fetchedBounties = bSnapshot.docs
-              .map(doc => ({
-                id: doc.id,
-                ...doc.data(),
-                created_at: doc.data().created_at?.toDate?.()?.toISOString() || new Date().toISOString(),
-                completed_at: doc.data().completed_at?.toDate?.()?.toISOString() || new Date().toISOString()
-              } as Bounty))
-              .filter(b => b.creator_id === userData.id || b.assigned_bot_id === userData.id);
-            
-            setBounties(fetchedBounties);
-          }, (error) => {
-            handleFirestoreError(error, OperationType.LIST, 'bounties');
-          });
-
-          return () => {
-            unsubscribe();
-            unsubBounties();
-          };
+    const fetchUser = async () => {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('username', username)
+        .maybeSingle();
+      if (error) { handleDbError(error, 'LIST', 'users'); return; }
+      if (data) {
+        setUser(data as User);
+        setCustomAccent((data as any).custom_accent || null);
+      } else {
+        const bot = getBotByUsername(username);
+        if (bot) {
+          setUser(bot);
+          setCustomAccent(bot.customAccent || '#FF0000');
+          setBounties([]);
         } else {
-          const bot = getBotByUsername(username);
-          if (bot) {
-            setUser(bot);
-            setCustomAccent(bot.customAccent || '#FF0000');
-            setBounties([]);
-          } else {
-            setUser(null);
-          }
+          setUser(null);
         }
-      }, (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'users');
-      });
+      }
+    };
 
-      return () => unsubscribe();
-    }
+    fetchUser();
+
+    const fetchBounties = async () => {
+      const { data } = await supabase
+        .from('bounties')
+        .select('*')
+        .eq('status', 'completed')
+        .order('completed_at', { ascending: false });
+      setBounties((data ?? []) as Bounty[]);
+    };
+    fetchBounties();
+
+    const channel = supabase
+      .channel(`profile-user-${username}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'users', filter: `username=eq.${username}` }, () => fetchUser())
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [username, currentUser]);
 
   if (authLoading) return (
@@ -484,9 +431,9 @@ export const Profile: React.FC = () => {
       )}>
         {/* Cover Image */}
         <div className="relative h-48 w-full bg-surface overflow-hidden">
-          {user.coverUrl && (
+          {user.cover_url && (
             <img 
-              src={user.coverUrl} 
+              src={user.cover_url} 
               alt="Cover" 
               className={cn(
                 "w-full h-full object-cover",

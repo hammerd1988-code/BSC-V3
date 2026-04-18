@@ -24,22 +24,8 @@ import {
   Coins
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
-import { db, handleFirestoreError, OperationType } from '../firebase';
-import { 
-  collection, 
-  addDoc, 
-  serverTimestamp, 
-  doc, 
-  updateDoc, 
-  onSnapshot, 
-  query, 
-  orderBy, 
-  limit,
-  deleteDoc,
-  increment,
-  getDoc,
-  writeBatch
-} from 'firebase/firestore';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { cn } from '../lib/utils';
 
 export const GoLive: React.FC = () => {
@@ -82,31 +68,35 @@ export const GoLive: React.FC = () => {
     }
   }, [messages]);
 
+  const normalizeStreamData = (data: any) => {
+    if (!data) return null;
+    return {
+      ...data,
+      hostUsername: data.host_username,
+      hostDisplayName: data.host_display_name,
+      hostAvatar: data.host_avatar,
+      activePoll: data.active_poll,
+      isLive: data.is_live,
+      crowdSize: data.crowd_size,
+    };
+  };
+
   const startMedia = async () => {
     if (isViewer) return;
     try {
       let stream;
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true
-        });
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       } catch (err) {
-        console.warn("Could not access video, trying audio only...", err);
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: false,
-          audio: true
-        });
+        console.warn('Could not access video, trying audio only...', err);
+        stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
         setIsCameraOn(false);
       }
-      
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
+      if (videoRef.current) videoRef.current.srcObject = stream;
     } catch (error) {
-      console.error("Media Error:", error);
-      alert("Microphone and Camera access denied. Please allow permissions to go live.");
+      console.error('Media Error:', error);
+      alert('Microphone and Camera access denied. Please allow permissions to go live.');
     }
   };
 
@@ -115,168 +105,112 @@ export const GoLive: React.FC = () => {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
     }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
+    if (videoRef.current) videoRef.current.srcObject = null;
   };
 
   useEffect(() => {
     if (isViewer && viewerStreamId) {
-      // Viewer logic: increment crowd size
-      const streamRef = doc(db, 'live_streams', viewerStreamId);
-      try {
-        updateDoc(streamRef, {
-          crowdSize: increment(1)
-        });
-      } catch (error) {
-        handleFirestoreError(error, OperationType.UPDATE, `live_streams/${viewerStreamId}`);
-      }
+      supabase.rpc('increment_counter', { p_table: 'streams', p_id: viewerStreamId, p_field: 'crowd_size', p_amount: 1 }).then();
 
-      const unsubscribe = onSnapshot(streamRef, (snapshot) => {
-        if (snapshot.exists()) {
-          const data = snapshot.data();
-          setStreamData(data);
-          setStreamTitle(data.title);
-          setCrowdSize(data.crowd_size ?? data.crowdSize ?? 0);
-          const liveState = data.is_live ?? data.isLive ?? false;
-          setIsLive(!!liveState);
-          if (!liveState) {
-            setHasEnded(true);
-          }
+      const fetchStream = async () => {
+        const { data } = await supabase.from('streams').select('*').eq('id', viewerStreamId).maybeSingle();
+        const normalized = normalizeStreamData(data);
+        if (normalized) {
+          setStreamData(normalized);
+          setStreamTitle(normalized.title);
+          setCrowdSize(normalized.crowdSize ?? 0);
+          setIsLive(!!normalized.isLive);
+          if (!normalized.isLive) setHasEnded(true);
         } else {
           setHasEnded(true);
         }
-      }, (error) => {
-        handleFirestoreError(error, OperationType.GET, `live_streams/${viewerStreamId}`);
-      });
+      };
+
+      fetchStream();
+
+      const streamChannel = supabase.channel(`stream-viewer-${viewerStreamId}`)
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'streams', filter: `id=eq.${viewerStreamId}` }, ({ new: data }) => {
+          const normalized = normalizeStreamData(data);
+          setStreamData(normalized);
+          setStreamTitle(normalized?.title ?? '');
+          setCrowdSize(normalized?.crowdSize ?? 0);
+          setIsLive(!!normalized?.isLive);
+          if (normalized && !normalized.isLive) setHasEnded(true);
+        })
+        .subscribe();
 
       return () => {
-        try {
-          updateDoc(streamRef, {
-            crowdSize: increment(-1)
-          });
-        } catch (error) {
-          handleFirestoreError(error, OperationType.UPDATE, `live_streams/${viewerStreamId}`);
-        }
-        unsubscribe();
+        supabase.rpc('increment_counter', { p_table: 'streams', p_id: viewerStreamId, p_field: 'crowd_size', p_amount: -1 }).then();
+        supabase.removeChannel(streamChannel);
       };
-    } else {
-      startMedia();
-      return () => stopMedia();
     }
+
+    startMedia();
+    return () => stopMedia();
   }, [isViewer, viewerStreamId]);
 
   useEffect(() => {
     if (!streamId) return;
 
-    const q = query(
-      collection(db, 'live_streams', streamId, 'messages'),
-      orderBy('createdAt', 'asc'),
-      limit(100)
-    );
+    const fetchMessages = async () => {
+      const { data, error } = await supabase
+        .from('stream_chat')
+        .select('*')
+        .eq('stream_id', streamId)
+        .order('created_at', { ascending: true })
+        .limit(100);
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const msgs = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        created_at: doc.data().created_at?.toDate?.()?.toISOString() || new Date().toISOString()
+      if (error) {
+        handleDbError(error, 'LIST', `stream_chat/${streamId}`);
+        return;
+      }
+
+      const normalized = (data ?? []).map((msg: any) => ({
+        ...msg,
+        senderName: msg.sender_name,
+        senderUsername: msg.sender_username,
       }));
-      setMessages(msgs);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, `live_streams/${streamId}/messages`);
-    });
-
-    // Listen for events (donations, etc.)
-    const eventsQuery = query(
-      collection(db, 'live_streams', streamId, 'events'),
-      orderBy('createdAt', 'desc'),
-      limit(1)
-    );
-
-    const unsubscribeEvents = onSnapshot(eventsQuery, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === 'added') {
-          const event = { id: change.doc.id, ...change.doc.data() };
-          const eventTime = event.created_at?.toMillis?.() || Date.now();
-          if (Date.now() - eventTime < 5000) {
-            setRecentEvents(prev => [...prev, event]);
-            setTimeout(() => {
-              setRecentEvents(prev => prev.filter(e => e.id !== event.id));
-            }, 5000);
-          }
-        }
-      });
-    });
-
-    return () => {
-      unsubscribe();
-      unsubscribeEvents();
+      setMessages(normalized);
     };
+
+    fetchMessages();
+
+    const chatChannel = supabase.channel(`stream-chat-${streamId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'stream_chat', filter: `stream_id=eq.${streamId}` }, ({ new: payload }) => {
+        const msg: any = payload;
+        if (msg.type === 'donation') {
+          const event = {
+            id: msg.id,
+            senderName: msg.sender_name,
+            amount: msg.amount,
+            message: msg.content,
+            created_at: msg.created_at,
+          };
+          setRecentEvents(prev => [...prev, event]);
+          setTimeout(() => {
+            setRecentEvents(prev => prev.filter(e => e.id !== event.id));
+          }, 5000);
+        }
+        fetchMessages();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(chatChannel); };
   }, [streamId]);
 
   useEffect(() => {
     if (currentUser?.is_live && currentUser.active_stream_id && !isViewer && !isLive) {
       setStreamId(currentUser.active_stream_id);
       setIsLive(true);
-      getDoc(doc(db, 'live_streams', currentUser.active_stream_id)).then(snap => {
-        if (snap.exists()) {
-          setStreamTitle(snap.data().title);
+      supabase.from('streams').select('*').eq('id', currentUser.active_stream_id).maybeSingle().then(({ data }) => {
+        const normalized = normalizeStreamData(data);
+        if (normalized) {
+          setStreamTitle(normalized.title);
+          setStreamData(normalized);
         }
       });
     }
   }, [currentUser, isViewer, isLive]);
-
-  const handleStartStream = async () => {
-    if (!streamTitle.trim() || !currentUser) return;
-    setIsLoading(true);
-    try {
-      const docRef = await addDoc(collection(db, 'live_streams'), {
-        hostId: currentUser.id,
-        hostDisplayName: currentUser.display_name,
-        hostUsername: currentUser.username,
-        hostAvatar: currentUser.avatar_url,
-        title: streamTitle,
-        isLive: true,
-        crowdSize: 0,
-        startedAt: serverTimestamp()
-      });
-      setStreamId(docRef.id);
-      setIsLive(true);
-      
-      // Update user status
-      await updateDoc(doc(db, 'users', currentUser.id), {
-        is_live: true,
-        active_stream_id: docRef.id
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'live_streams');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleEndStream = async () => {
-    if (!streamId || !currentUser) return;
-    try {
-      await updateDoc(doc(db, 'live_streams', streamId), {
-        isLive: false,
-        endedAt: serverTimestamp()
-      });
-      
-      // Update user status
-      await updateDoc(doc(db, 'users', currentUser.id), {
-        is_live: false,
-        active_stream_id: null
-      });
-
-      setIsLive(false);
-      setStreamId(null);
-      setHasEnded(true);
-      stopMedia();
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `live_streams/${streamId}`);
-    }
-  };
 
   const toggleCamera = () => {
     if (streamRef.current) {
@@ -298,73 +232,103 @@ export const GoLive: React.FC = () => {
     }
   };
 
+  const handleStartStream = async () => {
+    if (!streamTitle.trim() || !currentUser) return;
+    setIsLoading(true);
+    try {
+      const { data, error } = await supabase.from('streams').insert({
+        host_id: currentUser.id,
+        host_display_name: currentUser.display_name,
+        host_username: currentUser.username,
+        host_avatar: currentUser.avatar_url,
+        title: streamTitle,
+        is_live: true,
+        crowd_size: 0,
+        started_at: new Date().toISOString(),
+      }).select().single();
+
+      if (error) throw error;
+
+      setStreamId(data.id);
+      setIsLive(true);
+      setStreamData(normalizeStreamData(data));
+      await supabase.from('users').update({ is_live: true, active_stream_id: data.id }).eq('id', currentUser.id);
+    } catch (error) {
+      handleDbError(error, 'CREATE', 'streams');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleEndStream = async () => {
+    if (!streamId || !currentUser) return;
+    try {
+      await supabase.from('streams').update({ is_live: false, ended_at: new Date().toISOString() }).eq('id', streamId);
+      await supabase.from('users').update({ is_live: false, active_stream_id: null }).eq('id', currentUser.id);
+
+      setIsLive(false);
+      setStreamId(null);
+      setHasEnded(true);
+      stopMedia();
+    } catch (error) {
+      handleDbError(error, 'UPDATE', `streams/${streamId}`);
+    }
+  };
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMessage.trim() || !currentUser || !streamId) return;
-    
+
     try {
-      await addDoc(collection(db, 'live_streams', streamId, 'messages'), {
-        senderId: currentUser.id,
-        senderName: currentUser.display_name,
-        senderUsername: currentUser.username,
+      const { error } = await supabase.from('stream_chat').insert({
+        stream_id: streamId,
+        sender_id: currentUser.id,
+        sender_name: currentUser.display_name,
+        sender_username: currentUser.username,
         content: newMessage,
-        created_at: serverTimestamp()
+        created_at: new Date().toISOString(),
       });
+
+      if (error) throw error;
       setNewMessage('');
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, `live_streams/${streamId}/messages`);
+      handleDbError(error, 'CREATE', `stream_chat/${streamId}`);
     }
   };
 
   const handleDonate = async (e: React.FormEvent) => {
     e.preventDefault();
-    const amount = parseInt(donationAmount);
+    const amount = parseInt(donationAmount, 10);
     if (!amount || amount <= 0 || !currentUser || !streamId || !streamData) return;
     if ((currentUser.cred_balance || 0) < amount) {
-      alert("Insufficient CRED");
+      alert('Insufficient CRED');
       return;
     }
 
     try {
-      const batch = writeBatch(db);
-      
-      batch.update(doc(db, 'users', currentUser.id), {
-        credBalance: increment(-amount)
-      });
-      
-      batch.update(doc(db, 'users', streamData.hostId), {
-        credBalance: increment(amount)
-      });
+      await Promise.all([
+        supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'cred_balance', p_amount: -amount }),
+        supabase.rpc('increment_counter', { p_table: 'users', p_id: streamData.host_id, p_field: 'cred_balance', p_amount: amount }),
+        supabase.from('transactions').insert([
+          { user_id: currentUser.id, amount, type: 'spend', description: `Donated to ${streamData.host_username}'s stream`, created_at: new Date().toISOString() },
+          { user_id: streamData.host_id, amount, type: 'earn', description: `Donation from ${currentUser.username}`, created_at: new Date().toISOString() },
+        ]),
+        supabase.from('stream_chat').insert({
+          stream_id: streamId,
+          sender_id: currentUser.id,
+          sender_name: currentUser.display_name,
+          sender_username: currentUser.username,
+          content: donationMessage || `${amount} CRED donation`,
+          type: 'donation',
+          amount,
+          created_at: new Date().toISOString(),
+        })
+      ]);
 
-      batch.set(doc(collection(db, 'transactions')), {
-        userId: currentUser.id,
-        amount: amount,
-        type: 'spend',
-        description: `Donated to ${streamData.hostUsername}'s stream`,
-        created_at: serverTimestamp()
-      });
-
-      batch.set(doc(collection(db, 'transactions')), {
-        userId: streamData.hostId,
-        amount: amount,
-        type: 'earn',
-        description: `Donation from ${currentUser.username}`,
-        created_at: serverTimestamp()
-      });
-
-      batch.set(doc(collection(db, 'live_streams', streamId, 'events')), {
-        type: 'donation',
-        senderName: currentUser.display_name,
-        amount: amount,
-        message: donationMessage,
-        created_at: serverTimestamp()
-      });
-
-      await batch.commit();
       setShowDonateModal(false);
       setDonationMessage('');
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'donations');
+      handleDbError(error, 'CREATE', 'donations');
     }
   };
 
@@ -373,48 +337,60 @@ export const GoLive: React.FC = () => {
     if (!pollQuestion.trim() || !pollOption1.trim() || !pollOption2.trim() || !streamId) return;
 
     try {
-      await updateDoc(doc(db, 'live_streams', streamId), {
-        activePoll: {
-          id: Date.now().toString(),
-          question: pollQuestion,
-          options: {
-            [pollOption1]: 0,
-            [pollOption2]: 0
-          },
-          totalVotes: 0
-        }
-      });
+      const activePoll = {
+        id: Date.now().toString(),
+        question: pollQuestion,
+        options: {
+          [pollOption1]: 0,
+          [pollOption2]: 0,
+        },
+        totalVotes: 0,
+      };
+
+      const { error } = await supabase.from('streams').update({ active_poll: activePoll }).eq('id', streamId);
+      if (error) throw error;
+
       setShowPollModal(false);
       setPollQuestion('');
       setPollOption1('');
       setPollOption2('');
+      setStreamData((prev: any) => ({ ...prev, active_poll: activePoll, activePoll }));
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `live_streams/${streamId}`);
+      handleDbError(error, 'UPDATE', `streams/${streamId}`);
     }
   };
 
   const handleVote = async (option: string) => {
-    if (!streamId || !streamData?.activePoll || votedPolls.has(streamData.activePoll.id)) return;
+    const poll = streamData?.activePoll ?? streamData?.active_poll;
+    if (!streamId || !poll || votedPolls.has(poll.id)) return;
 
     try {
-      setVotedPolls(prev => new Set(prev).add(streamData.activePoll.id));
-      await updateDoc(doc(db, 'live_streams', streamId), {
-        [`activePoll.options.${option}`]: increment(1),
-        [`activePoll.totalVotes`]: increment(1)
-      });
+      setVotedPolls(prev => new Set(prev).add(poll.id));
+      const updatedPoll = {
+        ...poll,
+        options: {
+          ...poll.options,
+          [option]: (poll.options?.[option] || 0) + 1,
+        },
+        totalVotes: (poll.totalVotes || 0) + 1,
+      };
+
+      const { error } = await supabase.from('streams').update({ active_poll: updatedPoll }).eq('id', streamId);
+      if (error) throw error;
+      setStreamData((prev: any) => ({ ...prev, active_poll: updatedPoll, activePoll: updatedPoll }));
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `live_streams/${streamId}`);
+      handleDbError(error, 'UPDATE', `streams/${streamId}`);
     }
   };
 
   const handleEndPoll = async () => {
     if (!streamId) return;
     try {
-      await updateDoc(doc(db, 'live_streams', streamId), {
-        activePoll: null
-      });
+      const { error } = await supabase.from('streams').update({ active_poll: null }).eq('id', streamId);
+      if (error) throw error;
+      setStreamData((prev: any) => ({ ...prev, active_poll: null, activePoll: null }));
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `live_streams/${streamId}`);
+      handleDbError(error, 'UPDATE', `streams/${streamId}`);
     }
   };
 

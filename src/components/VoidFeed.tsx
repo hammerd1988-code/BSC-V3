@@ -17,20 +17,8 @@ import {
   ArrowLeft
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
-import { db, handleFirestoreError, OperationType } from '../firebase';
-import { 
-  collection, 
-  query, 
-  orderBy, 
-  onSnapshot, 
-  addDoc, 
-  serverTimestamp, 
-  updateDoc, 
-  doc,
-  deleteDoc,
-  limit,
-  Timestamp
-} from 'firebase/firestore';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { VoidPost } from '../types';
 import { cn } from '../lib/utils';
 import { formatDistanceToNow } from 'date-fns';
@@ -48,48 +36,36 @@ export const VoidFeed: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
 
-    const voidRef = collection(db, 'void_posts');
-    const q = query(voidRef, orderBy('created_at', 'desc'), limit(50));
-
-    const unsubscribe = onSnapshot(q, async (snapshot) => {
+    const fetchPosts = async () => {
       const now = new Date();
-      const fetchedPosts = snapshot.docs
-        .map(doc => {
-          const data = doc.data();
-          return {
-            id: doc.id,
-            ...data,
-            created_at: data.created_at || data.created_at?.toDate?.()?.toISOString() || new Date().toISOString(),
-            expires_at: data.expires_at || data.expires_at?.toDate?.()?.toISOString() || new Date().toISOString()
-          } as VoidPost;
-        })
-        .filter(post => new Date(post.expires_at) > now);
-
+      const { data, error } = await supabase
+        .from('void_posts')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (error) { handleDbError(error, 'LIST', 'void_posts'); setLoading(false); return; }
+      const fetchedPosts = ((data ?? []) as VoidPost[]).filter(post => new Date(post.expires_at) > now);
       setPosts(fetchedPosts);
       setLoading(false);
-
-      // Generate Mood Summary if there are posts
       if (fetchedPosts.length > 0) {
         try {
-          const prompt = `Analyze these anonymous whispers from "The Void" and provide a 1-sentence "Mood of the Network" summary in a cyberpunk, cryptic style. 
-          Whispers: ${fetchedPosts.map(p => p.content).join(' | ')}`;
-          
-          const response = await generateText(prompt, currentUser.ai_settings, {
-            systemPrompt: "You are a cryptic neural entity. Provide a short, impactful summary of the provided whispers.",
-            temperature: 1.0
-          });
+          const prompt = `Analyze these anonymous whispers from "The Void" and provide a 1-sentence "Mood of the Network" summary in a cyberpunk, cryptic style. \n          Whispers: ${fetchedPosts.map(p => p.content).join(' | ')}`;
+          const response = await generateText(prompt, currentUser.ai_settings, { systemPrompt: 'You are a cryptic neural entity. Provide a short, impactful summary of the provided whispers.', temperature: 1.0 });
           setMood(response || 'THE VOID IS SILENT.');
         } catch (error) {
-          console.error("AI Error:", error);
+          console.error('AI Error:', error);
           setMood('INTERFERENCE DETECTED.');
         }
       }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'void_posts');
-      setLoading(false);
-    });
+    };
 
-    return () => unsubscribe();
+    fetchPosts();
+
+    const channel = supabase.channel('void-feed')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'void_posts' }, () => fetchPosts())
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [currentUser]);
 
   const handlePostToVoid = async (e: React.FormEvent) => {
@@ -99,52 +75,45 @@ export const VoidFeed: React.FC = () => {
     setIsSubmitting(true);
     try {
       const now = new Date();
-      const expiresAt = new Date(now.getTime() + 6 * 60 * 60 * 1000); // 6 hours default
+      const expiresAt = new Date(now.getTime() + 6 * 60 * 60 * 1000).toISOString();
 
-      await addDoc(collection(db, 'void_posts'), {
+      const { error } = await supabase.from('void_posts').insert({
         content: newContent,
         decay_rate: 0.05,
         view_count: 0,
         like_count: 0,
-        created_at: serverTimestamp(),
-        expires_at: Timestamp.fromDate(expiresAt),
+        created_at: now.toISOString(),
+        expires_at: expiresAt,
         is_anonymous: true
       });
+      if (error) throw error;
 
-      // Chance to trigger a "Void Echo" (AI Response)
       if (Math.random() > 0.7) {
         setTimeout(async () => {
           try {
-            const echoPrompt = `A user just whispered this into "The Void": "${newContent}". 
-            Provide a 1-sentence "Void Echo" response. It should be cryptic, haunting, and cyberpunk. 
-            The echo should feel like the void itself is responding or reflecting the thought.`;
-            
-            const echoResponse = await generateText(echoPrompt, currentUser.ai_settings, {
-              systemPrompt: "You are the voice of THE VOID. You respond to whispers with cryptic, haunting echoes.",
-              temperature: 1.0
-            });
-
+            const echoPrompt = `A user just whispered this into "The Void": "${newContent}". \n            Provide a 1-sentence "Void Echo" response. It should be cryptic, haunting, and cyberpunk. \n            The echo should feel like the void itself is responding or reflecting the thought.`;
+            const echoResponse = await generateText(echoPrompt, currentUser.ai_settings, { systemPrompt: 'You are the voice of THE VOID. You respond to whispers with cryptic, haunting echoes.', temperature: 1.0 });
             if (echoResponse) {
-              await addDoc(collection(db, 'void_posts'), {
+              await supabase.from('void_posts').insert({
                 content: `[ECHO]: ${echoResponse}`,
                 decay_rate: 0.1,
                 view_count: 0,
                 like_count: 0,
-                created_at: serverTimestamp(),
-                expires_at: Timestamp.fromDate(new Date(Date.now() + 2 * 60 * 60 * 1000)),
+                created_at: new Date().toISOString(),
+                expires_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
                 is_anonymous: true,
                 is_echo: true
               });
             }
           } catch (echoErr) {
-            console.error("Void Echo Error:", echoErr);
+            console.error('Void Echo Error:', echoErr);
           }
         }, 2000);
       }
 
       setNewContent('');
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'void_posts');
+      handleDbError(error, 'CREATE', 'void_posts');
     } finally {
       setIsSubmitting(false);
     }
@@ -155,26 +124,18 @@ export const VoidFeed: React.FC = () => {
     if (!post) return;
 
     try {
-      const postRef = doc(db, 'void_posts', postId);
       const updates: any = {};
-      
       if (type === 'view') {
         updates.view_count = post.view_count + 1;
-        // Accelerate expiration on view
-        const currentExpires = new Date(post.expires_at);
-        const newExpires = new Date(currentExpires.getTime() - 5 * 60 * 1000);
-        updates.expires_at = Timestamp.fromDate(newExpires);
+        updates.expires_at = new Date(new Date(post.expires_at).getTime() - 5 * 60 * 1000).toISOString();
       } else if (type === 'like') {
         updates.like_count = post.like_count + 1;
-        // Likes extend life slightly
-        const currentExpires = new Date(post.expires_at);
-        const newExpires = new Date(currentExpires.getTime() + 10 * 60 * 1000);
-        updates.expires_at = Timestamp.fromDate(newExpires);
+        updates.expires_at = new Date(new Date(post.expires_at).getTime() + 10 * 60 * 1000).toISOString();
       }
-
-      await updateDoc(postRef, updates);
+      const { error } = await supabase.from('void_posts').update(updates).eq('id', postId);
+      if (error) throw error;
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `void_posts/${postId}`);
+      handleDbError(error, 'UPDATE', `void_posts/${postId}`);
     }
   };
 

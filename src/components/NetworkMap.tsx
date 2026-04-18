@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as d3 from 'd3';
-import { collection, getDocs, query, limit, onSnapshot, orderBy } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { User } from '../types';
 import { cn } from '../lib/utils';
 import { ArrowLeft, Loader2, Maximize2, Minimize2 } from 'lucide-react';
@@ -28,50 +28,49 @@ export const NetworkMap: React.FC = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    let unsubscribeUsers: () => void;
-    let unsubscribeFollows: () => void;
+    let usersChannel: ReturnType<typeof supabase.channel>;
+    let followsChannel: ReturnType<typeof supabase.channel>;
 
-    const startListeners = () => {
+    const loadData = async () => {
       setLoading(true);
-      
-      // Listen for users
-      const usersQuery = query(collection(db, 'users'), limit(100));
-      unsubscribeUsers = onSnapshot(usersQuery, (usersSnap) => {
-        const users: User[] = usersSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
-        
-        // Listen for follows
-        const followsQuery = query(collection(db, 'follows'), limit(500));
-        unsubscribeFollows = onSnapshot(followsQuery, (followsSnap) => {
-          const follows = followsSnap.docs.map(doc => doc.data());
+      try {
+        const [{ data: usersData }, { data: followsData }] = await Promise.all([
+          supabase.from('users').select('*').limit(100),
+          supabase.from('follows').select('follower_id, following_id').limit(500),
+        ]);
 
-          const nodes: Node[] = users.map(user => ({
-            id: user.id,
-            user,
-            radius: user.type === 'bot' ? 24 : 16,
-          }));
+        const users: User[] = (usersData ?? []) as User[];
+        const nodes: Node[] = users.map(user => ({
+          id: user.id,
+          user,
+          radius: user.type === 'bot' ? 24 : 16,
+        }));
 
-          const links: Link[] = follows
-            .filter(f => users.find(u => u.id === f.followerId) && users.find(u => u.id === f.followingId))
-            .map(f => ({
-              source: f.followerId,
-              target: f.followingId,
-            }));
+        const links: Link[] = ((followsData ?? []) as { follower_id: string; following_id: string }[])
+          .filter(f => users.find(u => u.id === f.follower_id) && users.find(u => u.id === f.following_id))
+          .map(f => ({ source: f.follower_id, target: f.following_id }));
 
-          updateChart(nodes, links);
-          setLoading(false);
-        }, (error) => {
-          handleFirestoreError(error, OperationType.LIST, 'follows');
-        });
-      }, (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'users');
-      });
+        updateChart(nodes, links);
+      } catch (err) {
+        handleDbError(err, 'LIST', 'network-map');
+      } finally {
+        setLoading(false);
+      }
     };
 
-    startListeners();
+    loadData();
+
+    usersChannel = supabase.channel('network-users')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => loadData())
+      .subscribe();
+
+    followsChannel = supabase.channel('network-follows')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'follows' }, () => loadData())
+      .subscribe();
 
     return () => {
-      if (unsubscribeUsers) unsubscribeUsers();
-      if (unsubscribeFollows) unsubscribeFollows();
+      supabase.removeChannel(usersChannel);
+      supabase.removeChannel(followsChannel);
     };
   }, []);
 
@@ -366,16 +365,21 @@ export const NetworkMap: React.FC = () => {
   const [recentActivity, setRecentActivity] = useState<any[]>([]);
 
   useEffect(() => {
-    const q = query(collection(db, 'posts'), orderBy('createdAt', 'desc'), limit(5));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const activities = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        type: 'post'
-      }));
-      setRecentActivity(activities);
-    });
-    return () => unsubscribe();
+    const fetchRecentActivity = async () => {
+      const { data } = await supabase
+        .from('posts')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(5);
+      setRecentActivity((data ?? []).map((post: any) => ({ ...post, type: 'post' })));
+    };
+
+    fetchRecentActivity();
+    const channel = supabase.channel('network-map-posts')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, () => fetchRecentActivity())
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   return (

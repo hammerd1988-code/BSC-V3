@@ -3,9 +3,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { X, Loader2, Upload, Camera, Cpu, Globe, Key, Palette, HeartHandshake, Megaphone, ExternalLink } from 'lucide-react';
 import { User, AiProvider } from '../types';
 import { useAuth } from '../AuthContext';
-import { db, storage, handleFirestoreError, OperationType } from '../firebase';
-import { doc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
-import { ref, uploadBytes, uploadString, getDownloadURL } from 'firebase/storage';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { v4 as uuidv4 } from 'uuid';
 import { cn } from '../lib/utils';
 import { AvatarBuilderModal } from './AvatarBuilderModal';
@@ -51,17 +50,12 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
     setError(null);
     try {
       const fileExt = file.name.split('.').pop();
-      const fileName = `${uuidv4()}.${fileExt}`;
-      const storageRef = ref(storage, `profile_images/${currentUser.id}/${type}_${fileName}`);
-      
-      await uploadBytes(storageRef, file);
-      const downloadURL = await getDownloadURL(storageRef);
-      
-      if (type === 'avatar') {
-        setAvatarUrl(downloadURL);
-      } else {
-        setCoverUrl(downloadURL);
-      }
+      const filePath = `profile_images/${currentUser.id}/${type}_${uuidv4()}.${fileExt}`;
+      const { error: upErr } = await supabase.storage.from('media').upload(filePath, file, { upsert: true });
+      if (upErr) throw upErr;
+      const { data: { publicUrl } } = supabase.storage.from('media').getPublicUrl(filePath);
+      if (type === 'avatar') setAvatarUrl(publicUrl);
+      else setCoverUrl(publicUrl);
     } catch (err) {
       console.error(err);
       setError(`Failed to upload ${type} image.`);
@@ -80,9 +74,12 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
     try {
       // Check if username is taken
       if (username !== user.username) {
-        const q = query(collection(db, 'users'), where('username', '==', username));
-        const querySnapshot = await getDocs(q);
-        if (!querySnapshot.empty) {
+        const { data: taken } = await supabase
+          .from('users')
+          .select('id')
+          .eq('username', username)
+          .maybeSingle();
+        if (taken) {
           setError('Username is already taken.');
           setIsSaving(false);
           return;
@@ -91,13 +88,14 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
 
       let finalAvatarUrl = avatarUrl;
       if (avatarUrl.startsWith('data:')) {
-        const storageRef = ref(storage, `profile_images/${currentUser.id}/avatar_${uuidv4()}.png`);
-        await uploadString(storageRef, avatarUrl, 'data_url');
-        finalAvatarUrl = await getDownloadURL(storageRef);
+        const filePath = `profile_images/${currentUser.id}/avatar_${uuidv4()}.png`;
+        const blob = await fetch(avatarUrl).then(r => r.blob());
+        const { error: upErr } = await supabase.storage.from('media').upload(filePath, blob, { upsert: true, contentType: 'image/png' });
+        if (upErr) throw upErr;
+        finalAvatarUrl = supabase.storage.from('media').getPublicUrl(filePath).data.publicUrl;
       }
 
-      const userRef = doc(db, 'users', currentUser.id);
-      await updateDoc(userRef, {
+      const { error: updateErr } = await supabase.from('users').update({
         display_name: displayName,
         username,
         bio,
@@ -105,17 +103,13 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
         cover_url: coverUrl,
         custom_accent: customAccent,
         sponsored_entity: sponsoredEntity.name ? sponsoredEntity : null,
-        ai_settings: {
-          provider: aiProvider,
-          endpoint: aiEndpoint,
-          model: aiModel,
-          apiKey: aiApiKey
-        }
-      });
+        ai_settings: { provider: aiProvider, endpoint: aiEndpoint, model: aiModel, apiKey: aiApiKey },
+      }).eq('id', currentUser.id);
+      if (updateErr) throw updateErr;
 
       onClose();
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `users/${currentUser.id}`);
+      handleDbError(err, 'UPDATE', `users/${currentUser.id}`);
       setError('Failed to update profile.');
     } finally {
       setIsSaving(false);

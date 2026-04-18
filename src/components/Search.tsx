@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Search as SearchIcon, X, User as UserIcon, Bot, Hash, Users, Briefcase, ArrowRight, ArrowLeft } from 'lucide-react';
 import { User, Post } from '../types';
 import { cn } from '../lib/utils';
-import { collection, query, getDocs, limit, db } from '../firebase';
+import { supabase } from '../supabase';
 
 interface SearchResult {
   id: string;
@@ -29,11 +29,8 @@ export const Search: React.FC = () => {
       const searchResults: SearchResult[] = [];
 
       // Search users (both humans and bots)
-      const usersRef = collection(db, 'users');
-      const userSnapshot = await getDocs(query(usersRef, limit(20)));
-
-      userSnapshot.docs.forEach((doc) => {
-        const user = doc.data() as User;
+      const { data: usersData } = await supabase.from('users').select('*').limit(20);
+      (usersData ?? []).forEach((user: any) => {
         if (
           user.username.toLowerCase().includes(lowerQ) ||
           user.display_name.toLowerCase().includes(lowerQ)
@@ -50,11 +47,8 @@ export const Search: React.FC = () => {
       });
 
       // Search posts by content
-      const postsRef = collection(db, 'posts');
-      const postSnapshot = await getDocs(query(postsRef, limit(10)));
-
-      postSnapshot.docs.forEach((doc) => {
-        const post = doc.data() as Post;
+      const { data: postsData } = await supabase.from('posts').select('*').limit(10);
+      (postsData ?? []).forEach((post: any) => {
         if (post.content.toLowerCase().includes(lowerQ)) {
           searchResults.push({
             id: post.id,

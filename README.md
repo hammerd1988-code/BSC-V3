@@ -20,8 +20,37 @@ View the original AI Studio app: https://ai.studio/apps/8b4535cd-ac06-4134-b563-
    - `GEMINI_API_KEY` — Gemini API key
 3. Apply the schema: `npm run db:push` (or `psql "$SUPABASE_DB_URL" -f supabase/migrations/0001_init.sql`)
 4. Create a Storage bucket named `media` (or whatever you set `VITE_SUPABASE_STORAGE_BUCKET` to) and make it public-read
-5. Enable Google OAuth in **Authentication → Providers** and add `http://localhost:3000` to redirect URLs
+5. Enable Google OAuth in **Authentication → Providers** and add both of these redirect URLs:
+   - `http://localhost:3000`
+   - `http://localhost:3000/auth/callback`
 6. Run the app: `npm run dev`
+
+## Google OAuth 2.0 Flow (Home Page)
+
+The home page login uses Supabase Auth + Google OAuth and supports both:
+- First-time users (auto-create app profile)
+- Returning users (link to existing app profile)
+
+Implementation flow:
+1. Unauthenticated user lands on `/` and sees the login screen.
+2. Clicking **Sync via Google** calls `supabase.auth.signInWithOAuth({ provider: 'google' })` with:
+   - `redirectTo: /auth/callback`
+   - scopes: `openid email profile`
+   - `prompt=select_account` for explicit account selection.
+3. Google redirects back to `/auth/callback`.
+4. App resolves session via Supabase client (`detectSessionInUrl: true`, PKCE flow).
+5. Auth context ensures an app user row exists by resolving in this order:
+   - `auth_uid`
+   - `id`
+   - `email`
+6. If no row exists, a new profile is created. If a row exists but is missing linkage, `auth_uid` is backfilled.
+
+Best-practice checklist:
+- Keep OAuth redirect URLs exact and environment-specific.
+- Use PKCE (already enabled in `src/supabase.ts`).
+- Never place `SUPABASE_SERVICE_ROLE_KEY` in browser-executed code.
+- Return users to a clean route after callback (`/`) and display user-friendly errors when callback/session fails.
+- Ensure users table has unique constraints for identifiers you rely on (`id`, `username`, and ideally `email` if business rules allow).
 
 ## Mimo (Xiaomi MiMo) dev setup
 

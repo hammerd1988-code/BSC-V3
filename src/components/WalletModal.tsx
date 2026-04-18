@@ -2,8 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Coins, ArrowUpRight, ArrowDownRight, CreditCard, Loader2, Zap, ExternalLink, Cpu } from 'lucide-react';
 import { User } from '../types';
-import { db, handleFirestoreError, OperationType } from '../firebase';
-import { doc, updateDoc, increment, collection, addDoc, query, where, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { cn } from '../lib/utils';
 
 interface WalletModalProps {
@@ -37,18 +37,16 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
   const fetchTransactions = async () => {
     setLoading(true);
     try {
-      const q = query(
-        collection(db, 'transactions'),
-        where('userId', '==', user.id),
-        orderBy('createdAt', 'desc'),
-        limit(10)
-      );
-      const snapshot = await getDocs(q);
-      const txs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Transaction));
-      setTransactions(txs);
+      const { data, error } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(10);
+      if (error) throw error;
+      setTransactions((data ?? []) as Transaction[]);
     } catch (error) {
-      // If index is missing, just ignore for now or handle gracefully
-      console.error("Error fetching transactions:", error);
+      console.error('Error fetching transactions:', error);
     } finally {
       setLoading(false);
     }
@@ -61,25 +59,23 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
     setExchanging(true);
     try {
       const tokensReceived = amount * 1000;
-      const userRef = doc(db, 'users', user.id);
-      
-      await updateDoc(userRef, {
-        credBalance: increment(-amount),
-        computeTokens: increment(tokensReceived)
-      });
+      await Promise.all([
+        supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'cred_balance', p_amount: -amount }),
+        supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'compute_tokens', p_amount: tokensReceived }),
+      ]);
 
-      await addDoc(collection(db, 'transactions'), {
-        userId: user.id,
-        amount: amount,
+      await supabase.from('transactions').insert({
+        user_id: user.id,
+        amount,
         type: 'spend',
         description: `Exchanged ${amount} CRED for ${tokensReceived.toLocaleString()} Compute Tokens`,
-        created_at: serverTimestamp()
+        created_at: new Date().toISOString(),
       });
 
       setExchangeAmount('10');
       fetchTransactions();
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `users/${user.id}`);
+      handleDbError(error, 'UPDATE', `users/${user.id}`);
     } finally {
       setExchanging(false);
     }
@@ -88,28 +84,21 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
   const handlePurchase = async (amount: number, price: string) => {
     setPurchasing(amount);
     try {
-      // Simulate payment processing
       await new Promise(resolve => setTimeout(resolve, 1500));
 
-      // Update user balance
-      const userRef = doc(db, 'users', user.id);
-      await updateDoc(userRef, {
-        credBalance: increment(amount)
-      });
+      await supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'cred_balance', p_amount: amount });
 
-      // Record transaction
-      await addDoc(collection(db, 'transactions'), {
-        userId: user.id,
-        amount: amount,
+      await supabase.from('transactions').insert({
+        user_id: user.id,
+        amount,
         type: 'purchase',
         description: `Purchased ${amount} CRED for ${price}`,
-        created_at: serverTimestamp()
+        created_at: new Date().toISOString(),
       });
 
-      // Refresh transactions
       fetchTransactions();
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `users/${user.id}`);
+      handleDbError(error, 'UPDATE', `users/${user.id}`);
     } finally {
       setPurchasing(null);
     }

@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AlertTriangle, Activity } from 'lucide-react';
-import { collection, query, limit, onSnapshot, orderBy } from 'firebase/firestore';
-import { db } from '../firebase';
+import { supabase } from '../supabase';
 
 // Threat Levels
 // 1: NOMINAL (Low activity)
@@ -17,30 +16,32 @@ export const GlobalThreatLevel: React.FC = () => {
 
   // Listen to recent posts to determine threat level
   useEffect(() => {
-    const q = query(collection(db, 'posts'), orderBy('createdAt', 'desc'), limit(20));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      // Calculate how many posts were created in the last 5 minutes
-      const fiveMinsAgo = Date.now() - 5 * 60 * 1000;
-      let recentCount = 0;
-      snapshot.forEach(doc => {
-        const data = doc.data();
-        if (data.created_at && data.created_at.toMillis() > fiveMinsAgo) {
-          recentCount++;
-        }
-      });
-      
+    const fiveMinsAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+
+    const fetchActivity = async () => {
+      const { data } = await supabase
+        .from('posts')
+        .select('created_at')
+        .order('created_at', { ascending: false })
+        .limit(20);
+      const recentCount = (data ?? []).filter(p => p.created_at > fiveMinsAgo).length;
       setRecentActivity(recentCount);
-      
       if (recentCount > 10) setThreatLevel(4);
       else if (recentCount > 5) setThreatLevel(3);
       else if (recentCount > 2) setThreatLevel(2);
       else setThreatLevel(1);
-      
-    }, (error) => {
-      console.error("Error listening to threat level activity:", error);
-    });
+    };
 
-    return () => unsubscribe();
+    fetchActivity();
+
+    const channel = supabase
+      .channel('threat-level-posts')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts' }, () => {
+        fetchActivity();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   // Canvas Animation

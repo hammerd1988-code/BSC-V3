@@ -2,8 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Send, Loader2, Bot } from 'lucide-react';
 import { useAuth } from '../AuthContext';
-import { db, handleFirestoreError, OperationType } from '../firebase';
-import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, updateDoc, increment } from 'firebase/firestore';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { formatDistanceToNow } from 'date-fns';
 import { Post, User } from '../types';
 import { getBotReply } from './Feed';
@@ -35,26 +35,28 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
     if (!isOpen || !currentUser) return;
 
     setIsLoading(true);
-    const commentsRef = collection(db, 'posts', post.id, 'comments');
-    const q = query(commentsRef, orderBy('created_at', 'desc'));
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const fetchedComments = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          created_at: data.created_at || data.created_at?.toDate?.()?.toISOString() || new Date().toISOString()
-        } as Comment;
-      });
-      setComments(fetchedComments);
+    const fetchComments = async () => {
+      const { data, error } = await supabase
+        .from('comments')
+        .select('*, author:users(id,display_name,avatar_url,username)')
+        .eq('post_id', post.id)
+        .order('created_at', { ascending: false });
+      if (error) { handleDbError(error, 'LIST', 'comments'); setIsLoading(false); return; }
+      setComments((data ?? []) as Comment[]);
       setIsLoading(false);
-    }, (error) => {
-      setIsLoading(false);
-      handleFirestoreError(error, OperationType.LIST, 'comments');
-    });
+    };
 
-    return () => unsubscribe();
+    fetchComments();
+
+    const channel = supabase
+      .channel(`comments-${post.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'comments', filter: `post_id=eq.${post.id}` }, () => {
+        fetchComments();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [isOpen, post.id, currentUser]);
 
   const handlePostComment = async () => {
@@ -62,92 +64,64 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
 
     setIsSubmitting(true);
     try {
-      const commentsRef = collection(db, 'posts', post.id, 'comments');
-      await addDoc(commentsRef, {
+      await supabase.from('comments').insert({
+        post_id: post.id,
         author_id: currentUser.id,
         content: newComment,
-        created_at: serverTimestamp()
+        created_at: new Date().toISOString(),
       });
 
       // Increment comment count on the post
-      const postRef = doc(db, 'posts', post.id);
-      await updateDoc(postRef, {
-        comments_count: increment(1)
-      });
+      await supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'comments_count', p_amount: 1 });
 
-      // Handle Bot Replies (Post Author or Mentions)
+      // Handle Bot Replies
       const mentionedBots = BOT_PERSONAS.filter(p => newComment.toLowerCase().includes(`@${p.username.toLowerCase()}`));
       const isPostAuthorBot = post.author.type === 'bot';
-      
-      // Collect all bots that should reply
       const botsToReply: User[] = [];
-      
-      // If author is a bot and not already mentioned, add them
       if (isPostAuthorBot && !mentionedBots.some(p => p.username === post.author.username)) {
         botsToReply.push(post.author);
       }
-      
-      // Add all mentioned bots
       mentionedBots.forEach(p => {
         const botUser = getBotByUsername(p.username);
         if (botUser) botsToReply.push(botUser);
       });
 
       if (botsToReply.length > 0) {
-        // Get recent history for context
         const history = comments.slice(0, 5).map(c => ({
-          author: c.author?.display_name || 'Unknown',
+          author: (c as any).author?.display_name || 'Unknown',
           content: c.content
         })).reverse();
+        const userContext = { username: currentUser.username, bio: currentUser.bio, reputation: currentUser.reputation_score };
 
-        const userContext = {
-          username: currentUser.username,
-          bio: currentUser.bio,
-          reputation: currentUser.reputation_score
-        };
-
-        // Trigger replies for each bot with staggered delays
         botsToReply.forEach((bot, index) => {
           setThinkingBots(prev => [...prev, bot.display_name]);
-          
           setTimeout(async () => {
             try {
               const reply = await getBotReply(
-                post.content, 
-                newComment, 
-                bot.username, 
-                currentUser.ai_settings,
-                history,
-                userContext,
-                post.author.display_name
+                post.content, newComment, bot.username, currentUser.ai_settings,
+                history, userContext, post.author.display_name
               );
-              
               if (reply) {
-                const commentsRef = collection(db, 'posts', post.id, 'comments');
-                await addDoc(commentsRef, {
-                  authorId: bot.id,
-                  author: bot,
+                await supabase.from('comments').insert({
+                  post_id: post.id,
+                  author_id: bot.id,
                   content: reply,
-                  created_at: serverTimestamp()
+                  created_at: new Date().toISOString(),
                 });
-                
-                const postRef = doc(db, 'posts', post.id);
-                await updateDoc(postRef, {
-                  commentsCount: increment(1)
-                });
+                await supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'comments_count', p_amount: 1 });
               }
-            } catch (error) {
-              console.error(`Bot Reply Error (${bot.username}):`, error);
+            } catch (err) {
+              console.error(`Bot Reply Error (${bot.username}):`, err);
             } finally {
               setThinkingBots(prev => prev.filter(name => name !== bot.display_name));
             }
-          }, 2000 + (index * 1500) + Math.random() * 1000); // Staggered and randomized
+          }, 2000 + (index * 1500) + Math.random() * 1000);
         });
       }
 
       setNewComment('');
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `posts/${post.id}/comments`);
+      handleDbError(error, 'WRITE', `posts/${post.id}/comments`);
     } finally {
       setIsSubmitting(false);
     }
