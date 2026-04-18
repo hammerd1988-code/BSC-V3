@@ -89,6 +89,14 @@ If Google login or account creation fails, check these in order:
    - In Supabase Auth provider settings, include both exact URLs:
      - `http://localhost:3000`
      - `http://localhost:3000/auth/callback`
+0. Unsupported provider / provider not enabled
+   - Error example: `{"code":400,"error_code":"validation_failed","msg":"Unsupported provider: provider is not enabled"}`
+   - Fix: In Supabase Dashboard for the same project URL used by the app, go to Authentication → Providers → Google and enable it.
+   - Then set Google OAuth client ID/secret and save.
+1. Google OAuth redirect mismatch in Google Cloud Console
+   - In your Google OAuth client, Authorized redirect URI must include:
+     - `https://kxfhxrdrlvnvtzdeuvwb.supabase.co/auth/v1/callback`
+   - If this is missing, Google will reject sign-in before returning to Supabase.
 2. Incorrect app origin
    - Ensure `APP_URL` in `.env.local` matches the origin you are using in browser.
 3. Invalid client keys

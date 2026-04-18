@@ -3,6 +3,38 @@ import { supabase } from '../supabase';
 import { BrainCircuit, Loader2 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
+function mapAuthErrorMessage(message: string): string {
+  if (/provider is not enabled|unsupported provider/i.test(message)) {
+    return 'Google OAuth is not enabled in Supabase for this project. Enable Google under Authentication > Providers and add this app callback URL, then retry.';
+  }
+  if (/invalid redirect|redirect url|redirect_to/i.test(message)) {
+    return 'OAuth redirect URL is not allowed. Add this app origin and /auth/callback to Supabase Auth redirect URL allow-list.';
+  }
+  return message;
+}
+
+function getAuthConfigError(): string | null {
+  const hasUrl =
+    Boolean(import.meta.env.VITE_SUPABASE_URL) ||
+    Boolean(import.meta.env.NEXT_PUBLIC_SUPABASE_URL) ||
+    Boolean(import.meta.env.SUPABASE_URL) ||
+    Boolean(import.meta.env.SUPABASE_PROJECT_URL);
+
+  const hasKey =
+    Boolean(import.meta.env.VITE_SUPABASE_ANON_KEY) ||
+    Boolean(import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) ||
+    Boolean(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY) ||
+    Boolean(import.meta.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) ||
+    Boolean(import.meta.env.SUPABASE_ANON_KEY) ||
+    Boolean(import.meta.env.SUPABASE_PUBLISHABLE_KEY);
+
+  if (!hasUrl || !hasKey) {
+    return 'Auth is not configured. Set Supabase project URL and anon/publishable key in environment variables, then reload.';
+  }
+
+  return null;
+}
+
 export const Login: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -36,6 +68,11 @@ export const Login: React.FC = () => {
   }, [isCallbackRoute, location.pathname, location.search, normalizeNext]);
 
   React.useEffect(() => {
+    const configError = getAuthConfigError();
+    if (configError) {
+      setLoginError(configError);
+    }
+
     // Surface provider/callback errors from OAuth return URL.
     const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
     const queryParams = new URLSearchParams(window.location.search);
@@ -46,7 +83,8 @@ export const Login: React.FC = () => {
       queryParams.get('message');
 
     if (error || description) {
-      setLoginError(description || 'Authentication failed. Please try again.');
+      const raw = description || 'Authentication failed. Please try again.';
+      setLoginError(mapAuthErrorMessage(raw));
       setIsLoggingIn(false);
       setAuthAction(null);
     }
@@ -94,10 +132,11 @@ export const Login: React.FC = () => {
       const callbackUrl = new URL('/auth/callback', window.location.origin);
       callbackUrl.searchParams.set('next', destination);
 
-      const { error } = await supabase.auth.signInWithOAuth({
+      const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           redirectTo: callbackUrl.toString(),
+          skipBrowserRedirect: true,
           scopes: 'openid email profile',
           queryParams: {
             prompt: mode === 'signup' ? 'consent select_account' : 'select_account',
@@ -105,9 +144,16 @@ export const Login: React.FC = () => {
         },
       });
       if (error) throw error;
+
+      if (!data?.url) {
+        throw new Error('Unable to start Google OAuth flow.');
+      }
+
+      window.location.assign(data.url);
     } catch (error) {
       console.error('Login failed', error);
-      setLoginError(error instanceof Error ? error.message : 'Authentication failed.');
+      const message = error instanceof Error ? error.message : 'Authentication failed.';
+      setLoginError(mapAuthErrorMessage(message));
       setIsLoggingIn(false);
       setAuthAction(null);
     }
