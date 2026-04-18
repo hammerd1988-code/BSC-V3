@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
+    "verify:auth": "npx tsx scripts/verify-auth-flow.ts",
     "db:push": "npx supabase db push",
     "db:reset": "npx supabase db reset",
     "db:migrate": "npx supabase migration up"
