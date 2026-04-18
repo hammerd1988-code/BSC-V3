@@ -93,10 +93,19 @@ If Google login or account creation fails, check these in order:
    - Error example: `{"code":400,"error_code":"validation_failed","msg":"Unsupported provider: provider is not enabled"}`
    - Fix: In Supabase Dashboard for the same project URL used by the app, go to Authentication → Providers → Google and enable it.
    - Then set Google OAuth client ID/secret and save.
-1. Google OAuth redirect mismatch in Google Cloud Console
-   - In your Google OAuth client, Authorized redirect URI must include:
-     - `https://kxfhxrdrlvnvtzdeuvwb.supabase.co/auth/v1/callback`
-   - If this is missing, Google will reject sign-in before returning to Supabase.
+1. Google OAuth redirect_uri_mismatch error
+   - Error: `Error 400: redirect_uri_mismatch — You can't sign in to this app because it doesn't comply with Google's OAuth 2.0 policy.`
+   - Fix: Add the Supabase callback URI to your Google Cloud Console:
+     1. Open [Google Cloud Console](https://console.cloud.google.com)
+     2. Go to APIs & Services → Credentials
+     3. Find your OAuth 2.0 Client ID (ID: 575596623182-egvckpi1rf599stu0ef2t8fchrrm86q4.apps.googleusercontent.com)
+     4. Edit it and go to **Authorized redirect URIs** section
+     5. Click **Add URI** and paste exactly:
+        ```
+        https://kxfhxrdrlvnvtzdeuvwb.supabase.co/auth/v1/callback
+        ```
+     6. Click **Save**
+     7. Wait 1-2 minutes for propagation, then retry sign-in
 2. Incorrect app origin
    - Ensure `APP_URL` in `.env.local` matches the origin you are using in browser.
 3. Invalid client keys
