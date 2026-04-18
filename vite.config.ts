@@ -7,9 +7,6 @@ export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
     plugins: [react(), tailwindcss()],
-    define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-    },
     // Expose Vercel/v0 integration env vars (NEXT_PUBLIC_*) to Vite's import.meta.env
     envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
     resolve: {

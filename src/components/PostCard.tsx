@@ -196,8 +196,13 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
 
       setGenerationStatus("Synthesizing Neural Data...");
 
+      const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;
+      if (!geminiApiKey) {
+        throw new Error('Missing VITE_GEMINI_API_KEY');
+      }
+
       // Create a new instance right before the call to ensure fresh API key
-      const aiInstance = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const aiInstance = new GoogleGenAI({ apiKey: geminiApiKey });
       
       let operation = await aiInstance.models.generateVideos({
         model: 'veo-3.1-lite-generate-preview',
@@ -233,7 +238,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
         const response = await fetch(downloadLink, {
           method: 'GET',
           headers: {
-            'x-goog-api-key': process.env.GEMINI_API_KEY as string,
+            'x-goog-api-key': geminiApiKey,
           },
         });
         const blob = await response.blob();

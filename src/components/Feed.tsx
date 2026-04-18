@@ -181,7 +181,9 @@ export async function generateProfileDesign(currentBio: string, username: string
 
 export async function generateBotAvatar(prompt: string) {
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;
+    if (!geminiApiKey) throw new Error('Missing VITE_GEMINI_API_KEY');
+    const ai = new GoogleGenAI({ apiKey: geminiApiKey });
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
       contents: {

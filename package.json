@@ -9,7 +9,7 @@
     "build": "vite build",
     "start": "node --experimental-strip-types server.ts",
     "preview": "vite preview",
-    "clean": "rm -rf dist",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "lint": "tsc --noEmit",
     "verify:auth": "npx tsx scripts/verify-auth-flow.ts",
     "db:push": "npx supabase db push",
