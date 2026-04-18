@@ -22,8 +22,8 @@ source ./scripts/mimo-env.sh      # load creds into shell
 # everyday
 ./scripts/mimo.sh chat "Explain my server.ts webhook auth."
 ./scripts/mimo.sh stream "Write a regex for semver strings."
-./scripts/mimo.sh explain src/firebase.ts
-./scripts/mimo.sh review src/supabase-shim/firestore.ts
+./scripts/mimo.sh explain src/AuthContext.tsx
+./scripts/mimo.sh review src/components/Transmissions.tsx
 
 # interactive UI
 mimo-tui
@@ -243,10 +243,10 @@ Put the cursor in `src/AuthContext.tsx`, run **Tasks: Run Task → mimo: review 
 
 ### Batch-explain a directory
 ```bash
-for f in src/supabase-shim/*.ts; do
+for f in src/components/*.tsx; do
   echo "=== $f ==="
   ./scripts/mimo.sh explain "$f"
-done | tee docs/supabase-shim-notes.md
+done | tee docs/component-notes.md
 ```
 
 ---

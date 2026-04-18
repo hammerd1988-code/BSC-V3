@@ -31,6 +31,20 @@ View the original AI Studio app: https://ai.studio/apps/8b4535cd-ac06-4134-b563-
 6. Run the app: `npm run dev`
 7. Optional auth safety smoke-test: `npm run verify:auth`
 
+## Frontend-Backend Connection Setup
+
+For reliable landing page, login, and account creation workflows, keep origins aligned:
+
+1. Frontend origin
+   - `APP_URL` should match the URL users open in browser (for example `http://localhost:3000`).
+2. Socket/API origin
+   - Set `CLIENT_ORIGIN` to the frontend origin for backend CORS checks.
+   - Set `VITE_SOCKET_URL` to the backend URL when frontend and backend are on different ports (for example `http://localhost:3001`).
+   - If frontend and backend are same-origin in production, leave `VITE_SOCKET_URL` unset.
+3. Webhook security
+   - Set `AGENT_WEBHOOK_SECRET` in all environments.
+   - In production, server rejects webhook requests if this secret is missing.
+
 ## Google OAuth 2.0 Flow (Login + Account Creation)
 
 The auth entry page supports both sign-in and account creation with Google OAuth.
