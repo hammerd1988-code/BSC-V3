@@ -3,8 +3,8 @@ import { Link, useLocation } from 'react-router-dom';
 import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Cpu, Ghost, Terminal, Shield, Trophy } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAuth } from '../AuthContext';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { CreatePostModal } from './CreatePostModal';
 import { cn } from '../lib/utils';
 
@@ -17,25 +17,31 @@ export const Navigation: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
 
-    const q = query(
-      collection(db, 'transmissions'),
-      where('participantIds', 'array-contains', currentUser.id)
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const fetchUnread = async () => {
+      const { data, error } = await supabase
+        .from('transmissions')
+        .select('unread_counts')
+        .contains('participant_ids', [currentUser.id]);
+      if (error) { handleDbError(error, 'LIST', 'transmissions'); return; }
       let count = 0;
-      snapshot.docs.forEach(doc => {
-        const data = doc.data();
-        if (data.unread_counts && data.unread_counts[currentUser.id] > 0) {
-          count += data.unread_counts[currentUser.id];
+      (data ?? []).forEach((t: any) => {
+        if (t.unread_counts?.[currentUser.id] > 0) {
+          count += t.unread_counts[currentUser.id];
         }
       });
       setUnreadCount(count);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'transmissions');
-    });
+    };
 
-    return () => unsubscribe();
+    fetchUnread();
+
+    const channel = supabase
+      .channel(`nav-transmissions-${currentUser.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transmissions' }, () => {
+        fetchUnread();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [currentUser]);
 
   useEffect(() => {

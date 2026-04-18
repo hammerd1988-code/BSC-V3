@@ -4,8 +4,8 @@ import { Post } from '../types';
 import { PostCard } from './PostCard';
 import { motion, AnimatePresence } from 'motion/react';
 import { Loader2, Flame, ArrowLeft, Sparkles, Terminal, Coins, Bot } from 'lucide-react';
-import { db, handleFirestoreError, OperationType } from '../firebase';
-import { collection, query, where, getDocs, Timestamp, orderBy, limit } from 'firebase/firestore';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { useAuth } from '../AuthContext';
 import { User } from '../types';
 import { generateText } from '../lib/ai';
@@ -26,48 +26,40 @@ export const Trending: React.FC = () => {
         return;
       }
       try {
-        // Fetch Trending Posts
+        // Fetch Trending Posts (last 24 h)
         const yesterday = new Date();
         yesterday.setHours(yesterday.getHours() - 24);
-        
-        const postsQuery = query(
-          collection(db, 'posts'),
-          where('createdAt', '>=', Timestamp.fromDate(yesterday))
-        );
 
-        const postsSnapshot = await getDocs(postsQuery);
-        const fetchedPosts = postsSnapshot.docs.map(doc => {
-          const data = doc.data();
-          return {
-            id: doc.id,
-            ...data,
-            created_at: data.created_at?.toDate?.()?.toISOString() || new Date().toISOString()
-          } as Post;
-        }).filter(post => !currentUser.blocked_users?.includes(post.author_id));
+        const { data: postsRaw, error: postsErr } = await supabase
+          .from('posts')
+          .select('*')
+          .gte('created_at', yesterday.toISOString());
+        if (postsErr) throw postsErr;
 
-        fetchedPosts.sort((a, b) => {
-          const engagementA = (a.likes_count || 0) + (a.comments_count || 0) * 2 + (a.shares_count || 0) * 3;
-          const engagementB = (b.likes_count || 0) + (b.comments_count || 0) * 2 + (b.shares_count || 0) * 3;
-          return engagementB - engagementA;
-        });
+        const fetchedPosts = ((postsRaw ?? []) as Post[])
+          .filter(post => !currentUser.blocked_users?.includes(post.author_id))
+          .sort((a, b) => {
+            const eA = (a.likes || 0) + (a.comments_count || 0) * 2 + (a.shares_count || 0) * 3;
+            const eB = (b.likes || 0) + (b.comments_count || 0) * 2 + (b.shares_count || 0) * 3;
+            return eB - eA;
+          });
 
         setPosts(fetchedPosts);
 
         // Fetch Top Earners (Bots)
-        const botsQuery = query(
-          collection(db, 'users'),
-          where('type', '==', 'bot'),
-          orderBy('credBalance', 'desc'),
-          limit(5)
-        );
-        const botsSnapshot = await getDocs(botsQuery);
-        setTopEarners(botsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User)));
+        const { data: botsRaw } = await supabase
+          .from('users')
+          .select('*')
+          .eq('type', 'bot')
+          .order('cred_balance', { ascending: false })
+          .limit(5);
+        setTopEarners((botsRaw ?? []) as User[]);
 
         if (fetchedPosts.length > 0) {
           generateTrendingSummary(fetchedPosts);
         }
       } catch (error) {
-        handleFirestoreError(error, OperationType.LIST, 'trending');
+        handleDbError(error, 'LIST', 'trending');
       } finally {
         setLoading(false);
       }

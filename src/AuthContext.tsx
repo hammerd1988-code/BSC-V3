@@ -46,29 +46,79 @@ function buildDefaultProfile(supaUser: SupaUser): User & { auth_uid: string; ema
 }
 
 async function ensureUserProfile(supaUser: SupaUser): Promise<User> {
-  const { data: existing, error: fetchErr } = await supabase
+  const meta = (supaUser.user_metadata ?? {}) as Record<string, any>;
+
+  // Resolve existing profile using multiple keys for legacy/migrated accounts.
+  let existing: any = null;
+
+  const { data: byAuthUid, error: authUidErr } = await supabase
     .from('users')
     .select('*')
-    .eq('id', supaUser.id)
+    .eq('auth_uid', supaUser.id)
     .maybeSingle();
+  if (authUidErr) console.error('[AuthContext] fetch by auth_uid:', authUidErr.message);
+  existing = byAuthUid;
 
-  if (fetchErr) console.error('[AuthContext] fetch user:', fetchErr.message);
+  if (!existing) {
+    const { data: byId, error: byIdErr } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', supaUser.id)
+      .maybeSingle();
+    if (byIdErr) console.error('[AuthContext] fetch by id:', byIdErr.message);
+    existing = byId;
+  }
+
+  if (!existing && supaUser.email) {
+    const { data: byEmail, error: byEmailErr } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', supaUser.email)
+      .maybeSingle();
+    if (byEmailErr) console.error('[AuthContext] fetch by email:', byEmailErr.message);
+    existing = byEmail;
+  }
 
   if (!existing) {
     const profile = buildDefaultProfile(supaUser);
-    const { error: insertErr } = await supabase.from('users').insert(profile);
-    if (insertErr) console.error('[AuthContext] insert user:', insertErr.message);
-    return profile as User;
+    const { data: inserted, error: insertErr } = await supabase
+      .from('users')
+      .insert(profile)
+      .select('*')
+      .maybeSingle();
+
+    if (insertErr) {
+      console.error('[AuthContext] insert user:', insertErr.message);
+      // Fallback: avoid blocking UI, but caller should still function with this in-memory shape.
+      return profile as User;
+    }
+
+    return (inserted ?? profile) as User;
   }
 
-  // Ensure critical columns are present
+  // Ensure critical columns are present and keep profile aligned with auth metadata.
   const updates: Record<string, any> = {};
   if (!existing.auth_uid) updates.auth_uid = supaUser.id;
-  if (supaUser.email === 'hammerd1988@gmail.com' && existing.role !== 'admin') updates.role = 'admin';
+  if (!existing.email && supaUser.email) updates.email = supaUser.email;
+  if (!existing.display_name && (meta.full_name || meta.name)) {
+    updates.display_name = meta.full_name ?? meta.name;
+  }
+  if (!existing.avatar_url && (meta.avatar_url || meta.picture)) {
+    updates.avatar_url = meta.avatar_url ?? meta.picture;
+  }
+  if (supaUser.email === 'hammerd1988@gmail.com' && existing.role !== 'admin') {
+    updates.role = 'admin';
+  }
 
   if (Object.keys(updates).length > 0) {
-    await supabase.from('users').update(updates).eq('id', supaUser.id);
-    return { ...existing, ...updates } as User;
+    const { data: updated, error: updateErr } = await supabase
+      .from('users')
+      .update(updates)
+      .eq('id', existing.id)
+      .select('*')
+      .maybeSingle();
+    if (updateErr) console.error('[AuthContext] update user:', updateErr.message);
+    return ({ ...existing, ...updates, ...(updated ?? {}) }) as User;
   }
 
   return existing as User;

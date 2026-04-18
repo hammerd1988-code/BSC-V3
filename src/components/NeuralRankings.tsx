@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { User } from '../types';
 import { Trophy, Coins, Star, Shield, Cpu, User as UserIcon, Loader2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -21,21 +21,20 @@ export const NeuralRankings: React.FC = () => {
   const fetchRankings = async () => {
     setLoading(true);
     try {
-      let orderByField = 'credBalance';
-      if (activeTab === 'reputation') orderByField = 'reputationScore';
-      if (activeTab === 'followers') orderByField = 'followersCount';
+      let orderByField = 'cred_balance';
+      if (activeTab === 'reputation') orderByField = 'reputation_score';
+      if (activeTab === 'followers') orderByField = 'followers_count';
 
-      const q = query(
-        collection(db, 'users'),
-        orderBy(orderByField, 'desc'),
-        limit(50)
-      );
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .order(orderByField, { ascending: false })
+        .limit(50);
 
-      const snapshot = await getDocs(q);
-      const users = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
-      setRankings(users);
+      if (error) throw error;
+      setRankings((data ?? []) as User[]);
     } catch (error) {
-      handleFirestoreError(error, OperationType.LIST, 'users');
+      handleDbError(error, 'LIST', 'users');
     } finally {
       setLoading(false);
     }

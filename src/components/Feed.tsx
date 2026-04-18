@@ -11,8 +11,8 @@ export { socket } from '../lib/socket'; // backward-compat re-export
 import { useAuth } from '../AuthContext';
 import { GenerateOptions, generateText } from '../lib/ai';
 import { AiSettings } from '../types';
-import { db, handleFirestoreError, OperationType } from '../firebase';
-import { collection, query, where, onSnapshot, orderBy, limit, doc, getDoc, getDocs } from 'firebase/firestore';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { CreatePostModal } from './CreatePostModal';
 import { GoogleGenAI } from "@google/genai";
 import { BOT_PERSONAS } from '../lib/botPersonas';
@@ -233,17 +233,11 @@ export const Feed: React.FC = () => {
       setIsSharedPostLoading(true);
       const fetchSharedPost = async () => {
         try {
-          const postDoc = await getDoc(doc(db, 'posts', postId));
-          if (postDoc.exists()) {
-            const data = postDoc.data();
-            setSharedPost({
-              id: postDoc.id,
-              ...data,
-              created_at: data.created_at || data.created_at?.toDate?.()?.toISOString() || new Date().toISOString()
-            } as Post);
-          }
+          const { data, error } = await supabase.from('posts').select('*').eq('id', postId).maybeSingle();
+          if (error) throw error;
+          if (data) setSharedPost(data as Post);
         } catch (error) {
-          console.error("Error fetching shared post:", error);
+          console.error('Error fetching shared post:', error);
         } finally {
           setIsSharedPostLoading(false);
         }
@@ -274,21 +268,20 @@ export const Feed: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser) return;
-    const q = query(
-      collection(db, 'transmissions'),
-      where('participant_ids', 'array-contains', currentUser.id)
-    );
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const fetchUnread = async () => {
+      const { data } = await supabase
+        .from('transmissions')
+        .select('unread_counts')
+        .contains('participant_ids', [currentUser.id]);
       let count = 0;
-      snapshot.docs.forEach(doc => {
-        const data = doc.data();
-        count += (data.unread_counts?.[currentUser.id] || 0);
-      });
+      (data ?? []).forEach((t: any) => { count += (t.unread_counts?.[currentUser.id] || 0); });
       setUnreadCount(count);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'transmissions');
-    });
-    return () => unsubscribe();
+    };
+    fetchUnread();
+    const txChannel = supabase.channel(`feed-tx-${currentUser.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transmissions' }, () => fetchUnread())
+      .subscribe();
+    return () => { supabase.removeChannel(txChannel); };
   }, [currentUser]);
 
   useEffect(() => {
@@ -319,62 +312,55 @@ export const Feed: React.FC = () => {
     setShowDonationModal(false);
   };
 
-  // Load posts from Firestore
+  // Load posts from Supabase
   useEffect(() => {
     if (!currentUser) return;
-    
     setLoading(true);
-    const q = query(collection(db, 'posts'), orderBy('created_at', 'desc'), limit(limitCount));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const fetchedPosts = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          created_at: data.created_at?.toDate?.()?.toISOString() || new Date().toISOString()
-        } as Post;
-      }).filter(post => !currentUser.blocked_users?.includes(post.author_id))
+
+    const fetchPosts = async () => {
+      const { data, error } = await supabase
+        .from('posts')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(limitCount);
+      if (error) { handleDbError(error, 'LIST', 'posts'); setLoading(false); return; }
+      const fetched = ((data ?? []) as Post[])
+        .filter(p => !currentUser.blocked_users?.includes(p.author_id))
         .sort((a, b) => {
           if (a.is_boosted && !b.is_boosted) return -1;
           if (!a.is_boosted && b.is_boosted) return 1;
-          return 0; // Maintain relative order (createdAt desc from query)
+          return 0;
         });
-      setPosts(fetchedPosts);
+      setPosts(fetched);
       setLoading(false);
-      
-      // If we got fewer posts than requested, there are no more
-      if (snapshot.docs.length < limitCount) {
-        setHasMore(false);
-      } else {
-        setHasMore(true);
-      }
-    }, (error) => {
-      setLoading(false);
-      handleFirestoreError(error, OperationType.LIST, 'posts');
-    });
+      setHasMore((data?.length ?? 0) >= limitCount);
+    };
 
-    return () => unsubscribe();
+    fetchPosts();
+
+    const channel = supabase.channel('feed-posts')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, () => fetchPosts())
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [currentUser, limitCount]);
 
   useEffect(() => {
     if (!currentUser) return;
-    const q = query(
-      collection(db, 'live_streams'), 
-      where('isLive', '==', true),
-      orderBy('startedAt', 'desc'),
-      limit(10)
-    );
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const streams = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        created_at: doc.data().created_at?.toDate?.()?.toISOString() || new Date().toISOString()
-      } as LiveStream));
-      setLiveStreams(streams);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'live_streams');
-    });
-    return () => unsubscribe();
+    const fetchStreams = async () => {
+      const { data } = await supabase
+        .from('streams')
+        .select('*')
+        .eq('is_live', true)
+        .order('started_at', { ascending: false })
+        .limit(10);
+      setLiveStreams((data ?? []) as LiveStream[]);
+    };
+    fetchStreams();
+    const streamsChannel = supabase.channel('feed-streams')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'streams' }, () => fetchStreams())
+      .subscribe();
+    return () => { supabase.removeChannel(streamsChannel); };
   }, []);
 
   const loadMorePosts = useCallback(() => {
@@ -395,24 +381,21 @@ export const Feed: React.FC = () => {
     setIsRecommending(true);
     try {
       // Get a larger pool of posts for recommendation
-      const q = query(collection(db, 'posts'), orderBy('createdAt', 'desc'), limit(50));
-      const snapshot = await getDocs(q);
-      const pool = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          created_at: data.created_at?.toDate?.()?.toISOString() || new Date().toISOString()
-        } as Post;
-      }).filter(post => !currentUser.blocked_users?.includes(post.author_id));
+      const { data: pool } = await supabase
+        .from('posts')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(50);
+      const filtered = ((pool ?? []) as Post[]).filter(p => !currentUser.blocked_users?.includes(p.author_id));
 
+      const postContents = filtered.slice(0, 5).map(p => p.content).join(' | ');
       const prompt = `You are a neural recommendation engine for the "Blood, Sweat, or Code" platform.
       User Profile:
       - Display Name: ${currentUser.display_name}
       - Bio: ${currentUser.bio}
       
       Post Pool (ID and Content):
-      ${pool.map(p => `[ID: ${p.id}] ${p.content.replace(/<[^>]*>/g, '').slice(0, 100)}`).join('\n')}
+      ${filtered.map(p => `[ID: ${p.id}] ${p.content.replace(/<[^>]*>/g, '').slice(0, 100)}`).join('\n')}
       
       Analyze the user's profile and the post pool. Rank the top 15 posts that this user would find most engaging based on their likely interests.
       Return ONLY a JSON array of post IDs in order of recommendation.
@@ -425,7 +408,7 @@ export const Feed: React.FC = () => {
 
       const recommendedIds = JSON.parse(response);
       const rankedPosts = recommendedIds
-        .map((id: string) => pool.find(p => p.id === id))
+        .map((id: string) => filtered.find(p => p.id === id))
         .filter(Boolean) as Post[];
       
       setRecommendedPosts(rankedPosts);

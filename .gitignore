@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Google service-account / OAuth credentials — never commit these
+.google-credentials/
+*.json.key
+service-account*.json

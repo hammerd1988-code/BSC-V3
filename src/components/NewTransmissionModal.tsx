@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Search, User as UserIcon, Bot, Loader2, Zap } from 'lucide-react';
-import { db, handleFirestoreError, OperationType } from '../firebase';
-import { collection, query, where, getDocs, limit, doc, setDoc, getDoc } from 'firebase/firestore';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { User, Transmission } from '../types';
 import { useAuth } from '../AuthContext';
 import { cn } from '../lib/utils';
@@ -51,27 +51,21 @@ export const NewTransmissionModal: React.FC<NewTransmissionModalProps> = ({ isOp
         }));
 
         if (searchQuery.trim()) {
-          const q = query(
-            collection(db, 'users'),
-            where('username', '>=', searchQuery.toLowerCase()),
-            where('username', '<=', searchQuery.toLowerCase() + '\uf8ff'),
-            limit(10)
-          );
-          const snapshot = await getDocs(q);
-          const firestoreUsers = snapshot.docs
-            .map(doc => ({ id: doc.id, ...(doc.data() as any) } as User))
+          const { data: dbUsers } = await supabase
+            .from('users')
+            .select('*')
+            .gte('username', searchQuery.toLowerCase())
+            .lte('username', searchQuery.toLowerCase() + '\uf8ff')
+            .limit(10);
+          const firestoreUsers = ((dbUsers ?? []) as User[])
             .filter(u => u.id !== currentUser.id && !currentUser.blocked_users?.includes(u.id));
-          
-          // Combine and remove duplicates
           users = [...botResults, ...firestoreUsers].filter((v, i, a) => a.findIndex(t => t.id === v.id) === i);
         } else {
-          // Default results: Void Architect + some other bots
-          const defaultBots = botResults.slice(0, 5);
-          users = defaultBots;
+          users = botResults.slice(0, 5);
         }
         setResults(users);
       } catch (error) {
-        handleFirestoreError(error, OperationType.LIST, 'users');
+        handleDbError(error, 'LIST', 'users');
       } finally {
         setLoading(false);
       }
@@ -83,38 +77,29 @@ export const NewTransmissionModal: React.FC<NewTransmissionModalProps> = ({ isOp
 
   const handleSelectUser = async (user: User) => {
     if (!currentUser) return;
-
     try {
       // Check if transmission already exists
-      const q = query(
-        collection(db, 'transmissions'),
-        where('participantIds', 'array-contains', currentUser.id)
-      );
-      const snapshot = await getDocs(q);
-      const existing = snapshot.docs.find(doc => {
-        const data = doc.data() as Transmission;
-        return data.participant_ids.includes(user.id);
-      });
+      const { data: existing } = await supabase
+        .from('transmissions')
+        .select('*')
+        .contains('participant_ids', [currentUser.id, user.id])
+        .maybeSingle();
 
       if (existing) {
-        onSelect({ id: existing.id, ...(existing.data() as any) } as Transmission);
+        onSelect(existing as Transmission);
       } else {
-        // Create new transmission
-        const newTransmissionRef = doc(collection(db, 'transmissions'));
-        const newTransmission: Transmission = {
-          id: newTransmissionRef.id,
+        const newTransmission: Omit<Transmission, 'id'> & { id: string } = {
+          id: crypto.randomUUID(),
           participant_ids: [currentUser.id, user.id],
-          unread_counts: {
-            [currentUser.id]: 0,
-            [user.id]: 0
-          }
+          unread_counts: { [currentUser.id]: 0, [user.id]: 0 },
         };
-        await setDoc(newTransmissionRef, newTransmission);
-        onSelect(newTransmission);
+        const { error } = await supabase.from('transmissions').insert(newTransmission);
+        if (error) throw error;
+        onSelect(newTransmission as Transmission);
       }
       onClose();
     } catch (error) {
-      console.error("Error creating transmission:", error);
+      console.error('Error creating transmission:', error);
     }
   };
 

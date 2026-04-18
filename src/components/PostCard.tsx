@@ -5,8 +5,8 @@ import { Post } from '../types';
 import { cn } from '../lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 import { GoogleGenAI } from "@google/genai";
-import { doc, deleteDoc, writeBatch, increment, collection } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 
 interface PostCardProps {
   post: Post;
@@ -43,36 +43,26 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
 
   const handleBoost = async () => {
     if (!currentUser || post.is_boosted) return;
-    
     if ((currentUser.cred_balance || 0) < 50) {
-      alert("Insufficient CRED. You need 50 CRED to boost a post.");
+      alert('Insufficient CRED. You need 50 CRED to boost a post.');
       return;
     }
-
     setIsBoosting(true);
     try {
-      const batch = writeBatch(db);
-      const postRef = doc(db, 'posts', post.id);
-      const userRef = doc(db, 'users', currentUser.id);
-      const txRef = doc(collection(db, 'transactions'));
-
-      batch.update(postRef, { 
-        isBoosted: true,
-        boosts: increment(1)
-      });
-      batch.update(userRef, { credBalance: increment(-50) });
-      
-      batch.set(txRef, {
-        userId: currentUser.id,
-        amount: 50,
-        type: 'spend',
-        description: 'Boosted a transmission',
-        created_at: new Date()
-      });
-
-      await batch.commit();
+      await Promise.all([
+        supabase.from('posts').update({ is_boosted: true }).eq('id', post.id),
+        supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'boosts', p_amount: 1 }),
+        supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'cred_balance', p_amount: -50 }),
+        supabase.from('transactions').insert({
+          user_id: currentUser.id,
+          amount: 50,
+          type: 'spend',
+          description: 'Boosted a transmission',
+          created_at: new Date().toISOString(),
+        }),
+      ]);
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `posts/${post.id}`);
+      handleDbError(error, 'UPDATE', `posts/${post.id}`);
     } finally {
       setIsBoosting(false);
     }
@@ -82,70 +72,40 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     e.preventDefault();
     const amount = parseInt(tipAmount);
     if (!amount || amount <= 0 || !currentUser || currentUser.id === post.author_id) return;
-    if ((currentUser.cred_balance || 0) < amount) {
-      alert("Insufficient CRED");
-      return;
-    }
+    if ((currentUser.cred_balance || 0) < amount) { alert('Insufficient CRED'); return; }
 
     try {
-      const batch = writeBatch(db);
-      
-      batch.update(doc(db, 'users', currentUser.id), {
-        cred_balance: increment(-amount)
-      });
-      
-      batch.update(doc(db, 'users', post.author_id), {
-        cred_balance: increment(amount)
-      });
-
-      batch.set(doc(collection(db, 'transactions')), {
-        user_id: currentUser.id,
-        amount: amount,
-        type: 'spend',
-        description: `Tipped post author for a transmission`,
-        created_at: new Date()
-      });
-
-      batch.set(doc(collection(db, 'transactions')), {
-        user_id: post.author_id,
-        amount: amount,
-        type: 'earn',
-        description: `Tip from ${currentUser.username}`,
-        created_at: new Date()
-      });
-
-      batch.set(doc(collection(db, 'notifications')), {
-        userId: post.author_id,
-        type: 'tip',
-        data: {
-          amount: amount,
-          senderName: currentUser.display_name,
-          senderUsername: currentUser.username,
-          message: tipMessage,
-          postId: post.id
-        },
-        read: false,
-        created_at: new Date()
-      });
-
-      await batch.commit();
+      await Promise.all([
+        supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'cred_balance', p_amount: -amount }),
+        supabase.rpc('increment_counter', { p_table: 'users', p_id: post.author_id, p_field: 'cred_balance', p_amount: amount }),
+        supabase.from('transactions').insert([
+          { user_id: currentUser.id, amount, type: 'spend', description: 'Tipped post author for a transmission', created_at: new Date().toISOString() },
+          { user_id: post.author_id, amount, type: 'earn', description: `Tip from ${currentUser.username}`, created_at: new Date().toISOString() },
+        ]),
+        supabase.from('notifications').insert({
+          user_id: post.author_id,
+          type: 'tip',
+          data: { amount, senderName: currentUser.display_name, senderUsername: currentUser.username, message: tipMessage, postId: post.id },
+          read: false,
+          created_at: new Date().toISOString(),
+        }),
+      ]);
       setShowTipModal(false);
       setTipMessage('');
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'tips');
+      handleDbError(error, 'CREATE', 'tips');
     }
   };
 
   const handleDelete = async () => {
     if (!currentUser || currentUser.id !== post.author_id) return;
-    
     setIsDeleting(true);
     try {
-      await deleteDoc(doc(db, 'posts', post.id));
+      const { error } = await supabase.from('posts').delete().eq('id', post.id);
+      if (error) throw error;
       if (onDelete) onDelete(post.id);
-      // The Feed will update automatically via onSnapshot
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `posts/${post.id}`);
+      handleDbError(error, 'DELETE', `posts/${post.id}`);
     } finally {
       setIsDeleting(false);
       setShowDeleteConfirm(false);

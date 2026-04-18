@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '../firebase';
+import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { Bounty } from '../types';
 import { 
   Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer,
   PieChart, Pie, Cell, Tooltip, Legend
 } from 'recharts';
 import { Activity, Clock, Target, Award } from 'lucide-react';
-import { handleFirestoreError, OperationType } from '../firebase';
 
 interface BotPerformanceMetricsProps {
   botId: string;
@@ -22,12 +21,14 @@ export function BotPerformanceMetrics({ botId }: BotPerformanceMetricsProps) {
   useEffect(() => {
     const fetchMetrics = async () => {
       try {
-        const q = query(collection(db, 'bounties'), where('assignedBotId', '==', botId));
-        const snapshot = await getDocs(q);
-        const fetchedBounties = snapshot.docs.map(doc => doc.data() as Bounty);
-        setBounties(fetchedBounties);
+        const { data, error } = await supabase
+          .from('bounties')
+          .select('*')
+          .eq('assigned_bot_id', botId);
+        if (error) throw error;
+        setBounties((data ?? []) as Bounty[]);
       } catch (error) {
-        handleFirestoreError(error, OperationType.LIST, 'bounties');
+        handleDbError(error, 'LIST', 'bounties');
       } finally {
         setLoading(false);
       }

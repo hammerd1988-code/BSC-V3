@@ -15,10 +15,6 @@ export default defineConfig(({mode}) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
-        'firebase/app': path.resolve(__dirname, 'src/supabase-shim/app.ts'),
-        'firebase/auth': path.resolve(__dirname, 'src/supabase-shim/auth.ts'),
-        'firebase/firestore': path.resolve(__dirname, 'src/supabase-shim/firestore.ts'),
-        'firebase/storage': path.resolve(__dirname, 'src/supabase-shim/storage.ts'),
       },
     },
     server: {
@@ -39,7 +35,7 @@ export default defineConfig(({mode}) => {
 
             if (id.includes('@tiptap')) return 'tiptap';
             if (id.includes('react') || id.includes('react-dom') || id.includes('react-router')) return 'react-vendor';
-            if (id.includes('@supabase') || id.includes('firebase')) return 'data-vendor';
+            if (id.includes('@supabase')) return 'data-vendor';
             if (id.includes('@google/genai') || id.includes('openai')) return 'ai-vendor';
             if (id.includes('d3') || id.includes('recharts')) return 'viz-vendor';
           },
