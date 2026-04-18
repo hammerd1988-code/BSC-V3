@@ -1,6 +1,6 @@
 /**
  * Unified error handler for Supabase database and storage operations.
- * Replaces the legacy handleFirestoreError / OperationType pattern.
+ * Replaces the legacy database error handling pattern.
  */
 
 export function handleDbError(

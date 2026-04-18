@@ -2,7 +2,7 @@ import { io, Socket } from 'socket.io-client';
 
 // Determine the Socket.io server URL. In dev (Vite standalone), the proxy
 // forwards /socket.io → http://localhost:3001. In production, same origin.
-const SOCKET_URL = import.meta.env.DEV ? '/' : '/';
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || '/';
 
 let _socket: Socket | null = null;
 

@@ -1,6 +1,6 @@
 # Blood Sweat Code — AI Agent Instructions
 
-Neural-link social streaming platform migrating from Firebase to Supabase. This guide helps AI agents be immediately productive.
+Neural-link social streaming platform fully migrated to native Supabase. This guide helps AI agents be immediately productive.
 
 ## Quick Start
 
@@ -14,13 +14,11 @@ npm run db:reset                 # Reset database (WARNING: destructive)
 ## Essential Context
 
 ### 🔄 Migration State
-- **Active Migration**: Firebase → Supabase via compatibility shim (`src/supabase-shim/`)
-- **Import Rewriting**: Firebase imports are aliased to shim at build time (see `vite.config.ts`)
-- **Dual Patterns**: Code may contain both Firebase SDK calls and native Supabase patterns
+- **Migration Complete**: Firebase and shim layers have been removed from the active app code.
+- **Single Pattern**: Use native Supabase client, SQL migrations, and realtime channels.
 
 ### 📁 Project Structure
-- `src/components/` - React components (20+ using Firebase imports)
-- `src/supabase-shim/` - Firebase SDK compatibility layer
+- `src/components/` - React components
 - `supabase/migrations/` - Numbered SQL migrations (0001_init.sql, etc.)
 - `scripts/` - MiMo AI CLI tools and database utilities
 - `.env.local` - Environment variables (VITE_ prefix for client-side)
@@ -78,10 +76,9 @@ return () => { supabase.removeChannel(channel); };
 
 ## Warnings
 
-- **DO NOT** mix Firebase and Supabase imports in new files
+- **DO NOT** add Firebase imports back into the codebase
 - **DO NOT** use camelCase in SQL or database field names
 - **DO NOT** forget to handle RLS policy errors gracefully
-- **ALWAYS** use the shim for components still importing Firebase
 
 ## Custom Agents
 

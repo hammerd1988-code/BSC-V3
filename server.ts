@@ -4,12 +4,29 @@ import { Server } from 'socket.io';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 
+function parseAllowedOrigins(): string[] {
+  const raw = [
+    process.env.APP_URL,
+    process.env.CLIENT_ORIGIN,
+    process.env.VITE_APP_URL,
+  ]
+    .filter(Boolean)
+    .join(',');
+
+  return raw
+    .split(',')
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
+}
+
 async function startServer() {
   const app = express();
+  const isProd = process.env.NODE_ENV === 'production';
+  const allowedOrigins = parseAllowedOrigins();
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
     cors: {
-      origin: '*',
+      origin: allowedOrigins.length > 0 ? allowedOrigins : (isProd ? false : '*'),
     },
   });
 
@@ -23,9 +40,18 @@ async function startServer() {
   // Webhook Authentication Middleware
   const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const apiKey = req.headers['x-api-key'] || req.body.apiKey;
-    const expectedKey = process.env.AGENT_WEBHOOK_SECRET || 'dev-secret-key';
+    const expectedKey = process.env.AGENT_WEBHOOK_SECRET;
+
+    if (!expectedKey) {
+      if (isProd) {
+        console.error('[WEBHOOK] AGENT_WEBHOOK_SECRET is required in production.');
+        return res.status(500).json({ success: false, error: 'Server webhook auth is not configured' });
+      }
+      console.warn('[WEBHOOK] AGENT_WEBHOOK_SECRET is not set. Using dev fallback key.');
+    }
+    const validKey = expectedKey || 'dev-secret-key';
     
-    if (!apiKey || apiKey !== expectedKey) {
+    if (!apiKey || apiKey !== validKey) {
       console.warn(`[WEBHOOK] Unauthorized access attempt from ${req.ip}`);
       return res.status(401).json({ success: false, error: 'Unauthorized: Invalid or missing API Key' });
     }
@@ -34,7 +60,13 @@ async function startServer() {
 
   // API Routes
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok' });
+    res.json({
+      status: 'ok',
+      environment: process.env.NODE_ENV || 'development',
+      uptimeSeconds: Math.round(process.uptime()),
+      socketCorsConfigured: allowedOrigins.length > 0 || !isProd,
+      timestamp: new Date().toISOString(),
+    });
   });
 
   // Webhook endpoint for AI agents

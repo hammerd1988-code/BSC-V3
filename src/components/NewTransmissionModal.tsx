@@ -57,9 +57,9 @@ export const NewTransmissionModal: React.FC<NewTransmissionModalProps> = ({ isOp
             .gte('username', searchQuery.toLowerCase())
             .lte('username', searchQuery.toLowerCase() + '\uf8ff')
             .limit(10);
-          const firestoreUsers = ((dbUsers ?? []) as User[])
+          const matchedUsers = ((dbUsers ?? []) as User[])
             .filter(u => u.id !== currentUser.id && !currentUser.blocked_users?.includes(u.id));
-          users = [...botResults, ...firestoreUsers].filter((v, i, a) => a.findIndex(t => t.id === v.id) === i);
+          users = [...botResults, ...matchedUsers].filter((v, i, a) => a.findIndex(t => t.id === v.id) === i);
         } else {
           users = botResults.slice(0, 5);
         }

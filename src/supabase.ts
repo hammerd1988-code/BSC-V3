@@ -36,8 +36,8 @@ export const supabase: SupabaseClient = createClient(url ?? 'http://localhost', 
 });
 
 /**
- * Firestore collection name → Postgres table name.
- * Firestore conventions use camelCase / singular; Postgres uses snake_case.
+ * Logical collection/table alias → Postgres table name.
+ * App conventions use camelCase / singular; Postgres uses snake_case.
  */
 export const COLLECTION_TO_TABLE: Record<string, string> = {
   users: 'users',
@@ -155,7 +155,7 @@ export function mapFieldName(field: string): string {
 }
 
 /**
- * Convert an ISO timestamp string (or legacy Firestore Timestamp) to a
+ * Convert an ISO timestamp string (or legacy timestamp object) to a
  * relative human-readable string.
  */
 export function formatTimestamp(value: string | null | undefined | { toDate?: () => Date }): string {

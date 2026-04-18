@@ -30,19 +30,14 @@ Required env vars: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_SUPABASE
 - **AI:** Google Gemini API (primary), OpenAI SDK (secondary)
 - **Real-time:** Socket.io for notifications/WebRTC + Supabase Realtime channels for DB changes
 
-## Firebase → Supabase Shim
+## Supabase Data Layer
 
-The codebase was migrated from Firebase but many components still use Firebase SDK import paths. Vite aliases (`vite.config.ts`) intercept all `firebase/auth`, `firebase/firestore`, and `firebase/storage` imports and redirect them to `src/supabase-shim/`. This means existing code using `getDoc`, `setDoc`, `collection`, `query`, etc. still works — it runs against Supabase under the hood.
+The codebase now uses native Supabase APIs directly.
 
-Key files:
-- `src/supabase-shim/firestore.ts` — implements Firestore SDK surface over Supabase PostgREST + Realtime
-- `src/supabase-shim/auth.ts` — wraps Supabase Auth to match Firebase Auth API
-- `src/supabase-shim/storage.ts` — wraps Supabase Storage
-- `src/supabase.ts` — raw Supabase client + `toDb()` / `fromDb()` field mappers
+Key file:
+- `src/supabase.ts` — Supabase client + `toDb()` / `fromDb()` field mappers
 
 **Naming convention:** TypeScript uses camelCase; Postgres columns use snake_case. Always use `toDb()` when writing to Supabase and `fromDb()` when reading, rather than manually mapping fields.
-
-`WriteBatch` is sequential (not atomic). `increment()` calls use Postgres RPC functions.
 
 ## State Management
 
@@ -62,7 +57,6 @@ Real-time data uses Supabase `channel().on('postgres_changes', ...)` subscriptio
 | `src/types/` | TypeScript types for User, Post, Transmission, Bounty, etc. |
 | `supabase/migrations/0001_init.sql` | Full DB schema + RLS policies |
 | `server.ts` | Express API routes + Socket.io event handlers |
-| `firestore.rules` | Original Firestore rules — reference these to understand RLS intent |
 
 ## Database Schema Overview
 
