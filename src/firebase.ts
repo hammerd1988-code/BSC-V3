@@ -67,7 +67,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
       tenantId: current?.tenantId,
       providerInfo: current?.providerData.map((provider) => ({
         providerId: provider.providerId,
-        display_name: provider.displayName,
+        displayName: provider.displayName,
         email: provider.email,
         photoUrl: provider.photoURL,
       })) || [],

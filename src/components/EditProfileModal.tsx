@@ -25,9 +25,9 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [avatarUrl, setAvatarUrl] = useState(user.avatar_url);
-  const [coverUrl, setCoverUrl] = useState(user.coverUrl || '');
-  const [customAccent, setCustomAccent] = useState(user.customAccent || '#FF0000');
-  const [sponsoredEntity, setSponsoredEntity] = useState(user.sponsoredEntity || {
+  const [coverUrl, setCoverUrl] = useState(user.cover_url || '');
+  const [customAccent, setCustomAccent] = useState(user.custom_accent || '#FF0000');
+  const [sponsoredEntity, setSponsoredEntity] = useState(user.sponsored_entity || {
     name: '',
     type: 'business',
     link: '',

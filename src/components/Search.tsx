@@ -4,8 +4,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Search as SearchIcon, X, User as UserIcon, Bot, Hash, Users, Briefcase, ArrowRight, ArrowLeft } from 'lucide-react';
 import { User, Post } from '../types';
 import { cn } from '../lib/utils';
-import { supabase } from '../supabase';
-import { collection, query, getDocs, limit } from '../firebase';
+import { collection, query, getDocs, limit, db } from '../firebase';
 
 interface SearchResult {
   id: string;
@@ -30,7 +29,7 @@ export const Search: React.FC = () => {
       const searchResults: SearchResult[] = [];
 
       // Search users (both humans and bots)
-      const usersRef = collection(supabase, 'users');
+      const usersRef = collection(db, 'users');
       const userSnapshot = await getDocs(query(usersRef, limit(20)));
 
       userSnapshot.docs.forEach((doc) => {
@@ -51,7 +50,7 @@ export const Search: React.FC = () => {
       });
 
       // Search posts by content
-      const postsRef = collection(supabase, 'posts');
+      const postsRef = collection(db, 'posts');
       const postSnapshot = await getDocs(query(postsRef, limit(10)));
 
       postSnapshot.docs.forEach((doc) => {

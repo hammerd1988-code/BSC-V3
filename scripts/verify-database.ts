@@ -14,16 +14,21 @@
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseServiceKeyRaw = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+
+const hasUsableServiceKey = !!supabaseServiceKeyRaw
+  && !supabaseServiceKeyRaw.includes('your_supabase_service_role_key_here')
+  && !supabaseServiceKeyRaw.includes('YOUR_')
+  && supabaseServiceKeyRaw.length > 32;
 
 if (!supabaseUrl) {
   console.error('Error: SUPABASE_URL is not set');
   process.exit(1);
 }
 
-// Use service role key if available (for admin operations), otherwise use anon key
-const apiKey = supabaseServiceKey || supabaseAnonKey;
+// Use service role key only if it appears to be a real key; otherwise fall back to anon.
+const apiKey = (hasUsableServiceKey ? supabaseServiceKeyRaw : undefined) || supabaseAnonKey;
 
 if (!apiKey) {
   console.error('Error: No Supabase API key found');
@@ -90,7 +95,7 @@ async function verifyTables(): Promise<{ found: string[]; missing: string[] }> {
 async function verifyRLS(): Promise<boolean> {
   console.log('\n[3/4] Verifying RLS policies...');
   
-  if (!supabaseServiceKey) {
+  if (!hasUsableServiceKey) {
     console.log('  ⚠ Skipping RLS verification (requires service role key)');
     return true;
   }
@@ -118,6 +123,11 @@ async function verifyRLS(): Promise<boolean> {
 
 async function verifyStorage(): Promise<boolean> {
   console.log('\n[4/4] Verifying storage bucket...');
+
+  if (!hasUsableServiceKey) {
+    console.log('  ⚠ Skipping storage bucket check (requires service role key)');
+    return true;
+  }
   
   const bucketName = process.env.VITE_SUPABASE_STORAGE_BUCKET || 'media';
   
@@ -151,7 +161,7 @@ async function main() {
   console.log('  Blood Sweat Code - Database Verification');
   console.log('═══════════════════════════════════════════════════════════');
   console.log(`\nSupabase URL: ${supabaseUrl}`);
-  console.log(`Using key type: ${supabaseServiceKey ? 'service_role' : 'anon'}`);
+  console.log(`Using key type: ${hasUsableServiceKey ? 'service_role' : 'anon'}`);
 
   const connectionOk = await verifyConnection();
   if (!connectionOk) {
