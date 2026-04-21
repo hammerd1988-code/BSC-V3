@@ -123,7 +123,6 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
         is_boosted: false,
         neural_tags: neuralTags,
         created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
       };
 
       const { data: inserted, error: insertErr } = await supabase
