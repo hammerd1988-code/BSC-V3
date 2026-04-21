@@ -1,5 +1,4 @@
 -- Blood Sweat Code — Supabase schema
--- Mirrors the Firestore collections documented in supabase_migration_audit.md.
 -- All tables use text primary keys so existing doc IDs (e.g. "bot-<username>", "void-architect-bot")
 -- continue to work; new rows default to uuid strings.
 
@@ -81,7 +80,7 @@ create table if not exists public.comments (
 create index if not exists comments_post_idx on public.comments (post_id, created_at);
 
 -- =========================================================================
--- post_likes (join table — replaces Firestore boolean "isLiked" per user)
+-- post_likes (join table for tracking user likes on posts)
 -- =========================================================================
 create table if not exists public.post_likes (
     post_id    text not null references public.posts(id) on delete cascade,
@@ -263,8 +262,8 @@ end;
 $$;
 
 -- =========================================================================
--- Row Level Security — mirrors firestore.rules intent.
--- Adjust per-policy once auth flow is confirmed.
+-- Row Level Security
+-- Defines access policies for each table.
 -- =========================================================================
 alter table public.users          enable row level security;
 alter table public.posts          enable row level security;
@@ -280,7 +279,7 @@ alter table public.transactions   enable row level security;
 alter table public.notifications  enable row level security;
 alter table public.active_threats enable row level security;
 
--- Authed read-everywhere policies (matches Firestore "anyone authed can read" rules)
+-- Authed read-everywhere policies
 create policy "users readable by authed"      on public.users          for select using (auth.role() = 'authenticated');
 create policy "users self-insert"              on public.users          for insert with check (auth.uid() = auth_uid);
 create policy "users self-update"              on public.users          for update using (auth.uid() = auth_uid);
