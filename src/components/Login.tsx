@@ -7,6 +7,9 @@ function mapAuthErrorMessage(message: string): string {
   if (/provider is not enabled|unsupported provider/i.test(message)) {
     return 'Google OAuth is not enabled in Supabase for this project. Enable Google under Authentication > Providers and add this app callback URL, then retry.';
   }
+  if (/deleted_client|invalid_client/i.test(message)) {
+    return 'Google OAuth client is invalid or deleted. Update Supabase Authentication > Providers > Google to use the active Google OAuth Client ID/Secret, then retry.';
+  }
   if (/invalid redirect|redirect url|redirect_to/i.test(message)) {
     return 'OAuth redirect URL is not allowed. Add this app origin and /auth/callback to Supabase Auth redirect URL allow-list.';
   }
