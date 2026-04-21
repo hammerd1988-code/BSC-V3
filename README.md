@@ -98,7 +98,7 @@ If Google login or account creation fails, check these in order:
    - Fix: Add the Supabase callback URI to your Google Cloud Console:
      1. Open [Google Cloud Console](https://console.cloud.google.com)
      2. Go to APIs & Services → Credentials
-     3. Find your OAuth 2.0 Client ID (ID: 575596623182-egvckpi1rf599stu0ef2t8fchrrm86q4.apps.googleusercontent.com)
+   3. Find your OAuth 2.0 Client ID (ID: 575596623182-2gi0ljpfd7kf2gbohnslt371pf9hjech.apps.googleusercontent.com)
      4. Edit it and go to **Authorized redirect URIs** section
      5. Click **Add URI** and paste exactly:
         ```
