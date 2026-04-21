@@ -7,6 +7,9 @@ function mapAuthErrorMessage(message: string): string {
   if (/provider is not enabled|unsupported provider/i.test(message)) {
     return 'Google OAuth is not enabled in Supabase for this project. Enable Google under Authentication > Providers and add this app callback URL, then retry.';
   }
+  if (/pkce code verifier not found/i.test(message)) {
+    return 'Google OAuth session verifier was missing. Restart sign-in from this page and complete it in the same tab without reloading.';
+  }
   if (/deleted_client|invalid_client/i.test(message)) {
     return 'Google OAuth client is invalid or deleted. Update Supabase Authentication > Providers > Google to use the active Google OAuth Client ID/Secret, then retry.';
   }
@@ -121,24 +124,6 @@ export const Login: React.FC = () => {
       setIsLoggingIn(true);
       setAuthAction('callback');
 
-      const queryParams = new URLSearchParams(window.location.search);
-      const code = queryParams.get('code');
-
-      if (code) {
-        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
-        if (exchangeError) {
-          // Some providers/retries can return an already-used-code warning;
-          // continue and attempt to read session from storage in that case.
-          const tolerated = /already been used|invalid flow state/i.test(exchangeError.message);
-          if (!tolerated) {
-            setLoginError(mapAuthErrorMessage(exchangeError.message || 'Failed to exchange OAuth code for session.'));
-            setIsLoggingIn(false);
-            setAuthAction(null);
-            return;
-          }
-        }
-      }
-
       let data: Awaited<ReturnType<typeof supabase.auth.getSession>>['data'] | null = null;
       let error: Awaited<ReturnType<typeof supabase.auth.getSession>>['error'] | null = null;
 
@@ -191,7 +176,6 @@ export const Login: React.FC = () => {
         provider: 'google',
         options: {
           redirectTo: callbackUrl.toString(),
-          skipBrowserRedirect: true,
           scopes: 'openid email profile',
           queryParams: {
             prompt: mode === 'signup' ? 'consent select_account' : 'select_account',
@@ -200,11 +184,10 @@ export const Login: React.FC = () => {
       });
       if (error) throw error;
 
-      if (!data?.url) {
-        throw new Error('Unable to start Google OAuth flow.');
+      // In browser environments Supabase handles the redirect automatically.
+      if (!data?.url && import.meta.env.DEV) {
+        console.warn('[Login] OAuth started without explicit URL payload; browser redirect is managed by supabase-js.');
       }
-
-      window.location.assign(data.url);
     } catch (error) {
       console.error('Login failed', error);
       const message = error instanceof Error ? error.message : 'Authentication failed.';
