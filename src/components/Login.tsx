@@ -105,7 +105,31 @@ export const Login: React.FC = () => {
     const finalizeOauth = async () => {
       setIsLoggingIn(true);
       setAuthAction('callback');
-      const { data, error } = await supabase.auth.getSession();
+
+      const queryParams = new URLSearchParams(window.location.search);
+      const code = queryParams.get('code');
+
+      if (code) {
+        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+        // If the code was already exchanged in another tab/retry path,
+        // continue and attempt to read the current session below.
+        if (exchangeError && import.meta.env.DEV) {
+          console.warn('[Login] exchangeCodeForSession warning:', exchangeError.message);
+        }
+      }
+
+      let data: Awaited<ReturnType<typeof supabase.auth.getSession>>['data'] | null = null;
+      let error: Awaited<ReturnType<typeof supabase.auth.getSession>>['error'] | null = null;
+
+      // Small retry window to avoid race conditions right after OAuth exchange.
+      for (let i = 0; i < 5; i += 1) {
+        const result = await supabase.auth.getSession();
+        data = result.data;
+        error = result.error;
+        if (data?.session?.user || error) break;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+
       if (cancelled) return;
 
       if (error) {
