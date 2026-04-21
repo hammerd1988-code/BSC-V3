@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+import { supabase } from "../supabase";
 
 export type BriefingType = "featured_entity" | "feed_briefing" | "user_summary";
 
