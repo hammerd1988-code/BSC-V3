@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { socket } from './lib/socket';
 import { useAuth } from './AuthContext';
 import { User } from './types';
+import { CallModal } from './components/CallModal';
 
 interface CallContextType {
   incomingCall: any | null;
@@ -28,13 +29,17 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     if (currentUser) {
+      // Connect and register user with socket server
+      socket.connect();
+      socket.emit('user:register', currentUser.id);
+
       const handleIncomingCall = (data: any) => {
         setIncomingCall(data);
       };
 
       socket.on('call:incoming', handleIncomingCall);
       socket.on('call:accepted', () => {
-        // Handle transition to active call if needed
+        // Handled in CallModal
       });
       socket.on('call:rejected', () => {
         setOutgoingCall(null);
@@ -49,6 +54,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         socket.off('call:accepted');
         socket.off('call:rejected');
         socket.off('call:ended');
+        socket.disconnect();
       };
     }
   }, [currentUser]);
@@ -58,7 +64,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const acceptCall = () => {
-    // Logic handled in CallModal but we can track state here
+    // Transition to active call UI
   };
 
   const rejectCall = () => {
@@ -89,6 +95,17 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       clearCall
     }}>
       {children}
+      
+      {/* Global Call UI */}
+      <CallModal 
+        isOpen={!!outgoingCall || !!incomingCall}
+        onClose={clearCall}
+        isIncoming={!!incomingCall}
+        incomingData={incomingCall}
+        targetUserId={outgoingCall?.targetUser.id}
+        targetUserName={outgoingCall?.targetUser.display_name}
+        targetUserAvatar={outgoingCall?.targetUser.avatar_url}
+      />
     </CallContext.Provider>
   );
 };
