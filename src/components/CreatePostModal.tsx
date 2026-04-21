@@ -138,7 +138,10 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
       
       editor.commands.setContent('');
       onClose();
+      alert('Post submitted successfully!');
     } catch (error) {
+      console.error('Submission error:', error);
+      alert('Error creating post: ' + (error instanceof Error ? error.message : String(error)));
       handleDbError(error, 'CREATE', 'posts');
     } finally {
       setIsSubmitting(false);
