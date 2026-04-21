@@ -229,8 +229,8 @@ export const Transmissions: React.FC = () => {
         .update({
           last_transmit: {
             content: message.trim(),
-            senderId: currentUser.id,
-            createdAt: new Date().toISOString()
+            sender_id: currentUser.id,
+            created_at: new Date().toISOString()
           },
           unread_counts: updatedUnread,
           updated_at: new Date().toISOString()
