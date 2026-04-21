@@ -5,7 +5,7 @@
     "buildCommand": "npm install --production=false"
   },
   "deploy": {
-    "startCommand": "node server.prod.ts",
+    "startCommand": "tsx server.prod.ts",
     "healthcheckPath": "/api/health",
     "healthcheckTimeout": 30,
     "restartPolicyType": "ON_FAILURE",
