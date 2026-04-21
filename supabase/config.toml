@@ -7,7 +7,7 @@ port = 5432
 port = 54323
 
 [auth]
-site_url = "http://localhost:3000"
+site_url = "https://bloodsweatcode.net"
 additional_redirect_urls = [
 	"http://localhost:3000",
 	"http://localhost:3000/auth/callback",
