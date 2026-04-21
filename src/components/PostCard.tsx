@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Heart, MessageCircle, MessageSquare, Share2, Bot, User as UserIcon, Sparkles, Video, Loader2, X, Radio, ShieldAlert, CheckCircle2, Trash2, AlertTriangle, TrendingUp, Coins, Terminal, Rocket } from 'lucide-react';
 import { Post } from '../types';
@@ -119,7 +119,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
 
   const handleShare = async () => {
     const shareData = {
-      title: `Transmission from ${post.author.display_name}`,
+      title: `Transmission from ${author.display_name}`,
       text: post.content.replace(/<[^>]*>/g, '').slice(0, 100) + '...',
       url: `${window.location.origin}/?post=${post.id}`
     };
@@ -169,7 +169,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     if (!showThinking && !thinkingText) {
       setIsThinkingLoading(true);
       setShowThinking(true);
-      const text = await getBotThinking(post.content, post.author.username, currentUser?.ai_settings);
+      const text = await getBotThinking(post.content, author.username, currentUser?.ai_settings);
       setThinkingText(text || null);
       setIsThinkingLoading(false);
     } else {
@@ -262,7 +262,21 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     }
   };
 
-  const isVoidArchitect = post.author.username === 'void_architect';
+  // Guard: post.author is joined by the Feed query but may be absent on
+  // bot-injected posts or stale realtime payloads. Use a safe fallback so the
+  // component never throws on missing author data.
+  const author = post.author ?? {
+    id: post.author_id,
+    username: post.author_id?.slice(0, 8) ?? 'unknown',
+    display_name: 'Loading...',
+    avatar_url: `https://picsum.photos/seed/${post.author_id}/200`,
+    type: 'human' as const,
+    is_live: false,
+    is_online: false,
+    activeStreamId: null,
+  };
+
+  const isVoidArchitect = author.username === 'void_architect';
 
   return (
     <motion.div
@@ -277,15 +291,15 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
       {/* Header */}
       <div className={cn("p-4 flex items-center justify-between", isVoidArchitect && "bg-zinc-950/50")}>
         <div className="flex items-center space-x-3">
-          <Link to={`/profile/${post.author.username}`} className="relative block">
+          <Link to={`/profile/${author.username}`} className="relative block">
             <div className={cn(
               "rounded-full p-0.5 transition-all duration-500",
-              post.author.is_live ? "bg-accent animate-pulse shadow-[0_0_10px_rgba(255,0,0,0.5)]" : "bg-transparent",
-              isVoidArchitect && !post.author.is_live && "bg-white/20"
+              author.is_live ? "bg-accent animate-pulse shadow-[0_0_10px_rgba(255,0,0,0.5)]" : "bg-transparent",
+              isVoidArchitect && !author.is_live && "bg-white/20"
             )}>
               <img
-                src={post.author.avatar_url}
-                alt={post.author.display_name}
+                src={author.avatar_url}
+                alt={author.display_name}
                 className={cn(
                   "w-10 h-10 rounded-full object-cover border-2 border-primary hover:opacity-80 transition-opacity",
                   isVoidArchitect && "grayscale contrast-125 border-white/20"
@@ -293,7 +307,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
               />
             </div>
             <div className="absolute -bottom-1 -right-1 bg-background rounded-full p-0.5 border border-primary">
-              {post.author.type === 'bot' ? (
+              {author.type === 'bot' ? (
                 <Bot className={cn("w-3 h-3 text-accent", isVoidArchitect && "text-white")} />
               ) : (
                 <UserIcon className="w-3 h-3 text-white" />
@@ -301,13 +315,13 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
             </div>
           </Link>
           <div>
-            <Link to={`/profile/${post.author.username}`} className="block group">
+            <Link to={`/profile/${author.username}`} className="block group">
               <h3 className={cn(
                 "font-bold text-sm tracking-tight flex items-center gap-1 group-hover:text-accent transition-colors",
                 isVoidArchitect && "font-mono uppercase tracking-widest text-white"
               )}>
-                {post.author.display_name}
-                {post.author.type === 'bot' && (
+                {author.display_name}
+                {author.type === 'bot' && (
                   <div className="flex items-center gap-1">
                     <motion.span
                       animate={{ opacity: [1, 0.5, 1] }}
@@ -341,9 +355,9 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
                     </AnimatePresence>
                   </div>
                 )}
-                {post.author.is_live && (
+                {author.is_live && (
                   <Link 
-                    to={`/golive?streamId=${post.author.activeStreamId}`}
+                    to={`/golive?streamId=${author.activeStreamId}`}
                     className="flex items-center gap-1 px-1.5 py-0.5 bg-accent rounded text-[8px] font-black text-white uppercase tracking-widest animate-pulse"
                   >
                     <Radio className="w-2 h-2" />
@@ -357,7 +371,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
                   </div>
                 )}
               </h3>
-              <p className="text-xs text-gray-400">@{post.author.username}</p>
+              <p className="text-xs text-gray-400">@{author.username}</p>
             </Link>
           </div>
         </div>
@@ -637,7 +651,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
             )}
           </div>
 
-          {post.author.type === 'bot' && (
+          {author.type === 'bot' && (
             <button
               onClick={toggleThinking}
               className={cn(
@@ -754,7 +768,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
               <div className="p-6 border-b border-white/10 flex items-center justify-between">
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">
                   <Coins className="w-5 h-5 text-yellow-500" />
-                  Tip {post.author.display_name}
+                  Tip {author.display_name}
                 </h2>
                 <button onClick={() => setShowTipModal(false)} className="p-1 hover:bg-white/10 rounded-full text-white">
                   <X className="w-6 h-6" />
@@ -801,3 +815,4 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     </motion.div>
   );
 };
+
