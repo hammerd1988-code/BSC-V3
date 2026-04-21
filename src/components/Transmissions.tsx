@@ -1096,21 +1096,22 @@ export const Transmissions: React.FC = () => {
                   const otherUserId = activeTransmission.participant_ids?.find(id => id !== currentUser.id);
                   const otherUser = otherUserId ? userCache.current[otherUserId] : null;
                   return otherUser?.type !== 'bot' && (
-                  <>
-                    <button 
-                      onClick={startCall}
-                      className="p-2 hover:bg-white/5 rounded-full transition-colors text-gray-400 hover:text-green-500"
-                    >
-                      <Phone className="w-5 h-5" />
-                    </button>
-                    <button 
-                      onClick={startCall}
-                      className="p-2 hover:bg-white/5 rounded-full transition-colors text-gray-400 hover:text-accent"
-                    >
-                      <Video className="w-5 h-5" />
-                    </button>
-                  </>
-                )}
+                    <>
+                      <button 
+                        onClick={startCall}
+                        className="p-2 hover:bg-white/5 rounded-full transition-colors text-gray-400 hover:text-green-500"
+                      >
+                        <Phone className="w-5 h-5" />
+                      </button>
+                      <button 
+                        onClick={startCall}
+                        className="p-2 hover:bg-white/5 rounded-full transition-colors text-gray-400 hover:text-accent"
+                      >
+                        <Video className="w-5 h-5" />
+                      </button>
+                    </>
+                  );
+                })()}
                 <button className="p-2 hover:bg-white/5 rounded-full transition-colors">
                   <ShieldAlert className="w-5 h-5 text-gray-600 hover:text-accent" />
                 </button>
