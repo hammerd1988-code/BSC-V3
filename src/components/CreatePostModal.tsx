@@ -87,7 +87,14 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
   };
 
   const handlePost = async () => {
-    if (!editor || editor.isEmpty || !currentUser) return;
+    if (!editor || editor.isEmpty) {
+      alert('Cannot post empty content.');
+      return;
+    }
+    if (!currentUser) {
+      alert('Neural link lost: No active session. Please sign in.');
+      return;
+    }
     
     setIsSubmitting(true);
     try {
@@ -113,6 +120,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
         console.error("Tag Gen Error:", tagErr);
       }
 
+      // Prepare the payload exactly matching the database schema
       const newPost = {
         author_id: currentUser.id,
         content,
@@ -122,26 +130,35 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
         shares_count: 0,
         is_boosted: false,
         neural_tags: neuralTags,
-        created_at: new Date().toISOString(),
+        // Let the DB handle created_at/updated_at defaults
       };
+
+      console.log('[Post] Submitting to Supabase:', newPost);
 
       const { data: inserted, error: insertErr } = await supabase
         .from('posts')
         .insert(newPost)
         .select()
         .single();
-      if (insertErr) throw insertErr;
+
+      if (insertErr) {
+        console.error('[Post] Insert Error:', insertErr);
+        throw insertErr;
+      }
+      
       const postWithId = inserted;
+      console.log('[Post] Successfully inserted:', postWithId);
 
       onPostCreated(postWithId);
       socket.emit('post:create', postWithId);
       
       editor.commands.setContent('');
       onClose();
-      alert('Post submitted successfully!');
-    } catch (error) {
+      alert('Neural transmission successful!');
+    } catch (error: any) {
       console.error('Submission error:', error);
-      alert('Error creating post: ' + (error instanceof Error ? error.message : String(error)));
+      const errorMsg = error.message || String(error);
+      alert(`Neural Link Failure: ${errorMsg}`);
       handleDbError(error, 'CREATE', 'posts');
     } finally {
       setIsSubmitting(false);
