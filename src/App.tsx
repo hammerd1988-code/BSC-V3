@@ -47,6 +47,7 @@ export default function App() {
   if (!currentUser) {
     return (
       <Routes>
+        <Route path="/auth/callback" element={<Login />} />
         <Route path="*" element={<Login />} />
       </Routes>
     );

@@ -1,5 +1,6 @@
 import React from 'react';
 import { supabase } from '../supabase';
+import type { Session, AuthError } from '@supabase/supabase-js';
 import { BrainCircuit, Loader2 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -119,46 +120,63 @@ export const Login: React.FC = () => {
   React.useEffect(() => {
     if (!shouldFinalizeOAuth) return;
 
-    let cancelled = false;
-    const finalizeOauth = async () => {
-      setIsLoggingIn(true);
-      setAuthAction('callback');
+    let settled = false;
 
-      let data: Awaited<ReturnType<typeof supabase.auth.getSession>>['data'] | null = null;
-      let error: Awaited<ReturnType<typeof supabase.auth.getSession>>['error'] | null = null;
+    // Lazily initialised so cleanup can always call these safely.
+    let unsubscribe = () => {};
+    let timeoutId: ReturnType<typeof setTimeout>;
 
-      // Small retry window to avoid race conditions right after OAuth exchange.
-      for (let i = 0; i < 15; i += 1) {
-        const result = await supabase.auth.getSession();
-        data = result.data;
-        error = result.error;
-        if (data?.session?.user || error) break;
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
+    setIsLoggingIn(true);
+    setAuthAction('callback');
 
-      if (cancelled) return;
+    const resolve = (session: Session | null, err?: AuthError | null) => {
+      if (settled) return;
+      settled = true;
+      unsubscribe();
+      clearTimeout(timeoutId);
 
-      if (error) {
-        setLoginError(error.message || 'Failed to complete sign in.');
+      if (err) {
+        setLoginError(mapAuthErrorMessage(err.message || 'Failed to complete sign in.'));
         setIsLoggingIn(false);
         setAuthAction(null);
         return;
       }
-
-      if (data.session?.user) {
-        // Clean OAuth hash/query params from URL after successful callback.
-        const destination = normalizeNext(nextTargetRef.current);
-        navigate(destination, { replace: true });
+      if (session?.user) {
+        // Clean OAuth params from URL and navigate to the intended destination.
+        navigate(normalizeNext(nextTargetRef.current), { replace: true });
         return;
       }
-
       setLoginError('Google sign-in did not return a valid session. Please try again.');
       setIsLoggingIn(false);
       setAuthAction(null);
     };
 
-    void finalizeOauth();
-    return () => { cancelled = true; };
+    // 1) Subscribe to auth state changes — the SIGNED_IN event fires when
+    //    supabase-js completes the PKCE code exchange (detectSessionInUrl).
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (_event === 'SIGNED_IN') resolve(session);
+      else if (_event === 'SIGNED_OUT') resolve(null);
+    });
+    unsubscribe = () => authListener.subscription.unsubscribe();
+
+    // 2) Immediate check — detectSessionInUrl may have already resolved the
+    //    session before this effect ran.
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (data.session?.user || error) resolve(data.session, error);
+    });
+
+    // 3) Hard timeout — if the PKCE exchange hasn't resolved in 8 s, surface
+    //    an error rather than spinning forever.
+    timeoutId = setTimeout(async () => {
+      const { data, error } = await supabase.auth.getSession();
+      resolve(data.session, error);
+    }, 8000);
+
+    return () => {
+      settled = true;
+      unsubscribe();
+      clearTimeout(timeoutId);
+    };
   }, [navigate, normalizeNext, shouldFinalizeOAuth]);
 
   const startGoogleAuth = async (mode: 'signin' | 'signup') => {

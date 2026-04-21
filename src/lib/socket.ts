@@ -18,9 +18,17 @@ export function getSocket(): Socket {
   return _socket;
 }
 
-// Lazy singleton — safe to call at module level with no side-effects
+// Lazy singleton — safe to call at module level with no side-effects.
+// Methods must be bound to the real socket so that `this` inside socket.io
+// internals (e.g. `this._callbacks['$call:incoming']`) refers to the real
+// socket instance, not the proxy target.
 export const socket: Socket = new Proxy({} as Socket, {
   get(_target, prop: string) {
-    return (getSocket() as any)[prop];
+    const realSocket = getSocket();
+    const value = (realSocket as any)[prop];
+    if (typeof value === 'function') {
+      return value.bind(realSocket);
+    }
+    return value;
   },
 });
