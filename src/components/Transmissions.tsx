@@ -27,13 +27,15 @@ import {
   Globe
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
+import { useCall } from '../CallContext';
 import { supabase } from '../supabase';
 import { Transmission, Transmit, User as UserType } from '../types';
 import { format } from 'date-fns';
 import { Link } from 'react-router-dom';
+import { NewTransmissionModal } from './NewTransmissionModal';
 
 export const Transmissions: React.FC = () => {
-  const { user: currentUser } = useAuth();
+  const { currentUser } = useAuth();
   const [transmissions, setTransmissions] = useState<Transmission[]>([]);
   const [activeTransmission, setActiveTransmission] = useState<Transmission | null>(null);
   const [transmits, setTransmits] = useState<Transmit[]>([]);
@@ -204,7 +206,6 @@ export const Transmissions: React.FC = () => {
       const newTransmit = {
         transmission_id: activeTransmission.id,
         sender_id: currentUser.id,
-        receiver_id: otherUserId,
         content: message.trim(),
         type: 'text',
         burn_duration: burnDuration,
@@ -287,9 +288,18 @@ export const Transmissions: React.FC = () => {
     });
   }, [transmissions, searchQuery, currentUser]);
 
+  const { initiateCall } = useCall();
+
   const startCall = () => {
-    // Placeholder for WebRTC call functionality
-    alert("NEURAL AUDIO/VIDEO LINK: Feature pending hardware authorization.");
+    if (!activeTransmission || !currentUser) return;
+    const otherUserId = activeTransmission.participant_ids?.find(id => id !== currentUser.id);
+    const otherUser = otherUserId ? userCache.current[otherUserId] : null;
+    
+    if (otherUser) {
+      initiateCall(otherUser);
+    } else {
+      alert("NEURAL LINK ERROR: Target node not found in current sector.");
+    }
   };
 
   if (!currentUser) return null;
@@ -642,42 +652,14 @@ export const Transmissions: React.FC = () => {
       </div>
 
       {/* New Chat Modal */}
-      <AnimatePresence>
-        {showNewChat && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#0a0a0a] border border-white/10 rounded-2xl overflow-hidden shadow-2xl"
-            >
-              <div className="p-6 border-b border-white/10 flex items-center justify-between">
-                <h3 className="text-sm font-black text-white uppercase tracking-widest">New Neural Link</h3>
-                <button onClick={() => setShowNewChat(false)} className="text-gray-600 hover:text-white">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-              <div className="p-6">
-                <div className="relative mb-6">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-600" />
-                  <input 
-                    type="text"
-                    placeholder="SEARCH ENTITY BY USERNAME..."
-                    className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-white placeholder:text-gray-700 outline-none focus:border-accent/50 transition-all uppercase text-[10px]"
-                  />
-                </div>
-                <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
-                  <p className="text-[8px] text-gray-700 uppercase tracking-widest mb-4">Network Suggestions</p>
-                  {/* This would be populated with actual users */}
-                  <div className="text-center py-8 text-gray-700 uppercase tracking-widest text-[10px]">
-                    Scanning local nodes...
-                  </div>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <NewTransmissionModal 
+        isOpen={showNewChat}
+        onClose={() => setShowNewChat(false)}
+        onSelect={(t) => {
+          setActiveTransmission(t);
+          setShowNewChat(false);
+        }}
+      />
     </div>
   );
 };
