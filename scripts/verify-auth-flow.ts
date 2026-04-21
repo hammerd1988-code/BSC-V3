@@ -12,7 +12,7 @@ function normalizeNext(value: string | null | undefined): string {
 }
 
 function buildCallbackUrl(origin: string, next: string): string {
-  const callbackUrl = new URL('/auth/callback', origin);
+  const callbackUrl = new URL('/', origin);
   callbackUrl.searchParams.set('next', normalizeNext(next));
   return callbackUrl.toString();
 }
@@ -42,14 +42,14 @@ function run(): void {
   assertEqual(
     'callback url with safe next',
     callback,
-    'http://localhost:3000/auth/callback?next=%2Fjobs',
+    'http://localhost:3000/?next=%2Fjobs',
   );
 
   const callbackBlocked = buildCallbackUrl('http://localhost:3000', 'https://evil.example');
   assertEqual(
     'callback url with blocked next',
     callbackBlocked,
-    'http://localhost:3000/auth/callback?next=%2F',
+    'http://localhost:3000/?next=%2F',
   );
 
   console.log('Auth flow smoke tests passed.');

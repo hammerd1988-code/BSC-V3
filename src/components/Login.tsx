@@ -42,6 +42,11 @@ export const Login: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const isCallbackRoute = location.pathname === '/auth/callback';
+  const hasOAuthCode = React.useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return params.has('code');
+  }, [location.search]);
+  const shouldFinalizeOAuth = isCallbackRoute || hasOAuthCode;
   const nextTargetRef = React.useRef<string>('/');
 
   const [isLoggingIn, setIsLoggingIn] = React.useState(false);
@@ -65,10 +70,10 @@ export const Login: React.FC = () => {
     }
 
     const currentTarget = `${location.pathname}${location.search}`;
-    if (!isCallbackRoute) {
+    if (!shouldFinalizeOAuth) {
       nextTargetRef.current = normalizeNext(currentTarget);
     }
-  }, [isCallbackRoute, location.pathname, location.search, normalizeNext]);
+  }, [location.pathname, location.search, normalizeNext, shouldFinalizeOAuth]);
 
   React.useEffect(() => {
     const configError = getAuthConfigError();
@@ -94,7 +99,7 @@ export const Login: React.FC = () => {
   }, []);
 
   React.useEffect(() => {
-    if (!isCallbackRoute) return;
+    if (!shouldFinalizeOAuth) return;
 
     let cancelled = false;
     const finalizeOauth = async () => {
@@ -124,7 +129,7 @@ export const Login: React.FC = () => {
 
     void finalizeOauth();
     return () => { cancelled = true; };
-  }, [isCallbackRoute, navigate, normalizeNext]);
+  }, [navigate, normalizeNext, shouldFinalizeOAuth]);
 
   const startGoogleAuth = async (mode: 'signin' | 'signup') => {
     setLoginError(null);
@@ -132,7 +137,9 @@ export const Login: React.FC = () => {
     setAuthAction(mode);
     try {
       const destination = normalizeNext(nextTargetRef.current);
-      const callbackUrl = new URL('/auth/callback', window.location.origin);
+      // Use root as OAuth return path so deployments without SPA rewrites
+      // still complete auth and can finalize from the OAuth code query param.
+      const callbackUrl = new URL('/', window.location.origin);
       callbackUrl.searchParams.set('next', destination);
 
       const { data, error } = await supabase.auth.signInWithOAuth({
@@ -175,7 +182,7 @@ export const Login: React.FC = () => {
       </div>
       <h1 className="text-3xl font-black text-white uppercase italic tracking-tighter mb-2">Neural Link</h1>
       <p className="text-zinc-500 font-bold uppercase tracking-widest text-xs mb-12 text-center max-w-xs leading-relaxed">
-        {isCallbackRoute
+        {shouldFinalizeOAuth
           ? 'Finalizing secure Google OAuth handshake...'
           : 'Establish connection to the global consciousness network.'}
       </p>
