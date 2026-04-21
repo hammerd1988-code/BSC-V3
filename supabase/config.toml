@@ -16,7 +16,9 @@ additional_redirect_urls = [
 	"https://bsc-v3-git-main-hammerd1988-3391s-projects.vercel.app",
 	"https://bsc-v3-git-main-hammerd1988-3391s-projects.vercel.app/auth/callback",
 	"https://bsc-v3-d851ghzuw-hammerd1988-3391s-projects.vercel.app",
-	"https://bsc-v3-d851ghzuw-hammerd1988-3391s-projects.vercel.app/auth/callback"
+	"https://bsc-v3-d851ghzuw-hammerd1988-3391s-projects.vercel.app/auth/callback",
+	"https://bsc-v3-k934rm5o1-hammerd1988-3391s-projects.vercel.app",
+	"https://bsc-v3-k934rm5o1-hammerd1988-3391s-projects.vercel.app/auth/callback"
 ]
 jwt_expiry = 3600
 enable_signup = true
