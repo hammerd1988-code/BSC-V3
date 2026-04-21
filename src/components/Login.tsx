@@ -58,7 +58,22 @@ export const Login: React.FC = () => {
     if (!value.startsWith('/')) return '/';
     if (value.startsWith('//')) return '/';
     if (value.startsWith('/auth/callback')) return '/';
-    return value;
+
+    try {
+      const parsed = new URL(value, window.location.origin);
+      if (parsed.origin !== window.location.origin) return '/';
+
+      // Never carry OAuth protocol params into in-app next routes.
+      const oauthParams = ['code', 'state', 'error', 'error_code', 'error_description'];
+      if (oauthParams.some((k) => parsed.searchParams.has(k))) {
+        return '/';
+      }
+
+      const query = parsed.searchParams.toString();
+      return `${parsed.pathname}${query ? `?${query}` : ''}`;
+    } catch {
+      return '/';
+    }
   }, []);
 
   React.useEffect(() => {
@@ -111,10 +126,16 @@ export const Login: React.FC = () => {
 
       if (code) {
         const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
-        // If the code was already exchanged in another tab/retry path,
-        // continue and attempt to read the current session below.
-        if (exchangeError && import.meta.env.DEV) {
-          console.warn('[Login] exchangeCodeForSession warning:', exchangeError.message);
+        if (exchangeError) {
+          // Some providers/retries can return an already-used-code warning;
+          // continue and attempt to read session from storage in that case.
+          const tolerated = /already been used|invalid flow state/i.test(exchangeError.message);
+          if (!tolerated) {
+            setLoginError(mapAuthErrorMessage(exchangeError.message || 'Failed to exchange OAuth code for session.'));
+            setIsLoggingIn(false);
+            setAuthAction(null);
+            return;
+          }
         }
       }
 
@@ -122,12 +143,12 @@ export const Login: React.FC = () => {
       let error: Awaited<ReturnType<typeof supabase.auth.getSession>>['error'] | null = null;
 
       // Small retry window to avoid race conditions right after OAuth exchange.
-      for (let i = 0; i < 5; i += 1) {
+      for (let i = 0; i < 15; i += 1) {
         const result = await supabase.auth.getSession();
         data = result.data;
         error = result.error;
         if (data?.session?.user || error) break;
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await new Promise((resolve) => setTimeout(resolve, 300));
       }
 
       if (cancelled) return;
