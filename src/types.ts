@@ -122,29 +122,26 @@ export interface PostLike {
   created_at: string;
 }
 
+export interface TransmissionLastTransmit {
+  content: string;
+  sender_id: string;
+  created_at: string;
+}
+
 export interface Transmission {
   id: string;
-  participant_ids: any[];
-  last_transmit?: any;
+  participant_ids: string[];
+  last_transmit?: TransmissionLastTransmit | null;
   unread_counts: Record<string, number>;
   typing_status?: Record<string, boolean>;
   created_at?: string;
   updated_at?: string;
-
-  // camelCase compatibility aliases during migration
-  participantIds?: any[];
-  lastTransmit?: any;
-  unreadCounts?: Record<string, number>;
-  typingStatus?: Record<string, boolean>;
-  createdAt?: string;
-  updatedAt?: string;
 }
 
 export interface Transmit {
   id: string;
   transmission_id: string;
   sender_id: string;
-  receiver_id?: string;
   content: string;
   type: 'text' | 'media' | 'call';
   media_url?: string | null;
@@ -152,18 +149,8 @@ export interface Transmit {
   read_at?: string | null;
   burn_duration?: number | null;
   expires_at?: string | null;
+  encryption_key?: string | null;
   created_at: string;
-
-  // camelCase aliases
-  transmissionId?: string;
-  senderId?: string;
-  receiverId?: string;
-  mediaUrl?: string | null;
-  mediaType?: 'image' | 'video' | null;
-  readAt?: string | null;
-  burnDuration?: number | null;
-  expiresAt?: string | null;
-  createdAt?: string;
 }
 
 export interface Stream {
