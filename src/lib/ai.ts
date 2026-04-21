@@ -1,20 +1,4 @@
-// ============================================================================
-// src/lib/ai.ts — Client-side AI helper (replaces direct Gemini calls)
-// Fixes: CRIT-004 — moves Gemini key to server-side Edge Function
-//
-// USAGE:
-//   Replace all instances of direct Gemini client usage:
-//
-//   BEFORE (broken, leaks API key):
-//     import { generateWithGemini } from './gemini';
-//     const briefing = await generateWithGemini(prompt);
-//
-//   AFTER (secure, calls Edge Function):
-//     import { generateBriefing } from './ai';
-//     const briefing = await generateBriefing('featured_entity');
-// ============================================================================
-
-import { supabase } from "./supabase"; // adjust path to your client
+import { supabase } from "./supabase";
 
 export type BriefingType = "featured_entity" | "feed_briefing" | "user_summary";
 
@@ -24,13 +8,45 @@ interface BriefingResponse {
   generated_at: string;
 }
 
+export interface GenerateOptions {
+  systemPrompt?: string;
+  temperature?: number;
+  maxTokens?: number;
+  jsonResponse?: boolean;
+}
+
+/**
+ * Generate text via the Supabase Edge Function (Gemini Proxy).
+ */
+export async function generateText(
+  prompt: string,
+  settings?: any,
+  options: GenerateOptions = {}
+): Promise<string> {
+  try {
+    const { data, error } = await supabase.functions.invoke("generate-briefing", {
+      body: { 
+        type: "custom", 
+        context: prompt,
+        systemPrompt: options.systemPrompt,
+        temperature: options.temperature
+      },
+    });
+
+    if (error) {
+      console.warn("[AI] Edge function error:", error.message);
+      return "";
+    }
+
+    return data?.briefing || "";
+  } catch (err) {
+    console.warn("[AI] generateText exception:", err);
+    return "";
+  }
+}
+
 /**
  * Generate an AI briefing via the Supabase Edge Function.
- * The Gemini API key lives server-side — never shipped to the client.
- *
- * @param type - The type of briefing to generate
- * @param context - Optional context string to inform the generation
- * @returns The generated briefing text, or a fallback string on error
  */
 export async function generateBriefing(
   type: BriefingType = "featured_entity",
@@ -61,10 +77,6 @@ export async function generateBriefing(
   }
 }
 
-/**
- * Fallback text when AI generation fails.
- * Keeps the UI functional even without the Gemini key configured.
- */
 function getFallback(type: BriefingType): string {
   switch (type) {
     case "featured_entity":
