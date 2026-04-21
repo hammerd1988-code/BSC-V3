@@ -12,7 +12,6 @@ import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
 import { socket } from '../lib/socket';
 import { v4 as uuidv4 } from 'uuid';
-import { generateText } from '../lib/ai';
 
 interface CreatePostModalProps {
   isOpen: boolean;
@@ -99,38 +98,18 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
     setIsSubmitting(true);
     try {
       const content = editor.getHTML();
-      const plainText = editor.getText();
       
-      // Generate Neural Tags
-      let neuralTags: string[] = [];
-      try {
-        const tagPrompt = `Analyze this social media post and provide 3-5 short, technical, cyberpunk-themed "Neural Tags" that categorize its content. 
-        Return ONLY a comma-separated list of tags. No other text.
-        Post Content: "${plainText}"`;
-        
-        const tagResponse = await generateText(tagPrompt, currentUser.ai_settings, {
-          systemPrompt: "You are a neural categorization engine. Output only comma-separated tags.",
-          temperature: 0.5
-        });
-        
-        if (tagResponse) {
-          neuralTags = tagResponse.split(',').map(t => t.trim().toUpperCase()).filter(t => t.length > 0);
-        }
-      } catch (tagErr) {
-        console.error("Tag Gen Error:", tagErr);
-      }
-
-      // Prepare the payload exactly matching the database schema
+      // Prepare the payload EXACTLY matching the database schema verified via SQL
+      // Missing columns in DB: neural_tags, shares_count
       const newPost = {
         author_id: currentUser.id,
         content,
         likes: 0,
         boosts: 0,
         comments_count: 0,
-        shares_count: 0,
         is_boosted: false,
-        neural_tags: neuralTags,
-        // Let the DB handle created_at/updated_at defaults
+        type: 'text',
+        feed_type: 'global'
       };
 
       console.log('[Post] Submitting to Supabase:', newPost);
