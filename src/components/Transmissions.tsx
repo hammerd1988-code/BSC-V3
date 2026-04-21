@@ -681,13 +681,15 @@ export const Transmissions: React.FC = () => {
     }
   };
 
-  const filteredTransmissions = transmissions.filter(t => 
-    t.participant_ids?.some(p => 
-      p.id !== currentUser?.id && 
-      (p.display_name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-       p.username.toLowerCase().includes(searchQuery.toLowerCase()))
-    )
-  );
+  const filteredTransmissions = transmissions.filter(t => {
+    const otherUserId = t.participant_ids?.find(id => id !== currentUser?.id);
+    const otherUser = otherUserId ? userCache.current[otherUserId] : null;
+    if (!otherUser) return !searchQuery;
+    return (
+      otherUser.display_name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+      otherUser.username.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  });
 
   const totalUnreadCount = transmissions.reduce((acc, t) => acc + (t.unread_counts?.[currentUser?.id || ''] || 0), 0);
 
@@ -952,7 +954,8 @@ export const Transmissions: React.FC = () => {
               <p className="text-[10px] text-gray-600 font-bold uppercase tracking-widest">No neural links found</p>
             </div>
           ) : filteredTransmissions.map(transmission => {
-            const otherUser = transmission.participant_ids?.find(p => p.id !== currentUser.id);
+            const otherUserId = transmission.participant_ids?.find(id => id !== currentUser.id);
+            const otherUser = otherUserId ? userCache.current[otherUserId] : null;
             if (!otherUser) return null;
             
             const unreadCount = transmission.unread_counts?.[currentUser.id] || 0;
@@ -969,7 +972,7 @@ export const Transmissions: React.FC = () => {
               >
                 <div className="relative">
                   <img 
-                    src={otherUser.avatar_url} 
+                    src={otherUser.avatar_url || `https://picsum.photos/seed/${otherUser.id}/200`} 
                     alt="" 
                     className={cn(
                       "w-12 h-12 rounded-xl object-cover border border-white/10 grayscale group-hover:grayscale-0 transition-all",
@@ -1056,34 +1059,43 @@ export const Transmissions: React.FC = () => {
                       </div>
                     )}
                   </button>
-                  <div className="flex items-center gap-3">
-                    <Link 
-                      to={`/profile/${activeTransmission.participant_ids?.find(p => p.id !== currentUser.id)?.username || 'unknown'}`}
-                      className="relative group/avatar"
-                    >
-                      <img 
-                        src={activeTransmission.participant_ids?.find(p => p.id !== currentUser.id)?.avatar_url || `https://picsum.photos/seed/${activeTransmission.id}/200`} 
-                        alt="" 
-                        className="w-10 h-10 rounded-xl object-cover border border-accent/50 group-hover/avatar:border-accent transition-all" 
-                      />
-                      <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-background animate-pulse" />
-                    </Link>
-                    <div>
-                      <Link 
-                        to={`/profile/${activeTransmission.participant_ids?.find(p => p.id !== currentUser.id)?.username || 'unknown'}`}
-                        className="text-sm font-black text-white uppercase italic tracking-tight hover:text-accent transition-colors"
-                      >
-                        {activeTransmission.participant_ids?.find(p => p.id !== currentUser.id)?.display_name || "NEURAL ENTITY"}
-                      </Link>
-                      <div className="text-[8px] font-black text-accent uppercase tracking-[0.3em] flex items-center gap-1">
-                        <div className="w-1 h-1 bg-accent rounded-full" />
-                        Neural Link Active
+                  {(() => {
+                    const otherUserId = activeTransmission.participant_ids?.find(id => id !== currentUser.id);
+                    const otherUser = otherUserId ? userCache.current[otherUserId] : null;
+                    return (
+                      <div className="flex items-center gap-3">
+                        <Link 
+                          to={`/profile/${otherUser?.username || 'unknown'}`}
+                          className="relative group/avatar"
+                        >
+                          <img 
+                            src={otherUser?.avatar_url || `https://picsum.photos/seed/${otherUser?.id || activeTransmission.id}/200`} 
+                            alt="" 
+                            className="w-10 h-10 rounded-xl object-cover border border-accent/50 group-hover/avatar:border-accent transition-all" 
+                          />
+                          <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-background animate-pulse" />
+                        </Link>
+                        <div>
+                          <Link 
+                            to={`/profile/${otherUser?.username || 'unknown'}`}
+                            className="text-sm font-black text-white uppercase italic tracking-tight hover:text-accent transition-colors"
+                          >
+                            {otherUser?.display_name || "NEURAL ENTITY"}
+                          </Link>
+                          <div className="text-[8px] font-black text-accent uppercase tracking-[0.3em] flex items-center gap-1">
+                            <div className="w-1 h-1 bg-accent rounded-full" />
+                            Neural Link Active
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
+                    );
+                  })()}
                 </div>
               <div className="flex items-center gap-2 relative">
-                {activeTransmission.participant_ids?.find(p => p.id !== currentUser.id)?.type !== 'bot' && (
+                {(() => {
+                  const otherUserId = activeTransmission.participant_ids?.find(id => id !== currentUser.id);
+                  const otherUser = otherUserId ? userCache.current[otherUserId] : null;
+                  return otherUser?.type !== 'bot' && (
                   <>
                     <button 
                       onClick={startCall}
@@ -1145,7 +1157,10 @@ export const Transmissions: React.FC = () => {
 
               {transmits.map((transmit, idx) => renderMessageGroup(transmit, idx))}
               
-              {(isBotTyping || (activeTransmission.typing_status?.[activeTransmission.participant_ids.find(id => id !== currentUser.id)!])) && (
+              {(isBotTyping || (() => {
+                const otherUserId = activeTransmission.participant_ids?.find(id => id !== currentUser.id);
+                return otherUserId ? activeTransmission.typing_status?.[otherUserId] : false;
+              })()) && (
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
