@@ -4,7 +4,7 @@
 
 # Blood Sweat Code
 
-Neural-link social / streaming / bounty app. Migrated from Firebase (Firestore + Auth + Storage) to **Supabase** (Postgres + Auth + Storage + Realtime).
+Neural-link social / streaming / bounty app powered by **Supabase** (Postgres + Auth + Storage + Realtime).
 
 View the original AI Studio app: https://ai.studio/apps/8b4535cd-ac06-4134-b563-47ea1678cce7
 

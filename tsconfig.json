@@ -18,11 +18,7 @@
     "paths": {
       "@/*": [
         "./*"
-      ],
-      "firebase/app": ["./src/supabase-shim/app.ts"],
-      "firebase/auth": ["./src/supabase-shim/auth.ts"],
-      "firebase/firestore": ["./src/supabase-shim/firestore.ts"],
-      "firebase/storage": ["./src/supabase-shim/storage.ts"]
+      ]
     },
     "allowImportingTsExtensions": true,
     "noEmit": true

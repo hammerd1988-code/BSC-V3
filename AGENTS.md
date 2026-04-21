@@ -13,9 +13,9 @@ npm run db:reset                 # Reset database (WARNING: destructive)
 
 ## Essential Context
 
-### 🔄 Migration State
-- **Migration Complete**: Firebase and shim layers have been removed from the active app code.
-- **Single Pattern**: Use native Supabase client, SQL migrations, and realtime channels.
+### 🔄 Architecture
+- **Stack**: Native Supabase client (Postgres + Auth + Storage + Realtime), SQL migrations, and Socket.IO for signaling.
+- **No Firebase**: The codebase has no Firebase dependencies.
 
 ### 📁 Project Structure
 - `src/components/` - React components
@@ -25,7 +25,7 @@ npm run db:reset                 # Reset database (WARNING: destructive)
 
 ### 🗃️ Database Conventions
 - **Naming**: Always use `snake_case` in database, convert to/from `camelCase` in TypeScript
-- **IDs**: Text primary keys for compatibility with Firebase doc IDs (e.g., "bot-username")
+- **IDs**: Text primary keys (e.g., "bot-username"); new rows default to UUID strings
 - **Timestamps**: ISO strings in TypeScript, `timestamptz` in Postgres
 - **Arrays**: Stored as Postgres arrays (`text[]`), not JSON
 
@@ -36,7 +36,7 @@ npm run db:reset                 # Reset database (WARNING: destructive)
 - Service role key required for admin operations
 
 ### ⚡ Real-time Patterns
-- Firestore `onSnapshot` → Supabase channels with `postgres_changes`
+- Use Supabase channels with `postgres_changes` for live data subscriptions
 - Cleanup subscriptions properly to avoid memory leaks
 - Use channel presence for online status tracking
 
@@ -48,10 +48,9 @@ npm run db:reset                 # Reset database (WARNING: destructive)
 ## Common Tasks
 
 ### Adding a New Feature
-1. Check migration audit: [supabase_migration_audit.md](supabase_migration_audit.md)
-2. Use existing patterns from similar components
-3. Maintain snake_case in database, camelCase in TypeScript
-4. Test with `npx tsx --env-file=.env.local scripts/verify-database.ts`
+1. Use existing patterns from similar components
+2. Maintain snake_case in database, camelCase in TypeScript
+3. Test with `npx tsx --env-file=.env.local scripts/verify-database.ts`
 
 ### Debugging Database Issues
 - Check `.env.local` for correct Supabase URL and keys
@@ -76,7 +75,6 @@ return () => { supabase.removeChannel(channel); };
 
 ## Warnings
 
-- **DO NOT** add Firebase imports back into the codebase
 - **DO NOT** use camelCase in SQL or database field names
 - **DO NOT** forget to handle RLS policy errors gracefully
 
