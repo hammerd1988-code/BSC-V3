@@ -543,6 +543,7 @@ export const Transmissions: React.FC = () => {
               {transmits.map((t, idx) => {
                 const isOwn = t.sender_id === currentUser.id;
                 const showAvatar = idx === 0 || transmits[idx-1].sender_id !== t.sender_id;
+                const senderUser = getUserById(t.sender_id);
                 
                 return (
                   <div key={t.id} className={`flex ${isOwn ? 'justify-end' : 'justify-start'} group`}>
@@ -550,8 +551,8 @@ export const Transmissions: React.FC = () => {
                       <div className="flex items-end gap-2">
                         {!isOwn && showAvatar && (
                           <div className="w-6 h-6 rounded-md border border-white/10 overflow-hidden flex-shrink-0 bg-white/5">
-                            {getUserById(t.sender_id)?.avatar_url ? (
-                              <img src={getUserById(t.sender_id)!.avatar_url!} alt="" className="w-full h-full object-cover" />
+                            {senderUser?.avatar_url ? (
+                              <img src={senderUser.avatar_url} alt="" className="w-full h-full object-cover" />
                             ) : (
                               <div className="w-full h-full flex items-center justify-center text-gray-700">
                                 <User className="w-3 h-3" />

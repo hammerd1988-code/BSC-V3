@@ -81,7 +81,7 @@ export const NewTransmissionModal: React.FC<NewTransmissionModalProps> = ({ isOp
       // Check if transmission already exists
       const { data: existingRows } = await supabase
         .from('transmissions')
-        .select('*')
+        .select('id, participant_ids')
         .contains('participant_ids', [currentUser.id, user.id])
         .limit(10);
 
