@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Loader2, Upload, Camera, Cpu, Globe, Key, Palette, HeartHandshake, Megaphone, ExternalLink } from 'lucide-react';
 import { User, AiProvider } from '../types';
@@ -41,6 +41,27 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
   
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const coverInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setDisplayName(user.display_name);
+    setUsername(user.username);
+    setBio(user.bio || '');
+    setAvatarUrl(user.avatar_url);
+    setCoverUrl(user.cover_url || '');
+    setCustomAccent(user.custom_accent || '#FF0000');
+    setSponsoredEntity(user.sponsored_entity || {
+      name: '',
+      type: 'business',
+      link: '',
+      description: ''
+    });
+    setAiProvider(user.ai_settings?.provider || 'gemini');
+    setAiEndpoint(user.ai_settings?.endpoint || '');
+    setAiModel(user.ai_settings?.model || '');
+    setAiApiKey(user.ai_settings?.apiKey || '');
+    setError(null);
+  }, [isOpen, user]);
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'avatar' | 'cover') => {
     const file = e.target.files?.[0];
