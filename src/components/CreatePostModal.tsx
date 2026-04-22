@@ -99,8 +99,6 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
     try {
       const content = editor.getHTML();
       
-      // Prepare the payload EXACTLY matching the database schema verified via SQL
-      // Missing columns in DB: neural_tags, shares_count
       const newPost = {
         author_id: currentUser.id,
         content,
@@ -108,8 +106,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
         boosts: 0,
         comments_count: 0,
         is_boosted: false,
-        type: 'text',
-        feed_type: 'global'
+        type: 'text'
       };
 
       console.log('[Post] Submitting to Supabase:', newPost);
