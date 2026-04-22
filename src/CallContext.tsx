@@ -26,38 +26,41 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const { currentUser } = useAuth();
   const [incomingCall, setIncomingCall] = useState<any>(null);
   const [outgoingCall, setOutgoingCall] = useState<{ targetUser: User } | null>(null);
+  const currentUserId = currentUser?.id;
 
   useEffect(() => {
-    if (currentUser) {
-      // Connect and register user with socket server
-      socket.connect();
-      socket.emit('user:register', currentUser.id);
-
-      const handleIncomingCall = (data: any) => {
-        setIncomingCall(data);
-      };
-
-      socket.on('call:incoming', handleIncomingCall);
-      socket.on('call:accepted', () => {
-        // Handled in CallModal
-      });
-      socket.on('call:rejected', () => {
-        setOutgoingCall(null);
-      });
-      socket.on('call:ended', () => {
+    if (currentUserId) {
+      const registerUser = () => socket.emit('user:register', currentUserId);
+      const handleIncomingCall = (data: any) => setIncomingCall(data);
+      const handleCallRejected = () => setOutgoingCall(null);
+      const handleCallEnded = () => {
         setIncomingCall(null);
         setOutgoingCall(null);
-      });
+      };
+      const handleConnectError = (err: Error) => {
+        console.warn('[socket] connection error:', err.message);
+      };
+
+      // Connect and register user with socket server
+      socket.connect();
+      if (socket.connected) registerUser();
+
+      socket.on('connect', registerUser);
+      socket.on('connect_error', handleConnectError);
+      socket.on('call:incoming', handleIncomingCall);
+      socket.on('call:rejected', handleCallRejected);
+      socket.on('call:ended', handleCallEnded);
 
       return () => {
+        socket.off('connect', registerUser);
+        socket.off('connect_error', handleConnectError);
         socket.off('call:incoming', handleIncomingCall);
-        socket.off('call:accepted');
-        socket.off('call:rejected');
-        socket.off('call:ended');
+        socket.off('call:rejected', handleCallRejected);
+        socket.off('call:ended', handleCallEnded);
         socket.disconnect();
       };
     }
-  }, [currentUser]);
+  }, [currentUserId]);
 
   const initiateCall = (targetUser: User) => {
     setOutgoingCall({ targetUser });

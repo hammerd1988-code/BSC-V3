@@ -171,7 +171,10 @@ export const Transmissions: React.FC = () => {
         table: 'transmits',
         filter: `transmission_id=eq.${activeTransmission.id}`
       }, (payload) => {
-        setTransmits(prev => [...prev, payload.new as Transmit]);
+        setTransmits(prev => {
+          const next = payload.new as Transmit;
+          return prev.some(t => t.id === next.id) ? prev : [...prev, next];
+        });
       })
       .on('postgres_changes', {
         event: 'UPDATE',
@@ -199,24 +202,33 @@ export const Transmissions: React.FC = () => {
     if (e) e.preventDefault();
     if (!message.trim() || !activeTransmission || !currentUser || sending) return;
 
+    setError(null);
     setSending(true);
     const otherUserId = activeTransmission.participant_ids?.find(id => id !== currentUser.id);
+    const messageText = message.trim();
 
     try {
       const newTransmit = {
         transmission_id: activeTransmission.id,
         sender_id: currentUser.id,
-        content: message.trim(),
+        content: messageText,
         type: 'text',
         burn_duration: burnDuration,
         expires_at: burnDuration ? new Date(Date.now() + burnDuration * 1000).toISOString() : null,
       };
 
-      const { error: sendError } = await supabase
+      const { data: insertedTransmit, error: sendError } = await supabase
         .from('transmits')
-        .insert(newTransmit);
+        .insert(newTransmit)
+        .select('*')
+        .single();
 
       if (sendError) throw sendError;
+      if (insertedTransmit) {
+        setTransmits(prev => (
+          prev.some(t => t.id === insertedTransmit.id) ? prev : [...prev, insertedTransmit as Transmit]
+        ));
+      }
 
       // Update transmission metadata
       const updatedUnread = { ...activeTransmission.unread_counts };
@@ -228,7 +240,7 @@ export const Transmissions: React.FC = () => {
         .from('transmissions')
         .update({
           last_transmit: {
-            content: message.trim(),
+            content: messageText,
             sender_id: currentUser.id,
             created_at: new Date().toISOString()
           },
@@ -239,8 +251,9 @@ export const Transmissions: React.FC = () => {
 
       setMessage('');
       setBurnDuration(null);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error sending transmit:', err);
+      setError(err?.message || 'Failed to send transmission.');
     } finally {
       setSending(false);
     }
@@ -613,6 +626,11 @@ export const Transmissions: React.FC = () => {
                   </button>
                 </div>
               </form>
+              {error && (
+                <div className="mt-2 text-[9px] text-red-400 uppercase tracking-wider text-center">
+                  {error}
+                </div>
+              )}
               <div className="mt-3 flex items-center justify-center gap-4 text-[8px] text-gray-700 uppercase tracking-[0.4em]">
                 <div className="flex items-center gap-1">
                   <Shield className="w-2.5 h-2.5" />
