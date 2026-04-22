@@ -34,6 +34,9 @@ import { format } from 'date-fns';
 import { Link } from 'react-router-dom';
 import { NewTransmissionModal } from './NewTransmissionModal';
 
+const appendTransmitUnique = (prev: Transmit[], next: Transmit): Transmit[] =>
+  prev.some((t) => t.id === next.id) ? prev : [...prev, next];
+
 export const Transmissions: React.FC = () => {
   const { currentUser } = useAuth();
   const [transmissions, setTransmissions] = useState<Transmission[]>([]);
@@ -171,10 +174,8 @@ export const Transmissions: React.FC = () => {
         table: 'transmits',
         filter: `transmission_id=eq.${activeTransmission.id}`
       }, (payload) => {
-        setTransmits(prev => {
-          const next = payload.new as Transmit;
-          return prev.some(t => t.id === next.id) ? prev : [...prev, next];
-        });
+        const next = payload.new as Transmit;
+        setTransmits((prev) => appendTransmitUnique(prev, next));
       })
       .on('postgres_changes', {
         event: 'UPDATE',
@@ -225,9 +226,7 @@ export const Transmissions: React.FC = () => {
 
       if (sendError) throw sendError;
       if (insertedTransmit) {
-        setTransmits(prev => (
-          prev.some(t => t.id === insertedTransmit.id) ? prev : [...prev, insertedTransmit as Transmit]
-        ));
+        setTransmits((prev) => appendTransmitUnique(prev, insertedTransmit as Transmit));
       }
 
       // Update transmission metadata
@@ -251,9 +250,9 @@ export const Transmissions: React.FC = () => {
 
       setMessage('');
       setBurnDuration(null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error sending transmit:', err);
-      setError(err?.message || 'Failed to send transmission.');
+      setError(err instanceof Error ? err.message : 'Failed to send transmission.');
     } finally {
       setSending(false);
     }
