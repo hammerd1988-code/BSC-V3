@@ -31,11 +31,12 @@ import { useCall } from '../CallContext';
 import { supabase } from '../supabase';
 import { Transmission, Transmit, User as UserType } from '../types';
 import { format } from 'date-fns';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { NewTransmissionModal } from './NewTransmissionModal';
 
 export const Transmissions: React.FC = () => {
   const { currentUser } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [transmissions, setTransmissions] = useState<Transmission[]>([]);
   const [activeTransmission, setActiveTransmission] = useState<Transmission | null>(null);
   const [transmits, setTransmits] = useState<Transmit[]>([]);
@@ -188,6 +189,72 @@ export const Transmissions: React.FC = () => {
     };
   }, [activeTransmission, currentUser]);
 
+  useEffect(() => {
+    const targetUserId = searchParams.get('userId');
+    if (!currentUser || !targetUserId || targetUserId === currentUser.id) return;
+
+    let cancelled = false;
+    const clearTarget = () => {
+      const next = new URLSearchParams(searchParams);
+      next.delete('userId');
+      setSearchParams(next, { replace: true });
+    };
+
+    const openTargetTransmission = async () => {
+      const existing = transmissions.find(t =>
+        t.participant_ids?.includes(currentUser.id) &&
+        t.participant_ids?.includes(targetUserId)
+      );
+
+      if (existing) {
+        if (!cancelled) setActiveTransmission(existing);
+        clearTarget();
+        return;
+      }
+
+      try {
+        const { data: existingFromDb, error: existingError } = await supabase
+          .from('transmissions')
+          .select('*')
+          .contains('participant_ids', [currentUser.id, targetUserId])
+          .maybeSingle();
+
+        if (existingError) throw existingError;
+
+        if (existingFromDb) {
+          if (!cancelled) {
+            setTransmissions(prev => prev.some(t => t.id === existingFromDb.id) ? prev : [existingFromDb as Transmission, ...prev]);
+            setActiveTransmission(existingFromDb as Transmission);
+          }
+          clearTarget();
+          return;
+        }
+
+        const newTransmission: Transmission = {
+          id: crypto.randomUUID(),
+          participant_ids: [currentUser.id, targetUserId],
+          unread_counts: { [currentUser.id]: 0, [targetUserId]: 0 },
+          typing_status: {}
+        };
+
+        const { error: createError } = await supabase.from('transmissions').insert(newTransmission);
+        if (createError) throw createError;
+
+        if (!cancelled) {
+          setTransmissions(prev => prev.some(t => t.id === newTransmission.id) ? prev : [newTransmission, ...prev]);
+          setActiveTransmission(newTransmission);
+        }
+        clearTarget();
+      } catch (err: any) {
+        console.error('Error opening transmission:', err);
+        if (!cancelled) setError(err?.message || 'Unable to open transmission.');
+      }
+    };
+
+    void openTargetTransmission();
+    return () => { cancelled = true; };
+  }, [currentUser, transmissions, searchParams, setSearchParams]);
+
   // Scroll to bottom when messages change
   useEffect(() => {
     if (scrollRef.current) {
@@ -197,38 +264,45 @@ export const Transmissions: React.FC = () => {
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!message.trim() || !activeTransmission || !currentUser || sending) return;
+    const trimmedMessage = message.trim();
+    if (!trimmedMessage || !activeTransmission || !currentUser || sending) return;
 
     setSending(true);
+    setError(null);
     const otherUserId = activeTransmission.participant_ids?.find(id => id !== currentUser.id);
 
     try {
       const newTransmit = {
         transmission_id: activeTransmission.id,
         sender_id: currentUser.id,
-        content: message.trim(),
+        content: trimmedMessage,
         type: 'text',
         burn_duration: burnDuration,
         expires_at: burnDuration ? new Date(Date.now() + burnDuration * 1000).toISOString() : null,
       };
 
-      const { error: sendError } = await supabase
+      const { data: insertedTransmit, error: sendError } = await supabase
         .from('transmits')
-        .insert(newTransmit);
+        .insert(newTransmit)
+        .select('*')
+        .single();
 
       if (sendError) throw sendError;
+      if (insertedTransmit) {
+        setTransmits(prev => prev.some(t => t.id === insertedTransmit.id) ? prev : [...prev, insertedTransmit as Transmit]);
+      }
 
       // Update transmission metadata
-      const updatedUnread = { ...activeTransmission.unread_counts };
+      const updatedUnread = { ...(activeTransmission.unread_counts ?? {}) };
       if (otherUserId) {
         updatedUnread[otherUserId] = (updatedUnread[otherUserId] || 0) + 1;
       }
 
-      await supabase
+      const { error: updateError } = await supabase
         .from('transmissions')
         .update({
           last_transmit: {
-            content: message.trim(),
+            content: trimmedMessage,
             sender_id: currentUser.id,
             created_at: new Date().toISOString()
           },
@@ -236,11 +310,16 @@ export const Transmissions: React.FC = () => {
           updated_at: new Date().toISOString()
         })
         .eq('id', activeTransmission.id);
+      if (updateError) {
+        console.error('Error updating transmission metadata:', updateError);
+      }
 
       setMessage('');
       setBurnDuration(null);
+      setActiveTransmission(prev => prev ? { ...prev, unread_counts: updatedUnread } : prev);
     } catch (err) {
       console.error('Error sending transmit:', err);
+      setError('Failed to send transmission. Please retry.');
     } finally {
       setSending(false);
     }
@@ -251,7 +330,7 @@ export const Transmissions: React.FC = () => {
     
     if (!isTyping) {
       setIsTyping(true);
-      const typingStatus = { ...activeTransmission.typing_status };
+      const typingStatus = { ...(activeTransmission.typing_status ?? {}) };
       typingStatus[currentUser.id] = true;
       
       supabase
@@ -264,7 +343,7 @@ export const Transmissions: React.FC = () => {
     
     typingTimeoutRef.current = setTimeout(() => {
       setIsTyping(false);
-      const typingStatus = { ...activeTransmission.typing_status };
+      const typingStatus = { ...(activeTransmission.typing_status ?? {}) };
       typingStatus[currentUser.id] = false;
       
       supabase
