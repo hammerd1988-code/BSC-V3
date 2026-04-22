@@ -290,7 +290,7 @@ export const Transmissions: React.FC = () => {
         .from('transmits')
         .insert(newTransmit)
         .select('*')
-        .single();
+        .maybeSingle();
 
       if (sendError) throw sendError;
       if (insertedTransmit) {
