@@ -54,7 +54,12 @@ export const Transmissions: React.FC = () => {
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const userCache = useRef<Record<string, UserType>>({});
+  const transmissionsRef = useRef<Transmission[]>([]);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    transmissionsRef.current = transmissions;
+  }, [transmissions]);
 
   // Fetch all transmissions for current user
   useEffect(() => {
@@ -201,7 +206,7 @@ export const Transmissions: React.FC = () => {
     };
 
     const openTargetTransmission = async () => {
-      const existing = transmissions.find(t =>
+      const existing = transmissionsRef.current.find(t =>
         t.participant_ids?.includes(currentUser.id) &&
         t.participant_ids?.includes(targetUserId)
       );
@@ -253,7 +258,7 @@ export const Transmissions: React.FC = () => {
 
     void openTargetTransmission();
     return () => { cancelled = true; };
-  }, [currentUser, transmissions, searchParams, setSearchParams]);
+  }, [currentUser, searchParams, setSearchParams]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -290,6 +295,8 @@ export const Transmissions: React.FC = () => {
       if (sendError) throw sendError;
       if (insertedTransmit) {
         setTransmits(prev => prev.some(t => t.id === insertedTransmit.id) ? prev : [...prev, insertedTransmit as Transmit]);
+      } else {
+        console.warn('Transmit insert succeeded but no row returned; waiting for realtime sync.');
       }
 
       // Update transmission metadata
