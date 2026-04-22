@@ -14,6 +14,8 @@ interface NewTransmissionModalProps {
   onSelect: (transmission: Transmission) => void;
 }
 
+const MAX_TRANSMISSION_LOOKUP_LIMIT = 50;
+
 export const NewTransmissionModal: React.FC<NewTransmissionModalProps> = ({ isOpen, onClose, onSelect }) => {
   const { currentUser } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
@@ -83,7 +85,7 @@ export const NewTransmissionModal: React.FC<NewTransmissionModalProps> = ({ isOp
         .from('transmissions')
         .select('id, participant_ids')
         .contains('participant_ids', [currentUser.id, user.id])
-        .limit(10);
+        .limit(MAX_TRANSMISSION_LOOKUP_LIMIT);
 
       const existing = (existingRows || []).find((t) => {
         const ids = t.participant_ids || [];
