@@ -5,17 +5,27 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 
 function parseAllowedOrigins(): string[] {
+  const normalizeOrigin = (value: string): string => {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    if (/^https?:\/\//i.test(trimmed)) return trimmed;
+    return `https://${trimmed}`;
+  };
+
+  const railwayDomain = process.env.RAILWAY_PUBLIC_DOMAIN || process.env.RAILWAY_STATIC_URL || '';
   const raw = [
     process.env.APP_URL,
     process.env.CLIENT_ORIGIN,
     process.env.VITE_APP_URL,
+    process.env.CORS_ORIGINS,
+    railwayDomain,
   ]
     .filter(Boolean)
     .join(',');
 
   return raw
     .split(',')
-    .map((v) => v.trim())
+    .map(normalizeOrigin)
     .filter((v) => v.length > 0);
 }
 

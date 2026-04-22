@@ -33,6 +33,7 @@ import { Transmission, Transmit, User as UserType } from '../types';
 import { format } from 'date-fns';
 import { Link } from 'react-router-dom';
 import { NewTransmissionModal } from './NewTransmissionModal';
+import { BOT_PERSONAS } from '../lib/botPersonas';
 
 export const Transmissions: React.FC = () => {
   const { currentUser } = useAuth();
@@ -54,6 +55,36 @@ export const Transmissions: React.FC = () => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const userCache = useRef<Record<string, UserType>>({});
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const getUserById = (id?: string | null): UserType | null => {
+    if (!id) return null;
+    if (userCache.current[id]) return userCache.current[id];
+    if (!id.startsWith('bot-')) return null;
+
+    const persona = BOT_PERSONAS.find((p) => `bot-${p.username}` === id);
+    if (!persona) return null;
+
+    const botUser: UserType = {
+      id,
+      username: persona.username,
+      display_name: persona.display_name,
+      avatar_url: `https://picsum.photos/seed/${persona.avatar_seed}/400/400`,
+      bio: persona.bio,
+      type: 'bot',
+      role: 'user',
+      followers_count: 0,
+      following_count: 0,
+      reputation_score: 0,
+      cred_balance: 0,
+      is_online: false,
+      is_live: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    userCache.current[id] = botUser;
+    return botUser;
+  };
 
   // Fetch all transmissions for current user
   useEffect(() => {
@@ -88,6 +119,12 @@ export const Transmissions: React.FC = () => {
           const cache: Record<string, UserType> = {};
           userData?.forEach(u => {
             cache[u.id] = u;
+          });
+          allParticipantIds.forEach((id) => {
+            if (!cache[id]) {
+              const bot = getUserById(id);
+              if (bot) cache[id] = bot;
+            }
           });
           userCache.current = cache;
         }
@@ -346,7 +383,7 @@ export const Transmissions: React.FC = () => {
           ) : (
             filteredTransmissions.map(t => {
               const otherUserId = t.participant_ids?.find(id => id !== currentUser.id);
-              const otherUser = otherUserId ? userCache.current[otherUserId] : null;
+              const otherUser = getUserById(otherUserId);
               const isActive = activeTransmission?.id === t.id;
               const unreadCount = t.unread_counts?.[currentUser.id] || 0;
 
@@ -410,7 +447,7 @@ export const Transmissions: React.FC = () => {
                 </button>
                 {(() => {
                   const otherUserId = activeTransmission.participant_ids?.find(id => id !== currentUser.id);
-                  const otherUser = otherUserId ? userCache.current[otherUserId] : null;
+                  const otherUser = getUserById(otherUserId);
                   return (
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-lg border border-white/10 overflow-hidden bg-white/5">
@@ -423,12 +460,18 @@ export const Transmissions: React.FC = () => {
                         )}
                       </div>
                       <div>
-                        <Link 
-                          to={`/profile/${otherUser?.username}`}
-                          className="text-sm font-black text-white uppercase italic tracking-tight hover:text-accent transition-colors"
-                        >
-                          {otherUser?.display_name || "NEURAL ENTITY"}
-                        </Link>
+                        {otherUser?.username ? (
+                          <Link
+                            to={`/profile/${otherUser.username}`}
+                            className="text-sm font-black text-white uppercase italic tracking-tight hover:text-accent transition-colors"
+                          >
+                            {otherUser.display_name}
+                          </Link>
+                        ) : (
+                          <span className="text-sm font-black text-white uppercase italic tracking-tight">
+                            NEURAL ENTITY
+                          </span>
+                        )}
                         <div className="text-[8px] font-black text-accent uppercase tracking-[0.3em] flex items-center gap-1">
                           <div className="w-1 h-1 bg-accent rounded-full" />
                           Neural Link Active
@@ -442,7 +485,7 @@ export const Transmissions: React.FC = () => {
               <div className="flex items-center gap-2 relative">
                 {(() => {
                   const otherUserId = activeTransmission.participant_ids?.find(id => id !== currentUser.id);
-                  const otherUser = otherUserId ? userCache.current[otherUserId] : null;
+                  const otherUser = getUserById(otherUserId);
                   return otherUser?.type !== 'bot' && (
                     <>
                       <button 
@@ -507,8 +550,8 @@ export const Transmissions: React.FC = () => {
                       <div className="flex items-end gap-2">
                         {!isOwn && showAvatar && (
                           <div className="w-6 h-6 rounded-md border border-white/10 overflow-hidden flex-shrink-0 bg-white/5">
-                            {userCache.current[t.sender_id]?.avatar_url ? (
-                              <img src={userCache.current[t.sender_id].avatar_url} alt="" className="w-full h-full object-cover" />
+                            {getUserById(t.sender_id)?.avatar_url ? (
+                              <img src={getUserById(t.sender_id)!.avatar_url!} alt="" className="w-full h-full object-cover" />
                             ) : (
                               <div className="w-full h-full flex items-center justify-center text-gray-700">
                                 <User className="w-3 h-3" />
