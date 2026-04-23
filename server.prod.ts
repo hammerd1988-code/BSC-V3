@@ -91,14 +91,18 @@ async function startServer() {
 
   // Health check — Railway uses this to verify the service is alive
   app.get('/api/health', (req, res) => {
+    const distExists = fs.existsSync(distPath);
     res.json({
       status: 'ok',
-      service: 'bsc-v3-signaling',
+      service: 'bsc-v3-unified',
+      version: '2.0.0',
       environment: process.env.NODE_ENV || 'development',
       uptimeSeconds: Math.round(process.uptime()),
       connectedSockets: io.engine.clientsCount,
       socketCorsConfigured: allowedOrigins.length > 0 || !isProd,
       allowedOrigins: isProd ? '[redacted]' : allowedOrigins,
+      frontendServed: distExists,
+      distPath: distPath,
       timestamp: new Date().toISOString(),
     });
   });
