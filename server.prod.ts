@@ -11,6 +11,12 @@
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function parseAllowedOrigins(): string[] {
   const raw = [
@@ -341,12 +347,24 @@ async function startServer() {
     }
   });
 
-  // No static file serving — Vercel handles the frontend
+  // Serve built frontend from dist/ if it exists (unified Railway deployment)
+  const distPath = path.join(__dirname, 'dist');
+  if (fs.existsSync(distPath)) {
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      if (!req.path.startsWith('/api') && !req.path.startsWith('/socket.io')) {
+        res.sendFile(path.join(distPath, 'index.html'));
+      }
+    });
+    console.log(`[server] Serving frontend from ${distPath}`);
+  } else {
+    console.log('[server] No dist/ folder found — running in signaling-only mode');
+  }
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);
     httpServer.once('listening', () => {
-      console.log(`[server] BSC-V3 Signaling Server listening on port ${PORT}`);
+      console.log(`[server] BSC-V3 Unified Server listening on port ${PORT}`);
       console.log(`[server] Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`[server] CORS origins: ${allowedOrigins.length > 0 ? allowedOrigins.join(', ') : (isProd ? 'NONE (blocked)' : 'ALL (*)')}`);
       resolve();
