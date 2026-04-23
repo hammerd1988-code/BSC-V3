@@ -102,9 +102,10 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
       const newPost = {
         author_id: currentUser.id,
         content,
-        likes: 0,
+        likes_count: 0,
         boosts: 0,
         comments_count: 0,
+        shares_count: 0,
         is_boosted: false,
         type: 'text'
       };

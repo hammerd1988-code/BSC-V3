@@ -75,7 +75,7 @@ export interface Post {
   content: string;
   media_url?: string | null;
   media_type?: 'image' | 'video' | null;
-  likes: number;
+  likes_count: number;
   boosts: number;
   comments_count: number;
   shares_count: number;

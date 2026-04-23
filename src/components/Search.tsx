@@ -54,7 +54,7 @@ export const Search: React.FC = () => {
             id: post.id,
             type: 'keyword',
             title: post.content.substring(0, 50),
-            subtitle: `${post.likes} likes · ${post.comments_count} comments`,
+            subtitle: `${post.likes_count} likes · ${post.comments_count} comments`,
           });
         }
       });
