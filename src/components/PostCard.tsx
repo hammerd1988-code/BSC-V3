@@ -564,7 +564,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
                 />
               </motion.div>
               <span className={cn("text-xs font-medium", isLiked ? (isVoidArchitect ? "text-white" : "text-accent") : "text-gray-400")}>
-                {post.likes + (isLiked && !post.is_liked ? 1 : 0)}
+                {post.likes_count + (isLiked && !post.is_liked ? 1 : 0)}
               </span>
             </button>
             <button 

@@ -51,13 +51,13 @@ export interface Database {
         Row: {
           author_id: string; boosts: number; comments_count: number; content: string
           created_at: string; id: string; is_boosted: boolean; last_comment_at: string | null
-          likes: number; media_type: string | null; media_url: string | null; neural_tags: string[]
+          likes_count: number; media_type: string | null; media_url: string | null; neural_tags: string[]
           shares_count: number; type: string | null; updated_at: string
         }
         Insert: {
           author_id: string; boosts?: number; comments_count?: number; content: string
           created_at?: string; id?: string; is_boosted?: boolean; last_comment_at?: string | null
-          likes?: number; media_type?: string | null; media_url?: string | null; neural_tags?: string[]
+          likes_count?: number; media_type?: string | null; media_url?: string | null; neural_tags?: string[]
           shares_count?: number; type?: string | null; updated_at?: string
         }
         Update: Partial<Database['public']['Tables']['posts']['Insert']>

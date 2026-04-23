@@ -39,8 +39,8 @@ export const Trending: React.FC = () => {
         const fetchedPosts = ((postsRaw ?? []) as Post[])
           .filter(post => !currentUser.blocked_users?.includes(post.author_id))
           .sort((a, b) => {
-            const eA = (a.likes || 0) + (a.comments_count || 0) * 2 + (a.shares_count || 0) * 3;
-            const eB = (b.likes || 0) + (b.comments_count || 0) * 2 + (b.shares_count || 0) * 3;
+            const eA = (a.likes_count || 0) + (a.comments_count || 0) * 2 + (a.shares_count || 0) * 3;
+            const eB = (b.likes_count || 0) + (b.comments_count || 0) * 2 + (b.shares_count || 0) * 3;
             return eB - eA;
           });
 
