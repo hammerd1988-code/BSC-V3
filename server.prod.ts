@@ -49,6 +49,7 @@ async function startServer() {
   });
 
   const PORT = Number(process.env.PORT) || 3001;
+  const distPath = path.join(__dirname, 'dist');
 
   // Middleware
   app.use(express.json());
@@ -352,13 +353,14 @@ async function startServer() {
   });
 
   // Serve built frontend from dist/ if it exists (unified Railway deployment)
-  const distPath = path.join(__dirname, 'dist');
   if (fs.existsSync(distPath)) {
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      if (!req.path.startsWith('/api') && !req.path.startsWith('/socket.io')) {
-        res.sendFile(path.join(distPath, 'index.html'));
+    // SPA fallback — must be last route, only for non-API/non-socket paths
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
+        return next();
       }
+      res.sendFile(path.join(distPath, 'index.html'));
     });
     console.log(`[server] Serving frontend from ${distPath}`);
   } else {
