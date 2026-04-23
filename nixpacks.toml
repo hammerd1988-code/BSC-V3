@@ -1,9 +1,9 @@
-# nixpacks config v3 - cache bust 2026-04-23
+# nixpacks config v4 - install all deps including devDependencies for build
 [phases.setup]
 nixPkgs = ["nodejs_22", "python3"]
 
 [phases.install]
-cmds = ["npm ci"]
+cmds = ["npm ci --include=dev"]
 
 [phases.build]
 cmds = ["npm run build", "ls -la dist/"]
