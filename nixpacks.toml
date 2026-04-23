@@ -1,5 +1,11 @@
+[phases.setup]
+nixPkgs = ["nodejs_22", "python3"]
+
+[phases.install]
+cmds = ["npm ci --prefer-offline"]
+
 [phases.build]
-cmds = ["npm install", "npm run build"]
+cmds = ["npm run build"]
 
 [start]
 cmd = "npm run start:prod"
