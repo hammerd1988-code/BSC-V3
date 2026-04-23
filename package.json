@@ -9,6 +9,7 @@
     "build": "vite build",
     "start": "tsx server.ts",
     "start:prod": "tsx server.prod.ts",
+    "start:unified": "tsx server.unified.ts",
     "preview": "vite preview",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "lint": "tsc --noEmit",
