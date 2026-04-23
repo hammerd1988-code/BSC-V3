@@ -1,11 +1,12 @@
+# nixpacks config v3 - cache bust 2026-04-23
 [phases.setup]
 nixPkgs = ["nodejs_22", "python3"]
 
 [phases.install]
-cmds = ["npm ci --prefer-offline"]
+cmds = ["npm ci"]
 
 [phases.build]
-cmds = ["npm run build"]
+cmds = ["npm run build", "ls -la dist/"]
 
 [start]
 cmd = "npm run start:prod"
