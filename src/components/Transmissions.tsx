@@ -24,7 +24,8 @@ import {
   Terminal,
   Activity,
   Cpu,
-  Globe
+  Globe,
+  AlertCircle
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { useCall } from '../CallContext';
@@ -35,7 +36,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { NewTransmissionModal } from './NewTransmissionModal';
 
 export const Transmissions: React.FC = () => {
-  const { currentUser } = useAuth();
+  const { currentUser, supabaseUser } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [transmissions, setTransmissions] = useState<Transmission[]>([]);
   const [activeTransmission, setActiveTransmission] = useState<Transmission | null>(null);
@@ -109,24 +110,51 @@ export const Transmissions: React.FC = () => {
 
     fetchTransmissions();
 
-    // Subscribe to new transmissions
+    // Subscribe to transmissions changes without brittle array filter.
+    // Client-side filter ensures we only process transmissions we participate in.
     const channel = supabase
       .channel('public:transmissions')
       .on('postgres_changes', { 
         event: '*', 
         schema: 'public', 
         table: 'transmissions',
-        filter: `participant_ids=cs.{${currentUser.id}}`
       }, (payload) => {
         if (payload.eventType === 'INSERT') {
-          setTransmissions(prev => [payload.new as Transmission, ...prev]);
+          const t = payload.new as Transmission;
+          if (!t.participant_ids?.includes(currentUser.id)) return;
+          if (import.meta.env.DEV) console.debug('[Transmissions] realtime INSERT', t.id);
+          setTransmissions(prev =>
+            prev.some(p => p.id === t.id)
+              ? prev
+              : [t, ...prev]
+          );
+          // Cache new participant users if needed
+          const unknownIds = (t.participant_ids ?? []).filter(id => !userCache.current[id]);
+          if (unknownIds.length > 0) {
+            supabase.from('users').select('*').in('id', unknownIds).then(({ data }) => {
+              if (data) data.forEach(u => { userCache.current[u.id] = u; });
+            });
+          }
         } else if (payload.eventType === 'UPDATE') {
-          setTransmissions(prev => prev.map(t => t.id === payload.new.id ? payload.new as Transmission : t));
+          const t = payload.new as Transmission;
+          if (!t.participant_ids?.includes(currentUser.id)) return;
+          if (import.meta.env.DEV) console.debug('[Transmissions] realtime UPDATE', t.id);
+          setTransmissions(prev =>
+            prev.map(p => p.id === t.id ? t : p)
+              .sort((a, b) => new Date(b.updated_at ?? 0).getTime() - new Date(a.updated_at ?? 0).getTime())
+          );
+          // Keep activeTransmission in sync
+          setActiveTransmission(prev => prev?.id === t.id ? t : prev);
         } else if (payload.eventType === 'DELETE') {
-          setTransmissions(prev => prev.filter(t => t.id !== payload.old.id));
+          const id = (payload.old as { id: string }).id;
+          if (import.meta.env.DEV) console.debug('[Transmissions] realtime DELETE', id);
+          setTransmissions(prev => prev.filter(p => p.id !== id));
+          setActiveTransmission(prev => prev?.id === id ? null : prev);
         }
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (import.meta.env.DEV) console.debug('[Transmissions] channel status:', status);
+      });
 
     return () => {
       supabase.removeChannel(channel);
@@ -168,7 +196,7 @@ export const Transmissions: React.FC = () => {
 
     fetchTransmits();
 
-    // Subscribe to new transmits
+    // Subscribe to new transmits for this transmission
     const channel = supabase
       .channel(`transmission:${activeTransmission.id}`)
       .on('postgres_changes', { 
@@ -177,7 +205,28 @@ export const Transmissions: React.FC = () => {
         table: 'transmits',
         filter: `transmission_id=eq.${activeTransmission.id}`
       }, (payload) => {
-        setTransmits(prev => [...prev, payload.new as Transmit]);
+        const newTransmit = payload.new as Transmit;
+        if (import.meta.env.DEV) console.debug('[Transmissions] transmit INSERT', newTransmit.id);
+        // Dedup: only add if not already present (optimistic insert may have added it)
+        setTransmits(prev =>
+          prev.some(t => t.id === newTransmit.id) ? prev : [...prev, newTransmit]
+        );
+        // Update local transmission list with latest message even if transmission UPDATE is delayed
+        setTransmissions(prev =>
+          prev.map(t =>
+            t.id === newTransmit.transmission_id
+              ? {
+                  ...t,
+                  last_transmit: {
+                    content: newTransmit.content,
+                    sender_id: newTransmit.sender_id,
+                    created_at: newTransmit.created_at,
+                  },
+                  updated_at: newTransmit.created_at ?? t.updated_at,
+                }
+              : t
+          ).sort((a, b) => new Date(b.updated_at ?? 0).getTime() - new Date(a.updated_at ?? 0).getTime())
+        );
       })
       .on('postgres_changes', {
         event: 'UPDATE',
@@ -185,9 +234,13 @@ export const Transmissions: React.FC = () => {
         table: 'transmissions',
         filter: `id=eq.${activeTransmission.id}`
       }, (payload) => {
-        setActiveTransmission(payload.new as Transmission);
+        const updated = payload.new as Transmission;
+        if (import.meta.env.DEV) console.debug('[Transmissions] active transmission UPDATE', updated.id);
+        setActiveTransmission(updated);
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (import.meta.env.DEV) console.debug(`[Transmissions] transmit channel (${activeTransmission.id}) status:`, status);
+      });
 
     return () => {
       supabase.removeChannel(channel);
@@ -196,7 +249,7 @@ export const Transmissions: React.FC = () => {
 
   useEffect(() => {
     const targetUserId = searchParams.get('userId');
-    if (!currentUser || !targetUserId || targetUserId === currentUser.id) return;
+    if (!currentUser || !supabaseUser || !targetUserId || targetUserId === currentUser.id) return;
 
     let cancelled = false;
     const clearTarget = () => {
@@ -258,7 +311,7 @@ export const Transmissions: React.FC = () => {
 
     void openTargetTransmission();
     return () => { cancelled = true; };
-  }, [currentUser, searchParams, setSearchParams]);
+  }, [currentUser, supabaseUser, searchParams, setSearchParams]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -271,6 +324,11 @@ export const Transmissions: React.FC = () => {
     if (e) e.preventDefault();
     const trimmedMessage = message.trim();
     if (!trimmedMessage || !activeTransmission || !currentUser || sending) return;
+
+    if (!supabaseUser) {
+      setError('Session expired. Please re-login to send messages.');
+      return;
+    }
 
     setSending(true);
     setError(null);
@@ -324,9 +382,14 @@ export const Transmissions: React.FC = () => {
       setMessage('');
       setBurnDuration(null);
       setActiveTransmission(prev => prev ? { ...prev, unread_counts: updatedUnread } : prev);
-    } catch (err) {
-      console.error('Error sending transmit:', err);
-      setError('Failed to send transmission. Please retry.');
+    } catch (err: any) {
+      console.error('[Transmissions] Error sending transmit:', err);
+      const msg = err?.message ?? 'Unknown error';
+      setError(
+        import.meta.env.DEV
+          ? `Failed to send: ${msg}`
+          : 'Failed to send transmission. Please retry.'
+      );
     } finally {
       setSending(false);
     }
@@ -642,6 +705,15 @@ export const Transmissions: React.FC = () => {
 
             {/* Input Area */}
             <div className="p-6 bg-[#050505] border-t border-white/10">
+              {error && (
+                <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-xl">
+                  <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
+                  <p className="text-[10px] font-black text-red-400 uppercase tracking-widest flex-1">{error}</p>
+                  <button onClick={() => setError(null)} className="text-red-400/50 hover:text-red-400 transition-colors">
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
               <form 
                 onSubmit={handleSendMessage}
                 className="relative bg-white/5 border border-white/10 rounded-2xl p-2 transition-all focus-within:border-accent/50 focus-within:bg-white/[0.07]"
