@@ -7,7 +7,7 @@ export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
     plugins: [react(), tailwindcss()],
-    // Expose Vercel/v0 integration env vars (NEXT_PUBLIC_*) to Vite's import.meta.env
+    // Expose compatibility env vars (NEXT_PUBLIC_*) to Vite's import.meta.env
     envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
     resolve: {
       alias: {
