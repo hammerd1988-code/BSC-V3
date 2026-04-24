@@ -7,12 +7,12 @@ port = 5432
 port = 54323
 
 [auth]
-site_url = "https://bloodsweatcode.net"
+site_url = "https://bloodsweatcode.org"
 additional_redirect_urls = [
 	"http://localhost:3000",
 	"http://localhost:3000/auth/callback",
-	"https://bloodsweatcode.net",
-	"https://bloodsweatcode.net/auth/callback"
+	"https://bloodsweatcode.org",
+	"https://bloodsweatcode.org/auth/callback"
 ]
 jwt_expiry = 3600
 enable_signup = true
