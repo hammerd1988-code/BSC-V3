@@ -2,7 +2,7 @@
  * Database verification script for Blood Sweat Code
  * 
  * Run with: npx tsx --env-file=.env.local scripts/verify-database.ts
- * Or via v0: node --env-file-if-exists=/vercel/share/.env.project scripts/verify-database.ts
+ * Or with a host-provided env file: node --env-file-if-exists=/path/to/.env.project scripts/verify-database.ts
  * 
  * This script verifies:
  * 1. Database connection
