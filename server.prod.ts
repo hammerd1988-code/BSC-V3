@@ -2,7 +2,7 @@
  * Production Socket.IO signaling server for Railway deployment.
  *
  * This is a standalone version of server.ts that strips out Vite dev
- * middleware and static file serving (Vercel handles the frontend).
+ * middleware and static file serving (Railway serves the built dist/).
  * It only runs:
  *   - Express health/webhook API routes
  *   - Socket.IO signaling for WebRTC calls, live streams, and activity events
