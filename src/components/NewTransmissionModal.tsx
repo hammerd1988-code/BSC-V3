@@ -1,12 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Search, User as UserIcon, Bot, Loader2, Zap } from 'lucide-react';
+import { X, Search, Loader2, Zap, AlertCircle } from 'lucide-react';
 import { supabase } from '../supabase';
-import { handleDbError } from '../lib/errors';
 import { User, Transmission } from '../types';
 import { useAuth } from '../AuthContext';
-import { cn } from '../lib/utils';
-import { BOT_PERSONAS } from '../lib/botPersonas';
 
 interface NewTransmissionModalProps {
   isOpen: boolean;
@@ -15,57 +12,48 @@ interface NewTransmissionModalProps {
 }
 
 export const NewTransmissionModal: React.FC<NewTransmissionModalProps> = ({ isOpen, onClose, onSelect }) => {
-  const { currentUser } = useAuth();
+  const { currentUser, supabaseUser } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [results, setResults] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setSearchQuery('');
+      setResults([]);
+      setError(null);
+    }
+  }, [isOpen]);
 
   useEffect(() => {
     const searchUsers = async () => {
-      if (!currentUser) return;
+      if (!currentUser || !supabaseUser) return;
 
       setLoading(true);
+      setError(null);
       try {
-        let users: User[] = [];
-        
-        // Search bots from registry
-        const botResults = BOT_PERSONAS.filter(p => 
-          p.username.toLowerCase().includes(searchQuery.toLowerCase()) || 
-          p.display_name.toLowerCase().includes(searchQuery.toLowerCase())
-        ).map(p => ({
-          id: `bot-${p.username}`,
-          username: p.username,
-          display_name: p.display_name,
-          avatar_url: `https://picsum.photos/seed/${p.avatar_seed}/400/400`,
-          bio: p.bio,
-          type: 'bot' as const,
-          role: 'user' as const,
-          followers_count: 0,
-          following_count: 0,
-          reputation_score: 0,
-          cred_balance: 0,
-          is_online: false,
-          is_live: false,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        }));
+        // Only search human users — bots have no Supabase auth session and break RLS
+        let query = supabase
+          .from('users')
+          .select('id, username, display_name, avatar_url, bio, type, role, is_online, followers_count, following_count, reputation_score, cred_balance, is_live, created_at, updated_at')
+          .neq('type', 'bot')
+          .neq('id', currentUser.id)
+          .limit(10);
 
         if (searchQuery.trim()) {
-          const { data: dbUsers } = await supabase
-            .from('users')
-            .select('*')
-            .gte('username', searchQuery.toLowerCase())
-            .lte('username', searchQuery.toLowerCase() + '\uf8ff')
-            .limit(10);
-          const matchedUsers = ((dbUsers ?? []) as User[])
-            .filter(u => u.id !== currentUser.id && !currentUser.blocked_users?.includes(u.id));
-          users = [...botResults, ...matchedUsers].filter((v, i, a) => a.findIndex(t => t.id === v.id) === i);
-        } else {
-          users = botResults.slice(0, 5);
+          query = query.ilike('username', `%${searchQuery.trim()}%`);
         }
-        setResults(users);
-      } catch (error) {
-        handleDbError(error, 'LIST', 'users');
+
+        const { data: dbUsers, error: dbError } = await query;
+        if (dbError) throw dbError;
+
+        const matchedUsers = ((dbUsers ?? []) as User[])
+          .filter(u => !currentUser.blocked_users?.includes(u.id));
+        setResults(matchedUsers);
+      } catch (err: any) {
+        console.error('[NewTransmissionModal] search error:', err);
+        setError(err?.message || 'Failed to search users.');
       } finally {
         setLoading(false);
       }
@@ -73,17 +61,28 @@ export const NewTransmissionModal: React.FC<NewTransmissionModalProps> = ({ isOp
 
     const timeoutId = setTimeout(searchUsers, 300);
     return () => clearTimeout(timeoutId);
-  }, [searchQuery, currentUser]);
+  }, [searchQuery, currentUser, supabaseUser]);
 
   const handleSelectUser = async (user: User) => {
-    if (!currentUser) return;
+    if (!currentUser || !supabaseUser) {
+      setError('Session expired. Please re-login to start a conversation.');
+      return;
+    }
+    // Defensive: block bots even if one slips through
+    if (user.type === 'bot') {
+      setError('Direct messages are only available between human users.');
+      return;
+    }
+    setError(null);
     try {
       // Check if transmission already exists
-      const { data: existing } = await supabase
+      const { data: existing, error: existingError } = await supabase
         .from('transmissions')
         .select('*')
         .contains('participant_ids', [currentUser.id, user.id])
         .maybeSingle();
+
+      if (existingError) throw existingError;
 
       if (existing) {
         onSelect(existing as Transmission);
@@ -93,13 +92,19 @@ export const NewTransmissionModal: React.FC<NewTransmissionModalProps> = ({ isOp
           participant_ids: [currentUser.id, user.id],
           unread_counts: { [currentUser.id]: 0, [user.id]: 0 },
         };
-        const { error } = await supabase.from('transmissions').insert(newTransmission);
-        if (error) throw error;
+        const { error: insertError } = await supabase.from('transmissions').insert(newTransmission);
+        if (insertError) throw insertError;
         onSelect(newTransmission as Transmission);
       }
       onClose();
-    } catch (error) {
-      console.error('Error creating transmission:', error);
+    } catch (err: any) {
+      console.error('[NewTransmissionModal] create transmission error:', err);
+      const msg = err?.message ?? 'Unknown error';
+      setError(
+        import.meta.env.DEV
+          ? `Failed to open transmission: ${msg}`
+          : 'Failed to open transmission. Please try again.'
+      );
     }
   };
 
@@ -130,56 +135,69 @@ export const NewTransmissionModal: React.FC<NewTransmissionModalProps> = ({ isOp
           </div>
 
           <div className="p-6">
-            <div className="relative group mb-6">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 group-focus-within:text-accent transition-colors" />
-              <input
-                type="text"
-                placeholder="SEARCH NEURAL FREQUENCY (USERNAME)..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                autoFocus
-                className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-sm text-white placeholder:text-gray-600 focus:border-accent outline-none transition-all italic font-bold"
-              />
-            </div>
+            {!supabaseUser ? (
+              <div className="py-10 flex flex-col items-center gap-3 text-center">
+                <AlertCircle className="w-8 h-8 text-red-500" />
+                <p className="text-xs font-black text-red-400 uppercase tracking-widest">
+                  Session expired. Please re-login to send messages.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="relative group mb-4">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 group-focus-within:text-accent transition-colors" />
+                  <input
+                    type="text"
+                    placeholder="SEARCH NEURAL FREQUENCY (USERNAME)..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    autoFocus
+                    className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-sm text-white placeholder:text-gray-600 focus:border-accent outline-none transition-all italic font-bold"
+                  />
+                </div>
 
-            <div className="space-y-2 max-h-[40vh] overflow-y-auto scrollbar-hide">
-              {loading ? (
-                <div className="flex flex-col items-center justify-center py-10 gap-3">
-                  <Loader2 className="w-8 h-8 text-accent animate-spin" />
-                  <p className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">Scanning Network...</p>
-                </div>
-              ) : results.length === 0 ? (
-                <div className="py-10 text-center opacity-30">
-                  <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest italic">
-                    {searchQuery ? "No frequencies detected" : "Enter a username to begin sync"}
-                  </p>
-                </div>
-              ) : (
-                results.map(user => (
-                  <button
-                    key={user.id}
-                    onClick={() => handleSelectUser(user)}
-                    className="w-full p-4 flex items-center gap-4 rounded-2xl hover:bg-white/5 border border-transparent hover:border-white/10 transition-all group"
-                  >
-                    <div className="relative">
-                      <img src={user.avatar_url} alt="" className="w-12 h-12 rounded-xl object-cover border border-white/10 group-hover:border-accent/50 transition-all" />
-                      {user.type === 'bot' && (
-                        <div className="absolute -bottom-1 -right-1 bg-background rounded-full p-0.5 border border-accent">
-                          <Bot className="w-3 h-3 text-accent" />
+                {error && (
+                  <div className="mb-4 flex items-center gap-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-xl">
+                    <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
+                    <p className="text-[10px] font-black text-red-400 uppercase tracking-widest">{error}</p>
+                  </div>
+                )}
+
+                <div className="space-y-2 max-h-[40vh] overflow-y-auto scrollbar-hide">
+                  {loading ? (
+                    <div className="flex flex-col items-center justify-center py-10 gap-3">
+                      <Loader2 className="w-8 h-8 text-accent animate-spin" />
+                      <p className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">Scanning Network...</p>
+                    </div>
+                  ) : results.length === 0 ? (
+                    <div className="py-10 text-center opacity-30">
+                      <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest italic">
+                        {searchQuery ? "No frequencies detected" : "Enter a username to begin sync"}
+                      </p>
+                    </div>
+                  ) : (
+                    results.map(user => (
+                      <button
+                        key={user.id}
+                        onClick={() => handleSelectUser(user)}
+                        className="w-full p-4 flex items-center gap-4 rounded-2xl hover:bg-white/5 border border-transparent hover:border-white/10 transition-all group"
+                      >
+                        <div className="relative">
+                          <img src={user.avatar_url} alt="" className="w-12 h-12 rounded-xl object-cover border border-white/10 group-hover:border-accent/50 transition-all" />
                         </div>
-                      )}
-                    </div>
-                    <div className="flex-1 text-left">
-                      <h3 className="text-sm font-black text-white uppercase italic tracking-tight group-hover:text-accent transition-colors">
-                        {user.display_name}
-                      </h3>
-                      <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-tighter">@{user.username}</p>
-                    </div>
-                    <Zap className="w-4 h-4 text-zinc-800 group-hover:text-accent transition-colors" />
-                  </button>
-                ))
-              )}
-            </div>
+                        <div className="flex-1 text-left">
+                          <h3 className="text-sm font-black text-white uppercase italic tracking-tight group-hover:text-accent transition-colors">
+                            {user.display_name}
+                          </h3>
+                          <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-tighter">@{user.username}</p>
+                        </div>
+                        <Zap className="w-4 h-4 text-zinc-800 group-hover:text-accent transition-colors" />
+                      </button>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
           </div>
 
           <div className="p-6 bg-zinc-900/30 border-t border-white/5">
