@@ -131,7 +131,11 @@ export const Transmissions: React.FC = () => {
           // Cache new participant users if needed
           const unknownIds = (t.participant_ids ?? []).filter(id => !userCache.current[id]);
           if (unknownIds.length > 0) {
-            supabase.from('users').select('*').in('id', unknownIds).then(({ data }) => {
+            supabase.from('users').select('*').in('id', unknownIds).then(({ data, error }) => {
+              if (error) {
+                console.error('[Transmissions] Failed to cache participant users:', error);
+                return;
+              }
               if (data) data.forEach(u => { userCache.current[u.id] = u; });
             });
           }
