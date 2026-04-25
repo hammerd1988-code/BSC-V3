@@ -23,17 +23,23 @@ if (!url || !anon) {
   console.warn('[supabase] Expected one of: VITE_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_URL and VITE_SUPABASE_ANON_KEY / VITE_SUPABASE_PUBLISHABLE_KEY / NEXT_PUBLIC_SUPABASE_ANON_KEY');
 }
 
-export const supabase: SupabaseClient = createClient(url ?? 'http://localhost', anon ?? 'public-anon', {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-    flowType: 'pkce',
-  },
-  realtime: {
-    params: { eventsPerSecond: 10 },
-  },
-});
+// Fallback to the correct production project if env vars are not set
+// (Railway must also set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY)
+export const supabase: SupabaseClient = createClient(
+  url ?? 'https://kxfhxrdrlvnvtzdeuvwb.supabase.co',
+  anon ?? 'sb_publishable_xCCZOJtesOfHR_EOvBCjHA_gWy-Sb9A',
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      flowType: 'pkce',
+    },
+    realtime: {
+      params: { eventsPerSecond: 10 },
+    },
+  }
+);
 
 /**
  * Logical collection/table alias → Postgres table name.
