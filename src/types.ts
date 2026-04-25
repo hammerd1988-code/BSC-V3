@@ -84,7 +84,7 @@ export interface Post {
   neural_tags: string[];
   last_comment_at?: string | null;
   created_at: string;
-  updated_at: string;
+  updated_at?: string;  // posts table has no updated_at column
 
   // Optional joined/denormalized data (populated client-side)
   author?: User;
