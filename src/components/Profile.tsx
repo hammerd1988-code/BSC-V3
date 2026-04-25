@@ -1048,6 +1048,12 @@ export const Profile: React.FC = () => {
         <EditProfileModal 
           isOpen={showEditProfileModal}
           onClose={() => setShowEditProfileModal(false)}
+          onSave={(updatedUser) => {
+            // Immediately merge updated fields into local state so the
+            // profile page reflects changes without waiting for realtime
+            setUser(prev => prev ? { ...prev, ...updatedUser } as User : prev);
+            if (updatedUser.custom_accent) setCustomAccent(updatedUser.custom_accent);
+          }}
           user={user}
         />
       )}

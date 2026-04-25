@@ -13,17 +13,18 @@ import { Wand2 } from 'lucide-react';
 interface EditProfileModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onSave?: (updatedUser: Partial<User>) => void;
   user: User;
 }
 
-export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onClose, user }) => {
+export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onClose, onSave, user }) => {
   const { currentUser } = useAuth();
   const [displayName, setDisplayName] = useState(user.display_name);
   const [username, setUsername] = useState(user.username);
   const [bio, setBio] = useState(user.bio || '');
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [avatarUrl, setAvatarUrl] = useState(user.avatar_url);
+  const [avatarUrl, setAvatarUrl] = useState<string>(user.avatar_url ?? '');
   const [coverUrl, setCoverUrl] = useState(user.cover_url || '');
   const [customAccent, setCustomAccent] = useState(user.custom_accent || '#FF0000');
   const [sponsoredEntity, setSponsoredEntity] = useState(user.sponsored_entity || {
@@ -47,7 +48,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
     setDisplayName(user.display_name);
     setUsername(user.username);
     setBio(user.bio || '');
-    setAvatarUrl(user.avatar_url);
+    setAvatarUrl(user.avatar_url ?? '');
     setCoverUrl(user.cover_url || '');
     setCustomAccent(user.custom_accent || '#FF0000');
     setSponsoredEntity(user.sponsored_entity || {
@@ -107,8 +108,8 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
         }
       }
 
-      let finalAvatarUrl = avatarUrl;
-      if (avatarUrl.startsWith('data:')) {
+      let finalAvatarUrl: string | null = avatarUrl || null;
+      if (avatarUrl && avatarUrl.startsWith('data:')) {
         const filePath = `profile_images/${currentUser.id}/avatar_${uuidv4()}.png`;
         const blob = await fetch(avatarUrl).then(r => r.blob());
         const { error: upErr } = await supabase.storage.from('media').upload(filePath, blob, { upsert: true, contentType: 'image/png' });
@@ -116,18 +117,31 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
         finalAvatarUrl = supabase.storage.from('media').getPublicUrl(filePath).data.publicUrl;
       }
 
-      const { error: updateErr } = await supabase.from('users').update({
+      const updates = {
         display_name: displayName,
         username,
         bio,
         avatar_url: finalAvatarUrl,
-        cover_url: coverUrl,
+        cover_url: coverUrl || null,
         custom_accent: customAccent,
         sponsored_entity: sponsoredEntity.name ? sponsoredEntity : null,
         ai_settings: { provider: aiProvider, endpoint: aiEndpoint, model: aiModel, apiKey: aiApiKey },
-      }).eq('id', currentUser.id);
+        updated_at: new Date().toISOString(),
+      };
+
+      const { data: updatedRow, error: updateErr } = await supabase
+        .from('users')
+        .update(updates)
+        .eq('id', currentUser.id)
+        .select('*')
+        .maybeSingle();
       if (updateErr) throw updateErr;
 
+      // Notify parent with the updated user data so Profile can refresh immediately
+      // without waiting for realtime
+      if (onSave) {
+        onSave(updatedRow ?? updates);
+      }
       onClose();
     } catch (err) {
       handleDbError(err, 'UPDATE', `users/${currentUser.id}`);
