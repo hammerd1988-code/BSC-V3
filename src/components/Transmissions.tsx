@@ -345,10 +345,19 @@ export const Transmissions: React.FC = () => {
 
     const otherUserId = activeTransmission.participant_ids?.find(id => id !== currentUser.id);
 
+    if (!otherUserId) {
+      setMessage(savedMessage);
+      setBurnDuration(savedBurnDuration);
+      setSending(false);
+      setError('Cannot send: no recipient found in this transmission.');
+      return;
+    }
+
     try {
       const newTransmit = {
         transmission_id: activeTransmission.id,
         sender_id: currentUser.id,
+        receiver_id: otherUserId,
         content: savedMessage,
         type: 'text' as const,
         burn_duration: savedBurnDuration,
