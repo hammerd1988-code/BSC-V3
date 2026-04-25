@@ -165,10 +165,12 @@ export const GoLive: React.FC = () => {
         return;
       }
 
+      // stream_chat uses 'text' column (not 'content')
       const normalized = (data ?? []).map((msg: any) => ({
         ...msg,
+        content: msg.text,  // alias 'text' as 'content' for display compatibility
         senderName: msg.sender_name,
-        senderUsername: msg.sender_username,
+        isDonation: (msg.text ?? '').startsWith('\u{1F48E}'),
       }));
       setMessages(normalized);
     };
@@ -178,12 +180,12 @@ export const GoLive: React.FC = () => {
     const chatChannel = supabase.channel(`stream-chat-${streamId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'stream_chat', filter: `stream_id=eq.${streamId}` }, ({ new: payload }) => {
         const msg: any = payload;
-        if (msg.type === 'donation') {
+        // Detect donations by the 💎 prefix we encode into the text field
+        if ((msg.text ?? '').startsWith('\u{1F48E}')) {
           const event = {
             id: msg.id,
             senderName: msg.sender_name,
-            amount: msg.amount,
-            message: msg.content,
+            message: msg.text,
             created_at: msg.created_at,
           };
           setRecentEvents(prev => [...prev, event]);
@@ -280,13 +282,13 @@ export const GoLive: React.FC = () => {
     if (!newMessage.trim() || !currentUser || !streamId) return;
 
     try {
+      // stream_chat schema: id, stream_id, sender_id, sender_name, text, created_at
+      // NOTE: column is 'text' not 'content'; 'sender_username' does not exist
       const { error } = await supabase.from('stream_chat').insert({
         stream_id: streamId,
         sender_id: currentUser.id,
         sender_name: currentUser.display_name,
-        sender_username: currentUser.username,
-        content: newMessage,
-        created_at: new Date().toISOString(),
+        text: newMessage,
       });
 
       if (error) throw error;
@@ -313,15 +315,13 @@ export const GoLive: React.FC = () => {
           { user_id: currentUser.id, amount, type: 'spend', description: `Donated to ${streamData.host_username}'s stream`, created_at: new Date().toISOString() },
           { user_id: streamData.host_id, amount, type: 'earn', description: `Donation from ${currentUser.username}`, created_at: new Date().toISOString() },
         ]),
+        // stream_chat only has: stream_id, sender_id, sender_name, text
+        // Encode donation info into the text field since type/amount columns don't exist
         supabase.from('stream_chat').insert({
           stream_id: streamId,
           sender_id: currentUser.id,
           sender_name: currentUser.display_name,
-          sender_username: currentUser.username,
-          content: donationMessage || `${amount} CRED donation`,
-          type: 'donation',
-          amount,
-          created_at: new Date().toISOString(),
+          text: `💎 ${amount} CRED: ${donationMessage || 'Sent a donation!'}`,
         })
       ]);
 
@@ -398,19 +398,42 @@ export const GoLive: React.FC = () => {
     <div className="fixed inset-0 z-[60] bg-black flex flex-col md:flex-row overflow-hidden">
       {/* Main Stream Area */}
       <div className="relative flex-1 bg-zinc-900 flex items-center justify-center overflow-hidden">
-        <video 
-          ref={videoRef} 
-          autoPlay 
-          muted={!isViewer} 
-          playsInline 
-          className={cn(
-            "w-full h-full object-cover transition-opacity duration-500",
-            (isCameraOn || isViewer) ? "opacity-100" : "opacity-0"
-          )}
-          src={isViewer ? "https://assets.mixkit.co/videos/preview/mixkit-digital-animation-of-a-circuit-board-14052-large.mp4" : undefined}
-          loop={isViewer}
-        />
-        
+        {/* Host camera preview — only shown to the host (not viewers) */}
+        {!isViewer && (
+          <video 
+            ref={videoRef} 
+            autoPlay 
+            muted 
+            playsInline 
+            className={cn(
+              "w-full h-full object-cover transition-opacity duration-500",
+              isCameraOn ? "opacity-100" : "opacity-0"
+            )}
+          />
+        )}
+
+        {/* Viewer mode: show stream info panel since this is not a WebRTC broadcast */}
+        {isViewer && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950">
+            <div className="flex flex-col items-center gap-4 p-8 text-center">
+              {streamData?.host_avatar && (
+                <img src={streamData.host_avatar} alt="" className="w-24 h-24 rounded-full border-4 border-accent object-cover shadow-[0_0_30px_rgba(255,0,0,0.4)]" />
+              )}
+              <div>
+                <p className="text-white font-black text-xl uppercase tracking-tight">{streamData?.hostDisplayName || streamData?.host_display_name || 'Host'}</p>
+                <p className="text-zinc-400 text-sm mt-1">{streamTitle || 'Live Stream'}</p>
+              </div>
+              <div className="flex items-center gap-2 px-4 py-2 bg-accent/20 border border-accent/30 rounded-full">
+                <div className="w-2 h-2 bg-accent rounded-full animate-pulse" />
+                <span className="text-accent text-xs font-black uppercase tracking-widest">Live — {crowdSize} watching</span>
+              </div>
+              <p className="text-zinc-600 text-xs max-w-xs">
+                Audio stream active. Video broadcast requires the host to share their screen or use a streaming tool.
+              </p>
+            </div>
+          </div>
+        )}
+
         {!isCameraOn && !isViewer && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900">
             <div className="w-24 h-24 rounded-full bg-zinc-800 flex items-center justify-center mb-4 border border-white/10">
