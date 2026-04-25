@@ -78,9 +78,9 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
       const { data: { publicUrl } } = supabase.storage.from('media').getPublicUrl(filePath);
       if (type === 'avatar') setAvatarUrl(publicUrl);
       else setCoverUrl(publicUrl);
-    } catch (err) {
-      console.error(err);
-      setError(`Failed to upload ${type} image.`);
+    } catch (err: any) {
+      console.error('[EditProfile] Image upload error:', err?.message || err);
+      setError(`Upload failed: ${err?.message || 'Check camera/storage permissions.'}`);
     } finally {
       setIsSaving(false);
       if (e.target) e.target.value = '';
@@ -117,17 +117,21 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
         finalAvatarUrl = supabase.storage.from('media').getPublicUrl(filePath).data.publicUrl;
       }
 
-      const updates = {
+      // IMPORTANT: Only include columns that actually exist in the users table.
+      // 'sponsored_entity' does NOT exist — the correct column is 'sponsorship'.
+      const updates: Record<string, any> = {
         display_name: displayName,
         username,
         bio,
         avatar_url: finalAvatarUrl,
         cover_url: coverUrl || null,
         custom_accent: customAccent,
-        sponsored_entity: sponsoredEntity.name ? sponsoredEntity : null,
+        sponsorship: sponsoredEntity.name ? sponsoredEntity : null,  // correct column name
         ai_settings: { provider: aiProvider, endpoint: aiEndpoint, model: aiModel, apiKey: aiApiKey },
         updated_at: new Date().toISOString(),
       };
+
+      console.log('[EditProfile] Updating user', currentUser.id, 'with:', Object.keys(updates));
 
       const { data: updatedRow, error: updateErr } = await supabase
         .from('users')
@@ -135,7 +139,13 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
         .eq('id', currentUser.id)
         .select('*')
         .maybeSingle();
-      if (updateErr) throw updateErr;
+
+      if (updateErr) {
+        console.error('[EditProfile] Update error:', updateErr.code, updateErr.message, updateErr.details);
+        throw updateErr;
+      }
+
+      console.log('[EditProfile] Update success:', updatedRow?.id);
 
       // Notify parent with the updated user data so Profile can refresh immediately
       // without waiting for realtime
@@ -143,9 +153,17 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
         onSave(updatedRow ?? updates);
       }
       onClose();
-    } catch (err) {
+    } catch (err: any) {
+      console.error('[EditProfile] Save failed:', err?.message || err);
       handleDbError(err, 'UPDATE', `users/${currentUser.id}`);
-      setError('Failed to update profile.');
+      const msg = err?.message || String(err);
+      if (msg.includes('row-level security') || msg.includes('permission')) {
+        setError('Permission denied — your session may have expired. Sign out and back in.');
+      } else if (msg.includes('column') || msg.includes('does not exist')) {
+        setError(`Schema error: ${msg}`);
+      } else {
+        setError(`Failed to save: ${msg}`);
+      }
     } finally {
       setIsSaving(false);
     }

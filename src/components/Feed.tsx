@@ -381,6 +381,8 @@ export const Feed: React.FC = () => {
     if (!currentUser || posts.length === 0) return;
     
     setIsRecommending(true);
+    // Declare filtered outside try so catch block can use it as fallback
+    let filtered: Post[] = posts;
     try {
       // Get a larger pool of posts for recommendation
       const { data: pool } = await supabase
@@ -388,7 +390,7 @@ export const Feed: React.FC = () => {
         .select('*, author:users!author_id(*)')
         .order('created_at', { ascending: false })
         .limit(50);
-      const filtered = ((pool ?? []) as Post[]).filter(p => !currentUser.blocked_users?.includes(p.author_id));
+      filtered = ((pool ?? []) as Post[]).filter(p => !currentUser.blocked_users?.includes(p.author_id));
 
       const postContents = filtered.slice(0, 5).map(p => p.content).join(' | ');
       const prompt = `You are a neural recommendation engine for the "Blood, Sweat, or Code" platform.
@@ -416,18 +418,28 @@ export const Feed: React.FC = () => {
       setRecommendedPosts(rankedPosts);
     } catch (error) {
       console.error("Recommendation Error:", error);
-      // Fallback to latest if AI fails
-      setRecommendedPosts(posts.slice(0, 15));
+      // Fallback: sort by engagement score (likes + boosts) so For You
+      // shows genuinely different content from the chronological Latest tab
+      const fallback = [...filtered]
+        .sort((a, b) => {
+          const scoreA = (a.likes || 0) + (a.boosts || 0) * 2 + (a.comments_count || 0);
+          const scoreB = (b.likes || 0) + (b.boosts || 0) * 2 + (b.comments_count || 0);
+          return scoreB - scoreA;
+        })
+        .slice(0, 15);
+      setRecommendedPosts(fallback.length > 0 ? fallback : posts.slice(0, 15));
     } finally {
       setIsRecommending(false);
     }
   };
 
   useEffect(() => {
-    if (feedType === 'foryou' && recommendedPosts.length === 0) {
+    // Trigger recommendations whenever the user switches to For You tab
+    // (not just when empty, so a tab switch always refreshes)
+    if (feedType === 'foryou') {
       getRecommendations();
     }
-  }, [feedType, currentUser]);
+  }, [feedType]);
 
   const displayPosts = feedType === 'latest' ? posts : recommendedPosts;
 

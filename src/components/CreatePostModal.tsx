@@ -184,7 +184,9 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
 
   if (!isOpen) return null;
 
-  const isEmpty = !editor || (editor.isEmpty && !editor.getHTML().includes('<img'));
+  // editor.isEmpty can be unreliable with TipTap's default paragraph wrapper.
+  // Use getText().trim() for a reliable empty check.
+  const isEmpty = !editor || (!editor.getText().trim() && !editor.getHTML().includes('<img'));
 
   return (
     <AnimatePresence>

@@ -472,8 +472,13 @@ export const Transmissions: React.FC = () => {
 
   return (
     <div className="flex h-[calc(100vh-64px)] bg-black overflow-hidden font-mono text-xs">
-      {/* Sidebar */}
-      <div className={`${isSidebarOpen ? 'w-80' : 'w-0'} transition-all duration-300 border-r border-white/10 flex flex-col bg-[#050505]`}>
+      {/* Sidebar — on mobile: visible only when no active conversation */}
+      <div className={`
+        ${isSidebarOpen ? 'w-80' : 'w-0'}
+        transition-all duration-300 border-r border-white/10 flex flex-col bg-[#050505]
+        ${activeTransmission ? 'hidden md:flex' : 'flex'}
+        md:w-80 md:flex
+      `}>
         <div className="p-4 border-b border-white/10">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-black text-white uppercase tracking-widest flex items-center gap-2">
@@ -561,18 +566,20 @@ export const Transmissions: React.FC = () => {
         </div>
       </div>
 
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col relative bg-black">
+      {/* Main Content — on mobile: full width when conversation is active, hidden when no conversation */}
+      <div className={`flex-1 flex flex-col relative bg-black ${!activeTransmission ? 'hidden md:flex' : 'flex'}`}>
         {activeTransmission ? (
           <>
             {/* Header */}
             <div className="h-16 border-b border-white/10 flex items-center justify-between px-6 bg-[#050505]/80 backdrop-blur-xl z-10">
               <div className="flex items-center gap-4">
+                {/* Back button on mobile: clears active conversation to show contact list */}
                 <button 
-                  onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                  className="p-2 hover:bg-white/5 rounded-md transition-colors text-gray-600 lg:hidden"
+                  onClick={() => setActiveTransmission(null)}
+                  className="p-2 hover:bg-white/5 rounded-md transition-colors text-gray-400 hover:text-white md:hidden"
+                  title="Back to contacts"
                 >
-                  <ChevronLeft className={`w-5 h-5 transition-transform ${isSidebarOpen ? '' : 'rotate-180'}`} />
+                  <ChevronLeft className="w-5 h-5" />
                 </button>
                 {(() => {
                   const otherUserId = activeTransmission.participant_ids?.find(id => id !== currentUser.id);

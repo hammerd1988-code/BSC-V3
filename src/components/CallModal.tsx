@@ -218,9 +218,27 @@ export const CallModal: React.FC<CallModalProps> = ({
       }
     };
 
+    // ontrack fires once per track. We accumulate all tracks into a single
+    // MediaStream on the remoteVideoRef so both audio and video arrive.
     peerConnection.current.ontrack = (event) => {
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = event.streams[0];
+      console.log('[WebRTC] ontrack fired, kind:', event.track.kind, 'streams:', event.streams.length);
+      if (event.streams && event.streams[0]) {
+        // Preferred path: use the stream directly
+        if (remoteVideoRef.current && remoteVideoRef.current.srcObject !== event.streams[0]) {
+          remoteVideoRef.current.srcObject = event.streams[0];
+          remoteVideoRef.current.play().catch(e => console.warn('[WebRTC] remote play() failed:', e));
+        }
+      } else {
+        // Fallback: build a stream manually from individual tracks
+        if (remoteVideoRef.current) {
+          let stream = remoteVideoRef.current.srcObject as MediaStream | null;
+          if (!stream) {
+            stream = new MediaStream();
+            remoteVideoRef.current.srcObject = stream;
+          }
+          stream.addTrack(event.track);
+          remoteVideoRef.current.play().catch(e => console.warn('[WebRTC] remote play() failed:', e));
+        }
       }
     };
 
@@ -257,10 +275,13 @@ export const CallModal: React.FC<CallModalProps> = ({
     }
 
     if (localStream.current) {
+      // Attach local stream to the local video element immediately
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = localStream.current;
+        localVideoRef.current.play().catch(e => console.warn('[WebRTC] local play() failed:', e));
       }
 
+      // Add all tracks to the peer connection BEFORE creating offer/answer
       localStream.current.getTracks().forEach(track => {
         if (peerConnection.current && localStream.current) {
           peerConnection.current.addTrack(track, localStream.current);
@@ -461,15 +482,20 @@ export const CallModal: React.FC<CallModalProps> = ({
               </div>
             )}
 
-            {status === CallStatus.CONNECTED ? (
-              <video 
-                ref={remoteVideoRef} 
-                autoPlay 
-                playsInline 
-                className={cn("w-full h-full object-cover transition-all duration-500", remoteFilterObj.className)}
-                style={{ filter: remoteFilterObj.cssFilter !== 'none' ? remoteFilterObj.cssFilter : undefined }}
-              />
-            ) : (
+            {/* Remote video is always mounted so ontrack can attach the stream.
+                It's visually hidden until the call is CONNECTED. */}
+            <video 
+              ref={remoteVideoRef} 
+              autoPlay 
+              playsInline
+              className={cn(
+                "w-full h-full object-cover transition-all duration-500",
+                remoteFilterObj.className,
+                status !== CallStatus.CONNECTED && "hidden"
+              )}
+              style={{ filter: remoteFilterObj.cssFilter !== 'none' ? remoteFilterObj.cssFilter : undefined }}
+            />
+            {status !== CallStatus.CONNECTED && (
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <div className="relative">
                   {/* Animated Rings */}
@@ -580,6 +606,20 @@ export const CallModal: React.FC<CallModalProps> = ({
                 </motion.div>
               </div>
             )}
+
+            {/* Hidden audio element for audio-only calls — ensures audio plays
+                even when the remote video element is hidden due to isVideoOff */}
+            <audio
+              ref={(el) => {
+                // Sync audio element with remote stream for audio-only calls
+                if (el && remoteVideoRef.current?.srcObject) {
+                  el.srcObject = remoteVideoRef.current.srcObject;
+                }
+              }}
+              autoPlay
+              playsInline
+              className="hidden"
+            />
 
             {/* Picture-in-Picture (Local) */}
             {status === CallStatus.CONNECTED && (
