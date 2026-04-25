@@ -327,25 +327,32 @@ export const Transmissions: React.FC = () => {
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const trimmedMessage = message.trim();
-    if (!trimmedMessage || !activeTransmission || !currentUser || sending) return;
+    if (!trimmedMessage || !activeTransmission || !currentUser) return;
+    if (sending) return;
 
     if (!supabaseUser) {
       setError('Session expired. Please re-login to send messages.');
       return;
     }
 
+    // Optimistic UI: clear input immediately so the user feels responsiveness
+    const savedMessage = trimmedMessage;
+    const savedBurnDuration = burnDuration;
+    setMessage('');
+    setBurnDuration(null);
     setSending(true);
     setError(null);
+
     const otherUserId = activeTransmission.participant_ids?.find(id => id !== currentUser.id);
 
     try {
       const newTransmit = {
         transmission_id: activeTransmission.id,
         sender_id: currentUser.id,
-        content: trimmedMessage,
-        type: 'text',
-        burn_duration: burnDuration,
-        expires_at: burnDuration ? new Date(Date.now() + burnDuration * 1000).toISOString() : null,
+        content: savedMessage,
+        type: 'text' as const,
+        burn_duration: savedBurnDuration,
+        expires_at: savedBurnDuration ? new Date(Date.now() + savedBurnDuration * 1000).toISOString() : null,
       };
 
       const { data: insertedTransmit, error: sendError } = await supabase
@@ -371,7 +378,7 @@ export const Transmissions: React.FC = () => {
         .from('transmissions')
         .update({
           last_transmit: {
-            content: trimmedMessage,
+            content: savedMessage,
             sender_id: currentUser.id,
             created_at: new Date().toISOString()
           },
@@ -383,17 +390,14 @@ export const Transmissions: React.FC = () => {
         console.error('Error updating transmission metadata:', updateError);
       }
 
-      setMessage('');
-      setBurnDuration(null);
       setActiveTransmission(prev => prev ? { ...prev, unread_counts: updatedUnread } : prev);
     } catch (err: any) {
       console.error('[Transmissions] Error sending transmit:', err);
+      // Restore the message so the user can retry
+      setMessage(savedMessage);
+      setBurnDuration(savedBurnDuration);
       const msg = err?.message ?? 'Unknown error';
-      setError(
-        import.meta.env.DEV
-          ? `Failed to send: ${msg}`
-          : 'Failed to send transmission. Please retry.'
-      );
+      setError(`Failed to send: ${msg}`);
     } finally {
       setSending(false);
     }
@@ -443,15 +447,15 @@ export const Transmissions: React.FC = () => {
 
   const { initiateCall } = useCall();
 
-  const startCall = () => {
+  const startCall = (videoEnabled: boolean = true) => {
     if (!activeTransmission || !currentUser) return;
     const otherUserId = activeTransmission.participant_ids?.find(id => id !== currentUser.id);
     const otherUser = otherUserId ? userCache.current[otherUserId] : null;
     
     if (otherUser) {
-      initiateCall(otherUser);
+      initiateCall(otherUser, videoEnabled);
     } else {
-      alert("NEURAL LINK ERROR: Target node not found in current sector.");
+      setError('Target node not found in current sector.');
     }
   };
 
@@ -599,21 +603,27 @@ export const Transmissions: React.FC = () => {
                   return otherUser?.type !== 'bot' && (
                     <>
                       <button 
-                        onClick={startCall}
+                        onClick={() => startCall(false)}
                         className="p-2 hover:bg-white/5 rounded-full transition-colors text-gray-400 hover:text-green-500"
+                        title="Audio call"
                       >
                         <Phone className="w-5 h-5" />
                       </button>
                       <button 
-                        onClick={startCall}
+                        onClick={() => startCall(true)}
                         className="p-2 hover:bg-white/5 rounded-full transition-colors text-gray-400 hover:text-accent"
+                        title="Video call"
                       >
                         <Video className="w-5 h-5" />
                       </button>
                     </>
                   );
                 })()}
-                <button className="p-2 hover:bg-white/5 rounded-full transition-colors">
+                <button 
+                  onClick={() => setError('Report feature coming soon.')}
+                  className="p-2 hover:bg-white/5 rounded-full transition-colors"
+                  title="Report user"
+                >
                   <ShieldAlert className="w-5 h-5 text-gray-600 hover:text-accent" />
                 </button>
                 <div className="relative">
@@ -632,10 +642,30 @@ export const Transmissions: React.FC = () => {
                         exit={{ opacity: 0, y: 10, scale: 0.95 }}
                         className="absolute right-0 mt-2 w-48 bg-[#0a0a0a] border border-white/10 rounded-xl p-2 shadow-2xl z-50"
                       >
-                        <button className="w-full flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-lg transition-all uppercase tracking-widest text-[10px]">
-                          <Lock className="w-4 h-4" /> Secure Link
+                        <button 
+                          onClick={() => { setEncryptionEnabled(!encryptionEnabled); setShowOptions(false); }}
+                          className="w-full flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-lg transition-all uppercase tracking-widest text-[10px]"
+                        >
+                          <Lock className="w-4 h-4" /> {encryptionEnabled ? 'Unsecure Link' : 'Secure Link'}
                         </button>
-                        <button className="w-full flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-lg transition-all uppercase tracking-widest text-[10px]">
+                        <button 
+                          onClick={async () => {
+                            if (!activeTransmission) return;
+                            const confirmed = window.confirm('Are you sure you want to purge this transmission stream? This cannot be undone.');
+                            if (!confirmed) return;
+                            try {
+                              await supabase.from('transmits').delete().eq('transmission_id', activeTransmission.id);
+                              await supabase.from('transmissions').delete().eq('id', activeTransmission.id);
+                              setTransmissions(prev => prev.filter(t => t.id !== activeTransmission.id));
+                              setActiveTransmission(null);
+                              setTransmits([]);
+                              setShowOptions(false);
+                            } catch (err: any) {
+                              setError(`Failed to purge: ${err?.message || 'Unknown error'}`);
+                            }
+                          }}
+                          className="w-full flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-red-500 hover:bg-red-500/5 rounded-lg transition-all uppercase tracking-widest text-[10px]"
+                        >
                           <Trash2 className="w-4 h-4 text-red-500/50" /> Purge Stream
                         </button>
                       </motion.div>
@@ -739,10 +769,10 @@ export const Transmissions: React.FC = () => {
                 />
                 <div className="flex items-center justify-between px-2 py-1 border-t border-white/5 mt-2">
                   <div className="flex items-center gap-1">
-                    <button type="button" className="p-2 hover:bg-white/5 rounded-lg transition-colors text-gray-600 hover:text-accent">
+                    <button type="button" onClick={() => setError('Image uploads coming soon.')} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-gray-600 hover:text-accent" title="Attach image">
                       <ImageIcon className="w-4 h-4" />
                     </button>
-                    <button type="button" className="p-2 hover:bg-white/5 rounded-lg transition-colors text-gray-600 hover:text-accent">
+                    <button type="button" onClick={() => setError('File attachments coming soon.')} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-gray-600 hover:text-accent" title="Attach file">
                       <Paperclip className="w-4 h-4" />
                     </button>
                     <div className="h-4 w-[1px] bg-white/10 mx-1" />
@@ -765,7 +795,12 @@ export const Transmissions: React.FC = () => {
                   <button 
                     type="submit"
                     disabled={!message.trim() || sending}
-                    className="bg-accent hover:bg-accent/80 disabled:bg-gray-800 disabled:text-gray-600 text-black p-2.5 rounded-xl transition-all shadow-[0_0_15px_rgba(0,243,255,0.2)] group"
+                    onClick={(e) => {
+                      // Explicit click handler as backup for form submit
+                      e.preventDefault();
+                      handleSendMessage();
+                    }}
+                    className="bg-accent hover:bg-accent/80 disabled:bg-gray-800 disabled:text-gray-600 text-black p-2.5 rounded-xl transition-all shadow-[0_0_15px_rgba(0,243,255,0.2)] group cursor-pointer"
                   >
                     {sending ? (
                       <RefreshCw className="w-4 h-4 animate-spin" />

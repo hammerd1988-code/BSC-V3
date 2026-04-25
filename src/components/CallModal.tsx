@@ -13,6 +13,7 @@ interface CallModalProps {
   targetUserAvatar?: string;
   isIncoming?: boolean;
   incomingData?: any;
+  videoEnabled?: boolean;
 }
 
 const FILTERS = [
@@ -45,7 +46,8 @@ export const CallModal: React.FC<CallModalProps> = ({
   targetUserName,
   targetUserAvatar,
   isIncoming,
-  incomingData
+  incomingData,
+  videoEnabled = true,
 }) => {
   const { currentUser } = useAuth();
   const [status, setStatus] = useState<CallStatus>(CallStatus.IDLE);
@@ -173,10 +175,36 @@ export const CallModal: React.FC<CallModalProps> = ({
   }, [onClose]);
 
   const setupWebRTC = async () => {
-    const configuration = {
+    const configuration: RTCConfiguration = {
       iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' }
-      ]
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' },
+        // Metered free TURN servers for NAT traversal behind strict firewalls
+        {
+          urls: 'turn:a.relay.metered.ca:80',
+          username: 'bsc-open',
+          credential: 'bsc-open',
+        },
+        {
+          urls: 'turn:a.relay.metered.ca:80?transport=tcp',
+          username: 'bsc-open',
+          credential: 'bsc-open',
+        },
+        {
+          urls: 'turn:a.relay.metered.ca:443',
+          username: 'bsc-open',
+          credential: 'bsc-open',
+        },
+        {
+          urls: 'turns:a.relay.metered.ca:443?transport=tcp',
+          username: 'bsc-open',
+          credential: 'bsc-open',
+        },
+      ],
+      iceCandidatePoolSize: 10,
     };
     
     peerConnection.current = new RTCPeerConnection(configuration);
@@ -206,10 +234,16 @@ export const CallModal: React.FC<CallModalProps> = ({
     };
 
     try {
-      // Try video + audio first
-      localStream.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      if (videoEnabled) {
+        // Try video + audio first
+        localStream.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      } else {
+        // Audio-only call requested
+        localStream.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        setIsVideoOff(true);
+      }
     } catch (err: any) {
-      console.warn('Could not access video/audio, trying audio only...', err);
+      console.warn('Could not access requested media, trying audio only...', err);
       try {
         localStream.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         setIsVideoOff(true);

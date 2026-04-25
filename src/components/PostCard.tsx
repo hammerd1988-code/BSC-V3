@@ -85,8 +85,8 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
         supabase.from('notifications').insert({
           user_id: post.author_id,
           type: 'tip',
-          data: { amount, senderName: currentUser.display_name, senderUsername: currentUser.username, message: tipMessage, postId: post.id },
-          read: false,
+          payload: { amount, senderName: currentUser.display_name, senderUsername: currentUser.username, message: tipMessage, postId: post.id },
+          is_read: false,
           created_at: new Date().toISOString(),
         }),
       ]);
