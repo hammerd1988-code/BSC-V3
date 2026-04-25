@@ -183,21 +183,23 @@ export const Profile: React.FC = () => {
   useEffect(() => {
     if (!user) return;
     if (user.id === 'void-architect-bot') {
+      const mockLikes = Math.floor(Math.random() * 1000);
       setPosts(Array.from({ length: 5 }).map((_, i) => ({
         id: `up-${user.id}-${i}`,
         author_id: user.id,
         content: `This is my personal post #${i}. My neural pathways are buzzing.`,
         media_url: `https://picsum.photos/seed/userpost-${user.id}-${i}/800/800`,
-        media_type: 'image',
-        likes: Math.floor(Math.random() * 1000),
+        media_type: 'image' as const,
+        likes: mockLikes,
+        likes_count: mockLikes,
         boosts: Math.floor(Math.random() * 100),
         comments_count: Math.floor(Math.random() * 100),
         shares_count: Math.floor(Math.random() * 50),
         is_boosted: false,
-        neural_tags: [],
+        neural_tags: [] as string[],
         created_at: new Date(Date.now() - Math.random() * 10000000).toISOString(),
         updated_at: new Date().toISOString()
-      })));
+      } as Post)));
       return;
     }
 

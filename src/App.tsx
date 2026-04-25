@@ -17,6 +17,8 @@ const NeuralJobMarket = lazy(() => import('./components/NeuralJobMarket').then((
 const NeuralRankings = lazy(() => import('./components/NeuralRankings').then((m) => ({ default: m.NeuralRankings })));
 const AdminDashboard = lazy(() => import('./components/AdminDashboard').then((m) => ({ default: m.AdminDashboard })));
 const BotTerminal = lazy(() => import('./components/BotTerminal').then((m) => ({ default: m.BotTerminal })));
+const GoLive = lazy(() => import('./components/GoLive').then((m) => ({ default: m.GoLive })));
+const NetworkMap = lazy(() => import('./components/NetworkMap').then((m) => ({ default: m.NetworkMap })));
 
 /** Route-level guard: redirects non-admins before AdminDashboard even loads. */
 function AdminRoute({ children }: { children: React.ReactNode }) {
@@ -65,6 +67,8 @@ export default function App() {
             <Route path="/rankings" element={<NeuralRankings />} />
             <Route path="/void" element={<VoidFeed />} />
             <Route path="/transmissions" element={<Transmissions />} />
+            <Route path="/golive" element={<GoLive />} />
+            <Route path="/networkmap" element={<NetworkMap />} />
             <Route path="/terminal" element={<BotTerminal />} />
             <Route
               path="/admin"

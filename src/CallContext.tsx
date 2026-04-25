@@ -6,8 +6,8 @@ import { CallModal } from './components/CallModal';
 
 interface CallContextType {
   incomingCall: any | null;
-  outgoingCall: { targetUser: User } | null;
-  initiateCall: (targetUser: User) => void;
+  outgoingCall: { targetUser: User; videoEnabled: boolean } | null;
+  initiateCall: (targetUser: User, videoEnabled?: boolean) => void;
   acceptCall: () => void;
   rejectCall: () => void;
   endCall: () => void;
@@ -25,7 +25,7 @@ export const useCall = () => {
 export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { currentUser } = useAuth();
   const [incomingCall, setIncomingCall] = useState<any>(null);
-  const [outgoingCall, setOutgoingCall] = useState<{ targetUser: User } | null>(null);
+  const [outgoingCall, setOutgoingCall] = useState<{ targetUser: User; videoEnabled: boolean } | null>(null);
 
   useEffect(() => {
     if (currentUser) {
@@ -59,8 +59,8 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [currentUser]);
 
-  const initiateCall = (targetUser: User) => {
-    setOutgoingCall({ targetUser });
+  const initiateCall = (targetUser: User, videoEnabled: boolean = true) => {
+    setOutgoingCall({ targetUser, videoEnabled });
   };
 
   const acceptCall = () => {
@@ -105,6 +105,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         targetUserId={outgoingCall?.targetUser.id}
         targetUserName={outgoingCall?.targetUser.display_name}
         targetUserAvatar={outgoingCall?.targetUser.avatar_url}
+        videoEnabled={outgoingCall?.videoEnabled ?? true}
       />
     </CallContext.Provider>
   );
