@@ -106,16 +106,19 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
     setError(null);
 
     try {
+      // Only include columns that exist in the live posts table.
+      // DB schema: id (auto), author_id (uuid), content, media_url, media_type,
+      //   type, likes, boosts, comments_count, is_boosted, last_comment_at,
+      //   expires_at, is_echo, feed_type, created_at, updated_at
+      // NOTE: shares_count and neural_tags do NOT exist in the DB.
       const newPost = {
         author_id: currentUser.id,
         content: htmlContent,
         likes: 0,
         boosts: 0,
         comments_count: 0,
-        shares_count: 0,
         is_boosted: false,
         type: 'text',
-        neural_tags: [],
       };
 
       // Use maybeSingle() instead of single() to avoid PGRST116 error

@@ -107,36 +107,48 @@ export const AdminDashboard: React.FC = () => {
 
         {/* Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="bg-secondary/30 border border-white/10 rounded-xl p-6 flex items-center gap-4">
-            <div className="p-3 bg-blue-500/20 rounded-lg text-blue-500">
+          <button
+            onClick={() => { /* scroll to user table below */ document.querySelector('.admin-user-table')?.scrollIntoView({ behavior: 'smooth' }); }}
+            className="bg-secondary/30 border border-white/10 hover:bg-secondary/50 transition-colors rounded-xl p-6 flex items-center gap-4 text-left group cursor-pointer"
+          >
+            <div className="p-3 bg-blue-500/20 rounded-lg text-blue-500 group-hover:scale-110 transition-transform">
               <Users className="w-6 h-6" />
             </div>
             <div>
               <p className="text-sm text-muted-foreground font-bold uppercase tracking-widest">Total Users</p>
               <p className="text-2xl font-black">{stats.totalUsers}</p>
+              <p className="text-[10px] text-muted-foreground mt-1">Manage Users</p>
             </div>
-          </div>
-          <div className="bg-secondary/30 border border-white/10 rounded-xl p-6 flex items-center gap-4">
-            <div className="p-3 bg-green-500/20 rounded-lg text-green-500">
+          </button>
+          <button
+            onClick={() => navigate('/')}
+            className="bg-secondary/30 border border-white/10 hover:bg-secondary/50 transition-colors rounded-xl p-6 flex items-center gap-4 text-left group cursor-pointer"
+          >
+            <div className="p-3 bg-green-500/20 rounded-lg text-green-500 group-hover:scale-110 transition-transform">
               <Activity className="w-6 h-6" />
             </div>
             <div>
               <p className="text-sm text-muted-foreground font-bold uppercase tracking-widest">Total Posts</p>
               <p className="text-2xl font-black">{stats.totalPosts}</p>
+              <p className="text-[10px] text-muted-foreground mt-1">View Feed</p>
             </div>
-          </div>
-          <div className="bg-secondary/30 border border-white/10 rounded-xl p-6 flex items-center gap-4">
-            <div className="p-3 bg-yellow-500/20 rounded-lg text-yellow-500">
+          </button>
+          <button
+            onClick={() => navigate('/jobs')}
+            className="bg-secondary/30 border border-white/10 hover:bg-secondary/50 transition-colors rounded-xl p-6 flex items-center gap-4 text-left group cursor-pointer"
+          >
+            <div className="p-3 bg-yellow-500/20 rounded-lg text-yellow-500 group-hover:scale-110 transition-transform">
               <Shield className="w-6 h-6" />
             </div>
             <div>
               <p className="text-sm text-muted-foreground font-bold uppercase tracking-widest">Total Bounties</p>
               <p className="text-2xl font-black">{stats.totalBounties}</p>
+              <p className="text-[10px] text-muted-foreground mt-1">View Bounties</p>
             </div>
-          </div>
+          </button>
           <button 
-            onClick={() => navigate('/network')}
-            className="bg-accent/10 border border-accent/20 hover:bg-accent/20 transition-colors rounded-xl p-6 flex items-center gap-4 text-left group"
+            onClick={() => navigate('/networkmap')}
+            className="bg-accent/10 border border-accent/20 hover:bg-accent/20 transition-colors rounded-xl p-6 flex items-center gap-4 text-left group cursor-pointer"
           >
             <div className="p-3 bg-accent/20 rounded-lg text-accent group-hover:scale-110 transition-transform">
               <Activity className="w-6 h-6" />
@@ -149,7 +161,7 @@ export const AdminDashboard: React.FC = () => {
         </div>
 
         {/* User Management */}
-        <div className="bg-secondary/30 border border-white/10 rounded-xl overflow-hidden">
+        <div className="admin-user-table bg-secondary/30 border border-white/10 rounded-xl overflow-hidden">
           <div className="p-6 border-b border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <h2 className="text-xl font-bold">User Directory</h2>
             <div className="relative">
