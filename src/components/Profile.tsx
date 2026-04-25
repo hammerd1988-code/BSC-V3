@@ -28,7 +28,8 @@ import {
   ShieldAlert,
   Eye,
   Clock,
-  Plus
+  Plus,
+  LogOut
 } from 'lucide-react';
 import { User, Post, Bounty } from '../types';
 import { PostCard } from './PostCard';
@@ -510,6 +511,20 @@ export const Profile: React.FC = () => {
                     className="px-4 py-1.5 rounded-full border border-white/20 font-bold text-sm hover:bg-white/5 transition-colors text-white"
                   >
                     Edit Profile
+                  </button>
+                  <button 
+                    onClick={async () => {
+                      try {
+                        await supabase.auth.signOut();
+                        navigate('/');
+                      } catch (err) {
+                        console.error('[Profile] Sign out error:', err);
+                      }
+                    }}
+                    className="p-2 rounded-full border border-red-500/30 text-red-400 hover:bg-red-500/10 hover:border-red-500/50 transition-all"
+                    title="Sign Out"
+                  >
+                    <LogOut className="w-4 h-4" />
                   </button>
                 </div>
               ) : (

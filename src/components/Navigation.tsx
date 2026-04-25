@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Cpu, Ghost, Terminal, Shield, Trophy } from 'lucide-react';
-import { motion } from 'motion/react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Cpu, Ghost, Terminal, Shield, Trophy, LogOut, Settings } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
@@ -10,9 +10,13 @@ import { cn } from '../lib/utils';
 
 export const Navigation: React.FC = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const { currentUser } = useAuth();
   const [unreadCount, setUnreadCount] = useState(0);
   const [showCreatePostModal, setShowCreatePostModal] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -51,6 +55,32 @@ export const Navigation: React.FC = () => {
       document.title = `Blood, Sweat, or Code`;
     }
   }, [unreadCount]);
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setShowUserMenu(false);
+      }
+    };
+    if (showUserMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showUserMenu]);
+
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+    try {
+      await supabase.auth.signOut();
+      setShowUserMenu(false);
+      navigate('/');
+    } catch (err) {
+      console.error('[Navigation] Sign out error:', err);
+    } finally {
+      setIsLoggingOut(false);
+    }
+  };
 
   const isActive = (path: string) => location.pathname === path;
   const isProfileActive = location.pathname.startsWith('/profile');
@@ -123,7 +153,109 @@ export const Navigation: React.FC = () => {
           {currentUser?.role === 'admin' && (
             <NavItem path="/admin" icon={Shield} active={isActive('/admin')} />
           )}
-          <NavItem path={`/profile/${currentUser?.username || 'blood_queen'}`} icon={UserIcon} active={isProfileActive} />
+
+          {/* Profile icon with tap-to-open user menu */}
+          <div ref={menuRef} className="relative">
+            <button
+              onClick={() => setShowUserMenu(prev => !prev)}
+              className={cn(
+                "relative p-2 flex flex-col items-center justify-center group w-12 h-12",
+              )}
+              aria-label="User menu"
+            >
+              {isProfileActive && (
+                <motion.div
+                  layoutId="nav-glow"
+                  className="absolute inset-0 bg-accent/20 rounded-full blur-md"
+                  transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                />
+              )}
+              {currentUser?.avatar_url ? (
+                <img
+                  src={currentUser.avatar_url}
+                  alt="Profile"
+                  className={cn(
+                    "w-7 h-7 rounded-full object-cover border-2 transition-all duration-500 relative z-10",
+                    isProfileActive
+                      ? "border-accent shadow-[0_0_10px_rgba(255,0,0,0.6)] scale-110"
+                      : "border-white/20 group-hover:border-white/50 group-hover:scale-105"
+                  )}
+                />
+              ) : (
+                <UserIcon className={cn(
+                  "w-6 h-6 transition-all duration-500 relative z-10",
+                  isProfileActive
+                    ? "text-accent drop-shadow-[0_0_15px_rgba(255,0,0,0.8)] scale-110"
+                    : "text-gray-500 group-hover:text-gray-300 group-hover:scale-105"
+                )} />
+              )}
+              {isProfileActive && (
+                <motion.div
+                  layoutId="nav-indicator"
+                  className="absolute -bottom-2 w-6 h-1 bg-accent rounded-t-full shadow-[0_0_15px_rgba(255,0,0,1)]"
+                  transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                />
+              )}
+            </button>
+
+            {/* User menu popup */}
+            <AnimatePresence>
+              {showUserMenu && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                  transition={{ duration: 0.15 }}
+                  className="absolute bottom-14 right-0 w-52 bg-[#0a0a0a] border border-white/10 rounded-2xl p-2 shadow-2xl z-50"
+                >
+                  {/* User info header */}
+                  <div className="px-3 py-2 border-b border-white/5 mb-1">
+                    <p className="text-[11px] font-black text-white uppercase tracking-widest truncate">
+                      {currentUser?.display_name || 'User'}
+                    </p>
+                    <p className="text-[9px] text-gray-500 uppercase tracking-wider truncate">
+                      @{currentUser?.username || ''}
+                    </p>
+                  </div>
+
+                  {/* View Profile */}
+                  <Link
+                    to={`/profile/${currentUser?.username || ''}`}
+                    onClick={() => setShowUserMenu(false)}
+                    className="w-full flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all uppercase tracking-widest text-[10px]"
+                  >
+                    <UserIcon className="w-4 h-4" />
+                    View Profile
+                  </Link>
+
+                  {/* Settings (Edit Profile) */}
+                  <button
+                    onClick={() => {
+                      setShowUserMenu(false);
+                      navigate(`/profile/${currentUser?.username || ''}`);
+                    }}
+                    className="w-full flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all uppercase tracking-widest text-[10px]"
+                  >
+                    <Settings className="w-4 h-4" />
+                    Settings
+                  </button>
+
+                  {/* Divider */}
+                  <div className="my-1 border-t border-white/5" />
+
+                  {/* Logout */}
+                  <button
+                    onClick={handleLogout}
+                    disabled={isLoggingOut}
+                    className="w-full flex items-center gap-3 px-3 py-2 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-xl transition-all uppercase tracking-widest text-[10px] disabled:opacity-50"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    {isLoggingOut ? 'Signing Out...' : 'Sign Out'}
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
       </nav>
 
