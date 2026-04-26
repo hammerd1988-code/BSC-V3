@@ -14,6 +14,7 @@ import { Server } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import { initCasperAutonomy } from './casperAutonomy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -377,6 +378,9 @@ async function startServer() {
     });
     httpServer.listen(PORT, '0.0.0.0');
   });
+
+  // Start Casper's autonomous posting and comment reply system
+  initCasperAutonomy().catch(e => console.error('[server] Casper autonomy init failed:', e));
 }
 
 startServer();
