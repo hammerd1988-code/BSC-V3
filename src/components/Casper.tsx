@@ -516,37 +516,38 @@ export const Casper: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // ── VOICE CHAT STATE ──
+  // ── VOICE CONVERSATION STATE ──
   const [voiceMode, setVoiceMode] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
   const [transcript, setTranscript] = useState('');
-  const [ttsEnabled, setTtsEnabled] = useState(true); // Voice output ON by default
-  const [micLevel, setMicLevel] = useState(0); // 0-1 audio level for visual feedback
-  const [lastSpokenText, setLastSpokenText] = useState(''); // for manual replay
+  const [ttsEnabled, setTtsEnabled] = useState(true);
+  const [micLevel, setMicLevel] = useState(0);
+  const [lastSpokenText, setLastSpokenText] = useState('');
   const recognitionRef = useRef<any>(null);
   const synthRef = useRef<SpeechSynthesis | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const levelAnimRef = useRef<number>(0);
+  const voiceConversationActiveRef = useRef(false); // true = conversation loop running
+  const [micPermission, setMicPermission] = useState<'unknown' | 'granted' | 'denied'>('unknown');
+  const [debugMsg, setDebugMsg] = useState('');
 
-  // Pre-loaded voices list — populated once voiceschanged fires
+  // Pre-loaded voices list
   const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
 
   // ── VOICE SYSTEM INIT ──
   useEffect(() => {
     const synth = window.speechSynthesis;
     synthRef.current = synth;
-
     const loadVoices = () => {
       const v = synth.getVoices();
       if (v.length > 0) voicesRef.current = v;
     };
     loadVoices();
     synth.addEventListener('voiceschanged', loadVoices);
-
     return () => {
       synth.removeEventListener('voiceschanged', loadVoices);
       synth.cancel();
@@ -571,11 +572,7 @@ export const Casper: React.FC = () => {
     return voices.find(v => v.lang.startsWith('en')) || voices[0] || null;
   }, []);
 
-  // ── GRAVELLY GHOST BUTLER VOICE PROCESSING ──
-  // Note: SpeechSynthesis audio cannot be directly routed through AudioContext in most browsers.
-  // Instead we use extreme pitch/rate settings + a post-processing trick:
-  // We play a subtle low-frequency drone through AudioContext while TTS speaks,
-  // which creates a psychoacoustic "gravelly" effect in the listener's perception.
+  // ── GRAVELLY GHOST BUTLER VOICE ──
   const gravelyDroneRef = useRef<{ ctx: AudioContext; osc: OscillatorNode; gain: GainNode } | null>(null);
 
   const startGravelDrone = useCallback(() => {
@@ -583,18 +580,15 @@ export const Casper: React.FC = () => {
       const ctx = new AudioContext();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      // Sub-bass drone at 55Hz (A1) — felt more than heard, adds gravelly depth
       osc.type = 'sawtooth';
       osc.frequency.setValueAtTime(55, ctx.currentTime);
       gain.gain.setValueAtTime(0, ctx.currentTime);
-      gain.gain.linearRampToValueAtTime(0.04, ctx.currentTime + 0.3); // Fade in
+      gain.gain.linearRampToValueAtTime(0.04, ctx.currentTime + 0.3);
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start();
       gravelyDroneRef.current = { ctx, osc, gain };
-    } catch (e) {
-      console.warn('[Casper] Drone failed:', e);
-    }
+    } catch (e) { console.warn('[Casper] Drone failed:', e); }
   }, []);
 
   const stopGravelDrone = useCallback(() => {
@@ -607,9 +601,10 @@ export const Casper: React.FC = () => {
   }, []);
 
   // ── CORE TTS FUNCTION ──
-  const speakResponse = useCallback((text: string, isGreeting = false) => {
+  // onDone callback fires when TTS finishes (used to restart listening in conversation mode)
+  const speakResponse = useCallback((text: string, isGreeting = false, onDone?: () => void) => {
     const synth = window.speechSynthesis;
-    if (!synth) return;
+    if (!synth) { onDone?.(); return; }
 
     synth.cancel();
     if (!isGreeting) setLastSpokenText(text);
@@ -618,20 +613,20 @@ export const Casper: React.FC = () => {
       const utter = new SpeechSynthesisUtterance(text);
       const voice = getGhostVoice();
       if (voice) utter.voice = voice;
-      // Ghost butler voice: very deep, deliberate, slightly creepy
-      utter.pitch = 0.5;   // Very low pitch (Alfred-from-Batman deep)
-      utter.rate = 0.80;   // Slow and deliberate
+      utter.pitch = 0.5;
+      utter.rate = 0.80;
       utter.volume = 1.0;
 
       utter.onstart = () => {
         setIsSpeaking(true);
         setVoiceStatus('speaking');
-        startGravelDrone(); // Start the sub-bass drone for gravelly effect
+        startGravelDrone();
       };
       utter.onend = () => {
         setIsSpeaking(false);
         setVoiceStatus('idle');
         stopGravelDrone();
+        onDone?.();
       };
       utter.onerror = (e) => {
         console.warn('[Casper TTS] error:', e.error);
@@ -641,6 +636,7 @@ export const Casper: React.FC = () => {
         } else {
           setIsSpeaking(false);
           setVoiceStatus('idle');
+          onDone?.();
         }
       };
 
@@ -662,7 +658,7 @@ export const Casper: React.FC = () => {
     }
   }, [getGhostVoice, startGravelDrone, stopGravelDrone]);
 
-  // ── MIC LEVEL METER via AudioContext ──
+  // ── MIC LEVEL METER ──
   const startMicLevelMeter = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -674,7 +670,6 @@ export const Casper: React.FC = () => {
       analyser.fftSize = 256;
       source.connect(analyser);
       analyserRef.current = analyser;
-
       const buf = new Uint8Array(analyser.frequencyBinCount);
       const tick = () => {
         analyser.getByteFrequencyData(buf);
@@ -683,9 +678,7 @@ export const Casper: React.FC = () => {
         levelAnimRef.current = requestAnimationFrame(tick);
       };
       tick();
-    } catch (e) {
-      console.warn('[Casper] Mic level meter failed:', e);
-    }
+    } catch (e) { console.warn('[Casper] Mic level meter failed:', e); }
   }, []);
 
   const stopMicLevelMeter = useCallback(() => {
@@ -699,23 +692,116 @@ export const Casper: React.FC = () => {
     audioCtxRef.current = null;
   }, []);
 
-  // ── SPEECH RECOGNITION ──
-  // Use a ref to hold the latest sendVoiceMessage to avoid stale closure
+  // ── VOICE CONVERSATION LOOP ──
+  // sendVoiceMessageRef is set below after sendVoiceMessage is defined
   const sendVoiceMessageRef = useRef<(text: string) => void>(() => {});
-  const [micPermission, setMicPermission] = useState<'unknown' | 'granted' | 'denied'>('unknown');
-  const [debugMsg, setDebugMsg] = useState('');
 
-  const userStoppedRef = useRef(false);
-  const accumulatedTextRef = useRef('');
+  // Start one recognition session. On natural end (pause detected), auto-sends transcript.
+  // After AI response + TTS, restartListeningRef.current() is called to loop back.
+  const restartListeningRef = useRef<() => void>(() => {});
+
+  const startOneSession = useCallback(() => {
+    if (!voiceConversationActiveRef.current) return;
+
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) return;
+
+    const rec = new SR();
+    rec.continuous = false;   // Ends naturally after a pause — this IS the desired behavior
+    rec.interimResults = true;
+    rec.lang = 'en-US';
+    rec.maxAlternatives = 1;
+
+    let sessionFinalText = '';
+
+    rec.onstart = () => {
+      setIsListening(true);
+      setVoiceStatus('listening');
+      setDebugMsg('Listening...');
+      console.log('[Casper STT] Session started');
+    };
+
+    rec.onresult = (event: any) => {
+      let interim = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const t = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          sessionFinalText += t + ' ';
+        } else {
+          interim += t;
+        }
+      }
+      setTranscript(sessionFinalText + interim);
+    };
+
+    rec.onend = () => {
+      setIsListening(false);
+      stopMicLevelMeter();
+      const text = sessionFinalText.trim();
+      setTranscript('');
+      console.log('[Casper STT] Session ended. text:', text, 'active:', voiceConversationActiveRef.current);
+
+      if (!voiceConversationActiveRef.current) {
+        // User ended the conversation — don't process
+        setVoiceStatus('idle');
+        setDebugMsg('');
+        return;
+      }
+
+      if (text) {
+        // Send to AI — after response + TTS, restartListeningRef will restart listening
+        setDebugMsg('Processing...');
+        sendVoiceMessageRef.current(text);
+      } else {
+        // No speech detected — restart listening immediately
+        setDebugMsg('Listening...');
+        setTimeout(() => startOneSession(), 200);
+      }
+    };
+
+    rec.onerror = (event: any) => {
+      console.warn('[Casper STT] Error:', event.error);
+      if (event.error === 'not-allowed') {
+        setMicPermission('denied');
+        setDebugMsg('Mic access denied');
+        voiceConversationActiveRef.current = false;
+        setIsListening(false);
+        stopMicLevelMeter();
+        setVoiceMode(false);
+      } else if (event.error === 'aborted') {
+        // Intentional abort — onend handles it
+      } else if (event.error === 'no-speech') {
+        setDebugMsg('Listening...');
+        // onend fires and will restart
+      } else {
+        setDebugMsg('Retrying...');
+        // onend fires and will restart
+      }
+    };
+
+    recognitionRef.current = rec;
+    try {
+      rec.start();
+      startMicLevelMeter();
+    } catch (e: any) {
+      console.error('[Casper STT] Failed to start:', e);
+      if (voiceConversationActiveRef.current) setTimeout(() => startOneSession(), 300);
+    }
+  }, [startMicLevelMeter, stopMicLevelMeter]);
+
+  // Wire up the restart ref so sendVoiceMessage can call it after TTS finishes
+  useEffect(() => {
+    restartListeningRef.current = startOneSession;
+  }, [startOneSession]);
 
   const startListening = useCallback(async () => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) {
       setMessages(prev => [...prev, { id: Date.now().toString(), role: 'casper', content: 'Voice recognition requires Chrome or Brave browser.', timestamp: new Date() }]);
-      setDebugMsg('ERROR: SpeechRecognition not available');
       return;
     }
 
+    // Request mic permission explicitly
     setDebugMsg('Requesting microphone access...');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -733,109 +819,37 @@ export const Casper: React.FC = () => {
       return;
     }
 
-    window.speechSynthesis.cancel();
-    setIsSpeaking(false);
+    voiceConversationActiveRef.current = true;
+    setVoiceMode(true);
 
+    // Speak greeting, then start listening loop
+    const greeting = getVoiceGreeting();
+    setMessages(prev => [...prev, { id: Date.now().toString(), role: 'casper', content: greeting, timestamp: new Date() }]);
+    setDebugMsg('Casper is greeting you...');
+
+    speakResponse(greeting, true, () => {
+      // After greeting finishes, start the conversation loop
+      if (voiceConversationActiveRef.current) {
+        setTimeout(() => startOneSession(), 300);
+      }
+    });
+  }, [speakResponse, startOneSession]);
+
+  const stopListening = useCallback(() => {
+    voiceConversationActiveRef.current = false;
     if (recognitionRef.current) {
       try { recognitionRef.current.abort(); } catch {}
       recognitionRef.current = null;
-      await new Promise(r => setTimeout(r, 100));
     }
-
-    userStoppedRef.current = false;
-    accumulatedTextRef.current = '';
-    setIsListening(true);
-    setVoiceStatus('listening');
+    window.speechSynthesis.cancel();
+    setIsListening(false);
+    setIsSpeaking(false);
+    stopMicLevelMeter();
+    setVoiceStatus('idle');
     setTranscript('');
-    setDebugMsg("Listening... speak whenever you're ready");
-    startMicLevelMeter();
-
-    const createSession = () => {
-      if (userStoppedRef.current) return;
-
-      const rec = new SR();
-      rec.continuous = false;
-      rec.interimResults = true;
-      rec.lang = 'en-US';
-      rec.maxAlternatives = 1;
-
-      rec.onstart = () => { console.log('[Casper STT] Session started'); };
-
-      rec.onresult = (event: any) => {
-        let interim = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const t = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            accumulatedTextRef.current += t + ' ';
-          } else {
-            interim += t;
-          }
-        }
-        setTranscript(accumulatedTextRef.current + interim);
-      };
-
-      rec.onend = () => {
-        console.log('[Casper STT] onend. userStopped:', userStoppedRef.current, 'text:', accumulatedTextRef.current.trim());
-        if (userStoppedRef.current) {
-          const text = accumulatedTextRef.current.trim();
-          setIsListening(false);
-          stopMicLevelMeter();
-          setTranscript('');
-          if (text) {
-            setDebugMsg('Sending to Casper...');
-            sendVoiceMessageRef.current(text);
-          } else {
-            setDebugMsg('No speech captured');
-            setVoiceStatus('idle');
-          }
-        } else {
-          setDebugMsg("Listening... speak whenever you're ready");
-          setTimeout(() => createSession(), 80);
-        }
-      };
-
-      rec.onerror = (event: any) => {
-        console.warn('[Casper STT] Error:', event.error);
-        if (event.error === 'not-allowed') {
-          setMicPermission('denied');
-          setDebugMsg('Mic access denied');
-          userStoppedRef.current = true;
-          setIsListening(false);
-          stopMicLevelMeter();
-          setVoiceMode(false);
-        } else if (event.error === 'aborted') {
-          // Our own abort call - onend handles cleanup
-        } else if (event.error === 'no-speech') {
-          setDebugMsg("Listening... speak whenever you're ready");
-          // onend fires after no-speech and will auto-restart
-        } else {
-          setDebugMsg('Retrying...');
-          // onend will auto-restart for all other errors
-        }
-      };
-
-      recognitionRef.current = rec;
-      try {
-        rec.start();
-      } catch (e: any) {
-        console.error('[Casper STT] Failed to start:', e);
-        if (!userStoppedRef.current) setTimeout(() => createSession(), 300);
-      }
-    };
-
-    createSession();
-  }, [startMicLevelMeter, stopMicLevelMeter]);
-
-  const stopListening = useCallback(() => {
-    userStoppedRef.current = true;
-    if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch {}
-    } else {
-      setIsListening(false);
-      stopMicLevelMeter();
-      setVoiceStatus('idle');
-    }
-  }, [stopMicLevelMeter]);
+    setDebugMsg('');
+    stopGravelDrone();
+  }, [stopMicLevelMeter, stopGravelDrone]);
 
   // ── VOICE MESSAGE PIPELINE ──
   const sendVoiceMessage = useCallback(async (text: string) => {
@@ -854,17 +868,33 @@ export const Casper: React.FC = () => {
 
     const prompt = conversationHistory ? `${conversationHistory}\nUser: ${text}\nCasper:` : text;
 
+    // Callback to restart listening after Casper finishes speaking (conversation loop)
+    const onCasperDoneSpeaking = () => {
+      if (voiceConversationActiveRef.current) {
+        setDebugMsg('Listening...');
+        setTimeout(() => restartListeningRef.current(), 400);
+      }
+    };
+
     try {
       const response = await generateText(prompt, currentUser?.ai_settings, { systemPrompt: CASPER_SYSTEM_PROMPT, temperature: 0.8 });
       const casperText = response || "I seem to have drifted off for a moment. Could you repeat that?";
       setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'casper', content: casperText, timestamp: new Date() }]);
       setIsGenerating(false);
-      if (ttsEnabled) speakResponse(casperText);
+      if (ttsEnabled) {
+        speakResponse(casperText, false, onCasperDoneSpeaking);
+      } else {
+        onCasperDoneSpeaking();
+      }
     } catch {
       const fallback = "My connection to the void seems unstable right now. Please try again.";
       setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'casper', content: fallback, timestamp: new Date() }]);
       setIsGenerating(false);
-      if (ttsEnabled) speakResponse(fallback);
+      if (ttsEnabled) {
+        speakResponse(fallback, false, onCasperDoneSpeaking);
+      } else {
+        onCasperDoneSpeaking();
+      }
     }
   }, [isGenerating, messages, currentUser?.ai_settings, speakResponse, ttsEnabled]);
 
@@ -1084,21 +1114,13 @@ export const Casper: React.FC = () => {
             {/* Voice mode toggle */}
             <button
               onClick={() => {
-                const turningOn = !voiceMode;
-                setVoiceMode(turningOn);
-                if (!turningOn) {
-                  // Turning OFF: stop everything
+                if (voiceMode) {
+                  // Turning OFF: end the conversation
                   stopListening();
-                  window.speechSynthesis.cancel();
-                  setIsSpeaking(false);
-                  setVoiceStatus('idle');
+                  setVoiceMode(false);
                 } else {
-                  // Turning ON: speak greeting, then user taps mic to start listening
-                  const greeting = getVoiceGreeting();
-                  setMessages(prev => [...prev, { id: Date.now().toString(), role: 'casper', content: greeting, timestamp: new Date() }]);
-                  setVoiceStatus('idle');
-                  // Speak the greeting (non-blocking — user taps mic button to start listening)
-                  speakResponse(greeting, true);
+                  // Turning ON: startListening handles greeting + conversation loop
+                  startListening();
                 }
               }}
               className={cn(
@@ -1259,10 +1281,10 @@ export const Casper: React.FC = () => {
                   background: voiceStatus === 'listening' ? 'rgba(74,222,128,0.08)' : voiceStatus === 'thinking' ? tier.bg : voiceStatus === 'speaking' ? 'rgba(167,139,250,0.08)' : 'rgba(255,255,255,0.02)',
                 }}
               >
-                {voiceStatus === 'listening' ? '● Listening — speak now'
-                  : voiceStatus === 'thinking' ? '◌ Processing your whisper...'
+                {voiceStatus === 'listening' ? '● Listening — speak naturally'
+                  : voiceStatus === 'thinking' ? '◌ Casper is thinking...'
                   : voiceStatus === 'speaking' ? '▶ Casper is speaking'
-                  : '○ Tap mic to speak'}
+                  : '○ Starting conversation...'}
               </motion.div>
             </AnimatePresence>
 
@@ -1295,22 +1317,14 @@ export const Casper: React.FC = () => {
               </motion.div>
             )}
 
-            {/* Main mic button */}
+            {/* End conversation button — always visible in voice mode */}
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.92 }}
               onClick={() => {
-                if (isListening) {
-                  stopListening();
-                } else if (isSpeaking) {
-                  window.speechSynthesis.cancel();
-                  setIsSpeaking(false);
-                  setVoiceStatus('idle');
-                } else if (!isGenerating) {
-                  startListening();
-                }
+                stopListening();
+                setVoiceMode(false);
               }}
-              disabled={isGenerating && !isSpeaking}
               className="relative"
             >
               {/* Pulse rings */}
@@ -1328,8 +1342,8 @@ export const Casper: React.FC = () => {
                 "w-24 h-24 rounded-full flex items-center justify-center transition-all duration-300 border-2",
                 isListening ? "bg-green-500/20 border-green-500/60 shadow-[0_0_50px_rgba(74,222,128,0.5)]"
                   : isSpeaking ? "bg-purple-500/20 border-purple-500/60 shadow-[0_0_50px_rgba(167,139,250,0.5)]"
-                  : isGenerating ? "bg-white/5 border-white/10 opacity-50 cursor-not-allowed"
-                  : "bg-white/5 border-white/10 hover:bg-white/10 hover:border-white/30 cursor-pointer"
+                  : isGenerating ? "bg-white/5 border-white/10"
+                  : "bg-red-500/10 border-red-500/30 hover:bg-red-500/20 hover:border-red-500/50"
               )}>
                 {isListening ? (
                   <motion.div animate={{ scale: [1, 1.15, 1] }} transition={{ duration: 0.6, repeat: Infinity }}>
@@ -1342,7 +1356,7 @@ export const Casper: React.FC = () => {
                 ) : isGenerating ? (
                   <Loader2 className="w-10 h-10 animate-spin" style={{ color: tier.color }} />
                 ) : (
-                  <Mic className="w-10 h-10 text-white/50" />
+                  <X className="w-10 h-10 text-red-400/60" />
                 )}
               </div>
             </motion.button>
@@ -1371,7 +1385,7 @@ export const Casper: React.FC = () => {
             )}
 
             <p className="text-[9px] text-white/20 font-bold uppercase tracking-widest">
-              Voice Mode Active • Tap mic icon in header to exit
+              Conversation active • Tap the button above to end
             </p>
           </div>
         ) : (
