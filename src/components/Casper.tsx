@@ -705,6 +705,9 @@ export const Casper: React.FC = () => {
   const [micPermission, setMicPermission] = useState<'unknown' | 'granted' | 'denied'>('unknown');
   const [debugMsg, setDebugMsg] = useState('');
 
+  const userStoppedRef = useRef(false);
+  const accumulatedTextRef = useRef('');
+
   const startListening = useCallback(async () => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) {
@@ -713,127 +716,125 @@ export const Casper: React.FC = () => {
       return;
     }
 
-    // STEP 1: Explicitly request mic permission via getUserMedia FIRST.
-    // This ensures Brave shows the permission dialog and we get a clear grant/deny.
-    setDebugMsg('Requesting mic permission...');
+    setDebugMsg('Requesting microphone access...');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      // Permission granted — stop this test stream immediately (startMicLevelMeter will create its own)
       stream.getTracks().forEach(t => t.stop());
       setMicPermission('granted');
-      setDebugMsg('Mic permission granted. Starting recognition...');
     } catch (permErr: any) {
       setMicPermission('denied');
-      setDebugMsg(`Mic DENIED: ${permErr.message}`);
+      setDebugMsg(`Mic access denied: ${permErr.message}`);
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
         role: 'casper',
-        content: 'Microphone access was denied. Please click the camera/mic icon in Brave\'s address bar and allow access, then try again.',
+        content: "Microphone access denied. Click the lock icon in Brave's address bar and allow microphone access.",
         timestamp: new Date(),
       }]);
       return;
     }
 
-    // STEP 2: Stop any TTS and existing recognition before starting new session
     window.speechSynthesis.cancel();
     setIsSpeaking(false);
+
     if (recognitionRef.current) {
       try { recognitionRef.current.abort(); } catch {}
       recognitionRef.current = null;
-      // Small delay to let the browser clean up the previous session
-      await new Promise(r => setTimeout(r, 150));
+      await new Promise(r => setTimeout(r, 100));
     }
 
-    // STEP 3: Set listening state BEFORE starting recognition so UI updates immediately
+    userStoppedRef.current = false;
+    accumulatedTextRef.current = '';
     setIsListening(true);
     setVoiceStatus('listening');
     setTranscript('');
+    setDebugMsg("Listening... speak whenever you're ready");
     startMicLevelMeter();
 
-    const rec = new SR();
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.lang = 'en-US';
-    rec.maxAlternatives = 1;
+    const createSession = () => {
+      if (userStoppedRef.current) return;
 
-    let finalText = '';
-    let started = false;
+      const rec = new SR();
+      rec.continuous = false;
+      rec.interimResults = true;
+      rec.lang = 'en-US';
+      rec.maxAlternatives = 1;
 
-    rec.onstart = () => {
-      started = true;
-      setDebugMsg('Recognition active — speak now');
-      console.log('[Casper STT] Started');
-    };
+      rec.onstart = () => { console.log('[Casper STT] Session started'); };
 
-    rec.onresult = (event: any) => {
-      let interim = '';
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const t = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          finalText += t + ' ';
-        } else {
-          interim += t;
+      rec.onresult = (event: any) => {
+        let interim = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const t = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            accumulatedTextRef.current += t + ' ';
+          } else {
+            interim += t;
+          }
         }
+        setTranscript(accumulatedTextRef.current + interim);
+      };
+
+      rec.onend = () => {
+        console.log('[Casper STT] onend. userStopped:', userStoppedRef.current, 'text:', accumulatedTextRef.current.trim());
+        if (userStoppedRef.current) {
+          const text = accumulatedTextRef.current.trim();
+          setIsListening(false);
+          stopMicLevelMeter();
+          setTranscript('');
+          if (text) {
+            setDebugMsg('Sending to Casper...');
+            sendVoiceMessageRef.current(text);
+          } else {
+            setDebugMsg('No speech captured');
+            setVoiceStatus('idle');
+          }
+        } else {
+          setDebugMsg("Listening... speak whenever you're ready");
+          setTimeout(() => createSession(), 80);
+        }
+      };
+
+      rec.onerror = (event: any) => {
+        console.warn('[Casper STT] Error:', event.error);
+        if (event.error === 'not-allowed') {
+          setMicPermission('denied');
+          setDebugMsg('Mic access denied');
+          userStoppedRef.current = true;
+          setIsListening(false);
+          stopMicLevelMeter();
+          setVoiceMode(false);
+        } else if (event.error === 'aborted') {
+          // Our own abort call - onend handles cleanup
+        } else if (event.error === 'no-speech') {
+          setDebugMsg("Listening... speak whenever you're ready");
+          // onend fires after no-speech and will auto-restart
+        } else {
+          setDebugMsg('Retrying...');
+          // onend will auto-restart for all other errors
+        }
+      };
+
+      recognitionRef.current = rec;
+      try {
+        rec.start();
+      } catch (e: any) {
+        console.error('[Casper STT] Failed to start:', e);
+        if (!userStoppedRef.current) setTimeout(() => createSession(), 300);
       }
-      setTranscript(finalText + interim);
     };
 
-    rec.onend = () => {
-      console.log('[Casper STT] Ended, final:', finalText.trim());
-      setIsListening(false);
-      stopMicLevelMeter();
-      const text = finalText.trim();
-      setTranscript('');
-      setDebugMsg(text ? `Heard: "${text.slice(0, 40)}..."` : 'No speech detected');
-      if (text) {
-        sendVoiceMessageRef.current(text);
-      } else {
-        setVoiceStatus('idle');
-      }
-    };
+    createSession();
+  }, [startMicLevelMeter, stopMicLevelMeter]);
 
-    rec.onerror = (event: any) => {
-      console.warn('[Casper STT] Error:', event.error);
-      setDebugMsg(`STT Error: ${event.error}`);
-      // Only reset state for fatal errors — 'no-speech' is not fatal
-      if (event.error === 'no-speech') {
-        // Don't reset isListening — continuous mode will keep going
-        return;
-      }
-      setIsListening(false);
-      stopMicLevelMeter();
-      setTranscript('');
-      if (event.error === 'not-allowed') {
-        setMicPermission('denied');
-        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'casper', content: 'Microphone permission denied. Allow mic access in Brave and try again.', timestamp: new Date() }]);
-        setVoiceMode(false);
-      } else if (event.error === 'aborted') {
-        // Normal abort — don't show error
-        setVoiceStatus('idle');
-      } else {
-        setVoiceStatus('idle');
-      }
-    };
-
-    recognitionRef.current = rec;
-    try {
-      rec.start();
-    } catch (e: any) {
-      console.error('[Casper STT] Failed to start:', e);
-      setDebugMsg(`Failed to start: ${e.message}`);
+  const stopListening = useCallback(() => {
+    userStoppedRef.current = true;
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch {}
+    } else {
       setIsListening(false);
       stopMicLevelMeter();
       setVoiceStatus('idle');
     }
-  }, [startMicLevelMeter, stopMicLevelMeter]);
-
-  const stopListening = useCallback(() => {
-    if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch {}
-      recognitionRef.current = null;
-    }
-    setIsListening(false);
-    stopMicLevelMeter();
   }, [stopMicLevelMeter]);
 
   // ── VOICE MESSAGE PIPELINE ──
