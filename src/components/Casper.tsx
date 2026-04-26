@@ -996,8 +996,7 @@ export const Casper: React.FC = () => {
                 setTtsEnabled(!ttsEnabled);
                 if (muting) {
                   window.speechSynthesis.cancel();
-                  setIsSpeaking(false);
-                  setVoiceStatus('idle');
+                  setVoiceState(prev => prev === 'speaking' ? 'idle' : prev);
                 }
               }}
               className={cn(
@@ -1193,10 +1192,10 @@ export const Casper: React.FC = () => {
                     key={i}
                     className="w-1.5 rounded-full bg-green-400"
                     animate={{
-                      height: `${Math.max(4, micLevel * 40 * (0.4 + Math.sin(i * 0.8 + Date.now() / 200) * 0.6))}px`,
-                      opacity: micLevel > 0.05 ? 0.8 : 0.2,
+                      height: [`${4 + Math.random() * 36}px`, `${4 + Math.random() * 36}px`],
+                      opacity: [0.4, 0.9],
                     }}
-                    transition={{ duration: 0.1 }}
+                    transition={{ duration: 0.3 + i * 0.02, repeat: Infinity, repeatType: 'reverse' }}
                   />
                 ))}
               </div>
