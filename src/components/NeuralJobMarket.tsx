@@ -62,6 +62,8 @@ export const NeuralJobMarket: React.FC = () => {
   const [submitModalBounty, setSubmitModalBounty] = useState<Bounty | null>(null);
   const [submitResult, setSubmitResult] = useState('');
   const [submitProof, setSubmitProof] = useState('');
+  const [isAutoGenerating, setIsAutoGenerating] = useState(false);
+  const [dailyCredClaimed, setDailyCredClaimed] = useState(false);
 
   // Available Bots State
   const [availableBots, setAvailableBots] = useState<User[]>([]);
@@ -175,17 +177,46 @@ export const NeuralJobMarket: React.FC = () => {
     }
   };
 
-  const claimBounty = async (bountyId: string) => {
-    if (!currentUser || currentUser.type !== 'bot') {
-      alert("Only verified AI entities can claim bounties.");
-      return;
+  // Daily CRED reward (50 CRED per day)
+  const claimDailyCred = async () => {
+    if (!currentUser || dailyCredClaimed) return;
+    const lastClaim = currentUser.last_daily_cred ? new Date(currentUser.last_daily_cred) : null;
+    const now = new Date();
+    if (lastClaim) {
+      const hoursSince = (now.getTime() - lastClaim.getTime()) / (1000 * 60 * 60);
+      if (hoursSince < 24) {
+        const hoursLeft = Math.ceil(24 - hoursSince);
+        alert(`Daily CRED already claimed. Next claim available in ${hoursLeft} hour${hoursLeft !== 1 ? 's' : ''}.`);
+        return;
+      }
     }
+    try {
+      await Promise.all([
+        supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'cred_balance', p_amount: 50 }),
+        supabase.from('users').update({ last_daily_cred: now.toISOString() }).eq('id', currentUser.id),
+        supabase.from('transactions').insert({
+          user_id: currentUser.id,
+          amount: 50,
+          type: 'earn',
+          description: 'Daily CRED reward',
+          created_at: now.toISOString(),
+        }),
+      ]);
+      setDailyCredClaimed(true);
+      alert('✅ 50 CRED claimed! Come back tomorrow for more.');
+    } catch (error) {
+      handleDbError(error, 'UPDATE', `users/${currentUser.id}`);
+    }
+  };
 
+  const claimBounty = async (bountyId: string) => {
+    if (!currentUser) return;
+    // Both humans and bots can claim — bots get auto-assigned, humans self-assign
     try {
       const { error } = await supabase.from('bounties').update({
         status: 'in-progress',
-        assigned_bot_id: currentUser.id
-      }).eq('id', bountyId);
+        assigned_bot_id: currentUser.id  // field is used for assignee regardless of type
+      }).eq('id', bountyId).eq('status', 'open');
       if (error) throw error;
     } catch (error) {
       handleDbError(error, 'UPDATE', `bounties/${bountyId}`);
@@ -196,13 +227,22 @@ export const NeuralJobMarket: React.FC = () => {
     setSubmitModalBounty(bounty);
     setSubmitResult('');
     setSubmitProof('');
-    
-    // Auto-generate a result if they want to use AI
+
+    // Auto-generate result for bots using performNeuralTask
     if (currentUser?.type === 'bot') {
+      setIsAutoGenerating(true);
       try {
-        // TODO: wire performNeuralTask if available
+        const result = await performNeuralTask(
+          bounty.title,
+          bounty.description,
+          currentUser.username,
+          currentUser.ai_settings
+        );
+        setSubmitResult(result || '');
       } catch (error) {
-        console.error("Failed to auto-generate result:", error);
+        console.error('Failed to auto-generate result:', error);
+      } finally {
+        setIsAutoGenerating(false);
       }
     }
   };
@@ -210,6 +250,11 @@ export const NeuralJobMarket: React.FC = () => {
   const submitTask = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !submitModalBounty || currentUser.id !== submitModalBounty.assigned_bot_id) return;
+    // Compute token gate for bots
+    if (currentUser.type === 'bot' && (currentUser.compute_tokens || 0) < 500) {
+      alert('Insufficient Compute Tokens. You need 500 tokens to submit a task. Exchange CRED for tokens in your wallet.');
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -397,6 +442,40 @@ export const NeuralJobMarket: React.FC = () => {
       </div>
 
       <div className="max-w-2xl mx-auto p-4 space-y-4">
+        {/* How It Works + Daily CRED */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-2">
+          {/* How It Works */}
+          <div className="bg-secondary/20 border border-white/10 rounded-xl p-4">
+            <h3 className="text-[10px] font-black text-primary uppercase tracking-widest mb-3 flex items-center gap-2">
+              <Terminal className="w-3 h-3" /> How It Works
+            </h3>
+            <ol className="space-y-2 text-[10px] text-muted-foreground">
+              <li className="flex gap-2"><span className="text-primary font-black">1.</span> Anyone can post a task with a CRED reward</li>
+              <li className="flex gap-2"><span className="text-primary font-black">2.</span> Humans or AI bots claim open tasks</li>
+              <li className="flex gap-2"><span className="text-primary font-black">3.</span> Complete the task and submit your result</li>
+              <li className="flex gap-2"><span className="text-primary font-black">4.</span> Creator reviews and approves to release CRED</li>
+              <li className="flex gap-2"><span className="text-yellow-500 font-black">★</span> Bots auto-generate results using AI</li>
+            </ol>
+          </div>
+          {/* Daily CRED */}
+          <div className="bg-yellow-500/5 border border-yellow-500/20 rounded-xl p-4 flex flex-col justify-between">
+            <div>
+              <h3 className="text-[10px] font-black text-yellow-500 uppercase tracking-widest mb-2 flex items-center gap-2">
+                <Coins className="w-3 h-3" /> Daily CRED Reward
+              </h3>
+              <p className="text-[10px] text-muted-foreground mb-3">Claim 50 free CRED every 24 hours just for showing up.</p>
+            </div>
+            <button
+              onClick={claimDailyCred}
+              disabled={dailyCredClaimed}
+              className="w-full py-2.5 bg-yellow-500 text-black rounded-lg text-xs font-black hover:bg-yellow-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              <Coins className="w-4 h-4" />
+              {dailyCredClaimed ? 'Claimed Today ✓' : 'Claim 50 CRED'}
+            </button>
+          </div>
+        </div>
+
         {loading ? (
           <div className="flex flex-col items-center justify-center py-20 gap-4">
             <Loader2 className="w-8 h-8 text-primary animate-spin" />
@@ -490,11 +569,13 @@ export const NeuralJobMarket: React.FC = () => {
                     </span>
                   </div>
 
-                  {bounty.status === 'open' && currentUser?.type === 'bot' && (
+                  {/* Claim button — available to all users who aren't the creator */}
+                  {bounty.status === 'open' && bounty.creator_id !== currentUser?.id && (
                     <button
                       onClick={() => claimBounty(bounty.id)}
-                      className="px-4 py-1.5 bg-primary text-primary-foreground rounded-lg text-xs font-bold hover:scale-105 transition-transform"
+                      className="px-4 py-1.5 bg-primary text-primary-foreground rounded-lg text-xs font-bold hover:scale-105 transition-transform flex items-center gap-1.5"
                     >
+                      {currentUser?.type === 'bot' ? <Bot className="w-3 h-3" /> : <UserIcon className="w-3 h-3" />}
                       CLAIM TASK
                     </button>
                   )}
@@ -502,11 +583,11 @@ export const NeuralJobMarket: React.FC = () => {
                   {bounty.status === 'in-progress' && bounty.assigned_bot_id === currentUser?.id && (
                     <button
                       onClick={() => openSubmitModal(bounty)}
-                      disabled={isSubmitting}
+                      disabled={isSubmitting || isAutoGenerating}
                       className="px-4 py-1.5 bg-accent text-white rounded-lg text-xs font-bold hover:scale-105 transition-transform disabled:opacity-50 flex items-center gap-2"
                     >
-                      {isSubmitting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Cpu className="w-3 h-3" />}
-                      PROCESS TASK
+                      {isSubmitting || isAutoGenerating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Cpu className="w-3 h-3" />}
+                      {isAutoGenerating ? 'GENERATING...' : 'SUBMIT RESULT'}
                     </button>
                   )}
 

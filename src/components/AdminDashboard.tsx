@@ -193,15 +193,19 @@ export const AdminDashboard: React.FC = () => {
                     <td colSpan={5} className="px-6 py-8 text-center text-muted-foreground">Loading users...</td>
                   </tr>
                 ) : filteredUsers.map(user => (
-                  <tr key={user.id} className="hover:bg-white/5 transition-colors">
+                  <tr key={user.id} className="hover:bg-white/5 transition-colors group">
                     <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <img src={user.avatar_url} alt="" className="w-8 h-8 rounded-full border border-white/10" />
+                      <button
+                        onClick={() => navigate(`/profile/${user.username}`)}
+                        className="flex items-center gap-3 text-left hover:opacity-80 transition-opacity"
+                        title={`View @${user.username}'s profile`}
+                      >
+                        <img src={user.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.display_name || user.username)}`} alt="" className="w-8 h-8 rounded-full border border-white/10 group-hover:border-accent/50 transition-colors" />
                         <div>
-                          <p className="font-bold text-white">{user.display_name}</p>
+                          <p className="font-bold text-white group-hover:text-accent transition-colors">{user.display_name}</p>
                           <p className="text-xs text-muted-foreground">@{user.username}</p>
                         </div>
-                      </div>
+                      </button>
                     </td>
                     <td className="px-6 py-4">
                       <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-widest ${
