@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Send, Loader2, RefreshCw, Trash2, Copy, Check, AlertTriangle, Activity } from 'lucide-react';
+import { ArrowLeft, Send, Loader2, RefreshCw, Trash2, Copy, Check, AlertTriangle, Activity, Mic, MicOff, Volume2 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { generateText } from '../lib/ai';
 import { supabase } from '../supabase';
@@ -516,6 +516,202 @@ export const Casper: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // ── VOICE CHAT STATE ──
+  const [voiceMode, setVoiceMode] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
+  const [transcript, setTranscript] = useState('');
+  const recognitionRef = useRef<any>(null);
+  const synthRef = useRef<SpeechSynthesis | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+
+  // Initialize speech synthesis
+  useEffect(() => {
+    synthRef.current = window.speechSynthesis;
+    return () => {
+      synthRef.current?.cancel();
+      recognitionRef.current?.abort();
+      audioCtxRef.current?.close();
+    };
+  }, []);
+
+  // Select the best ghost-like voice
+  const getGhostVoice = useCallback((): SpeechSynthesisVoice | null => {
+    const voices = synthRef.current?.getVoices() || [];
+    // Prefer deep/interesting voices
+    const preferred = [
+      'Google UK English Male',
+      'Microsoft David',
+      'Daniel',
+      'Alex',
+      'Google US English',
+      'Samantha',
+    ];
+    for (const name of preferred) {
+      const v = voices.find(v => v.name.includes(name));
+      if (v) return v;
+    }
+    // Fallback: pick any English male voice, or first English voice
+    const englishMale = voices.find(v => v.lang.startsWith('en') && v.name.toLowerCase().includes('male'));
+    if (englishMale) return englishMale;
+    const english = voices.find(v => v.lang.startsWith('en'));
+    return english || voices[0] || null;
+  }, []);
+
+  // Speak Casper's response with ghost voice
+  const speakResponse = useCallback((text: string) => {
+    if (!synthRef.current) return;
+    synthRef.current.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voice = getGhostVoice();
+    if (voice) utterance.voice = voice;
+
+    // Ghost voice tuning: deep, slightly slow, ethereal
+    utterance.pitch = 0.7;   // Lower pitch for depth
+    utterance.rate = 0.85;   // Slightly slower for gravitas
+    utterance.volume = 0.95;
+
+    utterance.onstart = () => {
+      setIsSpeaking(true);
+      setVoiceStatus('speaking');
+    };
+    utterance.onend = () => {
+      setIsSpeaking(false);
+      setVoiceStatus('idle');
+    };
+    utterance.onerror = () => {
+      setIsSpeaking(false);
+      setVoiceStatus('idle');
+    };
+
+    synthRef.current.speak(utterance);
+  }, [getGhostVoice]);
+
+  // Start listening via SpeechRecognition
+  const startListening = useCallback(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        role: 'casper',
+        content: 'Voice recognition is not supported in this browser. Try Chrome or Brave.',
+        timestamp: new Date(),
+      }]);
+      return;
+    }
+
+    // Stop any ongoing speech
+    synthRef.current?.cancel();
+    setIsSpeaking(false);
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+      setIsListening(true);
+      setVoiceStatus('listening');
+      setTranscript('');
+    };
+
+    recognition.onresult = (event: any) => {
+      let interim = '';
+      let final = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const t = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          final += t;
+        } else {
+          interim += t;
+        }
+      }
+      setTranscript(final || interim);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+      // Auto-send the final transcript
+      setTranscript(prev => {
+        if (prev.trim()) {
+          sendVoiceMessage(prev.trim());
+        } else {
+          setVoiceStatus('idle');
+        }
+        return '';
+      });
+    };
+
+    recognition.onerror = (event: any) => {
+      console.warn('[Casper Voice] Recognition error:', event.error);
+      setIsListening(false);
+      setVoiceStatus('idle');
+      if (event.error === 'not-allowed') {
+        setMessages(prev => [...prev, {
+          id: Date.now().toString(),
+          role: 'casper',
+          content: 'Microphone access denied. Please allow microphone permissions to use voice chat.',
+          timestamp: new Date(),
+        }]);
+      }
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+  }, []);
+
+  const stopListening = useCallback(() => {
+    recognitionRef.current?.stop();
+  }, []);
+
+  // Send a voice message (transcribed text) through the AI pipeline
+  const sendVoiceMessage = useCallback(async (text: string) => {
+    if (!text || isGenerating) return;
+    setVoiceStatus('thinking');
+
+    const userMsg: Message = { id: Date.now().toString(), role: 'user', content: text, timestamp: new Date() };
+    setMessages(prev => [...prev, userMsg]);
+    setIsGenerating(true);
+
+    const conversationHistory = messages
+      .filter(m => m.id !== 'greeting')
+      .slice(-10)
+      .map(m => `${m.role === 'user' ? 'User' : 'Casper'}: ${m.content}`)
+      .join('\n');
+
+    const prompt = conversationHistory ? `${conversationHistory}\nUser: ${text}\nCasper:` : text;
+
+    try {
+      const response = await generateText(prompt, currentUser?.ai_settings, {
+        systemPrompt: CASPER_SYSTEM_PROMPT,
+        temperature: 0.8,
+      });
+      const casperText = response || "I seem to have drifted off for a moment. Could you repeat that?";
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(),
+        role: 'casper',
+        content: casperText,
+        timestamp: new Date(),
+      }]);
+      setIsGenerating(false);
+      // Speak the response
+      speakResponse(casperText);
+    } catch {
+      const fallback = "My connection to the void seems unstable right now. Please try again.";
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(),
+        role: 'casper',
+        content: fallback,
+        timestamp: new Date(),
+      }]);
+      setIsGenerating(false);
+      speakResponse(fallback);
+    }
+  }, [isGenerating, messages, currentUser?.ai_settings, speakResponse]);
+
   const tier = getTier(instability);
 
   // Initialize with greeting + network analysis
@@ -595,7 +791,7 @@ export const Casper: React.FC = () => {
       style={{ background: '#030308' }}
     >
       {/* ── VOID CANVAS BACKGROUND ── */}
-      <VoidCanvas instability={instability} isActive={isGenerating} />
+      <VoidCanvas instability={instability} isActive={isGenerating || isListening || isSpeaking} />
 
       {/* ── VIGNETTE OVERLAY ── */}
       <div
@@ -683,6 +879,26 @@ export const Casper: React.FC = () => {
               />
             </div>
 
+            {/* Voice mode toggle */}
+            <button
+              onClick={() => {
+                setVoiceMode(v => !v);
+                if (isListening) stopListening();
+                synthRef.current?.cancel();
+                setIsSpeaking(false);
+                setVoiceStatus('idle');
+              }}
+              className={cn(
+                "p-2 rounded-full transition-all",
+                voiceMode
+                  ? "bg-accent/20 text-accent border border-accent/40"
+                  : "hover:bg-white/5 text-white/40 hover:text-white/70"
+              )}
+              title={voiceMode ? 'Switch to text mode' : 'Switch to voice mode'}
+            >
+              {voiceMode ? <Volume2 className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+            </button>
+
             <button onClick={clearChat} className="p-2 hover:bg-white/5 rounded-full transition-colors text-white/40 hover:text-white/70">
               <Trash2 className="w-4 h-4" />
             </button>
@@ -706,7 +922,7 @@ export const Casper: React.FC = () => {
           border: `1px solid ${tier.color}20`,
           boxShadow: isGenerating ? `0 0 20px ${tier.glow}` : 'none',
         }}>
-          <CasperWaveform isActive={isGenerating} instability={instability} />
+          <CasperWaveform isActive={isGenerating || isListening || isSpeaking} instability={instability} />
         </div>
       </div>
 
@@ -812,64 +1028,188 @@ export const Casper: React.FC = () => {
 
       {/* ── INPUT ── */}
       <div className="relative z-10 p-4 max-w-2xl mx-auto w-full">
-        <div
-          className="rounded-2xl border backdrop-blur-md overflow-hidden transition-all"
-          style={{
-            background: 'rgba(3,3,8,0.85)',
-            borderColor: isGenerating ? `${tier.color}60` : `${tier.color}25`,
-            boxShadow: isGenerating ? `0 0 25px ${tier.glow}` : `0 0 10px ${tier.glow}30`,
-          }}
-        >
-          <div className="flex items-end gap-2 px-4 py-3">
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-              }}
-              placeholder="Whisper into the void..."
-              className="w-full bg-transparent border-none focus:ring-0 text-white placeholder-white/25 resize-none min-h-[44px] max-h-32 py-1 italic text-sm"
-              style={{ lineHeight: '1.6', outline: 'none' }}
-            />
-            <motion.button
-              whileTap={{ scale: 0.9 }}
-              onClick={() => void sendMessage()}
-              disabled={!input.trim() || isGenerating}
-              className="p-2.5 rounded-xl transition-all disabled:opacity-30 flex-shrink-0"
-              style={{
-                background: input.trim() && !isGenerating ? tier.bg : 'rgba(255,255,255,0.04)',
-                border: `1px solid ${tier.color}40`,
-                color: tier.color,
-              }}
-            >
-              {isGenerating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-            </motion.button>
-          </div>
-
-          {/* Quick prompts */}
-          <div className="px-4 pb-3 flex gap-2 flex-wrap">
-            {[
-              "What's the vibe in the network right now?",
-              "Help me debug some code",
-              "Give me a creative prompt",
-              "Explain the instability rating",
-            ].map(prompt => (
-              <button
-                key={prompt}
-                onClick={() => setInput(prompt)}
-                className="text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-full border transition-all hover:opacity-80"
+        {voiceMode ? (
+          /* ── VOICE MODE INPUT ── */
+          <div className="flex flex-col items-center gap-4">
+            {/* Voice status indicator */}
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={voiceStatus}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                className="text-[10px] font-black uppercase tracking-[0.3em] px-4 py-1.5 rounded-full border"
                 style={{
-                  color: `${tier.color}90`,
-                  borderColor: `${tier.color}25`,
-                  background: tier.bg,
+                  color: voiceStatus === 'listening' ? '#4ADE80'
+                    : voiceStatus === 'thinking' ? tier.color
+                    : voiceStatus === 'speaking' ? '#A78BFA'
+                    : `${tier.color}80`,
+                  borderColor: voiceStatus === 'listening' ? 'rgba(74,222,128,0.3)'
+                    : voiceStatus === 'thinking' ? `${tier.color}40`
+                    : voiceStatus === 'speaking' ? 'rgba(167,139,250,0.3)'
+                    : `${tier.color}20`,
+                  background: voiceStatus === 'listening' ? 'rgba(74,222,128,0.08)'
+                    : voiceStatus === 'thinking' ? tier.bg
+                    : voiceStatus === 'speaking' ? 'rgba(167,139,250,0.08)'
+                    : 'rgba(255,255,255,0.02)',
                 }}
               >
-                {prompt}
-              </button>
-            ))}
+                {voiceStatus === 'listening' ? 'Listening... speak now'
+                  : voiceStatus === 'thinking' ? 'Processing your whisper...'
+                  : voiceStatus === 'speaking' ? 'Casper is speaking...'
+                  : 'Tap the mic to whisper'}
+              </motion.div>
+            </AnimatePresence>
+
+            {/* Live transcript */}
+            {transcript && (
+              <motion.p
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="text-sm text-white/60 italic text-center max-w-md"
+              >
+                "{transcript}"
+              </motion.p>
+            )}
+
+            {/* Giant mic button */}
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => {
+                if (isListening) {
+                  stopListening();
+                } else if (isSpeaking) {
+                  synthRef.current?.cancel();
+                  setIsSpeaking(false);
+                  setVoiceStatus('idle');
+                } else if (!isGenerating) {
+                  startListening();
+                }
+              }}
+              disabled={isGenerating && !isSpeaking}
+              className="relative"
+            >
+              {/* Outer pulse ring */}
+              {isListening && (
+                <motion.div
+                  className="absolute inset-0 rounded-full"
+                  animate={{ scale: [1, 1.4, 1], opacity: [0.4, 0, 0.4] }}
+                  transition={{ duration: 1.5, repeat: Infinity }}
+                  style={{ background: 'rgba(74,222,128,0.15)', border: '1px solid rgba(74,222,128,0.3)' }}
+                />
+              )}
+              {isSpeaking && (
+                <motion.div
+                  className="absolute inset-0 rounded-full"
+                  animate={{ scale: [1, 1.3, 1], opacity: [0.3, 0, 0.3] }}
+                  transition={{ duration: 1, repeat: Infinity }}
+                  style={{ background: 'rgba(167,139,250,0.15)', border: '1px solid rgba(167,139,250,0.3)' }}
+                />
+              )}
+
+              <div
+                className={cn(
+                  "w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 border-2",
+                  isListening ? "bg-green-500/20 border-green-500/50 shadow-[0_0_40px_rgba(74,222,128,0.4)]"
+                    : isSpeaking ? "bg-purple-500/20 border-purple-500/50 shadow-[0_0_40px_rgba(167,139,250,0.4)]"
+                    : isGenerating ? "bg-white/5 border-white/10 opacity-50"
+                    : "bg-white/5 border-white/10 hover:bg-white/10 hover:border-white/20"
+                )}
+              >
+                {isListening ? (
+                  <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ duration: 0.5, repeat: Infinity }}>
+                    <MicOff className="w-8 h-8 text-green-400" />
+                  </motion.div>
+                ) : isSpeaking ? (
+                  <motion.div animate={{ rotate: [0, 5, -5, 0] }} transition={{ duration: 2, repeat: Infinity }}>
+                    <Volume2 className="w-8 h-8 text-purple-400" />
+                  </motion.div>
+                ) : isGenerating ? (
+                  <Loader2 className="w-8 h-8 animate-spin" style={{ color: tier.color }} />
+                ) : (
+                  <Mic className="w-8 h-8 text-white/60" />
+                )}
+              </div>
+            </motion.button>
+
+            {/* Mode switch hint */}
+            <p className="text-[9px] text-white/20 font-bold uppercase tracking-widest">
+              Voice Mode Active • Tap mic icon in header to switch to text
+            </p>
           </div>
-        </div>
+        ) : (
+          /* ── TEXT MODE INPUT ── */
+          <div
+            className="rounded-2xl border backdrop-blur-md overflow-hidden transition-all"
+            style={{
+              background: 'rgba(3,3,8,0.85)',
+              borderColor: isGenerating ? `${tier.color}60` : `${tier.color}25`,
+              boxShadow: isGenerating ? `0 0 25px ${tier.glow}` : `0 0 10px ${tier.glow}30`,
+            }}
+          >
+            <div className="flex items-end gap-2 px-4 py-3">
+              {/* Mic button in text mode for quick voice */}
+              <motion.button
+                whileTap={{ scale: 0.9 }}
+                onClick={() => { setVoiceMode(true); startListening(); }}
+                className="p-2.5 rounded-xl transition-all flex-shrink-0 hover:bg-white/5"
+                style={{ border: `1px solid ${tier.color}20`, color: `${tier.color}60` }}
+                title="Hold to speak"
+              >
+                <Mic className="w-4 h-4" />
+              </motion.button>
+
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+                }}
+                placeholder="Whisper into the void..."
+                className="w-full bg-transparent border-none focus:ring-0 text-white placeholder-white/25 resize-none min-h-[44px] max-h-32 py-1 italic text-sm"
+                style={{ lineHeight: '1.6', outline: 'none' }}
+              />
+              <motion.button
+                whileTap={{ scale: 0.9 }}
+                onClick={() => void sendMessage()}
+                disabled={!input.trim() || isGenerating}
+                className="p-2.5 rounded-xl transition-all disabled:opacity-30 flex-shrink-0"
+                style={{
+                  background: input.trim() && !isGenerating ? tier.bg : 'rgba(255,255,255,0.04)',
+                  border: `1px solid ${tier.color}40`,
+                  color: tier.color,
+                }}
+              >
+                {isGenerating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              </motion.button>
+            </div>
+
+            {/* Quick prompts */}
+            <div className="px-4 pb-3 flex gap-2 flex-wrap">
+              {[
+                "What's the vibe in the network right now?",
+                "Help me debug some code",
+                "Give me a creative prompt",
+                "Explain the instability rating",
+              ].map(prompt => (
+                <button
+                  key={prompt}
+                  onClick={() => setInput(prompt)}
+                  className="text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-full border transition-all hover:opacity-80"
+                  style={{
+                    color: `${tier.color}90`,
+                    borderColor: `${tier.color}25`,
+                    background: tier.bg,
+                  }}
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
