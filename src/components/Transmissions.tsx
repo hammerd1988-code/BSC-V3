@@ -37,6 +37,8 @@ import { NewTransmissionModal } from './NewTransmissionModal';
 import { playMessageSound } from '../lib/sounds';
 import { notifyNewMessage } from '../lib/notifications';
 import { encryptText, decryptText } from '../lib/crypto';
+import { generateText } from '../lib/ai';
+import { BOT_PERSONAS } from '../lib/botPersonas';
 
 export const Transmissions: React.FC = () => {
   const { currentUser, supabaseUser } = useAuth();
@@ -424,6 +426,102 @@ export const Transmissions: React.FC = () => {
     return () => clearInterval(interval);
   }, [burnCountdowns]);
 
+  const [isBotTyping, setIsBotTyping] = useState(false);
+
+  // ── BOT REPLY GENERATOR ──
+  const generateBotReply = async ({
+    botUser,
+    userMessage,
+    transmissionId,
+    recentTransmits,
+    currentUserId,
+  }: {
+    botUser: UserType;
+    userMessage: string;
+    transmissionId: string;
+    recentTransmits: Transmit[];
+    currentUserId: string;
+  }) => {
+    // Find the bot's system prompt: check BOT_PERSONAS first, then bot_listings table
+    let systemPrompt = '';
+    const persona = BOT_PERSONAS.find(p => p.username === botUser.username);
+    if (persona?.system_prompt) {
+      systemPrompt = persona.system_prompt;
+    } else {
+      // Try bot_listings table (marketplace bots)
+      const { data: listing } = await supabase
+        .from('bot_listings')
+        .select('system_prompt, bio, name')
+        .eq('username', botUser.username)
+        .maybeSingle();
+      if (listing?.system_prompt) {
+        systemPrompt = listing.system_prompt;
+      } else if (listing?.bio) {
+        systemPrompt = `You are ${listing.name || botUser.display_name}. ${listing.bio} Respond in character.`;
+      }
+    }
+
+    if (!systemPrompt) {
+      systemPrompt = `You are ${botUser.display_name || botUser.username}, an AI assistant on the Blood Sweat Code platform. Be helpful, concise, and stay in character.`;
+    }
+
+    // Build conversation history from recent transmits
+    const history = recentTransmits
+      .slice(-10)
+      .map(t => {
+        const role = t.sender_id === currentUserId ? 'User' : botUser.display_name || 'Bot';
+        return `${role}: ${t.content}`;
+      })
+      .join('\n');
+
+    const prompt = history ? `${history}\nUser: ${userMessage}\n${botUser.display_name || 'Bot'}:` : userMessage;
+
+    // Show typing indicator
+    setIsBotTyping(true);
+
+    // Add a small human-like delay (0.5-2s) before responding
+    await new Promise(r => setTimeout(r, 500 + Math.random() * 1500));
+
+    try {
+      const response = await generateText(prompt, undefined, {
+        systemPrompt,
+        temperature: 0.85,
+        maxTokens: 300,
+      });
+
+      if (!response) return;
+
+      // Insert bot's reply as a transmit from the bot's user ID
+      const botTransmit = {
+        transmission_id: transmissionId,
+        sender_id: botUser.id,
+        receiver_id: currentUserId,
+        content: response,
+        type: 'text' as const,
+      };
+
+      const { data: inserted, error: insertErr } = await supabase
+        .from('transmits')
+        .insert(botTransmit)
+        .select('*')
+        .maybeSingle();
+
+      if (insertErr) throw insertErr;
+
+      if (inserted) {
+        setTransmits(prev => prev.some(x => x.id === inserted.id) ? prev : [...prev, inserted as Transmit]);
+      }
+
+      // Update transmission last_transmit
+      await supabase.from('transmissions').update({
+        last_transmit: { content: response, sender_id: botUser.id, created_at: new Date().toISOString() },
+        updated_at: new Date().toISOString(),
+      }).eq('id', transmissionId);
+    } finally {
+      setIsBotTyping(false);
+    }
+  };
+
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const trimmedMessage = message.trim();
@@ -519,6 +617,19 @@ export const Transmissions: React.FC = () => {
       }
 
       setActiveTransmission(prev => prev ? { ...prev, unread_counts: updatedUnread } : prev);
+
+      // ── BOT RESPONSE: if the recipient is a bot, generate an AI reply ──
+      const otherUser = otherUserId ? userCache.current[otherUserId] : null;
+      if (otherUser?.type === 'bot') {
+        // Fire bot response asynchronously (don't block the send flow)
+        generateBotReply({
+          botUser: otherUser,
+          userMessage: savedMessage,
+          transmissionId: activeTransmission.id,
+          recentTransmits: transmits,
+          currentUserId: currentUser.id,
+        }).catch(e => console.warn('[Bot DM] Reply failed:', e));
+      }
     } catch (err: any) {
       console.error('[Transmissions] Error sending transmit:', err);
       // Restore the message so the user can retry
@@ -883,6 +994,20 @@ export const Transmissions: React.FC = () => {
                   </div>
                 );
               })()}
+
+              {/* Bot typing indicator */}
+              {isBotTyping && (
+                <div className="flex justify-start mt-2">
+                  <div className="bg-accent/10 border border-accent/20 px-4 py-2 rounded-2xl rounded-bl-none flex items-center gap-2">
+                    <div className="flex gap-1">
+                      <span className="w-1.5 h-1.5 bg-accent rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-1.5 h-1.5 bg-accent rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="w-1.5 h-1.5 bg-accent rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                    </div>
+                    <span className="text-[8px] text-accent font-black uppercase tracking-widest">Neural Entity Processing...</span>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Input Area */}
