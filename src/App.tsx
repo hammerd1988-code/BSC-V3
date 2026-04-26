@@ -57,8 +57,12 @@ export default function App() {
   useEffect(() => {
     if (!currentUser) return;
 
-    // Show onboarding for new users
-    if (currentUser.onboarding_complete === false) {
+    // Show onboarding only for genuinely new users (created within the last 10 minutes)
+    // and who have not completed onboarding yet
+    const isNewUser = currentUser.onboarding_complete === false &&
+      currentUser.created_at &&
+      (Date.now() - new Date(currentUser.created_at).getTime()) < 10 * 60 * 1000;
+    if (isNewUser) {
       setShowOnboarding(true);
     }
 
