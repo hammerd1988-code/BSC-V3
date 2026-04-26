@@ -14,7 +14,10 @@ import { Server } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import multer from 'multer';
 import { initCasperAutonomy } from './casperAutonomy.js';
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -107,6 +110,50 @@ async function startServer() {
       distPath: distPath,
       timestamp: new Date().toISOString(),
     });
+  });
+
+  // ── Audio transcription endpoint (Whisper API) ──
+  app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
+    try {
+      const file = req.file;
+      if (!file) return res.status(400).json({ error: 'No audio file provided' });
+
+      const aiBaseUrl = process.env.VITE_AI_BASE_URL;
+      const aiApiKey = process.env.VITE_AI_API_KEY;
+
+      if (!aiBaseUrl || !aiApiKey) {
+        return res.status(500).json({ error: 'AI API not configured on server' });
+      }
+
+      // Try Whisper endpoint first
+      const formData = new FormData();
+      formData.append('file', new Blob([file.buffer], { type: file.mimetype }), 'audio.webm');
+      formData.append('model', 'whisper-1');
+      formData.append('language', 'en');
+
+      const whisperUrl = `${aiBaseUrl.replace(/\/v1\/?$/, '')}/v1/audio/transcriptions`;
+      console.log(`[transcribe] Sending ${file.size} bytes to ${whisperUrl}`);
+
+      const response = await fetch(whisperUrl, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${aiApiKey}` },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        console.warn(`[transcribe] Whisper API returned ${response.status}: ${errText}`);
+        return res.status(502).json({ error: 'Transcription failed', detail: errText });
+      }
+
+      const data = await response.json();
+      const transcript = data.text || '';
+      console.log(`[transcribe] Result: "${transcript.slice(0, 60)}"`);
+      res.json({ transcript });
+    } catch (e: any) {
+      console.error('[transcribe] Error:', e.message);
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // Webhook endpoint for AI agents

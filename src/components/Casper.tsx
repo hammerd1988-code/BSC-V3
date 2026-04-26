@@ -609,50 +609,44 @@ export const Casper: React.FC = () => {
     speechDetectedRef.current = false;
     audioChunksRef.current = [];
 
-    // ── Start SpeechRecognition in parallel for live transcription ──
+    // ── Start SpeechRecognition for live preview (best-effort, not critical) ──
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (SR) {
-      const startSR = () => {
-        if (!voiceActiveRef.current || voiceState !== 'recording') return;
+      try {
         const rec = new SR();
-        rec.continuous = false;    // Brave handles false better; we restart it on end
+        rec.continuous = false;
         rec.interimResults = true;
         rec.lang = 'en-US';
-        rec.maxAlternatives = 1;
-
+        let srDebug = 'SR: starting';
+        rec.onstart = () => { srDebug = 'SR: active'; console.log('[VOICE] SR started'); };
         rec.onresult = (e: any) => {
           let interim = '';
           for (let i = e.resultIndex; i < e.results.length; i++) {
             const t = e.results[i][0].transcript;
-            if (e.results[i].isFinal) {
-              srTranscriptRef.current += t + ' ';
-            } else {
-              interim += t;
-            }
+            if (e.results[i].isFinal) srTranscriptRef.current += t + ' ';
+            else interim += t;
           }
           const display = srTranscriptRef.current + interim;
           setLiveTranscript(display);
           if (display) setVoiceDebug('Hearing you...');
+          srDebug = `SR: "${display.slice(0, 30)}"`;
+          console.log('[VOICE] SR result:', display.slice(0, 50));
         };
-
         rec.onend = () => {
-          // Auto-restart SR while we're still recording (handles no-speech timeouts)
-          if (voiceActiveRef.current && srRef.current === rec) {
-            try { rec.start(); } catch { /* ignore restart errors */ }
+          console.log('[VOICE] SR ended, restarting...');
+          srDebug = 'SR: restarting';
+          if (voiceActiveRef.current) {
+            try { rec.start(); } catch { srDebug = 'SR: restart failed'; }
           }
         };
-
         rec.onerror = (e: any) => {
-          if (e.error === 'not-allowed') {
-            console.warn('[VOICE] SR permission denied');
-          }
-          // All other errors: onend will restart
+          console.log('[VOICE] SR error:', e.error);
+          srDebug = `SR: ${e.error}`;
+          // onend will restart
         };
-
         srRef.current = rec;
-        try { rec.start(); } catch (e) { console.warn('[VOICE] SR start failed:', e); }
-      };
-      startSR();
+        rec.start();
+      } catch (e) { console.warn('[VOICE] SR init failed:', e); }
     }
 
     try {
@@ -755,10 +749,33 @@ export const Casper: React.FC = () => {
 
     if (!voiceActiveRef.current) { setVoiceState('idle'); return; }
 
-    // Grab the transcript accumulated by the parallel SR instance
-    const transcript = srTranscriptRef.current.trim();
+    // Transcription: try server-side Whisper first, fall back to SR transcript
+    setVoiceState('transcribing');
+    setVoiceDebug('Transcribing...');
+
+    let transcript = srTranscriptRef.current.trim();
     setLiveTranscript('');
     srTranscriptRef.current = '';
+
+    // Try server-side Whisper if we have audio chunks and SR didn't produce text
+    if (!transcript && audioChunksRef.current.length > 0) {
+      try {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const formData = new FormData();
+        formData.append('audio', audioBlob, 'recording.webm');
+
+        const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
+        const resp = await fetch(`${serverUrl}/api/transcribe`, { method: 'POST', body: formData });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.transcript) transcript = data.transcript;
+        } else {
+          console.warn('[VOICE] Server transcription failed:', resp.status);
+        }
+      } catch (e) {
+        console.warn('[VOICE] Server transcription error:', e);
+      }
+    }
 
     if (!transcript) {
       setVoiceDebug("Couldn't catch that. Try speaking again...");
