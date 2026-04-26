@@ -205,7 +205,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
         >
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-white/10">
-            <h2 className="text-lg font-bold text-white">New Transmission</h2>
+            <h2 className="text-lg font-bold text-white">New Signal</h2>
             <button
               onClick={handleClose}
               disabled={isSubmitting}
