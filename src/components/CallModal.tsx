@@ -4,6 +4,12 @@ import { Phone, PhoneOff, Mic, MicOff, Video, VideoOff, Loader2, Sparkles, Shiel
 import { socket } from '../lib/socket';
 import { useAuth } from '../AuthContext';
 import { cn } from '../lib/utils';
+import {
+  startRingtone, stopRingtone,
+  startDialTone, stopDialTone,
+  playConnectedSound, playDisconnectedSound, playFailedSound,
+  stopAllSounds
+} from '../lib/sounds';
 
 interface CallModalProps {
   isOpen: boolean;
@@ -106,6 +112,48 @@ export const CallModal: React.FC<CallModalProps> = ({
 
     return () => cleanupCall();
   }, [isOpen]);
+
+  // ---- Sound effects tied to call status ----
+  useEffect(() => {
+    switch (status) {
+      case CallStatus.RINGING:
+        // Incoming call: play ringtone + vibrate
+        stopDialTone();
+        startRingtone();
+        break;
+      case CallStatus.CALLING:
+        // Outgoing call: play dial tone
+        stopRingtone();
+        startDialTone();
+        break;
+      case CallStatus.CONNECTING:
+        // Transitioning: stop all tones
+        stopAllSounds();
+        break;
+      case CallStatus.CONNECTED:
+        // Connected: play chime
+        stopAllSounds();
+        playConnectedSound();
+        break;
+      case CallStatus.ENDED:
+        // Ended: play disconnect tone
+        stopAllSounds();
+        playDisconnectedSound();
+        break;
+      case CallStatus.FAILED:
+        // Failed: play error tone
+        stopAllSounds();
+        playFailedSound();
+        break;
+      default:
+        stopAllSounds();
+        break;
+    }
+    return () => {
+      // Cleanup sounds when status changes or component unmounts
+      stopAllSounds();
+    };
+  }, [status]);
 
   useEffect(() => {
     if (status === CallStatus.CONNECTED) {
@@ -360,6 +408,7 @@ export const CallModal: React.FC<CallModalProps> = ({
   };
 
   const cleanupCall = () => {
+    stopAllSounds();
     if (localStream.current) {
       localStream.current.getTracks().forEach(track => track.stop());
       localStream.current = null;

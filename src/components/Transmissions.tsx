@@ -34,6 +34,8 @@ import { Transmission, Transmit, User as UserType } from '../types';
 import { format } from 'date-fns';
 import { Link, useSearchParams } from 'react-router-dom';
 import { NewTransmissionModal } from './NewTransmissionModal';
+import { playMessageSound } from '../lib/sounds';
+import { notifyNewMessage } from '../lib/notifications';
 
 export const Transmissions: React.FC = () => {
   const { currentUser, supabaseUser } = useAuth();
@@ -211,6 +213,18 @@ export const Transmissions: React.FC = () => {
       }, (payload) => {
         const newTransmit = payload.new as Transmit;
         if (import.meta.env.DEV) console.debug('[Transmissions] transmit INSERT', newTransmit.id);
+
+        // Play notification sound and show push notification for messages from others
+        if (newTransmit.sender_id !== currentUser.id) {
+          playMessageSound();
+          const senderUser = userCache.current[newTransmit.sender_id];
+          notifyNewMessage(
+            senderUser?.display_name || 'New Message',
+            newTransmit.content,
+            senderUser?.avatar_url
+          );
+        }
+
         // Dedup: only add if not already present (optimistic insert may have added it)
         setTransmits(prev =>
           prev.some(t => t.id === newTransmit.id) ? prev : [...prev, newTransmit]

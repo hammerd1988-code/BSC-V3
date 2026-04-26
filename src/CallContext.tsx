@@ -3,6 +3,7 @@ import { socket } from './lib/socket';
 import { useAuth } from './AuthContext';
 import { User } from './types';
 import { CallModal } from './components/CallModal';
+import { requestNotificationPermission, notifyIncomingCall } from './lib/notifications';
 
 interface CallContextType {
   incomingCall: any | null;
@@ -27,6 +28,13 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [incomingCall, setIncomingCall] = useState<any>(null);
   const [outgoingCall, setOutgoingCall] = useState<{ targetUser: User; videoEnabled: boolean } | null>(null);
 
+  // Request notification permission when the user logs in
+  useEffect(() => {
+    if (currentUser) {
+      requestNotificationPermission();
+    }
+  }, [currentUser]);
+
   useEffect(() => {
     if (currentUser) {
       // Connect and register user with socket server
@@ -35,6 +43,11 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const handleIncomingCall = (data: any) => {
         setIncomingCall(data);
+        // Show browser push notification (works even when app is in background)
+        notifyIncomingCall(
+          data.callerName || 'Unknown',
+          data.callerAvatar
+        );
       };
 
       socket.on('call:incoming', handleIncomingCall);
