@@ -1167,20 +1167,20 @@ export const Casper: React.FC = () => {
             {/* Status badge */}
             <AnimatePresence mode="wait">
               <motion.div
-                key={voiceStatus}
+                key={voiceState}
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
                 className="text-[10px] font-black uppercase tracking-[0.3em] px-5 py-2 rounded-full border"
                 style={{
-                  color: voiceStatus === 'listening' ? '#4ADE80' : voiceStatus === 'thinking' ? tier.color : voiceStatus === 'speaking' ? '#A78BFA' : `${tier.color}80`,
-                  borderColor: voiceStatus === 'listening' ? 'rgba(74,222,128,0.3)' : voiceStatus === 'thinking' ? `${tier.color}40` : voiceStatus === 'speaking' ? 'rgba(167,139,250,0.3)' : `${tier.color}20`,
-                  background: voiceStatus === 'listening' ? 'rgba(74,222,128,0.08)' : voiceStatus === 'thinking' ? tier.bg : voiceStatus === 'speaking' ? 'rgba(167,139,250,0.08)' : 'rgba(255,255,255,0.02)',
+                  color: voiceState === 'listening' ? '#4ADE80' : voiceState === 'processing' ? tier.color : voiceState === 'speaking' ? '#A78BFA' : `${tier.color}80`,
+                  borderColor: voiceState === 'listening' ? 'rgba(74,222,128,0.3)' : voiceState === 'processing' ? `${tier.color}40` : voiceState === 'speaking' ? 'rgba(167,139,250,0.3)' : `${tier.color}20`,
+                  background: voiceState === 'listening' ? 'rgba(74,222,128,0.08)' : voiceState === 'processing' ? tier.bg : voiceState === 'speaking' ? 'rgba(167,139,250,0.08)' : 'rgba(255,255,255,0.02)',
                 }}
               >
-                {voiceStatus === 'listening' ? '● Listening — speak naturally'
-                  : voiceStatus === 'thinking' ? '◌ Casper is thinking...'
-                  : voiceStatus === 'speaking' ? '▶ Casper is speaking'
+                {voiceState === 'listening' ? '● Listening — speak naturally'
+                  : voiceState === 'processing' ? '◌ Casper is thinking...'
+                  : voiceState === 'speaking' ? '▶ Casper is speaking'
                   : '○ Starting conversation...'}
               </motion.div>
             </AnimatePresence>
@@ -1203,14 +1203,14 @@ export const Casper: React.FC = () => {
             )}
 
             {/* Live transcript */}
-            {transcript && (
+            {liveTranscript && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 className="px-5 py-3 rounded-2xl border max-w-md text-center"
                 style={{ background: 'rgba(74,222,128,0.05)', borderColor: 'rgba(74,222,128,0.2)' }}
               >
-                <p className="text-sm text-green-300/80 italic leading-relaxed">"{transcript}"</p>
+                <p className="text-sm text-green-300/80 italic leading-relaxed">"{liveTranscript}"</p>
               </motion.div>
             )}
 
@@ -1269,14 +1269,14 @@ export const Casper: React.FC = () => {
             )}
 
             {/* Debug panel — shows mic status and last error */}
-            {debugMsg && (
+            {voiceDebug && (
               <div className="px-4 py-2 rounded-xl border text-[9px] font-mono max-w-xs text-center"
                 style={{
-                  color: debugMsg.includes('ERROR') || debugMsg.includes('DENIED') || debugMsg.includes('Error') ? '#F87171' : '#86EFAC',
-                  borderColor: debugMsg.includes('ERROR') || debugMsg.includes('DENIED') || debugMsg.includes('Error') ? 'rgba(248,113,113,0.2)' : 'rgba(134,239,172,0.2)',
-                  background: debugMsg.includes('ERROR') || debugMsg.includes('DENIED') || debugMsg.includes('Error') ? 'rgba(248,113,113,0.05)' : 'rgba(134,239,172,0.05)',
+                  color: voiceDebug.includes('denied') || voiceDebug.includes('failed') || voiceDebug.includes('Error') ? '#F87171' : '#86EFAC',
+                  borderColor: voiceDebug.includes('denied') || voiceDebug.includes('failed') || voiceDebug.includes('Error') ? 'rgba(248,113,113,0.2)' : 'rgba(134,239,172,0.2)',
+                  background: voiceDebug.includes('denied') || voiceDebug.includes('failed') || voiceDebug.includes('Error') ? 'rgba(248,113,113,0.05)' : 'rgba(134,239,172,0.05)',
                 }}>
-                {debugMsg}
+                {voiceDebug}
               </div>
             )}
 
