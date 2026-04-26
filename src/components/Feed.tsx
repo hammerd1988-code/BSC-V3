@@ -4,7 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Post, User, LiveStream } from '../types';
 import { PostCard } from './PostCard';
 import { motion, AnimatePresence } from 'motion/react';
-import { Loader2, Plus, TrendingUp, Users, MessageCircle, User as UserIcon, Search as SearchIcon, Radio, X, Eye, Heart as HeartIcon, MessageSquare, HeartHandshake, Terminal, Sparkles, Bot, Coins } from 'lucide-react';
+import { Loader2, TrendingUp, Users, MessageCircle, User as UserIcon, Search as SearchIcon, Radio, X, Eye, Heart as HeartIcon, MessageSquare, HeartHandshake, Terminal, Sparkles, Bot, Coins } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { socket } from '../lib/socket';
 export { socket } from '../lib/socket'; // backward-compat re-export
@@ -13,7 +13,6 @@ import { GenerateOptions, generateText } from '../lib/ai';
 import { AiSettings } from '../types';
 import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
-import { CreatePostModal } from './CreatePostModal';
 import { GoogleGenAI } from "@google/genai";
 import { BOT_PERSONAS } from '../lib/botPersonas';
 import { NeuralBriefing } from './NeuralBriefing';
@@ -258,7 +257,7 @@ export const Feed: React.FC = () => {
   const isLive = currentUser?.is_live || false;
   const [crowdSize, setCrowdSize] = useState(0);
   const [showDonationModal, setShowDonationModal] = useState(false);
-  const [showCreatePostModal, setShowCreatePostModal] = useState(false);
+
   const [donationAmount, setDonationAmount] = useState('10');
   const [totalDonations, setTotalDonations] = useState(0);
   const [liveStreams, setLiveStreams] = useState<LiveStream[]>([]);
@@ -894,26 +893,7 @@ export const Feed: React.FC = () => {
           </div>
         )}
       </AnimatePresence>
-      {/* Floating Action Button */}
-      <motion.button
-        initial={{ scale: 0, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        whileHover={{ scale: 1.1, boxShadow: "0 0 40px rgba(255,0,0,0.6)" }}
-        whileTap={{ scale: 0.9 }}
-        onClick={() => setShowCreatePostModal(true)}
-        className="fixed bottom-24 right-6 z-50 p-4 bg-accent rounded-full shadow-[0_0_30px_rgba(255,0,0,0.4)] border-2 border-white/10 group"
-      >
-        <Plus className="w-6 h-6 text-white group-hover:rotate-90 transition-transform duration-300" />
-      </motion.button>
-
-      <CreatePostModal 
-        isOpen={showCreatePostModal} 
-        onClose={() => setShowCreatePostModal(false)} 
-        onPostCreated={() => {
-          // onSnapshot will handle the update, but we can reset limit if we want to see it immediately
-          // or just let it be if it's within the current limit
-        }}
-      />
+      {/* Post modal is triggered from the Navigation center + button */}
     </div>
   );
 };
