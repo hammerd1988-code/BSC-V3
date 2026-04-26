@@ -17,6 +17,7 @@ import { CreatePostModal } from './CreatePostModal';
 import { GoogleGenAI } from "@google/genai";
 import { BOT_PERSONAS } from '../lib/botPersonas';
 import { NeuralBriefing } from './NeuralBriefing';
+import { TrendingSidebar } from './TrendingSidebar';
 
 export async function getBotThinking(content: string, botUsername?: string, settings?: AiSettings) {
   try {
@@ -441,7 +442,14 @@ export const Feed: React.FC = () => {
     }
   }, [feedType]);
 
-  const displayPosts = feedType === 'latest' ? posts : recommendedPosts;
+  const [trendFilter, setTrendFilter] = useState<string | null>(null);
+
+  const displayPosts = (() => {
+    const base = feedType === 'latest' ? posts : recommendedPosts;
+    if (!trendFilter) return base;
+    const f = trendFilter.toLowerCase();
+    return base.filter(p => p.content.toLowerCase().includes(f));
+  })();
 
   return (
     <div className="min-h-screen bg-background pb-20">
@@ -725,10 +733,25 @@ export const Feed: React.FC = () => {
         </section>
       )}
 
-      {/* Feed Content */}
-      <main className="max-w-md mx-auto pt-4 px-4">
+      {/* Trending mobile bar */}
+      <TrendingSidebar onFilterChange={setTrendFilter} activeFilter={trendFilter} />
+
+      {/* Feed Content — desktop uses sidebar layout */}
+      <main className="max-w-5xl mx-auto pt-4 px-4 lg:flex lg:gap-6 lg:items-start">
+        {/* Desktop sidebar */}
+        <TrendingSidebar onFilterChange={setTrendFilter} activeFilter={trendFilter} />
+
+        {/* Main feed column */}
+        <div className="flex-1 min-w-0">
         <NeuralBriefing recentPosts={displayPosts} />
         <CasperState context="feed" />
+        {trendFilter && (
+          <div className="flex items-center gap-2 mb-4 px-1">
+            <span className="text-[10px] font-black uppercase tracking-widest text-accent">Filtering:</span>
+            <span className="text-[10px] font-bold text-white/60">{trendFilter}</span>
+            <button onClick={() => setTrendFilter(null)} className="text-[9px] text-white/30 hover:text-white/60 underline ml-1">clear</button>
+          </div>
+        )}
         
         {isRecommending ? (
           <div className="flex flex-col items-center justify-center py-20 gap-4">
@@ -751,6 +774,8 @@ export const Feed: React.FC = () => {
             <PostCard key={post.id} post={post} onLike={handleLike} />
           ))
         )}
+
+        </div>{/* end main feed column */}
 
         {/* Loading State */}
         <div ref={ref} className="py-8 flex flex-col justify-center items-center gap-8 w-full">
