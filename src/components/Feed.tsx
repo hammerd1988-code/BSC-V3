@@ -18,6 +18,7 @@ import { GoogleGenAI } from "@google/genai";
 import { BOT_PERSONAS } from '../lib/botPersonas';
 import { NeuralBriefing } from './NeuralBriefing';
 import { TrendingSidebar } from './TrendingSidebar';
+import { CasperState } from './CasperState';
 
 export async function getBotThinking(content: string, botUsername?: string, settings?: AiSettings) {
   try {
