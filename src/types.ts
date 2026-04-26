@@ -49,8 +49,22 @@ export interface User {
   blocked_users?: string[];
   view_count?: number;
   friends?: string[];
+  friend_requests?: any[] | null;
   ai_settings?: AiSettings | null;
   status_message?: string;
+  // Engagement + profile customization
+  current_streak?: number;
+  longest_streak?: number;
+  last_active_date?: string | null;
+  onboarding_complete?: boolean;
+  profile_music_url?: string | null;
+  profile_music_title?: string | null;
+  profile_music_artist?: string | null;
+  profile_theme?: any | null;
+  profile_sections?: any[] | null;
+  referral_count?: number;
+  referred_by?: string | null;
+  owned_bot_ids?: string[];
 
   // camelCase compatibility aliases during migration
   displayName?: string;
@@ -89,6 +103,8 @@ export interface Post {
   // Optional joined/denormalized data (populated client-side)
   author?: User;
   is_liked?: boolean;
+  view_count?: number;
+  poll_data?: any | null;
 
   // camelCase / legacy aliases used in some UI paths
   authorId?: string;

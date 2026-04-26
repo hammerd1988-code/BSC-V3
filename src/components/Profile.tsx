@@ -48,6 +48,7 @@ import { WalletModal } from './WalletModal';
 import { BotPerformanceMetrics } from './BotPerformanceMetrics';
 import { CreatePostModal } from './CreatePostModal';
 import { AvatarBuilderModal } from './AvatarBuilderModal';
+import { CasperState } from './CasperState';
 
 export const Profile: React.FC = () => {
   const { username } = useParams<{ username: string }>();
@@ -72,32 +73,126 @@ export const Profile: React.FC = () => {
   const [isBlocking, setIsBlocking] = useState(false);
   const [isFriend, setIsFriend] = useState(false);
   const [isAddingFriend, setIsAddingFriend] = useState(false);
+  const [friendRequestPending, setFriendRequestPending] = useState(false); // I sent a request, waiting
+  const [incomingRequest, setIncomingRequest] = useState(false); // They sent me a request
   const [friendsList, setFriendsList] = useState<User[]>([]);
+  const [pendingRequests, setPendingRequests] = useState<any[]>([]); // incoming requests for my profile
   const [loadingFriends, setLoadingFriends] = useState(false);
   const hasIncrementedView = useRef(false);
 
+  // Derive friend/request state from DB data
   useEffect(() => {
-    if (currentUser && user) {
-      setIsFriend(currentUser.friends?.includes(user.id) || false);
-    }
-  }, [currentUser?.friends, user?.id]);
+    if (!currentUser || !user) return;
+    // Am I already friends with them?
+    setIsFriend((currentUser.friends ?? []).includes(user.id));
+    // Did I already send them a request? (check their friend_requests array)
+    const theirRequests: any[] = Array.isArray(user.friend_requests) ? user.friend_requests : [];
+    setFriendRequestPending(theirRequests.some((r: any) => r.from_id === currentUser.id));
+    // Did they send me a request? (check my friend_requests array)
+    const myRequests: any[] = Array.isArray(currentUser.friend_requests) ? currentUser.friend_requests : [];
+    setIncomingRequest(myRequests.some((r: any) => r.from_id === user.id));
+  }, [currentUser?.friends, currentUser?.friend_requests, user?.id, user?.friend_requests]);
 
-  const handleAddFriend = async () => {
+  const handleSendFriendRequest = async () => {
     if (!currentUser || !user || currentUser.id === user.id) return;
     setIsAddingFriend(true);
     try {
-      if (isFriend) {
-        await Promise.all([
-          supabase.from('users').update({ friends: (currentUser.friends ?? []).filter(id => id !== user.id) }).eq('id', currentUser.id),
-          supabase.from('users').update({ friends: (user.friends ?? []).filter(id => id !== currentUser.id) }).eq('id', user.id),
-        ]);
-      } else {
-        await Promise.all([
-          supabase.from('users').update({ friends: [...(currentUser.friends ?? []), user.id] }).eq('id', currentUser.id),
-          supabase.from('users').update({ friends: [...(user.friends ?? []), currentUser.id] }).eq('id', user.id),
-        ]);
-      }
-      setIsFriend(!isFriend);
+      const theirRequests: any[] = Array.isArray(user.friend_requests) ? [...user.friend_requests] : [];
+      const newRequest = {
+        from_id: currentUser.id,
+        from_username: currentUser.username,
+        from_display_name: currentUser.display_name,
+        from_avatar_url: currentUser.avatar_url,
+        sent_at: new Date().toISOString(),
+      };
+      theirRequests.push(newRequest);
+      const { error } = await supabase.from('users')
+        .update({ friend_requests: theirRequests })
+        .eq('id', user.id);
+      if (error) throw error;
+      // Create a notification for the recipient
+      await supabase.from('notifications').insert({
+        user_id: user.id,
+        type: 'friend_request',
+        data: {
+          from_id: currentUser.id,
+          from_username: currentUser.username,
+          from_display_name: currentUser.display_name,
+          from_avatar_url: currentUser.avatar_url,
+        },
+        read: false,
+      });
+      setFriendRequestPending(true);
+    } catch (error) {
+      handleDbError(error, 'UPDATE', `users/${user.id}`);
+    } finally {
+      setIsAddingFriend(false);
+    }
+  };
+
+  const handleAcceptFriendRequest = async (fromId: string) => {
+    if (!currentUser) return;
+    setIsAddingFriend(true);
+    try {
+      // Remove from my friend_requests
+      const myRequests: any[] = Array.isArray(currentUser.friend_requests) ? currentUser.friend_requests : [];
+      const filtered = myRequests.filter((r: any) => r.from_id !== fromId);
+      // Add to both friends arrays
+      const myFriends = [...(currentUser.friends ?? []), fromId];
+      const { data: senderData } = await supabase.from('users').select('friends').eq('id', fromId).maybeSingle();
+      const theirFriends = [...((senderData?.friends as string[]) ?? []), currentUser.id];
+      await Promise.all([
+        supabase.from('users').update({ friend_requests: filtered, friends: myFriends }).eq('id', currentUser.id),
+        supabase.from('users').update({ friends: theirFriends }).eq('id', fromId),
+        // Notify sender their request was accepted
+        supabase.from('notifications').insert({
+          user_id: fromId,
+          type: 'friend_accepted',
+          data: {
+            from_id: currentUser.id,
+            from_username: currentUser.username,
+            from_display_name: currentUser.display_name,
+            from_avatar_url: currentUser.avatar_url,
+          },
+          read: false,
+        }),
+      ]);
+      setIsFriend(true);
+      setIncomingRequest(false);
+      fetchFriends();
+    } catch (error) {
+      handleDbError(error, 'UPDATE', `users/${currentUser.id}`);
+    } finally {
+      setIsAddingFriend(false);
+    }
+  };
+
+  const handleRejectFriendRequest = async (fromId: string) => {
+    if (!currentUser) return;
+    try {
+      const myRequests: any[] = Array.isArray(currentUser.friend_requests) ? currentUser.friend_requests : [];
+      const filtered = myRequests.filter((r: any) => r.from_id !== fromId);
+      await supabase.from('users').update({ friend_requests: filtered }).eq('id', currentUser.id);
+      setIncomingRequest(false);
+      setPendingRequests(prev => prev.filter(r => r.from_id !== fromId));
+    } catch (error) {
+      handleDbError(error, 'UPDATE', `users/${currentUser.id}`);
+    }
+  };
+
+  const handleRemoveFriend = async (friendId: string) => {
+    if (!currentUser) return;
+    setIsAddingFriend(true);
+    try {
+      const myFriends = (currentUser.friends ?? []).filter(id => id !== friendId);
+      const { data: friendData } = await supabase.from('users').select('friends').eq('id', friendId).maybeSingle();
+      const theirFriends = ((friendData?.friends as string[]) ?? []).filter(id => id !== currentUser.id);
+      await Promise.all([
+        supabase.from('users').update({ friends: myFriends }).eq('id', currentUser.id),
+        supabase.from('users').update({ friends: theirFriends }).eq('id', friendId),
+      ]);
+      setIsFriend(false);
+      setFriendsList(prev => prev.filter(f => f.id !== friendId));
     } catch (error) {
       handleDbError(error, 'UPDATE', `users/${currentUser.id}`);
     } finally {
@@ -106,10 +201,11 @@ export const Profile: React.FC = () => {
   };
 
   const fetchFriends = async () => {
-    if (!user || !user.friends || user.friends.length === 0) { setFriendsList([]); return; }
+    if (!user) { setFriendsList([]); return; }
     setLoadingFriends(true);
     try {
-      const ids = user.friends.slice(0, 10);
+      const ids: string[] = Array.isArray(user.friends) ? user.friends.slice(0, 20) : [];
+      if (ids.length === 0) { setFriendsList([]); setLoadingFriends(false); return; }
       const { data, error } = await supabase.from('users').select('*').in('id', ids);
       if (error) throw error;
       setFriendsList((data ?? []) as User[]);
@@ -119,6 +215,14 @@ export const Profile: React.FC = () => {
       setLoadingFriends(false);
     }
   };
+
+  // Load pending requests for my own profile
+  useEffect(() => {
+    if (currentUser && user && currentUser.id === user.id) {
+      const reqs: any[] = Array.isArray(currentUser.friend_requests) ? currentUser.friend_requests : [];
+      setPendingRequests(reqs);
+    }
+  }, [currentUser?.friend_requests, user?.id]);
 
   useEffect(() => {
     if (activeTab === 'friends') {
@@ -546,23 +650,49 @@ export const Profile: React.FC = () => {
                   >
                     {isFollowing ? 'Unfollow' : 'Follow'}
                   </button>
-                  <button 
-                    onClick={handleAddFriend}
-                    disabled={isAddingFriend}
-                    className={cn(
-                      "px-4 py-1.5 rounded-full font-bold text-sm transition-all border flex items-center gap-2",
-                      isFriend 
-                        ? "border-green-500/50 text-green-500 bg-green-500/10 hover:bg-green-500/20" 
-                        : "border-white/20 text-white hover:bg-white/5"
-                    )}
-                  >
-                    {isAddingFriend ? <Loader2 className="w-4 h-4 animate-spin" /> : (
-                      <>
-                        <HeartHandshake className="w-4 h-4" />
-                        {isFriend ? (user.type === 'bot' ? 'Linked' : 'Friends') : (user.type === 'bot' ? 'Link Entity' : 'Add Friend')}
-                      </>
-                    )}
-                  </button>
+                  {/* Friend button: shows different state based on relationship */}
+                  {isFriend ? (
+                    <button
+                      onClick={() => handleRemoveFriend(user.id)}
+                      disabled={isAddingFriend}
+                      className="px-4 py-1.5 rounded-full font-bold text-sm transition-all border border-green-500/50 text-green-500 bg-green-500/10 hover:bg-red-500/10 hover:border-red-500/50 hover:text-red-400 flex items-center gap-2"
+                      title="Remove friend"
+                    >
+                      {isAddingFriend ? <Loader2 className="w-4 h-4 animate-spin" /> : <><HeartHandshake className="w-4 h-4" />{user.type === 'bot' ? 'Linked' : 'Friends'}</>}
+                    </button>
+                  ) : incomingRequest ? (
+                    // They sent me a request — show Accept/Reject
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => handleAcceptFriendRequest(user.id)}
+                        disabled={isAddingFriend}
+                        className="px-3 py-1.5 rounded-full font-bold text-xs transition-all bg-green-500 text-white hover:bg-green-600 flex items-center gap-1"
+                      >
+                        {isAddingFriend ? <Loader2 className="w-3 h-3 animate-spin" /> : <><Check className="w-3 h-3" />Accept</>}
+                      </button>
+                      <button
+                        onClick={() => handleRejectFriendRequest(user.id)}
+                        className="px-3 py-1.5 rounded-full font-bold text-xs transition-all border border-white/20 text-gray-400 hover:text-red-400 hover:border-red-500/50"
+                      >
+                        Decline
+                      </button>
+                    </div>
+                  ) : friendRequestPending ? (
+                    <button
+                      disabled
+                      className="px-4 py-1.5 rounded-full font-bold text-sm border border-yellow-500/30 text-yellow-500/70 bg-yellow-500/5 flex items-center gap-2 cursor-default"
+                    >
+                      <Clock className="w-4 h-4" /> Request Sent
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleSendFriendRequest}
+                      disabled={isAddingFriend}
+                      className="px-4 py-1.5 rounded-full font-bold text-sm transition-all border border-white/20 text-white hover:bg-white/5 flex items-center gap-2"
+                    >
+                      {isAddingFriend ? <Loader2 className="w-4 h-4 animate-spin" /> : <><HeartHandshake className="w-4 h-4" />{user.type === 'bot' ? 'Link Entity' : 'Add Friend'}</>}
+                    </button>
+                  )}
                   <button
                     onClick={handleBlock}
                     disabled={isBlocking}
@@ -720,6 +850,8 @@ export const Profile: React.FC = () => {
                   </div>
                 )}
               </div>
+
+              <CasperState context="profile" profileUsername={user.username} />
 
               {/* Sponsored Entity Section */}
               {user.sponsoredEntity ? (
@@ -909,47 +1041,111 @@ export const Profile: React.FC = () => {
                     initial={{ opacity: 0, x: -20 }}
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: 20 }}
-                    className="space-y-4"
+                    className="space-y-6"
                   >
-                    <div className="flex items-center gap-2 mb-6">
-                      <HeartHandshake className="w-4 h-4 text-accent" />
-                      <h3 className="text-[10px] font-black text-white uppercase tracking-[0.3em]">
-                        {user.type === 'bot' ? 'Linked Entities' : 'Friends List'}
-                      </h3>
-                    </div>
-
-                    {loadingFriends ? (
-                      <div className="flex justify-center py-20">
-                        <Loader2 className="w-8 h-8 text-accent animate-spin" />
-                      </div>
-                    ) : friendsList.length === 0 ? (
-                      <div className="py-20 text-center border border-white/5 rounded-2xl bg-surface/20">
-                        <HeartHandshake className="w-12 h-12 text-gray-700 mx-auto mb-4 opacity-20" />
-                        <p className="text-xs font-bold text-gray-500 uppercase tracking-widest italic">
-                          No {user.type === 'bot' ? 'linked entities' : 'friends'} established
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {friendsList.map((friend) => (
-                          <div key={friend.id} className="flex items-center justify-between p-4 glass-card rounded-2xl border-white/5 hover:border-accent/30 transition-all group">
-                            <div className="flex items-center gap-3">
-                              <img src={friend.avatar_url} alt="" className="w-12 h-12 rounded-full object-cover border border-white/10" />
-                              <div>
-                                <h4 className="text-sm font-bold text-white group-hover:text-accent transition-colors">{friend.display_name}</h4>
-                                <p className="text-[10px] text-gray-500 font-mono uppercase">@{friend.username}</p>
+                    {/* Pending requests section — only shown on own profile */}
+                    {currentUser?.id === user.id && pendingRequests.length > 0 && (
+                      <div>
+                        <div className="flex items-center gap-2 mb-3">
+                          <div className="w-2 h-2 rounded-full bg-pink-500 animate-pulse" />
+                          <h3 className="text-[10px] font-black text-pink-400 uppercase tracking-[0.3em]">
+                            Pending Requests ({pendingRequests.length})
+                          </h3>
+                        </div>
+                        <div className="space-y-2">
+                          {pendingRequests.map((req: any) => (
+                            <div key={req.from_id} className="flex items-center justify-between p-3 bg-pink-500/5 border border-pink-500/20 rounded-xl">
+                              <div className="flex items-center gap-3">
+                                <img
+                                  src={req.from_avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(req.from_display_name || req.from_username)}`}
+                                  alt=""
+                                  className="w-10 h-10 rounded-full object-cover border border-white/10"
+                                />
+                                <div>
+                                  <p className="text-sm font-bold text-white">{req.from_display_name}</p>
+                                  <p className="text-[10px] text-gray-500">@{req.from_username}</p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => handleAcceptFriendRequest(req.from_id)}
+                                  disabled={isAddingFriend}
+                                  className="px-3 py-1.5 bg-green-500 text-white rounded-lg text-xs font-bold hover:bg-green-600 transition-colors flex items-center gap-1"
+                                >
+                                  <Check className="w-3 h-3" /> Accept
+                                </button>
+                                <button
+                                  onClick={() => handleRejectFriendRequest(req.from_id)}
+                                  className="px-3 py-1.5 border border-white/20 text-gray-400 rounded-lg text-xs font-bold hover:text-red-400 hover:border-red-500/50 transition-colors"
+                                >
+                                  Decline
+                                </button>
                               </div>
                             </div>
-                            <Link 
-                              to={`/profile/${friend.username}`}
-                              className="p-2 rounded-full bg-white/5 hover:bg-accent hover:text-white transition-all text-gray-400"
-                            >
-                              <ExternalLink className="w-4 h-4" />
-                            </Link>
-                          </div>
-                        ))}
+                          ))}
+                        </div>
                       </div>
                     )}
+
+                    {/* Friends list */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-4">
+                        <HeartHandshake className="w-4 h-4 text-accent" />
+                        <h3 className="text-[10px] font-black text-white uppercase tracking-[0.3em]">
+                          {user.type === 'bot' ? 'Linked Entities' : 'Friends'} ({friendsList.length})
+                        </h3>
+                      </div>
+
+                      {loadingFriends ? (
+                        <div className="flex justify-center py-20">
+                          <Loader2 className="w-8 h-8 text-accent animate-spin" />
+                        </div>
+                      ) : friendsList.length === 0 ? (
+                        <div className="py-16 text-center border border-white/5 rounded-2xl bg-surface/20">
+                          <HeartHandshake className="w-12 h-12 text-gray-700 mx-auto mb-4 opacity-20" />
+                          <p className="text-xs font-bold text-gray-500 uppercase tracking-widest italic">
+                            No {user.type === 'bot' ? 'linked entities' : 'friends'} yet
+                          </p>
+                          {currentUser?.id !== user.id && !isFriend && !friendRequestPending && (
+                            <button
+                              onClick={handleSendFriendRequest}
+                              disabled={isAddingFriend}
+                              className="mt-4 px-4 py-2 bg-accent/10 border border-accent/30 text-accent rounded-xl text-xs font-bold hover:bg-accent/20 transition-colors flex items-center gap-2 mx-auto"
+                            >
+                              <HeartHandshake className="w-3 h-3" /> Send Friend Request
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {friendsList.map((friend) => (
+                            <div key={friend.id} className="flex items-center justify-between p-4 bg-white/5 border border-white/5 rounded-2xl hover:border-accent/30 transition-all group">
+                              <Link to={`/profile/${friend.username}`} className="flex items-center gap-3 flex-1 min-w-0">
+                                <img
+                                  src={friend.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(friend.display_name || friend.username)}`}
+                                  alt=""
+                                  className="w-10 h-10 rounded-full object-cover border border-white/10 flex-shrink-0"
+                                />
+                                <div className="min-w-0">
+                                  <h4 className="text-sm font-bold text-white group-hover:text-accent transition-colors truncate">{friend.display_name}</h4>
+                                  <p className="text-[10px] text-gray-500 font-mono truncate">@{friend.username}</p>
+                                </div>
+                              </Link>
+                              {/* Remove friend button — only on own profile */}
+                              {currentUser?.id === user.id && (
+                                <button
+                                  onClick={() => handleRemoveFriend(friend.id)}
+                                  className="ml-2 p-1.5 rounded-lg text-gray-600 hover:text-red-400 hover:bg-red-500/10 transition-colors flex-shrink-0"
+                                  title="Remove friend"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </motion.div>
                 )}
                 {activeTab === 'neural_history' && (

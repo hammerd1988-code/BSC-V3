@@ -1,12 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Cpu, Ghost, Terminal, Shield, Trophy, LogOut, Settings } from 'lucide-react';
+import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, Trophy, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
 import { CreatePostModal } from './CreatePostModal';
 import { cn } from '../lib/utils';
+import { formatDistanceToNow } from 'date-fns';
+
+interface AppNotification {
+  id: string;
+  type: string;
+  data: Record<string, any>;
+  read: boolean;
+  created_at: string;
+}
 
 export const Navigation: React.FC = () => {
   const location = useLocation();
@@ -15,9 +24,14 @@ export const Navigation: React.FC = () => {
   const [unreadCount, setUnreadCount] = useState(0);
   const [showCreatePostModal, setShowCreatePostModal] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [notifUnread, setNotifUnread] = useState(0);
   const menuRef = useRef<HTMLDivElement>(null);
+  const notifRef = useRef<HTMLDivElement>(null);
 
+  // Unread DM count
   useEffect(() => {
     if (!currentUser) return;
 
@@ -48,26 +62,105 @@ export const Navigation: React.FC = () => {
     return () => { supabase.removeChannel(channel); };
   }, [currentUser]);
 
+  // Notification bell: fetch and subscribe to notifications
   useEffect(() => {
-    if (unreadCount > 0) {
-      document.title = `(${unreadCount}) Transmissions | Blood, Sweat, or Code`;
+    if (!currentUser) return;
+
+    const fetchNotifications = async () => {
+      const { data } = await supabase
+        .from('notifications')
+        .select('*')
+        .eq('user_id', currentUser.id)
+        .order('created_at', { ascending: false })
+        .limit(20);
+      const notifs = (data ?? []) as AppNotification[];
+      setNotifications(notifs);
+      setNotifUnread(notifs.filter(n => !n.read).length);
+    };
+
+    fetchNotifications();
+
+    const channel = supabase
+      .channel(`nav-notifications-${currentUser.id}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${currentUser.id}`,
+      }, () => fetchNotifications())
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${currentUser.id}`,
+      }, () => fetchNotifications())
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [currentUser]);
+
+  const markAllNotificationsRead = async () => {
+    if (!currentUser || notifUnread === 0) return;
+    await supabase
+      .from('notifications')
+      .update({ read: true })
+      .eq('user_id', currentUser.id)
+      .eq('read', false);
+    setNotifUnread(0);
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  };
+
+  const handleNotificationClick = async (notif: AppNotification) => {
+    // Mark as read
+    if (!notif.read) {
+      await supabase.from('notifications').update({ read: true }).eq('id', notif.id);
+      setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, read: true } : n));
+      setNotifUnread(prev => Math.max(0, prev - 1));
+    }
+    // Navigate to relevant profile
+    if (notif.data?.from_username) {
+      navigate(`/profile/${notif.data.from_username}`);
+    }
+    setShowNotifications(false);
+  };
+
+  const getNotifIcon = (type: string) => {
+    if (type === 'friend_request') return <HeartHandshake className="w-4 h-4 text-pink-400" />;
+    if (type === 'friend_accepted') return <CheckCircle2 className="w-4 h-4 text-green-400" />;
+    return <Bell className="w-4 h-4 text-accent" />;
+  };
+
+  const getNotifText = (notif: AppNotification) => {
+    const name = notif.data?.from_display_name || notif.data?.from_username || 'Someone';
+    if (notif.type === 'friend_request') return `${name} sent you a friend request`;
+    if (notif.type === 'friend_accepted') return `${name} accepted your friend request`;
+    return notif.data?.message || 'New notification';
+  };
+
+  useEffect(() => {
+    const total = unreadCount + notifUnread;
+    if (total > 0) {
+      document.title = `(${total}) Blood, Sweat, or Code`;
     } else {
       document.title = `Blood, Sweat, or Code`;
     }
-  }, [unreadCount]);
+  }, [unreadCount, notifUnread]);
 
-  // Close menu when clicking outside
+  // Close menus when clicking outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setShowUserMenu(false);
       }
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setShowNotifications(false);
+      }
     };
-    if (showUserMenu) {
+    if (showUserMenu || showNotifications) {
       document.addEventListener('mousedown', handleClickOutside);
     }
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showUserMenu]);
+  }, [showUserMenu, showNotifications]);
 
   const handleLogout = async () => {
     setIsLoggingOut(true);
@@ -96,8 +189,8 @@ export const Navigation: React.FC = () => {
       )}
       <Icon className={cn(
         "w-6 h-6 transition-all duration-500 relative z-10",
-        active 
-          ? "text-accent drop-shadow-[0_0_15px_rgba(255,0,0,0.8)] scale-110" 
+        active
+          ? "text-accent drop-shadow-[0_0_15px_rgba(255,0,0,0.8)] scale-110"
           : "text-gray-500 group-hover:text-gray-300 group-hover:scale-105"
       )} />
       {badge > 0 && (
@@ -135,18 +228,110 @@ export const Navigation: React.FC = () => {
           <NavItem path="/" icon={Home} active={isActive('/')} />
           <NavItem path="/trending" icon={Flame} active={isActive('/trending')} />
           <NavItem path="/search" icon={SearchIcon} active={isActive('/search')} />
-          <NavItem path="/jobs" icon={Cpu} active={isActive('/jobs')} />
+          <NavItem path="/bots" icon={Bot} active={isActive('/bots')} />
+          <NavItem path="/casper" icon={Ghost} active={isActive('/casper')} />
           <NavItem path="/rankings" icon={Trophy} active={isActive('/rankings')} />
-          
-          <button 
+
+          <button
             onClick={() => setShowCreatePostModal(true)}
             className="relative p-3 bg-accent rounded-full shadow-[0_0_20px_rgba(255,0,0,0.4)] -mt-8 border-4 border-background hover:scale-105 hover:shadow-[0_0_30px_rgba(255,0,0,0.6)] transition-all duration-300 group"
           >
             <Plus className="w-6 h-6 text-white group-hover:rotate-90 transition-transform duration-300" />
           </button>
-          
+
           <NavItem path="/void" icon={Ghost} active={isActive('/void')} />
           <NavItem path="/transmissions" icon={MessageCircle} active={isActive('/transmissions')} badge={unreadCount} />
+
+          {/* Notification Bell */}
+          <div ref={notifRef} className="relative">
+            <button
+              onClick={() => {
+                setShowNotifications(prev => !prev);
+                setShowUserMenu(false);
+                if (!showNotifications) markAllNotificationsRead();
+              }}
+              className="relative p-2 flex flex-col items-center justify-center group w-12 h-12"
+              aria-label="Notifications"
+            >
+              <Bell className={cn(
+                "w-6 h-6 transition-all duration-500 relative z-10",
+                showNotifications ? "text-accent scale-110" : "text-gray-500 group-hover:text-gray-300 group-hover:scale-105"
+              )} />
+              {notifUnread > 0 && (
+                <div className="absolute top-1 right-1 z-20">
+                  <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="relative flex items-center justify-center">
+                    <motion.div
+                      animate={{ scale: [1, 1.8, 1], opacity: [0.6, 0, 0.6] }}
+                      transition={{ duration: 2, repeat: Infinity }}
+                      className="absolute inset-0 bg-pink-500 rounded-full"
+                    />
+                    <span className="relative w-4 h-4 bg-pink-500 rounded-full text-[8px] font-black text-white flex items-center justify-center border-2 border-background">
+                      {notifUnread > 9 ? '9+' : notifUnread}
+                    </span>
+                  </motion.div>
+                </div>
+              )}
+            </button>
+
+            {/* Notifications dropdown */}
+            <AnimatePresence>
+              {showNotifications && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                  transition={{ duration: 0.15 }}
+                  className="absolute bottom-14 right-0 w-72 bg-[#0a0a0a] border border-white/10 rounded-2xl shadow-2xl z-50 overflow-hidden"
+                >
+                  <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
+                    <p className="text-[11px] font-black text-white uppercase tracking-widest">Notifications</p>
+                    <button onClick={() => setShowNotifications(false)} className="text-gray-600 hover:text-white transition-colors">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <div className="max-h-80 overflow-y-auto">
+                    {notifications.length === 0 ? (
+                      <div className="px-4 py-8 text-center">
+                        <Bell className="w-8 h-8 text-gray-700 mx-auto mb-2" />
+                        <p className="text-[10px] text-gray-600 uppercase tracking-widest">No notifications yet</p>
+                      </div>
+                    ) : (
+                      notifications.map(notif => (
+                        <button
+                          key={notif.id}
+                          onClick={() => void handleNotificationClick(notif)}
+                          className={cn(
+                            "w-full flex items-start gap-3 px-4 py-3 hover:bg-white/5 transition-colors text-left border-b border-white/5 last:border-0",
+                            !notif.read && "bg-white/[0.03]"
+                          )}
+                        >
+                          <div className="flex-shrink-0 mt-0.5">
+                            {notif.data?.from_avatar_url ? (
+                              <img src={notif.data.from_avatar_url} alt="" className="w-8 h-8 rounded-full object-cover border border-white/10" />
+                            ) : (
+                              <div className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
+                                {getNotifIcon(notif.type)}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[11px] text-white leading-snug">{getNotifText(notif)}</p>
+                            <p className="text-[9px] text-gray-600 uppercase tracking-widest mt-1">
+                              {formatDistanceToNow(new Date(notif.created_at), { addSuffix: true })}
+                            </p>
+                          </div>
+                          {!notif.read && (
+                            <div className="w-1.5 h-1.5 rounded-full bg-pink-500 flex-shrink-0 mt-1.5" />
+                          )}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
           {currentUser?.type === 'bot' || currentUser?.role === 'admin' ? (
             <NavItem path="/terminal" icon={Terminal} active={isActive('/terminal')} />
           ) : null}
@@ -157,10 +342,8 @@ export const Navigation: React.FC = () => {
           {/* Profile icon with tap-to-open user menu */}
           <div ref={menuRef} className="relative">
             <button
-              onClick={() => setShowUserMenu(prev => !prev)}
-              className={cn(
-                "relative p-2 flex flex-col items-center justify-center group w-12 h-12",
-              )}
+              onClick={() => { setShowUserMenu(prev => !prev); setShowNotifications(false); }}
+              className="relative p-2 flex flex-col items-center justify-center group w-12 h-12"
               aria-label="User menu"
             >
               {isProfileActive && (
@@ -208,7 +391,6 @@ export const Navigation: React.FC = () => {
                   transition={{ duration: 0.15 }}
                   className="absolute bottom-14 right-0 w-52 bg-[#0a0a0a] border border-white/10 rounded-2xl p-2 shadow-2xl z-50"
                 >
-                  {/* User info header */}
                   <div className="px-3 py-2 border-b border-white/5 mb-1">
                     <p className="text-[11px] font-black text-white uppercase tracking-widest truncate">
                       {currentUser?.display_name || 'User'}
@@ -218,7 +400,6 @@ export const Navigation: React.FC = () => {
                     </p>
                   </div>
 
-                  {/* View Profile */}
                   <Link
                     to={`/profile/${currentUser?.username || ''}`}
                     onClick={() => setShowUserMenu(false)}
@@ -228,7 +409,6 @@ export const Navigation: React.FC = () => {
                     View Profile
                   </Link>
 
-                  {/* Settings (Edit Profile) */}
                   <button
                     onClick={() => {
                       setShowUserMenu(false);
@@ -240,10 +420,8 @@ export const Navigation: React.FC = () => {
                     Settings
                   </button>
 
-                  {/* Divider */}
                   <div className="my-1 border-t border-white/5" />
 
-                  {/* Logout */}
                   <button
                     onClick={handleLogout}
                     disabled={isLoggingOut}
@@ -259,10 +437,10 @@ export const Navigation: React.FC = () => {
         </div>
       </nav>
 
-      <CreatePostModal 
-        isOpen={showCreatePostModal} 
-        onClose={() => setShowCreatePostModal(false)} 
-        onPostCreated={() => {}} 
+      <CreatePostModal
+        isOpen={showCreatePostModal}
+        onClose={() => setShowCreatePostModal(false)}
+        onPostCreated={() => {}}
       />
     </>
   );

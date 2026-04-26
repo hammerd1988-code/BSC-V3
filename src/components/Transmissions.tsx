@@ -36,6 +36,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { NewTransmissionModal } from './NewTransmissionModal';
 import { playMessageSound } from '../lib/sounds';
 import { notifyNewMessage } from '../lib/notifications';
+import { encryptText, decryptText } from '../lib/crypto';
 
 export const Transmissions: React.FC = () => {
   const { currentUser, supabaseUser } = useAuth();
@@ -52,6 +53,12 @@ export const Transmissions: React.FC = () => {
   const [isTyping, setIsTyping] = useState(false);
   const [burnDuration, setBurnDuration] = useState<number | null>(null);
   const [encryptionEnabled, setEncryptionEnabled] = useState(true);
+  // Map of transmit id -> decrypted plaintext (populated after decryption)
+  const [decryptedCache, setDecryptedCache] = useState<Record<string, string>>({});
+  // Map of transmit id -> remaining burn seconds
+  const [burnCountdowns, setBurnCountdowns] = useState<Record<string, number>>({});
+  // Shared encryption key per transmission (derived from transmission ID for simplicity)
+  const getTransmissionKey = (transmissionId: string) => `bsc-${transmissionId.slice(0, 16)}`;
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
@@ -183,13 +190,43 @@ export const Transmissions: React.FC = () => {
           .order('created_at', { ascending: true });
 
         if (fetchError) throw fetchError;
-        setTransmits(data || []);
-        
+        const rows = (data || []) as Transmit[];
+
+        // Filter out already-expired burn messages
+        const now = Date.now();
+        const live = rows.filter(t => !t.expires_at || new Date(t.expires_at).getTime() > now);
+        // Delete expired ones from DB silently
+        const expired = rows.filter(t => t.expires_at && new Date(t.expires_at).getTime() <= now);
+        if (expired.length > 0) {
+          supabase.from('transmits').delete().in('id', expired.map(t => t.id)).then();
+        }
+
+        setTransmits(live);
+
+        // Decrypt encrypted messages and initialize burn countdowns
+        const key = getTransmissionKey(activeTransmission.id);
+        const newDecrypted: Record<string, string> = {};
+        const newCountdowns: Record<string, number> = {};
+        await Promise.all(live.map(async (t) => {
+          if (t.encryption_key === 'aes-gcm-pbkdf2') {
+            try {
+              newDecrypted[t.id] = await decryptText(t.content, key);
+            } catch {
+              newDecrypted[t.id] = '[Encrypted message — decryption failed]';
+            }
+          }
+          if (t.expires_at) {
+            const remaining = Math.max(0, Math.floor((new Date(t.expires_at).getTime() - Date.now()) / 1000));
+            if (remaining > 0) newCountdowns[t.id] = remaining;
+          }
+        }));
+        setDecryptedCache(prev => ({ ...prev, ...newDecrypted }));
+        setBurnCountdowns(prev => ({ ...prev, ...newCountdowns }));
+
         // Mark as read
         if (activeTransmission.unread_counts?.[currentUser!.id] > 0) {
           const newUnread = { ...activeTransmission.unread_counts };
           newUnread[currentUser!.id] = 0;
-          
           await supabase
             .from('transmissions')
             .update({ unread_counts: newUnread })
@@ -214,16 +251,33 @@ export const Transmissions: React.FC = () => {
         const newTransmit = payload.new as Transmit;
         if (import.meta.env.DEV) console.debug('[Transmissions] transmit INSERT', newTransmit.id);
 
-        // Play notification sound and show push notification for messages from others
-        if (newTransmit.sender_id !== currentUser.id) {
-          playMessageSound();
-          const senderUser = userCache.current[newTransmit.sender_id];
-          notifyNewMessage(
-            senderUser?.display_name || 'New Message',
-            newTransmit.content,
-            senderUser?.avatar_url
-          );
-        }
+        // Decrypt if needed, then play sound/notify
+        const handleIncomingTransmit = async (t: Transmit) => {
+          let displayContent = t.content;
+          if (t.encryption_key === 'aes-gcm-pbkdf2' && activeTransmission) {
+            try {
+              displayContent = await decryptText(t.content, getTransmissionKey(activeTransmission.id));
+              setDecryptedCache(prev => ({ ...prev, [t.id]: displayContent }));
+            } catch {
+              setDecryptedCache(prev => ({ ...prev, [t.id]: '[Encrypted message]' }));
+            }
+          }
+          if (t.sender_id !== currentUser.id) {
+            playMessageSound();
+            const senderUser = userCache.current[t.sender_id];
+            notifyNewMessage(
+              senderUser?.display_name || 'New Message',
+              displayContent,
+              senderUser?.avatar_url
+            );
+          }
+          // Initialize burn countdown for incoming burn messages
+          if (t.expires_at) {
+            const remaining = Math.max(0, Math.floor((new Date(t.expires_at).getTime() - Date.now()) / 1000));
+            if (remaining > 0) setBurnCountdowns(prev => ({ ...prev, [t.id]: remaining }));
+          }
+        };
+        void handleIncomingTransmit(newTransmit);
 
         // Dedup: only add if not already present (optimistic insert may have added it)
         setTransmits(prev =>
@@ -338,6 +392,38 @@ export const Transmissions: React.FC = () => {
     }
   }, [transmits]);
 
+  // Burn countdown timer: tick every second, delete expired messages from DB and UI
+  useEffect(() => {
+    if (Object.keys(burnCountdowns).length === 0) return;
+    const interval = setInterval(() => {
+      setBurnCountdowns(prev => {
+        const next = { ...prev };
+        const toDelete: string[] = [];
+        for (const [id, secs] of Object.entries(next)) {
+          if (secs <= 1) {
+            toDelete.push(id);
+            delete next[id];
+          } else {
+            next[id] = secs - 1;
+          }
+        }
+        if (toDelete.length > 0) {
+          // Remove from UI immediately
+          setTransmits(prev => prev.filter(t => !toDelete.includes(t.id)));
+          setDecryptedCache(prev => {
+            const c = { ...prev };
+            toDelete.forEach(id => delete c[id]);
+            return c;
+          });
+          // Delete from DB
+          supabase.from('transmits').delete().in('id', toDelete).then();
+        }
+        return next;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [burnCountdowns]);
+
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const trimmedMessage = message.trim();
@@ -368,14 +454,24 @@ export const Transmissions: React.FC = () => {
     }
 
     try {
+      // Encrypt if enabled
+      let contentToStore = savedMessage;
+      let encryptionKeyStored: string | null = null;
+      if (encryptionEnabled) {
+        const key = getTransmissionKey(activeTransmission.id);
+        contentToStore = await encryptText(savedMessage, key);
+        encryptionKeyStored = 'aes-gcm-pbkdf2'; // marker so receiver knows to decrypt
+      }
+
       const newTransmit = {
         transmission_id: activeTransmission.id,
         sender_id: currentUser.id,
         receiver_id: otherUserId,
-        content: savedMessage,
+        content: contentToStore,
         type: 'text' as const,
         burn_duration: savedBurnDuration,
         expires_at: savedBurnDuration ? new Date(Date.now() + savedBurnDuration * 1000).toISOString() : null,
+        encryption_key: encryptionKeyStored,
       };
 
       const { data: insertedTransmit, error: sendError } = await supabase
@@ -386,7 +482,16 @@ export const Transmissions: React.FC = () => {
 
       if (sendError) throw sendError;
       if (insertedTransmit) {
-        setTransmits(prev => prev.some(t => t.id === insertedTransmit.id) ? prev : [...prev, insertedTransmit as Transmit]);
+        const t = insertedTransmit as Transmit;
+        setTransmits(prev => prev.some(x => x.id === t.id) ? prev : [...prev, t]);
+        // Cache decrypted version for sender (they already have plaintext)
+        if (encryptionEnabled) {
+          setDecryptedCache(prev => ({ ...prev, [t.id]: savedMessage }));
+        }
+        // Start burn countdown if applicable
+        if (savedBurnDuration && t.id) {
+          setBurnCountdowns(prev => ({ ...prev, [t.id]: savedBurnDuration }));
+        }
       } else {
         console.warn('Transmit insert succeeded but no row returned; waiting for realtime sync.');
       }
@@ -734,10 +839,23 @@ export const Transmissions: React.FC = () => {
                             ? 'bg-accent text-black font-bold rounded-br-none shadow-[0_0_20px_rgba(0,243,255,0.1)]' 
                             : 'bg-white/5 text-gray-300 border border-white/10 rounded-bl-none'
                         }`}>
-                          {t.content}
-                          {t.burn_duration && (
+                          {/* Show decrypted content if available, otherwise raw (unencrypted) */}
+                          {decryptedCache[t.id] ?? t.content}
+                          {/* Encryption indicator */}
+                          {t.encryption_key === 'aes-gcm-pbkdf2' && (
+                            <div className="absolute -top-1 -left-1">
+                              <Lock className="w-3 h-3 text-green-400" aria-label="End-to-end encrypted" />
+                            </div>
+                          )}
+                          {/* Burn countdown */}
+                          {burnCountdowns[t.id] !== undefined ? (
+                            <div className="absolute -top-1 -right-1 flex items-center gap-0.5 bg-red-900/80 rounded-full px-1">
+                              <Flame className="w-2.5 h-2.5 text-red-400 animate-pulse" />
+                              <span className="text-[8px] font-black text-red-400">{burnCountdowns[t.id]}s</span>
+                            </div>
+                          ) : t.burn_duration && (
                             <div className="absolute -top-1 -right-1">
-                              <Flame className="w-3 h-3 text-red-500 animate-pulse" />
+                              <Flame className="w-3 h-3 text-red-500/40" aria-label="Burn after reading" />
                             </div>
                           )}
                         </div>

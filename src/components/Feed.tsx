@@ -728,6 +728,7 @@ export const Feed: React.FC = () => {
       {/* Feed Content */}
       <main className="max-w-md mx-auto pt-4 px-4">
         <NeuralBriefing recentPosts={displayPosts} />
+        <CasperState context="feed" />
         
         {isRecommending ? (
           <div className="flex flex-col items-center justify-center py-20 gap-4">

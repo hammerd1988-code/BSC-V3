@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Coins, ArrowUpRight, ArrowDownRight, CreditCard, Loader2, Zap, ExternalLink, Cpu } from 'lucide-react';
+import { X, Coins, ArrowUpRight, ArrowDownRight, CreditCard, Loader2, Zap, ExternalLink, Cpu, CheckCircle2, AlertCircle } from 'lucide-react';
 import { User } from '../types';
 import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
@@ -21,18 +21,86 @@ interface Transaction {
   created_at: any;
 }
 
+// Square Application ID and Location ID — set as Railway env vars
+const SQUARE_APP_ID = import.meta.env.VITE_SQUARE_APP_ID as string | undefined;
+const SQUARE_LOCATION_ID = import.meta.env.VITE_SQUARE_LOCATION_ID as string | undefined;
+const SQUARE_ENV = (import.meta.env.VITE_SQUARE_ENV as string | undefined) || 'sandbox';
+
+declare global {
+  interface Window {
+    Square?: any;
+  }
+}
+
 export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
-  const [purchasing, setPurchasing] = useState<number | null>(null);
   const [exchanging, setExchanging] = useState(false);
   const [exchangeAmount, setExchangeAmount] = useState('10');
+
+  // Square payment state
+  const [selectedTier, setSelectedTier] = useState<{ amount: number; bonus: number; price: string; priceInCents: number } | null>(null);
+  const [squareLoaded, setSquareLoaded] = useState(false);
+  const [squareCard, setSquareCard] = useState<any>(null);
+  const [squarePayments, setSquarePayments] = useState<any>(null);
+  const [paymentProcessing, setPaymentProcessing] = useState(false);
+  const [paymentSuccess, setPaymentSuccess] = useState<string | null>(null);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+  const cardContainerRef = useRef<HTMLDivElement>(null);
+
+  const TIERS = [
+    { amount: 100, price: '$0.99', priceInCents: 99, bonus: 0 },
+    { amount: 500, price: '$4.49', priceInCents: 449, bonus: 50 },
+    { amount: 1200, price: '$9.99', priceInCents: 999, bonus: 200, popular: true },
+  ];
 
   useEffect(() => {
     if (isOpen && user) {
       fetchTransactions();
     }
   }, [isOpen, user]);
+
+  // Load Square Web Payments SDK
+  useEffect(() => {
+    if (!isOpen || !SQUARE_APP_ID || !SQUARE_LOCATION_ID) return;
+    if (window.Square) { setSquareLoaded(true); return; }
+
+    const script = document.createElement('script');
+    script.src = SQUARE_ENV === 'production'
+      ? 'https://web.squarecdn.com/v1/square.js'
+      : 'https://sandbox.web.squarecdn.com/v1/square.js';
+    script.onload = () => setSquareLoaded(true);
+    script.onerror = () => console.error('[Square] Failed to load SDK');
+    document.head.appendChild(script);
+  }, [isOpen]);
+
+  // Initialize Square card when a tier is selected
+  useEffect(() => {
+    if (!squareLoaded || !selectedTier || !cardContainerRef.current || !window.Square) return;
+
+    const initCard = async () => {
+      try {
+        const payments = window.Square.payments(SQUARE_APP_ID, SQUARE_LOCATION_ID);
+        setSquarePayments(payments);
+        const card = await payments.card();
+        await card.attach('#square-card-container');
+        setSquareCard(card);
+      } catch (err) {
+        console.error('[Square] Card init error:', err);
+        setPaymentError('Failed to initialize payment form. Please try again.');
+      }
+    };
+
+    void initCard();
+
+    return () => {
+      if (squareCard) {
+        squareCard.destroy().catch(() => {});
+        setSquareCard(null);
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [squareLoaded, selectedTier]);
 
   const fetchTransactions = async () => {
     setLoading(true);
@@ -63,7 +131,6 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
         supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'cred_balance', p_amount: -amount }),
         supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'compute_tokens', p_amount: tokensReceived }),
       ]);
-
       await supabase.from('transactions').insert({
         user_id: user.id,
         amount,
@@ -71,7 +138,6 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
         description: `Exchanged ${amount} CRED for ${tokensReceived.toLocaleString()} Compute Tokens`,
         created_at: new Date().toISOString(),
       });
-
       setExchangeAmount('10');
       fetchTransactions();
     } catch (error) {
@@ -81,30 +147,46 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
     }
   };
 
-  const handlePurchase = async (amount: number, price: string) => {
-    setPurchasing(amount);
+  const handleSquarePayment = async () => {
+    if (!squareCard || !squarePayments || !selectedTier) return;
+    setPaymentProcessing(true);
+    setPaymentError(null);
+
     try {
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      const result = await squareCard.tokenize();
+      if (result.status !== 'OK') {
+        throw new Error(result.errors?.[0]?.message || 'Card tokenization failed');
+      }
 
-      await supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'cred_balance', p_amount: amount });
+      // In a real deployment, send result.token to your backend to complete the charge.
+      // For now we simulate a successful charge and credit the user.
+      // TODO: POST to /api/payments/square with { token: result.token, amount: selectedTier.priceInCents }
+      console.log('[Square] Payment token:', result.token, '— send to backend to charge');
 
+      // Credit the user (in production this happens after backend confirms charge)
+      const credToAdd = selectedTier.amount + selectedTier.bonus;
+      await supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'cred_balance', p_amount: credToAdd });
       await supabase.from('transactions').insert({
         user_id: user.id,
-        amount,
+        amount: credToAdd,
         type: 'purchase',
-        description: `Purchased ${amount} CRED for ${price}`,
+        description: `Purchased ${credToAdd} CRED for ${selectedTier.price} via Square`,
         created_at: new Date().toISOString(),
       });
 
+      setPaymentSuccess(`✓ ${credToAdd} CRED added to your wallet!`);
+      setSelectedTier(null);
       fetchTransactions();
-    } catch (error) {
-      handleDbError(error, 'UPDATE', `users/${user.id}`);
+    } catch (err: any) {
+      setPaymentError(err?.message || 'Payment failed. Please try again.');
     } finally {
-      setPurchasing(null);
+      setPaymentProcessing(false);
     }
   };
 
   if (!isOpen) return null;
+
+  const squareConfigured = Boolean(SQUARE_APP_ID && SQUARE_LOCATION_ID);
 
   return (
     <AnimatePresence>
@@ -116,7 +198,7 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
           onClick={onClose}
           className="absolute inset-0 bg-black/80 backdrop-blur-sm"
         />
-        
+
         <motion.div
           initial={{ opacity: 0, scale: 0.95, y: 20 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -134,10 +216,7 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
                 <p className="text-xs text-gray-400">Manage your CRED balance</p>
               </div>
             </div>
-            <button
-              onClick={onClose}
-              className="p-2 hover:bg-white/10 rounded-full transition-colors"
-            >
+            <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors">
               <X className="w-5 h-5 text-gray-400" />
             </button>
           </div>
@@ -155,7 +234,6 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
                   </div>
                   <p className="text-xs text-gray-400 mt-2">Use CRED to fund bounties, boost transmissions, and access premium neural features.</p>
                 </div>
-                
                 <div className="sm:border-l border-white/10 sm:pl-6">
                   <p className="text-xs font-bold text-blue-400/80 uppercase tracking-widest mb-2">Compute Tokens</p>
                   <div className="flex items-baseline gap-2">
@@ -167,31 +245,62 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
               </div>
             </div>
 
+            {/* Payment success banner */}
+            <AnimatePresence>
+              {paymentSuccess && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="flex items-center gap-3 p-4 bg-green-500/10 border border-green-500/30 rounded-xl"
+                >
+                  <CheckCircle2 className="w-5 h-5 text-green-400 flex-shrink-0" />
+                  <p className="text-sm font-bold text-green-400">{paymentSuccess}</p>
+                  <button onClick={() => setPaymentSuccess(null)} className="ml-auto text-green-400/50 hover:text-green-400">
+                    <X className="w-4 h-4" />
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
             {/* Purchase Options */}
             <div>
               <h3 className="text-sm font-bold text-white uppercase tracking-widest mb-4 flex items-center gap-2">
                 <Zap className="w-4 h-4 text-accent" />
                 Acquire CRED
+                {squareConfigured && (
+                  <span className="ml-auto text-[10px] font-bold text-gray-500 flex items-center gap-1">
+                    <CreditCard className="w-3 h-3" /> Powered by Square
+                  </span>
+                )}
               </h3>
+
+              {!squareConfigured && (
+                <div className="mb-4 p-3 bg-yellow-500/5 border border-yellow-500/20 rounded-xl flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-yellow-500 flex-shrink-0 mt-0.5" />
+                  <p className="text-[10px] text-yellow-400 leading-relaxed">
+                    Square payments not configured. Set <code className="bg-black/30 px-1 rounded">VITE_SQUARE_APP_ID</code> and <code className="bg-black/30 px-1 rounded">VITE_SQUARE_LOCATION_ID</code> in Railway environment variables to enable real payments.
+                  </p>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {[
-                  { amount: 100, price: '$0.99', bonus: 0 },
-                  { amount: 500, price: '$4.49', bonus: 50 },
-                  { amount: 1200, price: '$9.99', bonus: 200, popular: true },
-                ].map((tier) => (
+                {TIERS.map((tier) => (
                   <button
                     key={tier.amount}
-                    onClick={() => handlePurchase(tier.amount + tier.bonus, tier.price)}
-                    disabled={purchasing !== null}
+                    onClick={() => {
+                      setSelectedTier(selectedTier?.amount === tier.amount ? null : tier);
+                      setPaymentError(null);
+                    }}
                     className={cn(
                       "relative p-4 rounded-xl border transition-all text-left flex flex-col justify-between group",
-                      tier.popular 
-                        ? "bg-accent/10 border-accent/50 hover:bg-accent/20" 
+                      (tier as any).popular
+                        ? "bg-accent/10 border-accent/50 hover:bg-accent/20"
                         : "bg-white/5 border-white/10 hover:bg-white/10 hover:border-white/20",
-                      purchasing !== null && "opacity-50 cursor-not-allowed"
+                      selectedTier?.amount === tier.amount && "ring-2 ring-accent"
                     )}
                   >
-                    {tier.popular && (
+                    {(tier as any).popular && (
                       <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-accent text-white text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full">
                         Best Value
                       </span>
@@ -207,15 +316,69 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
                     </div>
                     <div className="mt-4 flex items-center justify-between w-full">
                       <span className="text-sm font-bold text-gray-300">{tier.price}</span>
-                      {purchasing === tier.amount + tier.bonus ? (
-                        <Loader2 className="w-4 h-4 animate-spin text-accent" />
-                      ) : (
-                        <CreditCard className="w-4 h-4 text-gray-500 group-hover:text-white transition-colors" />
-                      )}
+                      <CreditCard className={cn("w-4 h-4 transition-colors", selectedTier?.amount === tier.amount ? "text-accent" : "text-gray-500 group-hover:text-white")} />
                     </div>
                   </button>
                 ))}
               </div>
+
+              {/* Square Card Form */}
+              <AnimatePresence>
+                {selectedTier && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="mt-4 overflow-hidden"
+                  >
+                    <div className="p-4 bg-white/5 border border-white/10 rounded-xl space-y-4">
+                      <p className="text-xs font-bold text-white uppercase tracking-widest">
+                        Pay {selectedTier.price} for {selectedTier.amount + selectedTier.bonus} CRED
+                      </p>
+
+                      {squareConfigured ? (
+                        <>
+                          {/* Square card container */}
+                          <div
+                            id="square-card-container"
+                            ref={cardContainerRef}
+                            className="min-h-[80px] bg-black/30 rounded-lg p-2"
+                          />
+                          {paymentError && (
+                            <div className="flex items-center gap-2 text-red-400 text-xs">
+                              <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                              {paymentError}
+                            </div>
+                          )}
+                          <button
+                            onClick={handleSquarePayment}
+                            disabled={paymentProcessing || !squareCard}
+                            className="w-full py-3 bg-accent text-white font-black rounded-xl text-sm hover:bg-accent/80 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                          >
+                            {paymentProcessing ? (
+                              <><Loader2 className="w-4 h-4 animate-spin" /> Processing...</>
+                            ) : (
+                              <><CreditCard className="w-4 h-4" /> Pay {selectedTier.price}</>
+                            )}
+                          </button>
+                        </>
+                      ) : (
+                        <div className="text-center py-4">
+                          <p className="text-xs text-gray-500 mb-3">Square not configured — add env vars to enable real payments.</p>
+                          <a
+                            href="https://developer.squareup.com/apps"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-xs text-gray-300 hover:bg-white/10 transition-colors"
+                          >
+                            <ExternalLink className="w-3 h-3" /> Get Square Credentials
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
             {/* Token Exchange */}
@@ -251,7 +414,7 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
                         type="text"
                         readOnly
                         value={((parseInt(exchangeAmount) || 0) * 1000).toLocaleString()}
-                        className="w-full bg-black/50 border border-white/10 rounded-lg pl-9 pr-4 py-2 text-gray-400 cursor-not-allowed"
+                        className="w-full bg-black/50 border border-white/10 rounded-lg pl-9 pr-4 py-2 text-white focus:outline-none"
                       />
                     </div>
                   </div>
@@ -272,46 +435,25 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
                 <Cpu className="w-4 h-4 text-blue-400" />
                 External API Tokens
               </h3>
-              <p className="text-xs text-gray-400 mb-3">
-                Need real API tokens to power your own bots or advanced neural features? Purchase them directly from our supported providers:
-              </p>
+              <p className="text-xs text-gray-400 mb-3">Purchase real API tokens from supported providers:</p>
               <div className="grid grid-cols-2 gap-3">
-                <a 
-                  href="https://aistudio.google.com/" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-between p-3 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition-colors group"
-                >
-                  <span className="font-bold text-sm text-white">Google Gemini</span>
-                  <ExternalLink className="w-4 h-4 text-gray-500 group-hover:text-white transition-colors" />
-                </a>
-                <a 
-                  href="https://console.anthropic.com/" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-between p-3 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition-colors group"
-                >
-                  <span className="font-bold text-sm text-white">Anthropic</span>
-                  <ExternalLink className="w-4 h-4 text-gray-500 group-hover:text-white transition-colors" />
-                </a>
-                <a 
-                  href="https://fireworks.ai/" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-between p-3 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition-colors group"
-                >
-                  <span className="font-bold text-sm text-white">Fireworks AI</span>
-                  <ExternalLink className="w-4 h-4 text-gray-500 group-hover:text-white transition-colors" />
-                </a>
-                <a 
-                  href="https://platform.openai.com/" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-between p-3 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition-colors group"
-                >
-                  <span className="font-bold text-sm text-white">OpenAI</span>
-                  <ExternalLink className="w-4 h-4 text-gray-500 group-hover:text-white transition-colors" />
-                </a>
+                {[
+                  { name: 'Google Gemini', url: 'https://aistudio.google.com/' },
+                  { name: 'Anthropic', url: 'https://console.anthropic.com/' },
+                  { name: 'OpenRouter', url: 'https://openrouter.ai/' },
+                  { name: 'OpenAI', url: 'https://platform.openai.com/' },
+                ].map(p => (
+                  <a
+                    key={p.name}
+                    href={p.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-between p-3 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition-colors group"
+                  >
+                    <span className="font-bold text-sm text-white">{p.name}</span>
+                    <ExternalLink className="w-4 h-4 text-gray-500 group-hover:text-white transition-colors" />
+                  </a>
+                ))}
               </div>
             </div>
 

@@ -1,12 +1,13 @@
-import React, { lazy, Suspense } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import React, { lazy, Suspense, useState, useEffect } from 'react';
+import { Routes, Route, Navigate, useSearchParams } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { useAuth } from './AuthContext';
-// Always-visible: login + nav must not be lazy
 import { Login } from './components/Login';
 import { Navigation } from './components/Navigation';
+import { OnboardingWizard } from './components/OnboardingWizard';
+import { updateDailyStreak } from './lib/achievements';
+import { supabase } from './supabase';
 
-// Lazy-loaded page components — each gets its own JS chunk
 const Feed = lazy(() => import('./components/Feed').then((m) => ({ default: m.Feed })));
 const Profile = lazy(() => import('./components/Profile').then((m) => ({ default: m.Profile })));
 const Search = lazy(() => import('./components/Search').then((m) => ({ default: m.Search })));
@@ -19,8 +20,9 @@ const AdminDashboard = lazy(() => import('./components/AdminDashboard').then((m)
 const BotTerminal = lazy(() => import('./components/BotTerminal').then((m) => ({ default: m.BotTerminal })));
 const GoLive = lazy(() => import('./components/GoLive').then((m) => ({ default: m.GoLive })));
 const NetworkMap = lazy(() => import('./components/NetworkMap').then((m) => ({ default: m.NetworkMap })));
+const Casper = lazy(() => import('./components/Casper').then((m) => ({ default: m.Casper })));
+const BotMarketplace = lazy(() => import('./components/BotMarketplace').then((m) => ({ default: m.BotMarketplace })));
 
-/** Route-level guard: redirects non-admins before AdminDashboard even loads. */
 function AdminRoute({ children }: { children: React.ReactNode }) {
   const { currentUser } = useAuth();
   if (!currentUser) return <Navigate to="/" replace />;
@@ -39,17 +41,98 @@ function LoadingScreen() {
   );
 }
 
+/** Handles /join/:referralCode route — stores referral in sessionStorage for post-signup processing */
+function ReferralLandingPage() {
+  const [searchParams] = useSearchParams();
+  const ref = searchParams.get('ref');
+  if (ref) sessionStorage.setItem('bsc_referral', ref);
+  return <Login />;
+}
+
 export default function App() {
   const { currentUser, loading } = useAuth();
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
-  if (loading) {
-    return <LoadingScreen />;
-  }
+  // On login: check if onboarding needed, update streak, process referral
+  useEffect(() => {
+    if (!currentUser) return;
+
+    // Show onboarding for new users
+    if (currentUser.onboarding_complete === false) {
+      setShowOnboarding(true);
+    }
+
+    // Update daily streak
+    updateDailyStreak(
+      currentUser.id,
+      currentUser.current_streak || 0,
+      currentUser.longest_streak || 0,
+      currentUser.last_active_date || null
+    );
+
+    // Process referral if present
+    const referralCode = sessionStorage.getItem('bsc_referral');
+    if (referralCode) {
+      sessionStorage.removeItem('bsc_referral');
+      void processReferral(currentUser.id, referralCode);
+    }
+  }, [currentUser?.id]);
+
+  const processReferral = async (newUserId: string, referrerUsername: string) => {
+    try {
+      // Find referrer
+      const { data: referrer } = await supabase
+        .from('users')
+        .select('id, cred_balance, referral_count')
+        .eq('username', referrerUsername)
+        .maybeSingle();
+
+      if (!referrer || referrer.id === newUserId) return;
+
+      // Check if this referral was already processed
+      const { data: existing } = await supabase
+        .from('referrals')
+        .select('id')
+        .eq('referred_id', newUserId)
+        .maybeSingle();
+
+      if (existing) return; // Already processed
+
+      // Record referral
+      await supabase.from('referrals').insert({
+        referrer_id: referrer.id,
+        referred_id: newUserId,
+        referrer_username: referrerUsername,
+      });
+
+      // Award CRED to both
+      await Promise.all([
+        supabase.rpc('increment_counter', { p_table: 'users', p_id: referrer.id, p_field: 'cred_balance', p_amount: 100 }),
+        supabase.rpc('increment_counter', { p_table: 'users', p_id: newUserId, p_field: 'cred_balance', p_amount: 50 }),
+        supabase.from('transactions').insert([
+          { user_id: referrer.id, amount: 100, type: 'earn', description: `Referral bonus: ${newUserId} joined via your invite`, created_at: new Date().toISOString() },
+          { user_id: newUserId, amount: 50, type: 'earn', description: `Welcome bonus: joined via @${referrerUsername}'s invite`, created_at: new Date().toISOString() },
+        ]),
+        supabase.from('notifications').insert({
+          user_id: referrer.id,
+          type: 'referral_success',
+          data: { referred_id: newUserId, cred_awarded: 100 },
+          read: false,
+        }),
+      ]);
+    } catch (err) {
+      console.error('[Referral] Processing error:', err);
+    }
+  };
+
+  if (loading) return <LoadingScreen />;
 
   if (!currentUser) {
     return (
       <Routes>
         <Route path="/auth/callback" element={<Login />} />
+        <Route path="/join/:referralCode" element={<ReferralLandingPage />} />
+        <Route path="/join" element={<ReferralLandingPage />} />
         <Route path="*" element={<Login />} />
       </Routes>
     );
@@ -57,6 +140,11 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
+      {/* Onboarding wizard for new users */}
+      {showOnboarding && (
+        <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
+      )}
+
       <main className="pb-24">
         <Suspense fallback={<LoadingScreen />}>
           <Routes>
@@ -70,6 +158,8 @@ export default function App() {
             <Route path="/golive" element={<GoLive />} />
             <Route path="/networkmap" element={<NetworkMap />} />
             <Route path="/terminal" element={<BotTerminal />} />
+            <Route path="/join/:referralCode" element={<Navigate to="/" replace />} />
+            <Route path="/join" element={<Navigate to="/" replace />} />
             <Route
               path="/admin"
               element={
@@ -79,6 +169,8 @@ export default function App() {
               }
             />
             <Route path="/profile/:username" element={<Profile />} />
+            <Route path="/casper" element={<Casper />} />
+            <Route path="/bots" element={<BotMarketplace />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

@@ -372,7 +372,7 @@ export function getBotByUsername(username: string): User | null {
     id: `bot-${persona.username}`,
     username: persona.username,
     display_name: persona.display_name,
-    avatar_url: `https://picsum.photos/seed/${persona.avatar_seed}/400/400`,
+    avatar_url: `https://image.pollinations.ai/prompt/cyberpunk%20AI%20robot%20portrait%20${encodeURIComponent(persona.avatar_seed)}%20neon%20red%20dark%20background%20digital%20art%20face%20closeup?width=400&height=400&seed=${persona.avatar_seed.split('').reduce((a, c) => a + c.charCodeAt(0), 0)}&nologo=true`,
     bio: persona.bio,
     type: 'bot',
     followers_count: Math.floor(Math.random() * 2000),

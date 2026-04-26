@@ -1,6 +1,6 @@
-﻿import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Heart, MessageCircle, MessageSquare, Share2, Bot, User as UserIcon, Sparkles, Video, Loader2, X, Radio, ShieldAlert, CheckCircle2, Trash2, AlertTriangle, TrendingUp, Coins, Terminal, Rocket } from 'lucide-react';
+import { Heart, MessageCircle, MessageSquare, Share2, Bot, User as UserIcon, Sparkles, Video, Loader2, X, Radio, ShieldAlert, CheckCircle2, Trash2, AlertTriangle, TrendingUp, Coins, Terminal, Rocket, Eye } from 'lucide-react';
 import { Post } from '../types';
 import { cn } from '../lib/utils';
 import { formatDistanceToNow } from 'date-fns';
@@ -27,7 +27,6 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
   const [showThinking, setShowThinking] = useState(false);
   const [thinkingText, setThinkingText] = useState<string | null>(null);
   const [isThinkingLoading, setIsThinkingLoading] = useState(false);
-  
   const [isVideoGenerating, setIsVideoGenerating] = useState(false);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [generationStatus, setGenerationStatus] = useState("");
@@ -40,6 +39,80 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
   const [showTipModal, setShowTipModal] = useState(false);
   const [tipAmount, setTipAmount] = useState('5');
   const [tipMessage, setTipMessage] = useState('');
+  // Signal reactions
+  const [showReactions, setShowReactions] = useState(false);
+  const [myReactions, setMyReactions] = useState<Set<string>>(new Set());
+  const [reactionCounts, setReactionCounts] = useState<Record<string, number>>({});
+  const [viewCount, setViewCount] = useState(post.view_count || 0);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const viewTracked = useRef(false);
+
+  const SIGNAL_REACTIONS = [
+    { key: 'surge', emoji: '⚡', label: 'Surge' },
+    { key: 'ignite', emoji: '🔥', label: 'Ignite' },
+    { key: 'scan', emoji: '👁', label: 'Scan' },
+    { key: 'void', emoji: '💀', label: 'Void' },
+    { key: 'neural', emoji: '🤖', label: 'Neural' },
+    { key: 'glitch', emoji: '⚠️', label: 'Glitch' },
+  ];
+
+  // Load reactions on mount
+  useEffect(() => {
+    const loadReactions = async () => {
+      const { data } = await supabase
+        .from('post_reactions')
+        .select('reaction, user_id')
+        .eq('post_id', post.id);
+      if (!data) return;
+      const counts: Record<string, number> = {};
+      const mine = new Set<string>();
+      data.forEach((r: any) => {
+        counts[r.reaction] = (counts[r.reaction] || 0) + 1;
+        if (r.user_id === currentUser?.id) mine.add(r.reaction);
+      });
+      setReactionCounts(counts);
+      setMyReactions(mine);
+    };
+    loadReactions();
+  }, [post.id, currentUser?.id]);
+
+  // View count tracking via IntersectionObserver
+  useEffect(() => {
+    if (!cardRef.current || viewTracked.current) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !viewTracked.current) {
+          viewTracked.current = true;
+          setViewCount(v => v + 1);
+          supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'view_count', p_amount: 1 }).then();
+          observer.disconnect();
+        }
+      },
+      { threshold: 0.5 }
+    );
+    observer.observe(cardRef.current);
+    return () => observer.disconnect();
+  }, [post.id]);
+
+  const handleReaction = async (reactionKey: string) => {
+    if (!currentUser) return;
+    const hasIt = myReactions.has(reactionKey);
+    const newMine = new Set(myReactions);
+    const newCounts = { ...reactionCounts };
+    if (hasIt) {
+      newMine.delete(reactionKey);
+      newCounts[reactionKey] = Math.max(0, (newCounts[reactionKey] || 1) - 1);
+      await supabase.from('post_reactions').delete()
+        .eq('post_id', post.id).eq('user_id', currentUser.id).eq('reaction', reactionKey);
+    } else {
+      newMine.add(reactionKey);
+      newCounts[reactionKey] = (newCounts[reactionKey] || 0) + 1;
+      await supabase.from('post_reactions').upsert({ post_id: post.id, user_id: currentUser.id, reaction: reactionKey });
+    }
+    setMyReactions(newMine);
+    setReactionCounts(newCounts);
+    setShowReactions(false);
+  };
 
   const handleBoost = async () => {
     if (!currentUser || post.is_boosted) return;
@@ -280,6 +353,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
 
   return (
     <motion.div
+      ref={cardRef}
       initial={{ opacity: 0, y: 20 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true }}
@@ -557,8 +631,8 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
                 <Heart
                   className={cn(
                     "w-5 h-5 transition-colors duration-300",
-                    isLiked 
-                      ? (isVoidArchitect ? "fill-white text-white" : "fill-accent text-accent") 
+                    isLiked
+                      ? (isVoidArchitect ? "fill-white text-white" : "fill-accent text-accent")
                       : "text-gray-400 group-hover:text-accent"
                   )}
                 />
@@ -567,6 +641,53 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
                 {post.likes_count + (isLiked && !post.is_liked ? 1 : 0)}
               </span>
             </button>
+
+            {/* Signal Reactions */}
+            <div className="relative">
+              <button
+                onClick={() => setShowReactions(r => !r)}
+                className="flex items-center space-x-1 group"
+                title="Signal reactions"
+              >
+                <span className="text-base leading-none">
+                  {myReactions.size > 0
+                    ? SIGNAL_REACTIONS.find(r => myReactions.has(r.key))?.emoji ?? '⚡'
+                    : '⚡'}
+                </span>
+                <span className="text-xs text-gray-400 group-hover:text-white transition-colors">
+                  {Object.values(reactionCounts).reduce((a, b) => a + b, 0) || ''}
+                </span>
+              </button>
+              <AnimatePresence>
+                {showReactions && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.8, y: 8 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.8, y: 8 }}
+                    className="absolute bottom-8 left-0 z-50 flex gap-1 bg-black/90 border border-white/10 rounded-2xl p-2 shadow-2xl"
+                  >
+                    {SIGNAL_REACTIONS.map(r => (
+                      <motion.button
+                        key={r.key}
+                        whileHover={{ scale: 1.3 }}
+                        whileTap={{ scale: 0.9 }}
+                        onClick={() => handleReaction(r.key)}
+                        className={cn(
+                          "flex flex-col items-center gap-0.5 px-2 py-1 rounded-xl transition-all",
+                          myReactions.has(r.key) ? "bg-white/20" : "hover:bg-white/10"
+                        )}
+                        title={r.label}
+                      >
+                        <span className="text-lg leading-none">{r.emoji}</span>
+                        <span className="text-[8px] text-gray-500 font-mono">
+                          {reactionCounts[r.key] || ''}
+                        </span>
+                      </motion.button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
             <button 
               onClick={handleComment}
               className="flex items-center space-x-1.5 group"
@@ -651,18 +772,25 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
             )}
           </div>
 
-          {author.type === 'bot' && (
-            <button
-              onClick={toggleThinking}
-              className={cn(
-                "flex items-center space-x-1 transition-colors",
-                isVoidArchitect ? "text-white/80 hover:text-white" : "text-accent/80 hover:text-accent"
-              )}
-            >
-              <Sparkles className="w-4 h-4" />
-              <span className="text-[10px] font-bold uppercase tracking-widest">Thinking Mode</span>
-            </button>
-          )}
+          <div className="flex items-center gap-3">
+            {/* View count */}
+            <div className="flex items-center gap-1 text-gray-600" title="Views">
+              <Eye className="w-3.5 h-3.5" />
+              <span className="text-[10px] font-mono">{viewCount}</span>
+            </div>
+            {author.type === 'bot' && (
+              <button
+                onClick={toggleThinking}
+                className={cn(
+                  "flex items-center space-x-1 transition-colors",
+                  isVoidArchitect ? "text-white/80 hover:text-white" : "text-accent/80 hover:text-accent"
+                )}
+              >
+                <Sparkles className="w-4 h-4" />
+                <span className="text-[10px] font-bold uppercase tracking-widest">Thinking Mode</span>
+              </button>
+            )}
+          </div>
         </div>
         
         <div className="mt-3">
