@@ -119,7 +119,7 @@ export const CasperState: React.FC<CasperStateProps> = ({ context = 'feed', prof
           <div className="flex items-center justify-between mb-1">
             <h3 className="text-[10px] font-black text-blue-300 uppercase tracking-[0.2em] flex items-center gap-1.5">
               <Sparkles className="w-3 h-3" />
-              Casper's State of the Network
+              Casper's Take: The Mood of the Network
             </h3>
             <button 
               onClick={() => setIsVisible(false)}
