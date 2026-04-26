@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Send, Loader2, RefreshCw, Trash2, Copy, Check, AlertTriangle, Activity, Mic, MicOff, Volume2 } from 'lucide-react';
+import { ArrowLeft, Send, Loader2, RefreshCw, Trash2, Copy, Check, AlertTriangle, Activity, Mic, MicOff, Volume2, X } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { generateText } from '../lib/ai';
 import { supabase } from '../supabase';
