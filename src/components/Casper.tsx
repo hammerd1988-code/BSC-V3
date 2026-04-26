@@ -540,10 +540,11 @@ export const Casper: React.FC = () => {
   const speechDetectedRef = useRef(false);
   const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
 
-  // Silence detection config
-  const SILENCE_THRESHOLD = 12;      // Audio level below this = silence
-  const SILENCE_DURATION_MS = 2000;  // 2 seconds of silence after speech = done talking
-  const MIN_SPEECH_DURATION_MS = 500; // Must have at least 500ms of speech to count
+  // Silence detection config — tuned to avoid cutting off mid-sentence
+  const SILENCE_THRESHOLD = 8;         // Audio level below this = silence (lower = less sensitive)
+  const SILENCE_DURATION_MS = 3000;    // 3 seconds of silence after speech = done talking
+  const MIN_SPEECH_DURATION_MS = 1500; // Must detect 1.5s of speech before silence detection activates
+  const MIN_RECORDING_MS = 2000;       // Don't check for silence until at least 2s of recording
 
   // Derived booleans for canvas/waveform reactivity
   const isListening = voiceState === 'recording';
@@ -642,6 +643,7 @@ export const Casper: React.FC = () => {
       // Audio level monitoring + silence detection loop
       const buf = new Uint8Array(analyser.frequencyBinCount);
       let speechStartTime = 0;
+      const recordingStartTime = Date.now();
 
       const monitorLevel = () => {
         if (!voiceActiveRef.current) return;
@@ -649,28 +651,33 @@ export const Casper: React.FC = () => {
         const avg = buf.reduce((a, b) => a + b, 0) / buf.length;
         setAudioLevel(Math.min(avg / 60, 1));
 
+        const elapsed = Date.now() - recordingStartTime;
+
         if (avg > SILENCE_THRESHOLD) {
           // Sound detected
           if (!speechDetectedRef.current) {
             speechDetectedRef.current = true;
             speechStartTime = Date.now();
-            setVoiceDebug('Hearing you...');
+            setVoiceDebug('Hearing you... keep talking');
           }
           // Clear silence timer — user is still talking
           if (silenceTimerRef.current) {
             clearTimeout(silenceTimerRef.current);
             silenceTimerRef.current = null;
           }
-        } else if (speechDetectedRef.current) {
-          // Silence after speech — start countdown
+        } else if (speechDetectedRef.current && elapsed > MIN_RECORDING_MS) {
+          // Silence after speech — start countdown (only after minimum recording time)
           const speechDuration = Date.now() - speechStartTime;
           if (speechDuration > MIN_SPEECH_DURATION_MS && !silenceTimerRef.current) {
+            setVoiceDebug('Done? Processing in 3s... or tap mic to send now');
             silenceTimerRef.current = setTimeout(() => {
-              // 2 seconds of silence after speech → done talking
               console.log('[VOICE v7] Silence detected — processing');
               finishListening();
             }, SILENCE_DURATION_MS);
           }
+        } else if (!speechDetectedRef.current && elapsed < MIN_RECORDING_MS) {
+          // Still in warm-up period
+          setVoiceDebug('Listening... speak naturally');
         }
 
         levelFrameRef.current = requestAnimationFrame(monitorLevel);
@@ -1217,8 +1224,18 @@ export const Casper: React.FC = () => {
               </div>
             </div>
 
-            {/* Exit button + replay */}
-            <div className="flex items-center gap-3">
+            {/* Exit button + manual send + replay */}
+            <div className="flex items-center gap-3 flex-wrap justify-center">
+              {/* Manual send: tap to stop recording and process immediately */}
+              {voiceState === 'recording' && (
+                <button
+                  onClick={() => finishListening()}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-full border text-[9px] font-black uppercase tracking-widest transition-all hover:opacity-80"
+                  style={{ color: '#4ADE80', borderColor: 'rgba(74,222,128,0.4)', background: 'rgba(74,222,128,0.08)' }}
+                >
+                  <Send className="w-3 h-3" /> Send Now
+                </button>
+              )}
               <button
                 onClick={() => exitVoiceMode()}
                 className="flex items-center gap-2 px-5 py-2.5 rounded-full border text-[9px] font-black uppercase tracking-widest transition-all hover:opacity-80"
