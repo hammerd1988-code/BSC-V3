@@ -529,6 +529,8 @@ export const Casper: React.FC = () => {
   const [voiceDebug, setVoiceDebug] = useState('');
   const [lastSpokenText, setLastSpokenText] = useState('');
 
+  const [liveTranscript, setLiveTranscript] = useState(''); // Real-time SR transcript
+
   const voiceActiveRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -539,6 +541,8 @@ export const Casper: React.FC = () => {
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const speechDetectedRef = useRef(false);
   const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
+  const srRef = useRef<any>(null);           // Parallel SpeechRecognition instance
+  const srTranscriptRef = useRef('');        // Accumulated SR transcript (ref = no stale closure)
 
   // Silence detection config — tuned to avoid cutting off mid-sentence
   const SILENCE_THRESHOLD = 8;         // Audio level below this = silence (lower = less sensitive)
@@ -593,33 +597,63 @@ export const Casper: React.FC = () => {
     }, 100);
   }, [ttsEnabled]);
 
-  // ── TRANSCRIBE: One-shot SpeechRecognition on captured audio ──
-  const transcribeWithSR = useCallback((): Promise<string> => {
-    return new Promise((resolve) => {
-      const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (!SR) { resolve(''); return; }
-      const rec = new SR();
-      rec.continuous = false;
-      rec.interimResults = false;
-      rec.lang = 'en-US';
-      let result = '';
-      rec.onresult = (e: any) => { if (e.results[0]?.[0]) result = e.results[0][0].transcript; };
-      rec.onend = () => resolve(result);
-      rec.onerror = () => resolve(result);
-      try { rec.start(); } catch { resolve(''); }
-      setTimeout(() => { try { rec.stop(); } catch {} }, 10000);
-    });
-  }, []);
-
-  // ── START LISTENING (begin recording + silence detection) ──
+  // ── START LISTENING: MediaRecorder (levels) + SpeechRecognition (transcript) in parallel ──
   const startListeningSession = useCallback(async () => {
     if (!voiceActiveRef.current) return;
     console.log('[VOICE v7] Starting listening session');
     setVoiceState('recording');
     setVoiceDebug('Listening... speak naturally');
     setAudioLevel(0);
+    setLiveTranscript('');
+    srTranscriptRef.current = '';
     speechDetectedRef.current = false;
     audioChunksRef.current = [];
+
+    // ── Start SpeechRecognition in parallel for live transcription ──
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SR) {
+      const startSR = () => {
+        if (!voiceActiveRef.current || voiceState !== 'recording') return;
+        const rec = new SR();
+        rec.continuous = false;    // Brave handles false better; we restart it on end
+        rec.interimResults = true;
+        rec.lang = 'en-US';
+        rec.maxAlternatives = 1;
+
+        rec.onresult = (e: any) => {
+          let interim = '';
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            const t = e.results[i][0].transcript;
+            if (e.results[i].isFinal) {
+              srTranscriptRef.current += t + ' ';
+            } else {
+              interim += t;
+            }
+          }
+          const display = srTranscriptRef.current + interim;
+          setLiveTranscript(display);
+          if (display) setVoiceDebug('Hearing you...');
+        };
+
+        rec.onend = () => {
+          // Auto-restart SR while we're still recording (handles no-speech timeouts)
+          if (voiceActiveRef.current && srRef.current === rec) {
+            try { rec.start(); } catch { /* ignore restart errors */ }
+          }
+        };
+
+        rec.onerror = (e: any) => {
+          if (e.error === 'not-allowed') {
+            console.warn('[VOICE] SR permission denied');
+          }
+          // All other errors: onend will restart
+        };
+
+        srRef.current = rec;
+        try { rec.start(); } catch (e) { console.warn('[VOICE] SR start failed:', e); }
+      };
+      startSR();
+    }
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -691,13 +725,19 @@ export const Casper: React.FC = () => {
     }
   }, []);
 
-  // ── FINISH LISTENING (stop recording, transcribe, process) ──
+  // ── FINISH LISTENING (stop recording + SR, grab transcript, process) ──
   const finishListening = useCallback(async () => {
-    console.log('[VOICE v7] Finishing listening');
+    console.log('[VOICE v7] Finishing listening. transcript so far:', srTranscriptRef.current.trim());
     // Stop monitoring
     cancelAnimationFrame(levelFrameRef.current);
     if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
     setAudioLevel(0);
+
+    // Stop SpeechRecognition
+    if (srRef.current) {
+      try { srRef.current.abort(); } catch {}
+      srRef.current = null;
+    }
 
     // Stop recorder
     if (mediaRecorderRef.current?.state === 'recording') {
@@ -715,14 +755,14 @@ export const Casper: React.FC = () => {
 
     if (!voiceActiveRef.current) { setVoiceState('idle'); return; }
 
-    // Transcribe
-    setVoiceState('transcribing');
-    setVoiceDebug('Transcribing...');
-    const transcript = await transcribeWithSR();
+    // Grab the transcript accumulated by the parallel SR instance
+    const transcript = srTranscriptRef.current.trim();
+    setLiveTranscript('');
+    srTranscriptRef.current = '';
 
-    if (!transcript.trim()) {
-      setVoiceDebug("Couldn't catch that. Speak again...");
-      if (voiceActiveRef.current) setTimeout(() => startListeningSession(), 1000);
+    if (!transcript) {
+      setVoiceDebug("Couldn't catch that. Try speaking again...");
+      if (voiceActiveRef.current) setTimeout(() => startListeningSession(), 1500);
       return;
     }
 
@@ -758,7 +798,7 @@ export const Casper: React.FC = () => {
         if (voiceActiveRef.current) setTimeout(() => startListeningSession(), 400);
       });
     }
-  }, [messages, currentUser?.ai_settings, speakOnce, transcribeWithSR, startListeningSession]);
+  }, [messages, currentUser?.ai_settings, speakOnce, startListeningSession]);
 
   // ── ENTER VOICE MODE ──
   const enterVoiceMode = useCallback(async () => {
@@ -797,6 +837,7 @@ export const Casper: React.FC = () => {
     voiceActiveRef.current = false;
     cancelAnimationFrame(levelFrameRef.current);
     if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+    if (srRef.current) { try { srRef.current.abort(); } catch {} srRef.current = null; }
     if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
     if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
     audioCtxRef.current?.close(); audioCtxRef.current = null;
@@ -805,6 +846,8 @@ export const Casper: React.FC = () => {
     setVoiceState('idle');
     setVoiceDebug('');
     setAudioLevel(0);
+    setLiveTranscript('');
+    srTranscriptRef.current = '';
   }, []);
 
   // Voice mode greeting helper
@@ -1191,6 +1234,18 @@ export const Casper: React.FC = () => {
                   />
                 ))}
               </div>
+            )}
+
+            {/* Live transcript — appears as user speaks */}
+            {liveTranscript && voiceState === 'recording' && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="px-5 py-3 rounded-2xl border max-w-sm text-center w-full"
+                style={{ background: 'rgba(74,222,128,0.05)', borderColor: 'rgba(74,222,128,0.2)' }}
+              >
+                <p className="text-sm text-green-300/80 italic leading-relaxed">"{liveTranscript}"</p>
+              </motion.div>
             )}
 
             {/* Central visual orb — shows state */}
