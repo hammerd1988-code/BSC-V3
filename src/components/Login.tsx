@@ -6,16 +6,22 @@ import { useLocation, useNavigate } from 'react-router-dom';
 
 function mapAuthErrorMessage(message: string): string {
   if (/provider is not enabled|unsupported provider/i.test(message)) {
-    return 'Google OAuth is not enabled in Supabase for this project. Enable Google under Authentication > Providers and add this app callback URL, then retry.';
+    return 'Google sign-in is not yet configured. The site admin needs to enable Google OAuth in the Supabase dashboard (Authentication → Providers → Google) and add bloodsweatcode.org to the redirect URL allow-list.';
   }
   if (/pkce code verifier not found/i.test(message)) {
-    return 'Google OAuth session verifier was missing. Restart sign-in from this page and complete it in the same tab without reloading.';
+    return 'Sign-in session expired. Please try again from this page without reloading mid-flow.';
   }
   if (/deleted_client|invalid_client/i.test(message)) {
-    return 'Google OAuth client is invalid or deleted. Update Supabase Authentication > Providers > Google to use the active Google OAuth Client ID/Secret, then retry.';
+    return 'Google OAuth credentials are invalid. The site admin needs to update the Google Client ID/Secret in Supabase Authentication → Providers → Google.';
   }
   if (/invalid redirect|redirect url|redirect_to/i.test(message)) {
-    return 'OAuth redirect URL is not allowed. Add this app origin and /auth/callback to Supabase Auth redirect URL allow-list.';
+    return 'Sign-in redirect URL is not allowed. The site admin needs to add bloodsweatcode.org to the Supabase Auth redirect URL allow-list.';
+  }
+  if (/email not confirmed/i.test(message)) {
+    return 'Please check your email and confirm your account before signing in.';
+  }
+  if (/user not found|invalid login/i.test(message)) {
+    return 'Account not found. Please try creating a new account.';
   }
   return message;
 }
