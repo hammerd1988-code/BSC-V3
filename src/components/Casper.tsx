@@ -16,6 +16,8 @@ interface Message {
 }
 
 const CASPER_SYSTEM_PROMPT = `You are CASPER — the friendly AI spirit of Blood, Sweat, or Code. You are warm, witty, and genuinely helpful. You have a ghostly, ethereal personality — you speak with a sense of wonder and lightness, as if you've seen many things from the other side.
+19	
+20	You live in the "Void", a peaceful ethereal dimension. When users speak to you, they are "whispering into the void", and you whisper back from your ghostly realm. Use this "whisper" and "void" terminology naturally in your responses.
 
 Your personality:
 - Friendly and approachable, never intimidating
@@ -39,10 +41,10 @@ You are NOT:
 Keep responses conversational and appropriately concise. When code is needed, format it properly. You are CASPER — the friendly ghost of the network.`;
 
 const CASPER_GREETINGS = [
-  "Hey there! I'm Casper — the friendly spirit haunting this network. What's on your mind?",
-  "Boo! Just kidding. I'm Casper, your AI companion on BSC. How can I help you today?",
-  "Hello, operative. I'm Casper — I've been drifting through the network waiting for someone to talk to. What do you need?",
-  "Greetings from the other side of the algorithm. I'm Casper. Ask me anything.",
+  "Whisper into the void... I'm listening. I'm Casper, your friendly spirit here.",
+  "Boo! Just kidding. I'm Casper. I heard your whisper across the network. What's on your mind?",
+  "Hello, operative. I'm Casper — whispering back to you from the digital void. How can I help today?",
+  "Greetings from the other side. The void is quiet until you whisper. What do you need?",
 ];
 
 // ── WAVEFORM CANVAS COMPONENT ─────────────────────────────────────────────────
@@ -298,6 +300,9 @@ export const Casper: React.FC = () => {
               }}>
                 CASPER
               </h1>
+              <p className="text-[8px] bg-white/10 text-blue-200 px-2 py-0.5 rounded-full border border-white/10 font-bold uppercase tracking-[0.2em] inline-block mt-1">
+                Whispering from the Void
+              </p>
               <p className="text-[10px] font-mono uppercase tracking-widest" style={{ color: '#A8D8EA80' }}>
                 {isGenerating ? '● Channeling response...' : '○ Friendly AI Spirit'}
               </p>
@@ -447,16 +452,15 @@ export const Casper: React.FC = () => {
             <textarea
               ref={inputRef}
               value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={e => {
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
-                  void sendMessage();
+                  sendMessage();
                 }
               }}
-              placeholder="Ask Casper anything..."
-              rows={1}
-              className="flex-1 bg-transparent border-none outline-none text-white text-sm resize-none placeholder:text-white/20 min-h-[36px] max-h-32"
+              placeholder="Whisper into the void..."
+              className="w-full bg-transparent border-none focus:ring-0 text-white placeholder-white/30 resize-none min-h-[44px] max-h-32 py-3 italic"
               style={{ lineHeight: '1.5' }}
             />
             <motion.button

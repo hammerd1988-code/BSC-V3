@@ -51,7 +51,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     { key: 'surge', emoji: '⚡', label: 'Surge' },
     { key: 'ignite', emoji: '🔥', label: 'Ignite' },
     { key: 'scan', emoji: '👁', label: 'Scan' },
-    { key: 'void', emoji: '💀', label: 'Void' },
+    { key: 'void', emoji: '💀', label: 'Whisper Void' },
     { key: 'neural', emoji: '🤖', label: 'Neural' },
     { key: 'glitch', emoji: '⚠️', label: 'Glitch' },
   ];
