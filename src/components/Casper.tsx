@@ -522,6 +522,7 @@ export const Casper: React.FC = () => {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
   const [transcript, setTranscript] = useState('');
+  const [ttsEnabled, setTtsEnabled] = useState(true); // Voice output ON by default
   const [micLevel, setMicLevel] = useState(0); // 0-1 audio level for visual feedback
   const [lastSpokenText, setLastSpokenText] = useState(''); // for manual replay
   const recognitionRef = useRef<any>(null);
@@ -857,14 +858,14 @@ export const Casper: React.FC = () => {
       const casperText = response || "I seem to have drifted off for a moment. Could you repeat that?";
       setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'casper', content: casperText, timestamp: new Date() }]);
       setIsGenerating(false);
-      speakResponse(casperText);
+      if (ttsEnabled) speakResponse(casperText);
     } catch {
       const fallback = "My connection to the void seems unstable right now. Please try again.";
       setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'casper', content: fallback, timestamp: new Date() }]);
       setIsGenerating(false);
-      speakResponse(fallback);
+      if (ttsEnabled) speakResponse(fallback);
     }
-  }, [isGenerating, messages, currentUser?.ai_settings, speakResponse]);
+  }, [isGenerating, messages, currentUser?.ai_settings, speakResponse, ttsEnabled]);
 
   // Keep the ref in sync so startListening's onend closure always has the latest version
   useEffect(() => {
@@ -925,23 +926,28 @@ export const Casper: React.FC = () => {
         systemPrompt: CASPER_SYSTEM_PROMPT,
         temperature: 0.8,
       });
+      const casperText = response || "I seem to have drifted off for a moment. Could you repeat that?";
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),
         role: 'casper',
-        content: response || "I seem to have drifted off for a moment. Could you repeat that?",
+        content: casperText,
         timestamp: new Date(),
       }]);
-    } catch {
-      setMessages(prev => [...prev, {
-        id: (Date.now() + 1).toString(),
-        role: 'casper',
-        content: "My connection to the void seems unstable right now. Please try again in a moment.",
-        timestamp: new Date(),
-      }]);
-    } finally {
       setIsGenerating(false);
+      // Speak the response aloud if TTS is enabled (works in both text and voice mode)
+      if (ttsEnabled) speakResponse(casperText);
+    } catch {
+      const fallback = "My connection to the void seems unstable right now. Please try again in a moment.";
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(),
+        role: 'casper',
+        content: fallback,
+        timestamp: new Date(),
+      }]);
+      setIsGenerating(false);
+      if (ttsEnabled) speakResponse(fallback);
     }
-  }, [input, isGenerating, messages, currentUser?.ai_settings]);
+  }, [input, isGenerating, messages, currentUser?.ai_settings, ttsEnabled, speakResponse]);
 
   const copyMessage = (id: string, content: string) => {
     navigator.clipboard.writeText(content).then(() => {
@@ -1051,6 +1057,28 @@ export const Casper: React.FC = () => {
                 }}
               />
             </div>
+
+            {/* TTS mute/unmute toggle — always visible */}
+            <button
+              onClick={() => {
+                const muting = ttsEnabled;
+                setTtsEnabled(!ttsEnabled);
+                if (muting) {
+                  window.speechSynthesis.cancel();
+                  setIsSpeaking(false);
+                  setVoiceStatus('idle');
+                }
+              }}
+              className={cn(
+                "p-2 rounded-full transition-all",
+                ttsEnabled
+                  ? "text-white/60 hover:bg-white/5 hover:text-white/80"
+                  : "text-white/20 hover:bg-white/5 hover:text-white/40"
+              )}
+              title={ttsEnabled ? 'Mute Casper voice' : 'Unmute Casper voice'}
+            >
+              {ttsEnabled ? <Volume2 className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+            </button>
 
             {/* Voice mode toggle */}
             <button
