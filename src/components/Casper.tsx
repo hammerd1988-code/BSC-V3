@@ -526,22 +526,41 @@ export const Casper: React.FC = () => {
   const synthRef = useRef<SpeechSynthesis | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
 
-  // Initialize speech synthesis
+  // Pre-loaded voices list — populated once voiceschanged fires
+  const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
+
+  // Initialize speech synthesis and load voices
   useEffect(() => {
-    synthRef.current = window.speechSynthesis;
+    const synth = window.speechSynthesis;
+    synthRef.current = synth;
+
+    const loadVoices = () => {
+      const v = synth.getVoices();
+      if (v.length > 0) voicesRef.current = v;
+    };
+
+    // Load immediately (may already be available)
+    loadVoices();
+
+    // Also listen for the async load event (required on Chrome/Brave)
+    synth.addEventListener('voiceschanged', loadVoices);
+
     return () => {
-      synthRef.current?.cancel();
+      synth.removeEventListener('voiceschanged', loadVoices);
+      synth.cancel();
       recognitionRef.current?.abort();
       audioCtxRef.current?.close();
     };
   }, []);
 
-  // Select the best ghost-like voice
+  // Select the best ghost-like voice from the pre-loaded list
   const getGhostVoice = useCallback((): SpeechSynthesisVoice | null => {
-    const voices = synthRef.current?.getVoices() || [];
-    // Prefer deep/interesting voices
+    const voices = voicesRef.current;
+    if (!voices.length) return null;
+    // Prefer deep/interesting voices in order
     const preferred = [
       'Google UK English Male',
+      'Microsoft David Desktop',
       'Microsoft David',
       'Daniel',
       'Alex',
@@ -552,41 +571,99 @@ export const Casper: React.FC = () => {
       const v = voices.find(v => v.name.includes(name));
       if (v) return v;
     }
-    // Fallback: pick any English male voice, or first English voice
+    // Fallback: any English male, then any English, then first available
     const englishMale = voices.find(v => v.lang.startsWith('en') && v.name.toLowerCase().includes('male'));
     if (englishMale) return englishMale;
     const english = voices.find(v => v.lang.startsWith('en'));
     return english || voices[0] || null;
   }, []);
 
-  // Speak Casper's response with ghost voice
+  // Robust speak function — handles Brave's paused synth and async voice loading
   const speakResponse = useCallback((text: string) => {
-    if (!synthRef.current) return;
-    synthRef.current.cancel();
+    const synth = synthRef.current || window.speechSynthesis;
+    if (!synth) return;
 
-    const utterance = new SpeechSynthesisUtterance(text);
-    const voice = getGhostVoice();
-    if (voice) utterance.voice = voice;
+    // Cancel any ongoing speech
+    synth.cancel();
 
-    // Ghost voice tuning: deep, slightly slow, ethereal
-    utterance.pitch = 0.7;   // Lower pitch for depth
-    utterance.rate = 0.85;   // Slightly slower for gravitas
-    utterance.volume = 0.95;
+    const doSpeak = () => {
+      const utterance = new SpeechSynthesisUtterance(text);
 
-    utterance.onstart = () => {
-      setIsSpeaking(true);
-      setVoiceStatus('speaking');
+      // Apply ghost voice — wait for voices if not loaded yet
+      const voice = getGhostVoice();
+      if (voice) {
+        utterance.voice = voice;
+      }
+      // Ghost voice tuning: deep, slightly slow, ethereal
+      utterance.pitch = 0.75;
+      utterance.rate = 0.88;
+      utterance.volume = 1.0;
+
+      utterance.onstart = () => {
+        setIsSpeaking(true);
+        setVoiceStatus('speaking');
+      };
+      utterance.onend = () => {
+        setIsSpeaking(false);
+        setVoiceStatus('idle');
+      };
+      utterance.onerror = (e) => {
+        console.warn('[Casper TTS] Error:', e.error, e);
+        setIsSpeaking(false);
+        setVoiceStatus('idle');
+        // Retry once on 'interrupted' (Brave sometimes fires this spuriously)
+        if (e.error === 'interrupted') {
+          setTimeout(() => {
+            const retryUtterance = new SpeechSynthesisUtterance(text);
+            const retryVoice = getGhostVoice();
+            if (retryVoice) retryUtterance.voice = retryVoice;
+            retryUtterance.pitch = 0.75;
+            retryUtterance.rate = 0.88;
+            retryUtterance.volume = 1.0;
+            retryUtterance.onstart = () => { setIsSpeaking(true); setVoiceStatus('speaking'); };
+            retryUtterance.onend = () => { setIsSpeaking(false); setVoiceStatus('idle'); };
+            retryUtterance.onerror = () => { setIsSpeaking(false); setVoiceStatus('idle'); };
+            synth.speak(retryUtterance);
+          }, 300);
+        }
+      };
+
+      // Brave/Chrome sometimes pauses the synth — resume it before speaking
+      if (synth.paused) synth.resume();
+      synth.speak(utterance);
+
+      // Brave workaround: if onstart doesn't fire within 500ms, the synth may be stuck
+      // Resume it and try again
+      const startTimeout = setTimeout(() => {
+        if (synth.paused) {
+          synth.resume();
+        }
+      }, 500);
+
+      // Clear the timeout when speech ends
+      const origOnEnd = utterance.onend;
+      utterance.onend = (e) => {
+        clearTimeout(startTimeout);
+        if (typeof origOnEnd === 'function') origOnEnd.call(utterance, e);
+      };
     };
-    utterance.onend = () => {
-      setIsSpeaking(false);
-      setVoiceStatus('idle');
-    };
-    utterance.onerror = () => {
-      setIsSpeaking(false);
-      setVoiceStatus('idle');
-    };
 
-    synthRef.current.speak(utterance);
+    // If voices aren't loaded yet, wait for them (max 2s)
+    if (voicesRef.current.length === 0) {
+      const waitForVoices = () => {
+        voicesRef.current = synth.getVoices();
+        doSpeak();
+        synth.removeEventListener('voiceschanged', waitForVoices);
+      };
+      synth.addEventListener('voiceschanged', waitForVoices);
+      // Fallback: speak anyway after 2s even if voices never load
+      setTimeout(() => {
+        synth.removeEventListener('voiceschanged', waitForVoices);
+        doSpeak();
+      }, 2000);
+    } else {
+      doSpeak();
+    }
   }, [getGhostVoice]);
 
   // Start listening via SpeechRecognition
