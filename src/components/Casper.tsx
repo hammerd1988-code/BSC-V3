@@ -517,21 +517,33 @@ export const Casper: React.FC = () => {
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // ======================================================================
-  // VOICE SYSTEM v6 — Push-to-Talk with MediaRecorder
-  // Hold button to record, release to transcribe + send to AI
+  // VOICE SYSTEM v7 — Tap-Once Conversational Flow
+  // MediaRecorder + AudioContext silence detection
+  // Tap to start conversation, tap to end. Natural turn-taking.
   // ======================================================================
 
   const [voiceMode, setVoiceMode] = useState(false);
   const [voiceState, setVoiceState] = useState<'idle' | 'recording' | 'transcribing' | 'thinking' | 'speaking'>('idle');
-  const [recordingTime, setRecordingTime] = useState(0);
+  const [audioLevel, setAudioLevel] = useState(0);
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [voiceDebug, setVoiceDebug] = useState('');
   const [lastSpokenText, setLastSpokenText] = useState('');
 
+  const voiceActiveRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const levelFrameRef = useRef<number>(0);
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const speechDetectedRef = useRef(false);
   const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
+
+  // Silence detection config
+  const SILENCE_THRESHOLD = 12;      // Audio level below this = silence
+  const SILENCE_DURATION_MS = 2000;  // 2 seconds of silence after speech = done talking
+  const MIN_SPEECH_DURATION_MS = 500; // Must have at least 500ms of speech to count
 
   // Derived booleans for canvas/waveform reactivity
   const isListening = voiceState === 'recording';
@@ -549,6 +561,7 @@ export const Casper: React.FC = () => {
   const pickVoice = (): SpeechSynthesisVoice | null => {
     const v = voicesRef.current.length ? voicesRef.current : window.speechSynthesis.getVoices();
     if (!v.length) return null;
+    // Prefer voices with better prosody/intonation
     for (const name of ['Google UK English Male', 'Microsoft David', 'Daniel', 'Alex', 'Google US English']) {
       const found = v.find(x => x.name.includes(name));
       if (found) return found;
@@ -556,7 +569,7 @@ export const Casper: React.FC = () => {
     return v.find(x => x.lang.startsWith('en')) || v[0] || null;
   };
 
-  // ── TTS: Speak text aloud (standalone, no conversation loop) ──
+  // ── TTS: Speak text aloud ──
   const speakOnce = useCallback((text: string, onDone?: () => void) => {
     if (!ttsEnabled) { onDone?.(); return; }
     const synth = window.speechSynthesis;
@@ -566,8 +579,9 @@ export const Casper: React.FC = () => {
       const utter = new SpeechSynthesisUtterance(text);
       const voice = pickVoice();
       if (voice) utter.voice = voice;
-      utter.pitch = 0.5;
-      utter.rate = 0.80;
+      // Tuned for more human sound: still deep but with life
+      utter.pitch = 0.7;    // Deep but not monotone
+      utter.rate = 0.9;     // Natural pace
       utter.volume = 1.0;
       utter.onstart = () => setVoiceState('speaking');
       utter.onend = () => { setVoiceState('idle'); onDone?.(); };
@@ -578,96 +592,130 @@ export const Casper: React.FC = () => {
     }, 100);
   }, [ttsEnabled]);
 
-  // ── TRANSCRIBE: Use one-shot SpeechRecognition on the audio ──
-  // This is a single recognition pass — no continuous mode, no restart loops
-  const transcribeAudio = useCallback((): Promise<string> => {
+  // ── TRANSCRIBE: One-shot SpeechRecognition on captured audio ──
+  const transcribeWithSR = useCallback((): Promise<string> => {
     return new Promise((resolve) => {
       const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (!SR) { resolve(''); return; }
-
       const rec = new SR();
       rec.continuous = false;
       rec.interimResults = false;
       rec.lang = 'en-US';
-      rec.maxAlternatives = 1;
-
       let result = '';
-      rec.onresult = (e: any) => {
-        if (e.results[0]?.[0]) result = e.results[0][0].transcript;
-      };
+      rec.onresult = (e: any) => { if (e.results[0]?.[0]) result = e.results[0][0].transcript; };
       rec.onend = () => resolve(result);
       rec.onerror = () => resolve(result);
-
       try { rec.start(); } catch { resolve(''); }
-
-      // Safety timeout: if recognition doesn't end in 8 seconds, force resolve
-      setTimeout(() => { try { rec.stop(); } catch {} }, 8000);
+      setTimeout(() => { try { rec.stop(); } catch {} }, 10000);
     });
   }, []);
 
-  // ── START RECORDING ──
-  const startRecording = useCallback(async () => {
-    setVoiceDebug('Starting recording...');
+  // ── START LISTENING (begin recording + silence detection) ──
+  const startListeningSession = useCallback(async () => {
+    if (!voiceActiveRef.current) return;
+    console.log('[VOICE v7] Starting listening session');
+    setVoiceState('recording');
+    setVoiceDebug('Listening... speak naturally');
+    setAudioLevel(0);
+    speechDetectedRef.current = false;
+    audioChunksRef.current = [];
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      // Set up AudioContext for level monitoring
+      const ctx = new AudioContext();
+      audioCtxRef.current = ctx;
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      analyserRef.current = analyser;
+
+      // Set up MediaRecorder
       const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-      audioChunksRef.current = [];
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-
-      recorder.start();
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+      recorder.start(250); // Collect data every 250ms
       mediaRecorderRef.current = recorder;
-      setVoiceState('recording');
-      setRecordingTime(0);
-      setVoiceDebug('Recording... hold to speak, release when done');
 
-      // Timer
-      recordingTimerRef.current = setInterval(() => {
-        setRecordingTime(prev => prev + 1);
-      }, 1000);
+      // Audio level monitoring + silence detection loop
+      const buf = new Uint8Array(analyser.frequencyBinCount);
+      let speechStartTime = 0;
+
+      const monitorLevel = () => {
+        if (!voiceActiveRef.current) return;
+        analyser.getByteFrequencyData(buf);
+        const avg = buf.reduce((a, b) => a + b, 0) / buf.length;
+        setAudioLevel(Math.min(avg / 60, 1));
+
+        if (avg > SILENCE_THRESHOLD) {
+          // Sound detected
+          if (!speechDetectedRef.current) {
+            speechDetectedRef.current = true;
+            speechStartTime = Date.now();
+            setVoiceDebug('Hearing you...');
+          }
+          // Clear silence timer — user is still talking
+          if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = null;
+          }
+        } else if (speechDetectedRef.current) {
+          // Silence after speech — start countdown
+          const speechDuration = Date.now() - speechStartTime;
+          if (speechDuration > MIN_SPEECH_DURATION_MS && !silenceTimerRef.current) {
+            silenceTimerRef.current = setTimeout(() => {
+              // 2 seconds of silence after speech → done talking
+              console.log('[VOICE v7] Silence detected — processing');
+              finishListening();
+            }, SILENCE_DURATION_MS);
+          }
+        }
+
+        levelFrameRef.current = requestAnimationFrame(monitorLevel);
+      };
+      levelFrameRef.current = requestAnimationFrame(monitorLevel);
 
     } catch (e: any) {
+      console.error('[VOICE v7] Mic error:', e);
       setVoiceDebug(`Mic error: ${e.message}`);
-      setMessages(prev => [...prev, {
-        id: Date.now().toString(), role: 'casper',
-        content: "Microphone access denied. Allow mic in your browser settings.",
-        timestamp: new Date(),
-      }]);
+      setVoiceState('idle');
     }
   }, []);
 
-  // ── STOP RECORDING + PROCESS ──
-  const stopRecording = useCallback(async () => {
-    if (recordingTimerRef.current) {
-      clearInterval(recordingTimerRef.current);
-      recordingTimerRef.current = null;
-    }
+  // ── FINISH LISTENING (stop recording, transcribe, process) ──
+  const finishListening = useCallback(async () => {
+    console.log('[VOICE v7] Finishing listening');
+    // Stop monitoring
+    cancelAnimationFrame(levelFrameRef.current);
+    if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+    setAudioLevel(0);
 
-    const recorder = mediaRecorderRef.current;
-    if (!recorder || recorder.state !== 'recording') {
-      setVoiceState('idle');
-      return;
+    // Stop recorder
+    if (mediaRecorderRef.current?.state === 'recording') {
+      mediaRecorderRef.current.stop();
     }
-
-    // Stop the recorder and wait for final data
-    recorder.stop();
-    recorder.stream.getTracks().forEach(t => t.stop());
     mediaRecorderRef.current = null;
 
-    // Transcription step
-    setVoiceState('transcribing');
-    setVoiceDebug('Transcribing your message...');
+    // Stop mic stream
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    audioCtxRef.current?.close();
+    audioCtxRef.current = null;
 
-    // Use one-shot SpeechRecognition for transcription
-    // We need to re-record briefly for SpeechRecognition since it can't process blobs
-    // Instead, we'll use a simpler approach: prompt the user to also use text if STT fails
-    const transcript = await transcribeAudio();
+    if (!voiceActiveRef.current) { setVoiceState('idle'); return; }
+
+    // Transcribe
+    setVoiceState('transcribing');
+    setVoiceDebug('Transcribing...');
+    const transcript = await transcribeWithSR();
 
     if (!transcript.trim()) {
-      setVoiceDebug('Could not transcribe. Try holding the button longer or use text input.');
-      setVoiceState('idle');
+      setVoiceDebug("Couldn't catch that. Speak again...");
+      if (voiceActiveRef.current) setTimeout(() => startListeningSession(), 1000);
       return;
     }
 
@@ -679,65 +727,81 @@ export const Casper: React.FC = () => {
     setMessages(prev => [...prev, userMsg]);
     setIsGenerating(true);
 
-    const allMessages = [...messages, userMsg];
-    const history = allMessages
-      .filter(m => m.id !== 'greeting')
-      .slice(-10)
-      .map(m => `${m.role === 'user' ? 'User' : 'Casper'}: ${m.content}`)
-      .join('\n');
+    const allMsgs = [...messages, userMsg];
+    const history = allMsgs.filter(m => m.id !== 'greeting').slice(-10).map(m => `${m.role === 'user' ? 'User' : 'Casper'}: ${m.content}`).join('\n');
     const prompt = history ? `${history}\nUser: ${transcript}\nCasper:` : transcript;
 
     try {
-      const response = await generateText(prompt, currentUser?.ai_settings, {
-        systemPrompt: CASPER_SYSTEM_PROMPT,
-        temperature: 0.8,
-      });
-      const casperText = response || "The void swallowed my words. Could you say that again?";
+      const response = await generateText(prompt, currentUser?.ai_settings, { systemPrompt: CASPER_SYSTEM_PROMPT, temperature: 0.8 });
+      const casperText = response || "The void swallowed my words. Say that again?";
       setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'casper', content: casperText, timestamp: new Date() }]);
       setIsGenerating(false);
-      speakOnce(casperText, () => setVoiceDebug('Hold the mic button to speak again'));
+      speakOnce(casperText, () => {
+        // After speaking, restart listening if conversation is still active
+        if (voiceActiveRef.current) {
+          setVoiceDebug('Listening...');
+          setTimeout(() => startListeningSession(), 400);
+        }
+      });
     } catch {
       const fallback = "My connection to the void is unstable. Try again.";
       setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'casper', content: fallback, timestamp: new Date() }]);
       setIsGenerating(false);
-      speakOnce(fallback, () => setVoiceDebug('Hold the mic button to speak again'));
+      speakOnce(fallback, () => {
+        if (voiceActiveRef.current) setTimeout(() => startListeningSession(), 400);
+      });
     }
-  }, [messages, currentUser?.ai_settings, speakOnce, transcribeAudio]);
+  }, [messages, currentUser?.ai_settings, speakOnce, transcribeWithSR, startListeningSession]);
 
-  // Voice mode greeting
-  const getVoiceGreeting = (): string => {
+  // ── ENTER VOICE MODE ──
+  const enterVoiceMode = useCallback(async () => {
+    // Request mic permission first
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(t => t.stop());
+    } catch (e: any) {
+      setVoiceDebug(`Mic denied: ${e.message}`);
+      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'casper', content: "Microphone access denied. Allow mic in your browser settings.", timestamp: new Date() }]);
+      return;
+    }
+
+    voiceActiveRef.current = true;
+    setVoiceMode(true);
+
+    // Greeting
     const h = new Date().getHours();
     const tod = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
     const greetings = [
-      `Good ${tod}. You woke me up. Hold the mic button and speak — I'm listening.`,
-      `Signal detected. Hold the button to talk. I'll be here.`,
-      `The void is listening. Hold the mic and speak.`,
+      `Good ${tod}. I'm listening. Just speak naturally.`,
+      `Signal detected. Talk to me — I'll know when you're done.`,
+      `The void is open. Speak whenever you're ready.`,
     ];
-    return greetings[Math.floor(Math.random() * greetings.length)];
-  };
-
-  // Enter voice mode
-  const enterVoiceMode = useCallback(() => {
-    setVoiceMode(true);
-    const greeting = getVoiceGreeting();
+    const greeting = greetings[Math.floor(Math.random() * greetings.length)];
     setMessages(prev => [...prev, { id: Date.now().toString(), role: 'casper', content: greeting, timestamp: new Date() }]);
-    speakOnce(greeting);
-    setVoiceDebug('Hold the mic button to speak');
-  }, [speakOnce]);
 
-  // Exit voice mode
+    speakOnce(greeting, () => {
+      // After greeting, start listening
+      if (voiceActiveRef.current) startListeningSession();
+    });
+  }, [speakOnce, startListeningSession]);
+
+  // ── EXIT VOICE MODE ──
   const exitVoiceMode = useCallback(() => {
-    if (mediaRecorderRef.current?.state === 'recording') {
-      mediaRecorderRef.current.stop();
-      mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
-    }
-    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    voiceActiveRef.current = false;
+    cancelAnimationFrame(levelFrameRef.current);
+    if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+    if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
+    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
+    audioCtxRef.current?.close(); audioCtxRef.current = null;
     window.speechSynthesis.cancel();
     setVoiceMode(false);
     setVoiceState('idle');
     setVoiceDebug('');
-    setRecordingTime(0);
+    setAudioLevel(0);
   }, []);
+
+  // Voice mode greeting helper
+  const getVoiceGreeting = (): string => 'The void is listening.';
 
     const tier = getTier(instability);
 
@@ -1082,7 +1146,7 @@ export const Casper: React.FC = () => {
       {/* ── INPUT ── */}
       <div className="relative z-10 p-4 max-w-2xl mx-auto w-full">
         {voiceMode ? (
-          /* ── PUSH-TO-TALK VOICE MODE ── */
+          /* ── CONVERSATIONAL VOICE MODE ── */
           <div className="flex flex-col items-center gap-5 pb-2">
 
             {/* Status badge */}
@@ -1094,94 +1158,73 @@ export const Casper: React.FC = () => {
                 exit={{ opacity: 0, y: -6 }}
                 className="text-[10px] font-black uppercase tracking-[0.3em] px-5 py-2 rounded-full border"
                 style={{
-                  color: voiceState === 'recording' ? '#EF4444' : voiceState === 'transcribing' ? '#FBBF24' : voiceState === 'thinking' ? tier.color : voiceState === 'speaking' ? '#A78BFA' : `${tier.color}80`,
-                  borderColor: voiceState === 'recording' ? 'rgba(239,68,68,0.4)' : voiceState === 'transcribing' ? 'rgba(251,191,36,0.3)' : voiceState === 'thinking' ? `${tier.color}40` : voiceState === 'speaking' ? 'rgba(167,139,250,0.3)' : `${tier.color}20`,
-                  background: voiceState === 'recording' ? 'rgba(239,68,68,0.1)' : voiceState === 'transcribing' ? 'rgba(251,191,36,0.08)' : voiceState === 'thinking' ? tier.bg : voiceState === 'speaking' ? 'rgba(167,139,250,0.08)' : 'rgba(255,255,255,0.02)',
+                  color: voiceState === 'recording' ? '#4ADE80' : voiceState === 'transcribing' ? '#FBBF24' : voiceState === 'thinking' ? tier.color : voiceState === 'speaking' ? '#A78BFA' : `${tier.color}80`,
+                  borderColor: voiceState === 'recording' ? 'rgba(74,222,128,0.4)' : voiceState === 'transcribing' ? 'rgba(251,191,36,0.3)' : voiceState === 'thinking' ? `${tier.color}40` : voiceState === 'speaking' ? 'rgba(167,139,250,0.3)' : `${tier.color}20`,
+                  background: voiceState === 'recording' ? 'rgba(74,222,128,0.1)' : voiceState === 'transcribing' ? 'rgba(251,191,36,0.08)' : voiceState === 'thinking' ? tier.bg : voiceState === 'speaking' ? 'rgba(167,139,250,0.08)' : 'rgba(255,255,255,0.02)',
                 }}
               >
-                {voiceState === 'recording' ? `● Recording — ${recordingTime}s`
+                {voiceState === 'recording' ? '● Listening — speak naturally'
                   : voiceState === 'transcribing' ? '◌ Transcribing...'
                   : voiceState === 'thinking' ? '◌ Casper is thinking...'
                   : voiceState === 'speaking' ? '▶ Casper is speaking'
-                  : '○ Hold the mic to speak'}
+                  : '○ Waiting...'}
               </motion.div>
             </AnimatePresence>
 
-            {/* Recording level bars */}
+            {/* Audio level indicator — shows real mic input level */}
             {voiceState === 'recording' && (
-              <div className="flex items-end gap-1 h-10">
-                {Array.from({ length: 20 }).map((_, i) => (
+              <div className="flex items-end gap-1 h-12">
+                {Array.from({ length: 24 }).map((_, i) => (
                   <motion.div
                     key={i}
-                    className="w-1.5 rounded-full bg-red-400"
-                    animate={{
-                      height: [`${4 + Math.random() * 36}px`, `${4 + Math.random() * 36}px`],
-                      opacity: [0.4, 0.9],
-                    }}
-                    transition={{ duration: 0.3 + i * 0.02, repeat: Infinity, repeatType: 'reverse' }}
+                    className="w-1.5 rounded-full"
+                    style={{ backgroundColor: audioLevel > 0.3 ? '#4ADE80' : audioLevel > 0.1 ? '#86EFAC' : '#374151' }}
+                    animate={{ height: `${Math.max(4, audioLevel * 48 * (0.5 + Math.sin(i * 0.7 + Date.now() / 200) * 0.5))}px` }}
+                    transition={{ duration: 0.08 }}
                   />
                 ))}
               </div>
             )}
 
-            {/* Push-to-talk mic button */}
-            <motion.button
-              onPointerDown={(e) => {
-                e.preventDefault();
-                if (voiceState === 'idle') startRecording();
-              }}
-              onPointerUp={() => {
-                if (voiceState === 'recording') stopRecording();
-              }}
-              onPointerLeave={() => {
-                if (voiceState === 'recording') stopRecording();
-              }}
-              whileTap={{ scale: 0.92 }}
-              disabled={voiceState !== 'idle' && voiceState !== 'recording'}
-              className="relative select-none touch-none"
-            >
-              {/* Pulse ring when recording */}
+            {/* Central visual orb — shows state */}
+            <div className="relative">
               {voiceState === 'recording' && (
-                <>
-                  <motion.div className="absolute inset-0 rounded-full" animate={{ scale: [1, 1.5, 1], opacity: [0.3, 0, 0.3] }} transition={{ duration: 0.8, repeat: Infinity }} style={{ background: 'rgba(239,68,68,0.2)', border: '1px solid rgba(239,68,68,0.4)' }} />
-                  <motion.div className="absolute inset-0 rounded-full" animate={{ scale: [1, 1.8, 1], opacity: [0.15, 0, 0.15] }} transition={{ duration: 1.2, repeat: Infinity, delay: 0.2 }} style={{ background: 'rgba(239,68,68,0.1)' }} />
-                </>
+                <motion.div className="absolute inset-0 rounded-full" animate={{ scale: [1, 1.4, 1], opacity: [0.3, 0, 0.3] }} transition={{ duration: 1.2, repeat: Infinity }} style={{ background: 'rgba(74,222,128,0.15)', border: '1px solid rgba(74,222,128,0.3)' }} />
               )}
               {isSpeaking && (
                 <motion.div className="absolute inset-0 rounded-full" animate={{ scale: [1, 1.4, 1], opacity: [0.3, 0, 0.3] }} transition={{ duration: 1, repeat: Infinity }} style={{ background: 'rgba(167,139,250,0.15)', border: '1px solid rgba(167,139,250,0.3)' }} />
               )}
-
               <div className={cn(
-                "w-24 h-24 rounded-full flex items-center justify-center transition-all duration-300 border-2",
-                voiceState === 'recording' ? "bg-red-500/20 border-red-500/60 shadow-[0_0_50px_rgba(239,68,68,0.5)]"
-                  : isSpeaking ? "bg-purple-500/20 border-purple-500/60 shadow-[0_0_50px_rgba(167,139,250,0.5)]"
+                "w-20 h-20 rounded-full flex items-center justify-center transition-all duration-500 border-2",
+                voiceState === 'recording' ? "bg-green-500/20 border-green-500/50 shadow-[0_0_40px_rgba(74,222,128,0.4)]"
+                  : isSpeaking ? "bg-purple-500/20 border-purple-500/50 shadow-[0_0_40px_rgba(167,139,250,0.4)]"
                   : voiceState === 'transcribing' || voiceState === 'thinking' ? "bg-white/5 border-white/10"
-                  : "bg-white/5 border-white/10 hover:bg-white/10 hover:border-white/30"
+                  : "bg-white/5 border-white/10"
               )}>
                 {voiceState === 'recording' ? (
-                  <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ duration: 0.5, repeat: Infinity }}>
-                    <Mic className="w-10 h-10 text-red-400" />
+                  <motion.div animate={{ scale: [1, 1.15, 1] }} transition={{ duration: 0.8, repeat: Infinity }}>
+                    <Mic className="w-8 h-8 text-green-400" />
                   </motion.div>
                 ) : isSpeaking ? (
                   <motion.div animate={{ scale: [1, 1.1, 1] }} transition={{ duration: 0.8, repeat: Infinity }}>
-                    <Volume2 className="w-10 h-10 text-purple-400" />
+                    <Volume2 className="w-8 h-8 text-purple-400" />
                   </motion.div>
                 ) : voiceState === 'transcribing' || voiceState === 'thinking' ? (
-                  <Loader2 className="w-10 h-10 animate-spin" style={{ color: tier.color }} />
+                  <Loader2 className="w-8 h-8 animate-spin" style={{ color: tier.color }} />
                 ) : (
-                  <Mic className="w-10 h-10 text-white/50" />
+                  <Mic className="w-8 h-8 text-white/30" />
                 )}
               </div>
-            </motion.button>
+            </div>
 
-            {/* Exit voice mode + replay */}
+            {/* Exit button + replay */}
             <div className="flex items-center gap-3">
               <button
                 onClick={() => exitVoiceMode()}
-                className="flex items-center gap-2 px-4 py-2 rounded-full border text-[9px] font-black uppercase tracking-widest transition-all hover:opacity-80"
+                className="flex items-center gap-2 px-5 py-2.5 rounded-full border text-[9px] font-black uppercase tracking-widest transition-all hover:opacity-80"
                 style={{ color: '#F87171', borderColor: 'rgba(248,113,113,0.3)', background: 'rgba(248,113,113,0.05)' }}
               >
-                <X className="w-3 h-3" /> Exit Voice
+                <X className="w-3 h-3" /> End Conversation
               </button>
               {lastSpokenText && voiceState === 'idle' && (
                 <button
@@ -1207,7 +1250,7 @@ export const Casper: React.FC = () => {
             )}
 
             <p className="text-[9px] text-white/20 font-bold uppercase tracking-widest">
-              Hold mic to speak • Release to send
+              Speak naturally • Casper detects when you're done
             </p>
           </div>
         ) : (
