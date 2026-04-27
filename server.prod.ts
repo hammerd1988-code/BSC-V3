@@ -147,38 +147,87 @@ async function startServer() {
       const file = req.file;
       if (!file) return res.status(400).json({ error: 'No audio file provided' });
 
+      // Build a list of providers to try in order
+      type WhisperProvider = { name: string; url: string; key: string; model: string };
+      const providers: WhisperProvider[] = [];
+
+      // 1. Custom AI proxy (VITE_AI_BASE_URL + VITE_AI_API_KEY)
       const aiBaseUrl = process.env.VITE_AI_BASE_URL;
       const aiApiKey = process.env.VITE_AI_API_KEY;
-
-      if (!aiBaseUrl || !aiApiKey) {
-        return res.status(500).json({ error: 'AI API not configured on server' });
+      if (aiBaseUrl && aiApiKey) {
+        providers.push({
+          name: 'proxy',
+          url: `${aiBaseUrl.replace(/\/v1\/?$/, '')}/v1/audio/transcriptions`,
+          key: aiApiKey,
+          model: 'whisper-1',
+        });
       }
 
-      // Try Whisper endpoint first
-      const formData = new FormData();
-      formData.append('file', new Blob([file.buffer], { type: file.mimetype }), 'audio.webm');
-      formData.append('model', 'whisper-1');
-      formData.append('language', 'en');
-
-      const whisperUrl = `${aiBaseUrl.replace(/\/v1\/?$/, '')}/v1/audio/transcriptions`;
-      console.log(`[transcribe] Sending ${file.size} bytes to ${whisperUrl}`);
-
-      const response = await fetch(whisperUrl, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${aiApiKey}` },
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        console.warn(`[transcribe] Whisper API returned ${response.status}: ${errText}`);
-        return res.status(502).json({ error: 'Transcription failed', detail: errText });
+      // 2. OpenAI direct (OPENAI_API_KEY)
+      const openaiKey = process.env.OPENAI_API_KEY;
+      if (openaiKey && !openaiKey.startsWith('sk-NWK')) { // skip the proxy-style key
+        providers.push({
+          name: 'openai',
+          url: 'https://api.openai.com/v1/audio/transcriptions',
+          key: openaiKey,
+          model: 'whisper-1',
+        });
       }
 
-      const data = await response.json();
-      const transcript = data.text || '';
-      console.log(`[transcribe] Result: "${transcript.slice(0, 60)}"`);
-      res.json({ transcript });
+      // 3. Groq free tier (GROQ_API_KEY)
+      const groqKey = process.env.GROQ_API_KEY;
+      if (groqKey) {
+        providers.push({
+          name: 'groq',
+          url: 'https://api.groq.com/openai/v1/audio/transcriptions',
+          key: groqKey,
+          model: 'whisper-large-v3',
+        });
+      }
+
+      if (providers.length === 0) {
+        return res.status(500).json({ error: 'No transcription API configured. Set VITE_AI_API_KEY, OPENAI_API_KEY, or GROQ_API_KEY.' });
+      }
+
+      let lastError = '';
+      for (const provider of providers) {
+        try {
+          const formData = new FormData();
+          // Determine best mime type — Groq prefers mp4/webm, OpenAI accepts webm
+          const mimeType = file.mimetype || 'audio/webm';
+          formData.append('file', new Blob([file.buffer], { type: mimeType }), `audio.${mimeType.split('/')[1] || 'webm'}`);
+          formData.append('model', provider.model);
+          formData.append('language', 'en');
+          formData.append('response_format', 'json');
+
+          console.log(`[transcribe] Trying ${provider.name} (${file.size} bytes) → ${provider.url}`);
+
+          const response = await fetch(provider.url, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${provider.key}` },
+            body: formData,
+          });
+
+          if (!response.ok) {
+            const errText = await response.text();
+            console.warn(`[transcribe] ${provider.name} returned ${response.status}: ${errText.slice(0, 200)}`);
+            lastError = `${provider.name}: ${response.status}`;
+            continue; // try next provider
+          }
+
+          const data = await response.json();
+          const transcript = (data.text || '').trim();
+          console.log(`[transcribe] ${provider.name} success: "${transcript.slice(0, 80)}"`);
+          return res.json({ transcript, provider: provider.name });
+        } catch (providerErr: any) {
+          console.warn(`[transcribe] ${provider.name} threw: ${providerErr.message}`);
+          lastError = providerErr.message;
+        }
+      }
+
+      // All providers failed
+      console.error('[transcribe] All providers failed. Last error:', lastError);
+      res.status(502).json({ error: 'All transcription providers failed', detail: lastError });
     } catch (e: any) {
       console.error('[transcribe] Error:', e.message);
       res.status(500).json({ error: e.message });
