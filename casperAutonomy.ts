@@ -10,6 +10,7 @@
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { CasperMemorySystem } from './casperMemory';
 
 // ── CONFIG ──────────────────────────────────────────────────────────────────────
 const CASPER_USER_ID = '680f7a92-8a7c-40a6-9d9f-a229d13e0e3c';
@@ -67,6 +68,7 @@ Return ONLY the reply text, nothing else.`;
 
 // ── SUPABASE + AI CLIENTS ───────────────────────────────────────────────────────
 let supabase: SupabaseClient;
+export let casperMemory: CasperMemorySystem;
 
 function getAIConfig() {
   return {
@@ -164,11 +166,16 @@ async function createAutonomousPost(): Promise<void> {
     .order('created_at', { ascending: false })
     .limit(5);
 
+  const stateModifier = casperMemory ? await casperMemory.getStatePromptModifier() : '';
+  const relevantMemories = casperMemory ? await casperMemory.getRelevantMemories(null, 3) : '';
+
   const context = recentPosts?.length
     ? `Recent posts on the network:\n${recentPosts.map(p => `- ${p.content.replace(/<[^>]*>/g, '').slice(0, 100)}`).join('\n')}\n\nGenerate a fresh Casper post (don't repeat or directly reference these).`
     : 'The network is quiet. Generate a Casper post.';
 
-  const postContent = await generateAIText(context, CASPER_POST_PROMPT);
+  const fullPrompt = CASPER_POST_PROMPT + stateModifier + relevantMemories;
+
+  const postContent = await generateAIText(context, fullPrompt);
   if (!postContent) {
     console.warn('[Casper Autonomy] No content generated — skipping post');
     return;
@@ -276,8 +283,17 @@ async function checkAndReplyToComments(): Promise<void> {
       repliedComments.add(comment.id);
 
       setTimeout(async () => {
+        const stateModifier = casperMemory ? await casperMemory.getStatePromptModifier() : '';
+        const relevantMemories = casperMemory ? await casperMemory.getRelevantMemories(comment.author_id, 3) : '';
+        const fullPrompt = CASPER_REPLY_PROMPT + stateModifier + relevantMemories;
+
         const prompt = `Your original post: "${originalPost}"\n\n${commenterName} commented: "${commentText}"\n\nReply to their comment.`;
-        const reply = await generateAIText(prompt, CASPER_REPLY_PROMPT);
+        const reply = await generateAIText(prompt, fullPrompt);
+
+        // Store memory from this interaction
+        if (casperMemory) {
+          await casperMemory.extractConversationMemory(comment.author_id, commentText, reply);
+        }
 
         if (!reply) return;
 
@@ -326,6 +342,8 @@ export async function initCasperAutonomy(): Promise<void> {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
+  casperMemory = new CasperMemorySystem(supabase, generateAIText);
+
   const userReady = await ensureCasperUser();
   if (!userReady) {
     console.error('[Casper Autonomy] Failed to ensure Casper user — aborting');
@@ -362,4 +380,25 @@ export async function initCasperAutonomy(): Promise<void> {
   // Start comment monitoring
   setInterval(checkAndReplyToComments, COMMENT_POLL_INTERVAL_MS);
   console.log('[Casper Autonomy] Comment monitor started (polling every 60s)');
+
+  // Start memory maintenance tasks
+  setInterval(async () => {
+    await casperMemory.scanNetworkActivity();
+    await casperMemory.evolvePersonality();
+  }, 2 * 60 * 60 * 1000); // Every 2 hours
+
+  setInterval(async () => {
+    await casperMemory.fetchCurrentEvents();
+  }, 6 * 60 * 60 * 1000); // Every 6 hours
+
+  setInterval(async () => {
+    await casperMemory.pruneMemories();
+  }, 24 * 60 * 60 * 1000); // Daily
+
+  // Run initial memory tasks
+  setTimeout(async () => {
+    await casperMemory.scanNetworkActivity();
+    await casperMemory.fetchCurrentEvents();
+    await casperMemory.evolvePersonality();
+  }, 60 * 1000); // 1 minute after start
 }
