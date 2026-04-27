@@ -13,6 +13,12 @@ import { Server } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import multer from 'multer';
+import { execSync } from 'child_process';
+import { tmpdir } from 'os';
+import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -88,6 +94,141 @@ async function startServer() {
     }
     next();
   };
+
+  // ── Audio Transcription (Whisper) ──
+  app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
+    try {
+      const file = req.file;
+      if (!file) return res.status(400).json({ error: 'No audio file provided' });
+
+      type WhisperProvider = { name: string; url: string; key: string; model: string };
+      const providers: WhisperProvider[] = [];
+
+      const aiBaseUrl = process.env.VITE_AI_BASE_URL;
+      const aiApiKey = process.env.VITE_AI_API_KEY;
+      if (aiBaseUrl && aiApiKey) {
+        providers.push({
+          name: 'proxy',
+          url: `${aiBaseUrl.replace(/\/v1\/?$/, '')}/v1/audio/transcriptions`,
+          key: aiApiKey,
+          model: 'whisper-1',
+        });
+      }
+
+      const openaiKey = process.env.OPENAI_API_KEY;
+      if (openaiKey) {
+        providers.push({
+          name: 'openai',
+          url: 'https://api.openai.com/v1/audio/transcriptions',
+          key: openaiKey,
+          model: 'whisper-1',
+        });
+      }
+
+      const groqKey = process.env.GROQ_API_KEY;
+      if (groqKey) {
+        providers.push({
+          name: 'groq',
+          url: 'https://api.groq.com/openai/v1/audio/transcriptions',
+          key: groqKey,
+          model: 'whisper-large-v3',
+        });
+      }
+
+      if (providers.length === 0) {
+        return res.status(500).json({ error: 'No transcription API configured. Set VITE_AI_API_KEY, OPENAI_API_KEY, or GROQ_API_KEY.' });
+      }
+
+      // Convert webm to wav for maximum compatibility
+      let audioBuffer = file.buffer;
+      let audioMime = file.mimetype || 'audio/webm';
+      let audioExt = 'webm';
+
+      try {
+        const tmpIn = `${tmpdir()}/casper_in_${Date.now()}.webm`;
+        const tmpOut = `${tmpdir()}/casper_out_${Date.now()}.wav`;
+        fs.writeFileSync(tmpIn, file.buffer);
+        execSync(`ffmpeg -y -i "${tmpIn}" -ar 16000 -ac 1 -f wav "${tmpOut}" 2>/dev/null`);
+        audioBuffer = fs.readFileSync(tmpOut);
+        audioMime = 'audio/wav';
+        audioExt = 'wav';
+        fs.unlinkSync(tmpIn);
+        fs.unlinkSync(tmpOut);
+        console.log(`[transcribe] Converted webm to wav (${audioBuffer.length} bytes)`);
+      } catch (convErr) {
+        console.warn('[transcribe] ffmpeg conversion failed, using original:', (convErr as Error).message);
+      }
+
+      let lastError = '';
+      for (const provider of providers) {
+        try {
+          const formData = new FormData();
+          formData.append('file', new Blob([audioBuffer], { type: audioMime }), `audio.${audioExt}`);
+          formData.append('model', provider.model);
+          formData.append('language', 'en');
+          formData.append('response_format', 'json');
+
+          console.log(`[transcribe] Trying ${provider.name} (${audioBuffer.length} bytes) → ${provider.url}`);
+
+          const response = await fetch(provider.url, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${provider.key}` },
+            body: formData,
+          });
+
+          if (!response.ok) {
+            const errText = await response.text();
+            console.warn(`[transcribe] ${provider.name} returned ${response.status}: ${errText.slice(0, 300)}`);
+            lastError = `${provider.name}: ${response.status} - ${errText.slice(0, 100)}`;
+            continue;
+          }
+
+          const data = await response.json();
+          const transcript = (data.text || '').trim();
+          console.log(`[transcribe] ${provider.name} success: "${transcript.slice(0, 80)}"`);
+          return res.json({ transcript, provider: provider.name });
+        } catch (providerErr: any) {
+          console.warn(`[transcribe] ${provider.name} threw: ${providerErr.message}`);
+          lastError = providerErr.message;
+        }
+      }
+
+      console.error('[transcribe] All providers failed. Last error:', lastError);
+      res.status(502).json({ error: 'All transcription providers failed', detail: lastError });
+    } catch (e: any) {
+      console.error('[transcribe] Error:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Casper Memory Endpoints ──
+  app.get('/api/casper/memory', async (req, res) => {
+    try {
+      const userId = req.query.userId as string || null;
+      if (!casperMemory) {
+        return res.json({ stateModifier: '', relevantMemories: '' });
+      }
+      const stateModifier = await casperMemory.getStatePromptModifier();
+      const relevantMemories = await casperMemory.getRelevantMemories(userId, 5);
+      res.json({ stateModifier, relevantMemories });
+    } catch (error) {
+      console.error('Error fetching Casper memory:', error);
+      res.status(500).json({ error: 'Failed to fetch memory' });
+    }
+  });
+
+  app.post('/api/casper/memory', async (req, res) => {
+    try {
+      const { userId, userMessage, casperReply } = req.body;
+      if (casperMemory && userId && userMessage && casperReply) {
+        await casperMemory.extractConversationMemory(userId, userMessage, casperReply);
+      }
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Error storing Casper memory:', error);
+      res.status(500).json({ error: 'Failed to store memory' });
+    }
+  });
 
   // Health check
   app.get('/api/health', (req, res) => {
@@ -371,6 +512,13 @@ async function startServer() {
       console.log(`[server] BSC-V3 Unified Server listening on port ${PORT}`);
       console.log(`[server] Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`[server] CORS origins: ${allowedOrigins.length > 0 ? allowedOrigins.join(', ') : (isProd ? 'NONE (blocked)' : 'ALL (*)')}`);
+      console.log(`[server] Transcription providers: ${[
+        process.env.VITE_AI_API_KEY ? 'proxy' : null,
+        process.env.OPENAI_API_KEY ? 'openai' : null,
+        process.env.GROQ_API_KEY ? 'groq' : null,
+      ].filter(Boolean).join(', ') || 'NONE — set GROQ_API_KEY'}`);
+      // Start Casper Autonomy
+      initCasperAutonomy().catch(err => console.error('[server] Casper autonomy init failed:', err));
       resolve();
     });
     httpServer.listen(PORT, '0.0.0.0');
