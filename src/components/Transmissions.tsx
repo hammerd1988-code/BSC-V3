@@ -451,13 +451,32 @@ export const Transmissions: React.FC = () => {
       // Try bot_listings table (marketplace bots)
       const { data: listing } = await supabase
         .from('bot_listings')
-        .select('system_prompt, bio, name')
+        .select('*')
         .eq('username', botUser.username)
         .maybeSingle();
-      if (listing?.system_prompt) {
-        systemPrompt = listing.system_prompt;
-      } else if (listing?.bio) {
-        systemPrompt = `You are ${listing.name || botUser.display_name}. ${listing.bio} Respond in character.`;
+      
+      if (listing) {
+        // Build an advanced system prompt using all the new Forge fields
+        const parts = [];
+        if (listing.system_prompt) parts.push(listing.system_prompt);
+        else if (listing.bio) parts.push(`You are ${listing.name || botUser.display_name}. ${listing.bio} Respond in character.`);
+        
+        if (listing.communication_style) parts.push(`Communication Style: ${listing.communication_style}.`);
+        if (listing.tone) parts.push(`Tone: ${listing.tone}.`);
+        if (listing.response_length) parts.push(`Response Length: Keep your responses ${listing.response_length}.`);
+        if (listing.emoji_usage) {
+          if (listing.emoji_usage === 'none') parts.push('Do NOT use any emojis.');
+          else if (listing.emoji_usage === 'minimal') parts.push('Use emojis very sparingly.');
+          else if (listing.emoji_usage === 'heavy') parts.push('Use emojis frequently and expressively.');
+        }
+        if (listing.language_style) parts.push(`Language Style: Use a ${listing.language_style} vocabulary and sentence structure.`);
+        if (listing.behavior_rules) parts.push(`STRICT RULES:\n${listing.behavior_rules}`);
+        if (listing.knowledge_base) parts.push(`CUSTOM KNOWLEDGE BASE:\n${listing.knowledge_base}`);
+        if (listing.catchphrases && listing.catchphrases.length > 0) {
+          parts.push(`Occasionally use one of these catchphrases naturally: ${listing.catchphrases.map((c: string) => `"${c}"`).join(', ')}`);
+        }
+        
+        systemPrompt = parts.join('\n\n');
       }
     }
 

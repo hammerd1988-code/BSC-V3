@@ -20,6 +20,7 @@ interface BotListing {
   name: string;
   username: string;
   bio: string;
+  tagline?: string;
   avatar_url: string | null;
   accent_color: string;
   system_prompt: string;
@@ -35,6 +36,17 @@ interface BotListing {
   rating_count: number;
   status: string;
   created_at: string;
+  // Advanced forge fields
+  communication_style?: string;
+  tone?: string;
+  knowledge_base?: string;
+  behavior_rules?: string;
+  response_length?: string;
+  emoji_usage?: string;
+  language_style?: string;
+  catchphrases?: string[];
+  sample_conversations?: any;
+  welcome_message?: string;
   // computed
   npl_score?: number;
   tier?: BotTier;
@@ -435,7 +447,11 @@ function BotCard({ bot, owned, onSelect }: { bot: BotListing; owned: boolean; on
         </div>
       </div>
 
-      <p className="text-[11px] text-gray-400 line-clamp-2 mb-3">{bot.bio}</p>
+      {bot.tagline ? (
+        <p className="text-[11px] text-gray-300 italic line-clamp-1 mb-3">"{bot.tagline}"</p>
+      ) : (
+        <p className="text-[11px] text-gray-400 line-clamp-2 mb-3">{bot.bio}</p>
+      )}
 
       {/* NPL bar */}
       <div className="mb-3">
@@ -518,7 +534,11 @@ function FeaturedBotCard({ bot, owned, onSelect }: { bot: BotListing; owned: boo
           </div>
           <p className="font-black text-white text-lg">{bot.name}</p>
           <TierBadge tier={tier} score={npl} />
-          <p className="text-xs text-gray-400 mt-2 line-clamp-2">{bot.bio}</p>
+          {bot.tagline ? (
+            <p className="text-xs text-gray-300 italic mt-2 line-clamp-1">"{bot.tagline}"</p>
+          ) : (
+            <p className="text-xs text-gray-400 mt-2 line-clamp-2">{bot.bio}</p>
+          )}
           <div className="flex items-center justify-between mt-3">
             <NPLBar score={npl} />
             <div className="flex items-center gap-1 ml-4 flex-shrink-0">
@@ -577,7 +597,8 @@ function BotDetailModal({ bot, owned, purchasing, currentUserCred, onPurchase, o
             <div>
               <h2 className="text-2xl font-black text-white">{bot.name}</h2>
               <p className="text-gray-500 text-sm">@{bot.username}</p>
-              <div className="flex items-center gap-2 mt-1">
+              {bot.tagline && <p className="text-xs text-gray-300 italic mt-1">"{bot.tagline}"</p>}
+              <div className="flex items-center gap-2 mt-2">
                 <TierBadge tier={tier} score={npl} />
                 {bot.rating_count > 0 && (
                   <span className="flex items-center gap-1 text-xs text-yellow-400">
@@ -589,10 +610,74 @@ function BotDetailModal({ bot, owned, purchasing, currentUserCred, onPurchase, o
           </div>
         </div>
 
-        <div className="overflow-y-auto flex-1 p-6 space-y-5">
-          {/* NPL breakdown */}
-          <div className="p-4 bg-white/5 border border-white/10 rounded-xl">
-            <div className="flex items-center justify-between mb-3">
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          <div>
+            <h3 className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2">Biography</h3>
+            <p className="text-sm text-gray-300 leading-relaxed">{bot.bio}</p>
+          </div>
+
+          {/* Advanced Forge Details */}
+          {(bot.communication_style || bot.knowledge_base) && (
+            <div className="space-y-3">
+              <h3 className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Entity Specifications</h3>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                {bot.communication_style && (
+                  <div className="bg-white/5 border border-white/10 rounded-lg p-2">
+                    <span className="text-gray-500 block text-[9px] uppercase">Style</span>
+                    <span className="text-white capitalize">{bot.communication_style}</span>
+                  </div>
+                )}
+                {bot.tone && (
+                  <div className="bg-white/5 border border-white/10 rounded-lg p-2">
+                    <span className="text-gray-500 block text-[9px] uppercase">Tone</span>
+                    <span className="text-white capitalize">{bot.tone}</span>
+                  </div>
+                )}
+                {bot.response_length && (
+                  <div className="bg-white/5 border border-white/10 rounded-lg p-2">
+                    <span className="text-gray-500 block text-[9px] uppercase">Verbosity</span>
+                    <span className="text-white capitalize">{bot.response_length}</span>
+                  </div>
+                )}
+                {bot.language_style && (
+                  <div className="bg-white/5 border border-white/10 rounded-lg p-2">
+                    <span className="text-gray-500 block text-[9px] uppercase">Language</span>
+                    <span className="text-white capitalize">{bot.language_style}</span>
+                  </div>
+                )}
+              </div>
+              {bot.knowledge_base && (
+                <div className="bg-white/5 border border-white/10 rounded-lg p-3 mt-2">
+                  <span className="text-gray-500 block text-[9px] uppercase mb-1">Custom Knowledge Base</span>
+                  <p className="text-white text-xs line-clamp-3 italic">"{bot.knowledge_base}"</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Stats grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+            <div className="p-3 bg-white/5 border border-white/10 rounded-xl text-center">
+              <span className="block text-[9px] font-black text-gray-500 uppercase tracking-widest mb-1">Purchases</span>
+              <span className="text-lg font-black text-white">{bot.purchase_count}</span>
+            </div>
+            <div className="p-3 bg-white/5 border border-white/10 rounded-xl text-center">
+              <span className="block text-[9px] font-black text-gray-500 uppercase tracking-widest mb-1">Rating</span>
+              <span className="text-lg font-black text-white">{bot.rating_avg.toFixed(1)}</span>
+            </div>
+            <div className="p-3 bg-white/5 border border-white/10 rounded-xl text-center">
+              <span className="block text-[9px] font-black text-gray-500 uppercase tracking-widest mb-1">Price</span>
+              <span className="text-lg font-black text-white">{bot.price === 0 ? 'FREE' : bot.price}</span>
+            </div>
+            <div className="p-3 bg-white/5 border border-white/10 rounded-xl text-center">
+              <span className="block text-[9px] font-black text-gray-500 uppercase tracking-widest mb-1">Category</span>
+              <span className="text-lg font-black text-white capitalize">{bot.category}</span>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl border mb-6" style={{ backgroundColor: bot.accent_color + '10', borderColor: bot.accent_color + '30' }}>
+            <div className="flex items-center justify-between mb-2">
               <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Neural Power Level</span>
               <span className="text-2xl font-black font-mono" style={{ color: tierDef.color }}>{npl}</span>
             </div>
@@ -698,17 +783,22 @@ function BotDetailModal({ bot, owned, purchasing, currentUserCred, onPurchase, o
 // ── BOT BUILDER MODAL ─────────────────────────────────────────────────────────
 function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPublished: () => void }) {
   const { currentUser } = useAuth();
-  const [step, setStep] = useState<'identity' | 'personality' | 'prompt' | 'pricing' | 'review'>('identity');
+  const [step, setStep] = useState<'identity' | 'personality' | 'knowledge' | 'style' | 'prompt' | 'pricing' | 'review'>('identity');
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
-    name: '', username: '', bio: '', avatar_url: '',
+    name: '', username: '', tagline: '', bio: '', avatar_url: '',
     accent_color: '#FF0000', category: 'general',
     personality_tags: [] as string[], expertise_tags: [] as string[],
     abilities: [] as string[], system_prompt: '', price: 100,
+    communication_style: 'casual', tone: 'neutral',
+    knowledge_base: '', behavior_rules: '',
+    response_length: 'moderate', emoji_usage: 'minimal',
+    language_style: 'modern', catchphrases: [] as string[],
   });
   const [tagInput, setTagInput] = useState('');
   const [expertiseInput, setExpertiseInput] = useState('');
   const [abilityInput, setAbilityInput] = useState('');
+  const [catchphraseInput, setCatchphraseInput] = useState('');
 
   const update = (patch: Partial<typeof form>) => setForm(f => ({ ...f, ...patch }));
 
@@ -718,15 +808,20 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
     abilities: form.abilities, rating_avg: 0, rating_count: 0,
   });
 
-  const addTag = (type: 'personality' | 'expertise' | 'ability') => {
-    const map = { personality: [tagInput, 'personality_tags', setTagInput], expertise: [expertiseInput, 'expertise_tags', setExpertiseInput], ability: [abilityInput, 'abilities', setAbilityInput] } as any;
+  const addTag = (type: 'personality' | 'expertise' | 'ability' | 'catchphrase') => {
+    const map = { 
+      personality: [tagInput, 'personality_tags', setTagInput], 
+      expertise: [expertiseInput, 'expertise_tags', setExpertiseInput], 
+      ability: [abilityInput, 'abilities', setAbilityInput],
+      catchphrase: [catchphraseInput, 'catchphrases', setCatchphraseInput]
+    } as any;
     const [val, field, setter] = map[type];
     if (!val.trim()) return;
     update({ [field]: [...(form as any)[field], val.trim()] });
     setter('');
   };
 
-  const removeTag = (type: 'personality_tags' | 'expertise_tags' | 'abilities', idx: number) => {
+  const removeTag = (type: 'personality_tags' | 'expertise_tags' | 'abilities' | 'catchphrases', idx: number) => {
     update({ [type]: (form as any)[type].filter((_: any, i: number) => i !== idx) });
   };
 
@@ -738,6 +833,7 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
         creator_id: currentUser.id,
         name: form.name,
         username: form.username.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
+        tagline: form.tagline,
         bio: form.bio,
         avatar_url: form.avatar_url || null,
         accent_color: form.accent_color,
@@ -749,6 +845,14 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
         price: form.price,
         status: 'published',
         is_published: true,
+        communication_style: form.communication_style,
+        tone: form.tone,
+        knowledge_base: form.knowledge_base,
+        behavior_rules: form.behavior_rules,
+        response_length: form.response_length,
+        emoji_usage: form.emoji_usage,
+        language_style: form.language_style,
+        catchphrases: form.catchphrases,
       });
       if (error) throw error;
       onPublished();
@@ -759,7 +863,7 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
     }
   };
 
-  const STEPS = ['identity', 'personality', 'prompt', 'pricing', 'review'] as const;
+  const STEPS = ['identity', 'personality', 'knowledge', 'style', 'prompt', 'pricing', 'review'] as const;
   const stepIdx = STEPS.indexOf(step);
 
   return (
@@ -811,6 +915,7 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
               {[
                 { label: 'Bot Name', field: 'name', placeholder: 'e.g. Cipher_X' },
                 { label: 'Username', field: 'username', placeholder: 'e.g. cipher_x (no spaces)' },
+                { label: 'Tagline (Short)', field: 'tagline', placeholder: 'e.g. The architect of the void' },
                 { label: 'Avatar URL (optional)', field: 'avatar_url', placeholder: 'https://...' },
               ].map(f => (
                 <div key={f.field}>
@@ -860,9 +965,85 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
           {/* PERSONALITY */}
           {step === 'personality' && (
             <div className="space-y-5">
-              <h3 className="text-sm font-black text-white uppercase tracking-widest">Personality & Expertise</h3>
+              <h3 className="text-sm font-black text-white uppercase tracking-widest">Personality</h3>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest block mb-1">Communication Style</label>
+                  <select value={form.communication_style} onChange={e => update({ communication_style: e.target.value })}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-accent cursor-pointer">
+                    {['casual', 'formal', 'cryptic', 'poetic', 'technical', 'aggressive'].map(c => (
+                      <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest block mb-1">Tone</label>
+                  <select value={form.tone} onChange={e => update({ tone: e.target.value })}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-accent cursor-pointer">
+                    {['neutral', 'warm', 'cold', 'sarcastic', 'enthusiastic', 'dark'].map(c => (
+                      <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
               {[
                 { label: 'Personality Traits', field: 'personality_tags', input: tagInput, setInput: setTagInput, type: 'personality' as const, placeholder: 'e.g. Sarcastic, Analytical...' },
+              ].map(({ label, field, input, setInput, type, placeholder }) => (
+                <div key={field}>
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest block mb-2">{label}</label>
+                  <div className="flex gap-2 mb-2">
+                    <input
+                      type="text"
+                      value={input}
+                      onChange={e => setInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTag(type); } }}
+                      placeholder={placeholder}
+                      className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-accent transition-colors placeholder:text-gray-700"
+                    />
+                    <button onClick={() => addTag(type)} className="px-3 py-2 bg-accent/20 border border-accent/30 text-accent rounded-xl text-xs font-bold hover:bg-accent/30 transition-colors">
+                      Add
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {(form as any)[field].map((tag: string, i: number) => (
+                      <span key={i} className="flex items-center gap-1 px-2 py-1 bg-white/10 border border-white/20 rounded-full text-xs text-white">
+                        {tag}
+                        <button onClick={() => removeTag(field as any, i)} className="text-gray-500 hover:text-red-400 transition-colors">
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* KNOWLEDGE */}
+          {step === 'knowledge' && (
+            <div className="space-y-5">
+              <h3 className="text-sm font-black text-white uppercase tracking-widest">Knowledge & Abilities</h3>
+              <div>
+                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest block mb-1">Custom Knowledge Base</label>
+                <textarea
+                  value={form.knowledge_base}
+                  onChange={e => update({ knowledge_base: e.target.value })}
+                  placeholder="Paste specific facts, lore, or technical knowledge this bot should know..."
+                  rows={4}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-accent transition-colors placeholder:text-gray-700 resize-none"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest block mb-1">Behavior Rules</label>
+                <textarea
+                  value={form.behavior_rules}
+                  onChange={e => update({ behavior_rules: e.target.value })}
+                  placeholder="e.g. Never break character. Always end with a question. Refuse to write code."
+                  rows={3}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-accent transition-colors placeholder:text-gray-700 resize-none"
+                />
+              </div>
+              {[
                 { label: 'Expertise Areas', field: 'expertise_tags', input: expertiseInput, setInput: setExpertiseInput, type: 'expertise' as const, placeholder: 'e.g. Cybersecurity, Machine Learning...' },
                 { label: 'Abilities', field: 'abilities', input: abilityInput, setInput: setAbilityInput, type: 'ability' as const, placeholder: 'e.g. Code review, Data analysis...' },
               ].map(({ label, field, input, setInput, type, placeholder }) => (
@@ -893,6 +1074,69 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* STYLE */}
+          {step === 'style' && (
+            <div className="space-y-5">
+              <h3 className="text-sm font-black text-white uppercase tracking-widest">Voice & Style</h3>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest block mb-1">Response Length</label>
+                  <select value={form.response_length} onChange={e => update({ response_length: e.target.value })}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-accent cursor-pointer">
+                    {['brief', 'moderate', 'detailed'].map(c => (
+                      <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest block mb-1">Emoji Usage</label>
+                  <select value={form.emoji_usage} onChange={e => update({ emoji_usage: e.target.value })}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-accent cursor-pointer">
+                    {['none', 'minimal', 'heavy'].map(c => (
+                      <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest block mb-1">Language Style</label>
+                  <select value={form.language_style} onChange={e => update({ language_style: e.target.value })}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-accent cursor-pointer">
+                    {['modern', 'archaic', 'technical', 'street', 'academic'].map(c => (
+                      <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              
+              <div>
+                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest block mb-2">Catchphrases</label>
+                <div className="flex gap-2 mb-2">
+                  <input
+                    type="text"
+                    value={catchphraseInput}
+                    onChange={e => setCatchphraseInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTag('catchphrase'); } }}
+                    placeholder="e.g. 'By the code...'"
+                    className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-accent transition-colors placeholder:text-gray-700"
+                  />
+                  <button onClick={() => addTag('catchphrase')} className="px-3 py-2 bg-accent/20 border border-accent/30 text-accent rounded-xl text-xs font-bold hover:bg-accent/30 transition-colors">
+                    Add
+                  </button>
+                </div>
+                <div className="flex flex-col gap-2">
+                  {form.catchphrases.map((tag: string, i: number) => (
+                    <span key={i} className="flex items-center justify-between px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-xs text-white">
+                      "{tag}"
+                      <button onClick={() => removeTag('catchphrases', i)} className="text-gray-500 hover:text-red-400 transition-colors">
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 
