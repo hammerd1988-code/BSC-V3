@@ -95,6 +95,87 @@ async function startServer() {
     next();
   };
 
+  // ── Text-to-Speech (Casper Voice) ──
+  app.post('/api/tts', async (req, res) => {
+    try {
+      const { text } = req.body;
+      if (!text || typeof text !== 'string') {
+        return res.status(400).json({ error: 'text is required' });
+      }
+
+      // Truncate to 4096 chars (OpenAI TTS limit)
+      const input = text.slice(0, 4096);
+
+      // Try providers in order
+      type TtsProvider = { name: string; url: string; key: string };
+      const providers: TtsProvider[] = [];
+
+      // 1. Dedicated OpenAI TTS key (OPENAI_TTS_KEY) — user can set this separately
+      const openaiTtsKey = process.env.OPENAI_TTS_KEY;
+      if (openaiTtsKey) {
+        providers.push({ name: 'openai-tts', url: 'https://api.openai.com/v1/audio/speech', key: openaiTtsKey });
+      }
+
+      // 2. Custom AI proxy (VITE_AI_BASE_URL + VITE_AI_API_KEY) — may support TTS
+      const aiBaseUrl = process.env.VITE_AI_BASE_URL;
+      const aiApiKey = process.env.VITE_AI_API_KEY;
+      if (aiBaseUrl && aiApiKey) {
+        providers.push({
+          name: 'proxy-tts',
+          url: `${aiBaseUrl.replace(/\/v1\/?$/, '')}/v1/audio/speech`,
+          key: aiApiKey,
+        });
+      }
+
+      // 3. Direct OpenAI (OPENAI_API_KEY) — may or may not be a real key
+      const openaiKey = process.env.OPENAI_API_KEY;
+      if (openaiKey) {
+        providers.push({ name: 'openai', url: 'https://api.openai.com/v1/audio/speech', key: openaiKey });
+      }
+
+      for (const provider of providers) {
+        try {
+          const response = await fetch(provider.url, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${provider.key}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: 'tts-1',
+              input,
+              voice: 'onyx',
+              speed: 0.9,
+              response_format: 'mp3',
+            }),
+          });
+
+          if (!response.ok) {
+            const errText = await response.text();
+            console.warn(`[tts] ${provider.name} returned ${response.status}: ${errText.slice(0, 200)}`);
+            continue;
+          }
+
+          const audioBuffer = await response.arrayBuffer();
+          console.log(`[tts] ${provider.name} success: ${audioBuffer.byteLength} bytes`);
+          res.set('Content-Type', 'audio/mpeg');
+          res.set('Content-Length', String(audioBuffer.byteLength));
+          res.set('Cache-Control', 'no-cache');
+          return res.send(Buffer.from(audioBuffer));
+        } catch (providerErr: any) {
+          console.warn(`[tts] ${provider.name} threw: ${providerErr.message}`);
+        }
+      }
+
+      // All providers failed — return 503 so client falls back to browser TTS
+      console.warn('[tts] All TTS providers failed or unavailable');
+      res.status(503).json({ error: 'TTS unavailable — falling back to browser TTS' });
+    } catch (e: any) {
+      console.error('[tts] Error:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ── Audio Transcription (Whisper) ──
   app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
     try {
