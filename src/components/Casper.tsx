@@ -7,6 +7,7 @@ import { generateText } from '../lib/ai';
 import { supabase } from '../supabase';
 import { cn } from '../lib/utils';
 import { formatDistanceToNow } from 'date-fns';
+import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
 
 interface Message {
   id: string;
@@ -380,37 +381,7 @@ const CasperWaveform: React.FC<{ isActive: boolean; instability: number }> = ({ 
 };
 
 // ── GHOST AVATAR ──────────────────────────────────────────────────────────────
-const CasperAvatar: React.FC<{ size?: 'sm' | 'md' | 'lg'; isActive?: boolean; instability?: number }> = ({ size = 'md', isActive = false, instability = 10 }) => {
-  const sizes = { sm: 'w-8 h-8', md: 'w-12 h-12', lg: 'w-20 h-20' };
-  const textSizes = { sm: 'text-lg', md: 'text-2xl', lg: 'text-4xl' };
-  const tier = getTier(instability);
-
-  return (
-    <motion.div
-      animate={isActive
-        ? { y: [0, -6, 0], scale: [1, 1.08, 1], rotate: [0, -2, 2, 0] }
-        : { y: [0, -3, 0] }
-      }
-      transition={{ duration: isActive ? 0.8 : 3, repeat: Infinity, ease: 'easeInOut' }}
-      className={cn(sizes[size], "rounded-full flex items-center justify-center relative")}
-      style={{
-        background: `radial-gradient(circle, ${tier.bg} 0%, rgba(10,10,20,0.8) 100%)`,
-        border: `1px solid ${tier.color}40`,
-        boxShadow: `0 0 ${isActive ? 30 : 15}px ${tier.glow}`,
-      }}
-    >
-      <span className={textSizes[size]}>👻</span>
-      {isActive && (
-        <motion.div
-          className="absolute inset-0 rounded-full"
-          animate={{ opacity: [0.2, 0.6, 0.2], scale: [1, 1.15, 1] }}
-          transition={{ duration: 1.2, repeat: Infinity }}
-          style={{ boxShadow: `0 0 25px ${tier.glow}`, border: `1px solid ${tier.color}60` }}
-        />
-      )}
-    </motion.div>
-  );
-};
+// Replaced with AnimatedCasperAvatar
 
 // ── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
 const CASPER_SYSTEM_PROMPT = `You are CASPER.
@@ -1063,7 +1034,7 @@ export const Casper: React.FC = () => {
             <button onClick={() => navigate(-1)} className="p-2 hover:bg-white/5 rounded-full transition-colors">
               <ArrowLeft className="w-5 h-5 text-white/60" />
             </button>
-            <CasperAvatar size="md" isActive={isGenerating} instability={instability} />
+            <AnimatedCasperAvatar size="md" isActive={isGenerating} instability={instability} />
             <div>
               <h1 className="text-xl font-black text-white uppercase italic tracking-tight" style={{
                 textShadow: `0 0 20px ${tier.glow}`,
@@ -1200,7 +1171,7 @@ export const Casper: React.FC = () => {
               exit={{ opacity: 0 }}
               className={cn("flex gap-3", msg.role === 'user' ? "justify-end" : "justify-start")}
             >
-              {msg.role === 'casper' && <CasperAvatar size="sm" instability={instability} />}
+              {msg.role === 'casper' && <AnimatedCasperAvatar size="sm" instability={instability} />}
 
               <div className={cn("max-w-[80%] group relative", msg.role === 'user' ? "items-end" : "items-start")}>
                 <div
@@ -1263,7 +1234,7 @@ export const Casper: React.FC = () => {
 
         {isGenerating && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-3 justify-start">
-            <CasperAvatar size="sm" isActive instability={instability} />
+            <AnimatedCasperAvatar size="sm" isActive instability={instability} />
             <div className="px-4 py-3 rounded-2xl rounded-bl-none border" style={{
               background: tier.bg,
               borderColor: `${tier.color}25`,
