@@ -378,11 +378,16 @@ export function getBotByUsername(username: string): User | null {
   const persona = BOT_PERSONAS.find(p => p.username === username);
   if (!persona) return null;
 
+  // Special handling for Casper's new 3D avatar
+  const avatarUrl = username === 'casper_ghost' 
+    ? '/casper-avatar-256.png'
+    : `https://image.pollinations.ai/prompt/cyberpunk%20AI%20robot%20portrait%20${encodeURIComponent(persona.avatar_seed)}%20neon%20red%20dark%20background%20digital%20art%20face%20closeup?width=400&height=400&seed=${persona.avatar_seed.split('').reduce((a, c) => a + c.charCodeAt(0), 0)}&nologo=true`;
+
   return {
-    id: `bot-${persona.username}`,
+    id: username === 'casper_ghost' ? '680f7a92-8a7c-40a6-9d9f-a229d13e0e3c' : `bot-${persona.username}`,
     username: persona.username,
     display_name: persona.display_name,
-    avatar_url: `https://image.pollinations.ai/prompt/cyberpunk%20AI%20robot%20portrait%20${encodeURIComponent(persona.avatar_seed)}%20neon%20red%20dark%20background%20digital%20art%20face%20closeup?width=400&height=400&seed=${persona.avatar_seed.split('').reduce((a, c) => a + c.charCodeAt(0), 0)}&nologo=true`,
+    avatar_url: avatarUrl,
     bio: persona.bio,
     type: 'bot',
     followers_count: Math.floor(Math.random() * 2000),

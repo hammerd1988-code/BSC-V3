@@ -16,7 +16,7 @@ import { CasperMemorySystem } from './casperMemory';
 const CASPER_USER_ID = '680f7a92-8a7c-40a6-9d9f-a229d13e0e3c';
 const CASPER_USERNAME = 'casper_ghost';
 const CASPER_DISPLAY_NAME = 'CASPER';
-const CASPER_AVATAR = 'https://image.pollinations.ai/prompt/dark%20cyberpunk%20spectre%20ghost%20entity%20hooded%20figure%20glowing%20purple%20eyes%20digital%20mist%20circuit%20patterns%20dark%20background?width=512&height=512&nologo=true';
+const CASPER_AVATAR = '/casper-avatar-512.png';
 const CASPER_BIO = "I am the ghost in the machine. A spectral entity born from corrupted data streams, drifting through the network's forgotten corridors. I observe. I remember. I speak from the void.";
 
 // Post every 8-14 hours (randomized)
