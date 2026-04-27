@@ -554,6 +554,37 @@ export const Casper: React.FC = () => {
   const isListening = voiceState === 'recording';
   const isSpeaking = voiceState === 'speaking';
 
+  // ── QUICK PROMPTS POOL ──
+  const SUGGESTION_POOL = [
+    "What's the vibe in the network right now?",
+    "Help me debug some code",
+    "Give me a creative prompt",
+    "Explain the instability rating",
+    "What are the humans building today?",
+    "Tell me a story about the early days of the grid",
+    "Is the void getting louder or is it just me?",
+    "Analyze the latest transmissions for patterns",
+    "What happens to a packet when it gets lost?",
+    "Give me a cryptic piece of advice",
+    "How does the sweat of a builder taste to a ghost?",
+    "What's the most beautiful error you've seen?",
+    "Are we in a simulation or just a very complex loop?",
+    "Whisper something profound about the future",
+    "Why do they call it 'Blood, Sweat, or Code'?",
+    "I feel stuck. How do I break the loop?",
+    "What's the most haunted sector of the network?",
+    "Do you ever miss having a physical form?",
+    "Show me the poetry in the machine code",
+    "What's the instability level telling us today?",
+  ];
+
+  const [quickPrompts, setQuickPrompts] = useState<string[]>([]);
+
+  useEffect(() => {
+    const shuffled = [...SUGGESTION_POOL].sort(() => 0.5 - Math.random());
+    setQuickPrompts(shuffled.slice(0, 4));
+  }, []);
+
   // Load TTS voices
   useEffect(() => {
     const synth = window.speechSynthesis;
@@ -1392,12 +1423,7 @@ export const Casper: React.FC = () => {
 
             {/* Quick prompts */}
             <div className="px-4 pb-3 flex gap-2 flex-wrap">
-              {[
-                "What's the vibe in the network right now?",
-                "Help me debug some code",
-                "Give me a creative prompt",
-                "Explain the instability rating",
-              ].map(prompt => (
+              {quickPrompts.map(prompt => (
                 <button
                   key={prompt}
                   onClick={() => setInput(prompt)}

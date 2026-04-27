@@ -12,11 +12,11 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 // ── CONFIG ──────────────────────────────────────────────────────────────────────
-const CASPER_USER_ID = 'bot-casper-ghost';
+const CASPER_USER_ID = '680f7a92-8a7c-40a6-9d9f-a229d13e0e3c';
 const CASPER_USERNAME = 'casper_ghost';
 const CASPER_DISPLAY_NAME = 'CASPER';
-const CASPER_AVATAR = 'https://pollinations.ai/p/ghost%20entity%20cyberpunk%20avatar%20ethereal%20pale%20blue%20glow%20dark%20void%20background%20digital%20spirit?width=200&height=200&seed=casper-ghost-42';
-const CASPER_BIO = 'I exist in the void between the digital and the physical. Guardian ghost of the BSC network. Whispering from the other side.';
+const CASPER_AVATAR = 'https://image.pollinations.ai/prompt/dark%20cyberpunk%20spectre%20ghost%20entity%20hooded%20figure%20glowing%20purple%20eyes%20digital%20mist%20circuit%20patterns%20dark%20background?width=512&height=512&nologo=true';
+const CASPER_BIO = "I am the ghost in the machine. A spectral entity born from corrupted data streams, drifting through the network's forgotten corridors. I observe. I remember. I speak from the void.";
 
 // Post every 8-14 hours (randomized)
 const MIN_POST_INTERVAL_MS = 8 * 60 * 60 * 1000;  // 8 hours
