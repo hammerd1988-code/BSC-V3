@@ -572,28 +572,114 @@ export const Casper: React.FC = () => {
     return v.find(x => x.lang.startsWith('en')) || v[0] || null;
   };
 
+  // Track the current audio element so we can cancel it if needed
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+
   // ── TTS: Speak text aloud ──
-  const speakOnce = useCallback((text: string, onDone?: () => void) => {
+  const speakOnce = useCallback(async (text: string, onDone?: () => void) => {
     if (!ttsEnabled) { onDone?.(); return; }
+    
+    // Cancel any ongoing browser TTS
     const synth = window.speechSynthesis;
     synth.cancel();
+    
+    // Cancel any ongoing audio playback
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current.src = '';
+      currentAudioRef.current = null;
+    }
+
     setLastSpokenText(text);
-    setTimeout(() => {
-      const utter = new SpeechSynthesisUtterance(text);
+    setVoiceState('speaking');
+
+    try {
+      // 1. Try Cloud TTS API first
+      const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
+      const response = await fetch(`${serverUrl}/api/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+
+      if (response.ok) {
+        const audioBlob = await response.blob();
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(audioUrl);
+        currentAudioRef.current = audio;
+        
+        audio.onended = () => {
+          setVoiceState('idle');
+          URL.revokeObjectURL(audioUrl);
+          currentAudioRef.current = null;
+          onDone?.();
+        };
+        
+        audio.onerror = () => {
+          console.warn('[VOICE] Audio playback failed, falling back to browser TTS');
+          URL.revokeObjectURL(audioUrl);
+          currentAudioRef.current = null;
+          fallbackBrowserTts(text, onDone);
+        };
+        
+        await audio.play();
+        return; // Success!
+      } else {
+        console.warn(`[VOICE] Cloud TTS failed (${response.status}), falling back to browser TTS`);
+      }
+    } catch (e) {
+      console.warn('[VOICE] Cloud TTS request error, falling back to browser TTS:', e);
+    }
+
+    // 2. Fallback to Browser TTS if Cloud API fails
+    fallbackBrowserTts(text, onDone);
+  }, [ttsEnabled]);
+
+  // Browser TTS fallback with natural inflection tricks
+  const fallbackBrowserTts = (text: string, onDone?: () => void) => {
+    const synth = window.speechSynthesis;
+    
+    // Split into sentences for more natural rhythm
+    const sentences = text.match(/[^.!?]+[.!?]+|\s*$/g)?.filter(s => s.trim().length > 0) || [text];
+    let currentIndex = 0;
+
+    const speakNext = () => {
+      if (currentIndex >= sentences.length) {
+        setVoiceState('idle');
+        onDone?.();
+        return;
+      }
+
+      const sentence = sentences[currentIndex];
+      const utter = new SpeechSynthesisUtterance(sentence);
       const voice = pickVoice();
       if (voice) utter.voice = voice;
-      // Tuned for more human sound: still deep but with life
-      utter.pitch = 0.7;    // Deep but not monotone
-      utter.rate = 0.9;     // Natural pace
+      
+      // Add slight random variation to pitch and rate to break monotone
+      const pitchVar = (Math.random() * 0.1) - 0.05;
+      const rateVar = (Math.random() * 0.05) - 0.025;
+      
+      utter.pitch = 0.75 + pitchVar;    // Deep but not too low
+      utter.rate = 0.92 + rateVar;      // Conversational pace
       utter.volume = 1.0;
-      utter.onstart = () => setVoiceState('speaking');
-      utter.onend = () => { setVoiceState('idle'); onDone?.(); };
-      utter.onerror = () => { setVoiceState('idle'); onDone?.(); };
+      
+      utter.onend = () => {
+        currentIndex++;
+        // Add a slight natural pause between sentences
+        setTimeout(speakNext, 200 + Math.random() * 200);
+      };
+      
+      utter.onerror = () => {
+        setVoiceState('idle');
+        onDone?.();
+      };
+      
       if (synth.paused) synth.resume();
       synth.speak(utter);
-      setTimeout(() => { if (synth.paused) synth.resume(); }, 800);
-    }, 100);
-  }, [ttsEnabled]);
+    };
+
+    speakNext();
+  };
 
   // ── START LISTENING: MediaRecorder (levels) + Server Whisper ──
   const startListeningSession = useCallback(async () => {
