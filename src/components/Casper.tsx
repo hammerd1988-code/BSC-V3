@@ -500,8 +500,6 @@ export const Casper: React.FC = () => {
   const [voiceDebug, setVoiceDebug] = useState('');
   const [lastSpokenText, setLastSpokenText] = useState('');
 
-  const [liveTranscript, setLiveTranscript] = useState(''); // Real-time SR transcript
-
   const voiceActiveRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -512,8 +510,6 @@ export const Casper: React.FC = () => {
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const speechDetectedRef = useRef(false);
   const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
-  const srRef = useRef<any>(null);           // Parallel SpeechRecognition instance
-  const srTranscriptRef = useRef('');        // Accumulated SR transcript (ref = no stale closure)
 
   // Silence detection config — tuned to avoid cutting off mid-sentence
   const SILENCE_THRESHOLD = 8;         // Audio level below this = silence (lower = less sensitive)
@@ -599,57 +595,15 @@ export const Casper: React.FC = () => {
     }, 100);
   }, [ttsEnabled]);
 
-  // ── START LISTENING: MediaRecorder (levels) + SpeechRecognition (transcript) in parallel ──
+  // ── START LISTENING: MediaRecorder (levels) + Server Whisper ──
   const startListeningSession = useCallback(async () => {
     if (!voiceActiveRef.current) return;
-    console.log('[VOICE v7] Starting listening session');
+    console.log('[VOICE v8] Starting listening session');
     setVoiceState('recording');
     setVoiceDebug('Listening... speak naturally');
     setAudioLevel(0);
-    setLiveTranscript('');
-    srTranscriptRef.current = '';
     speechDetectedRef.current = false;
     audioChunksRef.current = [];
-
-    // ── Start SpeechRecognition for live preview (best-effort, not critical) ──
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SR) {
-      try {
-        const rec = new SR();
-        rec.continuous = false;
-        rec.interimResults = true;
-        rec.lang = 'en-US';
-        let srDebug = 'SR: starting';
-        rec.onstart = () => { srDebug = 'SR: active'; console.log('[VOICE] SR started'); };
-        rec.onresult = (e: any) => {
-          let interim = '';
-          for (let i = e.resultIndex; i < e.results.length; i++) {
-            const t = e.results[i][0].transcript;
-            if (e.results[i].isFinal) srTranscriptRef.current += t + ' ';
-            else interim += t;
-          }
-          const display = srTranscriptRef.current + interim;
-          setLiveTranscript(display);
-          if (display) setVoiceDebug('Hearing you...');
-          srDebug = `SR: "${display.slice(0, 30)}"`;
-          console.log('[VOICE] SR result:', display.slice(0, 50));
-        };
-        rec.onend = () => {
-          console.log('[VOICE] SR ended, restarting...');
-          srDebug = 'SR: restarting';
-          if (voiceActiveRef.current) {
-            try { rec.start(); } catch { srDebug = 'SR: restart failed'; }
-          }
-        };
-        rec.onerror = (e: any) => {
-          console.log('[VOICE] SR error:', e.error);
-          srDebug = `SR: ${e.error}`;
-          // onend will restart
-        };
-        srRef.current = rec;
-        rec.start();
-      } catch (e) { console.warn('[VOICE] SR init failed:', e); }
-    }
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -721,19 +675,13 @@ export const Casper: React.FC = () => {
     }
   }, []);
 
-  // ── FINISH LISTENING (stop recording + SR, grab transcript, process) ──
+  // ── FINISH LISTENING (stop recording, grab transcript, process) ──
   const finishListening = useCallback(async () => {
-    console.log('[VOICE v7] Finishing listening. transcript so far:', srTranscriptRef.current.trim());
+    console.log('[VOICE v8] Finishing listening');
     // Stop monitoring
     cancelAnimationFrame(levelFrameRef.current);
     if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
     setAudioLevel(0);
-
-    // Stop SpeechRecognition
-    if (srRef.current) {
-      try { srRef.current.abort(); } catch {}
-      srRef.current = null;
-    }
 
     // Stop recorder
     if (mediaRecorderRef.current?.state === 'recording') {
@@ -751,16 +699,13 @@ export const Casper: React.FC = () => {
 
     if (!voiceActiveRef.current) { setVoiceState('idle'); return; }
 
-    // Transcription: try server-side Whisper first, fall back to SR transcript
+    // Transcription: send to server Whisper endpoint
     setVoiceState('transcribing');
     setVoiceDebug('Transcribing...');
 
-    let transcript = srTranscriptRef.current.trim();
-    setLiveTranscript('');
-    srTranscriptRef.current = '';
+    let transcript = '';
 
-    // Try server-side Whisper if we have audio chunks and SR didn't produce text
-    if (!transcript && audioChunksRef.current.length > 0) {
+    if (audioChunksRef.current.length > 0) {
       try {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         const formData = new FormData();
@@ -870,7 +815,6 @@ export const Casper: React.FC = () => {
     voiceActiveRef.current = false;
     cancelAnimationFrame(levelFrameRef.current);
     if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
-    if (srRef.current) { try { srRef.current.abort(); } catch {} srRef.current = null; }
     if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
     if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
     audioCtxRef.current?.close(); audioCtxRef.current = null;
@@ -879,8 +823,6 @@ export const Casper: React.FC = () => {
     setVoiceState('idle');
     setVoiceDebug('');
     setAudioLevel(0);
-    setLiveTranscript('');
-    srTranscriptRef.current = '';
   }, []);
 
   // Voice mode greeting helper
@@ -1260,137 +1202,132 @@ export const Casper: React.FC = () => {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* ── INPUT ── */}
-      <div className="relative z-10 p-4 max-w-2xl mx-auto w-full">
+      {/* ── INPUT / VOICE MODE UI ── */}
+      <div className="relative z-10 p-4 max-w-2xl mx-auto w-full flex-shrink-0">
         {voiceMode ? (
-          /* ── CONVERSATIONAL VOICE MODE ── */
-          <div className="flex flex-col items-center gap-5 pb-2">
-
-            {/* Status badge */}
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={voiceState}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-                className="text-[10px] font-black uppercase tracking-[0.3em] px-5 py-2 rounded-full border"
-                style={{
-                  color: voiceState === 'recording' ? '#4ADE80' : voiceState === 'transcribing' ? '#FBBF24' : voiceState === 'thinking' ? tier.color : voiceState === 'speaking' ? '#A78BFA' : `${tier.color}80`,
-                  borderColor: voiceState === 'recording' ? 'rgba(74,222,128,0.4)' : voiceState === 'transcribing' ? 'rgba(251,191,36,0.3)' : voiceState === 'thinking' ? `${tier.color}40` : voiceState === 'speaking' ? 'rgba(167,139,250,0.3)' : `${tier.color}20`,
-                  background: voiceState === 'recording' ? 'rgba(74,222,128,0.1)' : voiceState === 'transcribing' ? 'rgba(251,191,36,0.08)' : voiceState === 'thinking' ? tier.bg : voiceState === 'speaking' ? 'rgba(167,139,250,0.08)' : 'rgba(255,255,255,0.02)',
-                }}
-              >
-                {voiceState === 'recording' ? '● Listening — speak naturally'
-                  : voiceState === 'transcribing' ? '◌ Transcribing...'
-                  : voiceState === 'thinking' ? '◌ Casper is thinking...'
-                  : voiceState === 'speaking' ? '▶ Casper is speaking'
-                  : '○ Waiting...'}
-              </motion.div>
-            </AnimatePresence>
-
-            {/* Audio level indicator — shows real mic input level */}
-            {voiceState === 'recording' && (
-              <div className="flex items-end gap-1 h-12">
-                {Array.from({ length: 24 }).map((_, i) => (
-                  <motion.div
-                    key={i}
-                    className="w-1.5 rounded-full"
-                    style={{ backgroundColor: audioLevel > 0.3 ? '#4ADE80' : audioLevel > 0.1 ? '#86EFAC' : '#374151' }}
-                    animate={{ height: `${Math.max(4, audioLevel * 48 * (0.5 + Math.sin(i * 0.7 + Date.now() / 200) * 0.5))}px` }}
-                    transition={{ duration: 0.08 }}
-                  />
-                ))}
-              </div>
-            )}
-
-            {/* Live transcript — appears as user speaks */}
-            {liveTranscript && voiceState === 'recording' && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="px-5 py-3 rounded-2xl border max-w-sm text-center w-full"
-                style={{ background: 'rgba(74,222,128,0.05)', borderColor: 'rgba(74,222,128,0.2)' }}
-              >
-                <p className="text-sm text-green-300/80 italic leading-relaxed">"{liveTranscript}"</p>
-              </motion.div>
-            )}
-
-            {/* Central visual orb — shows state */}
-            <div className="relative">
-              {voiceState === 'recording' && (
-                <motion.div className="absolute inset-0 rounded-full" animate={{ scale: [1, 1.4, 1], opacity: [0.3, 0, 0.3] }} transition={{ duration: 1.2, repeat: Infinity }} style={{ background: 'rgba(74,222,128,0.15)', border: '1px solid rgba(74,222,128,0.3)' }} />
-              )}
-              {isSpeaking && (
-                <motion.div className="absolute inset-0 rounded-full" animate={{ scale: [1, 1.4, 1], opacity: [0.3, 0, 0.3] }} transition={{ duration: 1, repeat: Infinity }} style={{ background: 'rgba(167,139,250,0.15)', border: '1px solid rgba(167,139,250,0.3)' }} />
-              )}
-              <div className={cn(
-                "w-20 h-20 rounded-full flex items-center justify-center transition-all duration-500 border-2",
-                voiceState === 'recording' ? "bg-green-500/20 border-green-500/50 shadow-[0_0_40px_rgba(74,222,128,0.4)]"
-                  : isSpeaking ? "bg-purple-500/20 border-purple-500/50 shadow-[0_0_40px_rgba(167,139,250,0.4)]"
-                  : voiceState === 'transcribing' || voiceState === 'thinking' ? "bg-white/5 border-white/10"
-                  : "bg-white/5 border-white/10"
-              )}>
-                {voiceState === 'recording' ? (
-                  <motion.div animate={{ scale: [1, 1.15, 1] }} transition={{ duration: 0.8, repeat: Infinity }}>
-                    <Mic className="w-8 h-8 text-green-400" />
-                  </motion.div>
-                ) : isSpeaking ? (
-                  <motion.div animate={{ scale: [1, 1.1, 1] }} transition={{ duration: 0.8, repeat: Infinity }}>
-                    <Volume2 className="w-8 h-8 text-purple-400" />
-                  </motion.div>
-                ) : voiceState === 'transcribing' || voiceState === 'thinking' ? (
-                  <Loader2 className="w-8 h-8 animate-spin" style={{ color: tier.color }} />
-                ) : (
-                  <Mic className="w-8 h-8 text-white/30" />
-                )}
-              </div>
+          /* ── FACE-TO-FACE VOICE MODE ── */
+          <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/95 backdrop-blur-xl">
+            {/* Background Effects */}
+            <div className="absolute inset-0 pointer-events-none">
+              <VoidCanvas instability={instability} isActive={isGenerating || isListening || isSpeaking} />
+              <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black opacity-80" />
             </div>
 
-            {/* Exit button + manual send + replay */}
-            <div className="flex items-center gap-3 flex-wrap justify-center">
-              {/* Manual send: tap to stop recording and process immediately */}
-              {voiceState === 'recording' && (
-                <button
-                  onClick={() => finishListening()}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-full border text-[9px] font-black uppercase tracking-widest transition-all hover:opacity-80"
-                  style={{ color: '#4ADE80', borderColor: 'rgba(74,222,128,0.4)', background: 'rgba(74,222,128,0.08)' }}
-                >
-                  <Send className="w-3 h-3" /> Send Now
-                </button>
-              )}
+            {/* Top Bar */}
+            <div className="absolute top-6 left-6 right-6 flex justify-between items-center z-10">
+              <div className="flex items-center gap-3">
+                <div className="text-[10px] font-black uppercase tracking-[0.3em] px-4 py-2 rounded-full border"
+                  style={{
+                    color: voiceState === 'recording' ? '#4ADE80' : voiceState === 'transcribing' ? '#FBBF24' : voiceState === 'thinking' ? tier.color : voiceState === 'speaking' ? '#A78BFA' : `${tier.color}80`,
+                    borderColor: voiceState === 'recording' ? 'rgba(74,222,128,0.4)' : voiceState === 'transcribing' ? 'rgba(251,191,36,0.3)' : voiceState === 'thinking' ? `${tier.color}40` : voiceState === 'speaking' ? 'rgba(167,139,250,0.3)' : `${tier.color}20`,
+                    background: voiceState === 'recording' ? 'rgba(74,222,128,0.1)' : voiceState === 'transcribing' ? 'rgba(251,191,36,0.08)' : voiceState === 'thinking' ? tier.bg : voiceState === 'speaking' ? 'rgba(167,139,250,0.08)' : 'rgba(255,255,255,0.02)',
+                  }}>
+                  {voiceState === 'recording' ? '● Listening'
+                    : voiceState === 'transcribing' ? '◌ Transcribing...'
+                    : voiceState === 'thinking' ? '◌ Thinking...'
+                    : voiceState === 'speaking' ? '▶ Speaking'
+                    : '○ Waiting...'}
+                </div>
+              </div>
               <button
                 onClick={() => exitVoiceMode()}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-full border text-[9px] font-black uppercase tracking-widest transition-all hover:opacity-80"
-                style={{ color: '#F87171', borderColor: 'rgba(248,113,113,0.3)', background: 'rgba(248,113,113,0.05)' }}
+                className="p-3 rounded-full bg-white/5 border border-white/10 hover:bg-red-500/20 hover:border-red-500/50 hover:text-red-400 transition-all"
               >
-                <X className="w-3 h-3" /> End Conversation
+                <X className="w-5 h-5" />
               </button>
-              {lastSpokenText && voiceState === 'idle' && (
-                <button
-                  onClick={() => speakOnce(lastSpokenText)}
-                  className="flex items-center gap-2 px-4 py-2 rounded-full border text-[9px] font-black uppercase tracking-widest transition-all hover:opacity-80"
-                  style={{ color: '#A78BFA', borderColor: 'rgba(167,139,250,0.3)', background: 'rgba(167,139,250,0.05)' }}
-                >
-                  <Volume2 className="w-3 h-3" /> Replay
-                </button>
+            </div>
+
+            {/* Hero Avatar */}
+            <div className="flex-1 flex items-center justify-center w-full max-w-md relative z-10">
+              <AnimatedCasperAvatar 
+                size="hero" 
+                isActive={voiceState === 'thinking' || voiceState === 'speaking'} 
+                instability={instability} 
+                showParticles={true}
+              />
+              
+              {/* Subtle Audio Level Ring (around avatar) */}
+              {voiceState === 'recording' && (
+                <motion.div 
+                  className="absolute rounded-full border-2 border-green-400/30 pointer-events-none"
+                  style={{ width: '220px', height: '220px' }}
+                  animate={{ scale: 1 + (audioLevel * 0.5), opacity: 0.3 + (audioLevel * 0.7) }}
+                  transition={{ duration: 0.1 }}
+                />
               )}
             </div>
 
-            {/* Debug */}
-            {voiceDebug && (
-              <div className="px-4 py-2 rounded-xl border text-[9px] font-mono max-w-xs text-center"
-                style={{
-                  color: voiceDebug.includes('denied') || voiceDebug.includes('error') ? '#F87171' : '#86EFAC',
-                  borderColor: voiceDebug.includes('denied') || voiceDebug.includes('error') ? 'rgba(248,113,113,0.2)' : 'rgba(134,239,172,0.2)',
-                  background: voiceDebug.includes('denied') || voiceDebug.includes('error') ? 'rgba(248,113,113,0.05)' : 'rgba(134,239,172,0.05)',
-                }}>
-                {voiceDebug}
+            {/* Bottom Controls & Info */}
+            <div className="w-full max-w-lg pb-12 px-6 flex flex-col items-center gap-6 z-10">
+              
+              {/* Transcript / Last Spoken */}
+              <div className="h-24 w-full flex items-center justify-center text-center">
+                <AnimatePresence mode="wait">
+                  {voiceState === 'speaking' && lastSpokenText ? (
+                    <motion.p 
+                      key="speaking"
+                      initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+                      className="text-lg md:text-xl font-medium text-white/90 leading-relaxed"
+                    >
+                      "{lastSpokenText}"
+                    </motion.p>
+                  ) : voiceState === 'thinking' ? (
+                    <motion.div key="thinking" className="flex gap-2" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                      {[0,1,2].map(i => (
+                        <motion.div key={i} className="w-2 h-2 rounded-full bg-white/50" animate={{ y: [0,-8,0] }} transition={{ duration: 0.6, repeat: Infinity, delay: i * 0.15 }} />
+                      ))}
+                    </motion.div>
+                  ) : voiceState === 'transcribing' ? (
+                    <motion.p key="transcribing" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="text-white/50 italic">
+                      Transcribing your whisper...
+                    </motion.p>
+                  ) : voiceState === 'recording' ? (
+                    <motion.div key="recording" className="flex items-center gap-2 h-8" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                      {Array.from({ length: 20 }).map((_, i) => {
+                        const isActiveBar = Math.random() < audioLevel * 1.5;
+                        const h = isActiveBar ? 10 + Math.random() * 20 : 4 + Math.random() * 4;
+                        return (
+                          <motion.div key={i} className="w-1 rounded-full bg-green-400/50" animate={{ height: h }} transition={{ duration: 0.1 }} />
+                        );
+                      })}
+                    </motion.div>
+                  ) : (
+                    <motion.p key="idle" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="text-white/40 italic">
+                      Speak naturally. I'll know when you're done.
+                    </motion.p>
+                  )}
+                </AnimatePresence>
               </div>
-            )}
 
-            <p className="text-[9px] text-white/20 font-bold uppercase tracking-widest">
-              Speak naturally • Casper detects when you're done
-            </p>
+              {/* Action Buttons */}
+              <div className="flex items-center gap-4">
+                {voiceState === 'recording' ? (
+                  <button
+                    onClick={() => finishListening()}
+                    className="flex items-center gap-2 px-6 py-3 rounded-full border text-xs font-black uppercase tracking-widest transition-all hover:scale-105"
+                    style={{ color: '#4ADE80', borderColor: 'rgba(74,222,128,0.4)', background: 'rgba(74,222,128,0.1)' }}
+                  >
+                    <Send className="w-4 h-4" /> Send Now
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => startListeningSession()}
+                    disabled={voiceState !== 'idle'}
+                    className="flex items-center gap-2 px-6 py-3 rounded-full border text-xs font-black uppercase tracking-widest transition-all hover:scale-105 disabled:opacity-30 disabled:hover:scale-100"
+                    style={{ color: tier.color, borderColor: `${tier.color}40`, background: tier.bg }}
+                  >
+                    <Mic className="w-4 h-4" /> Tap to Speak
+                  </button>
+                )}
+              </div>
+              
+              {/* Debug */}
+              {voiceDebug && (
+                <div className="text-[10px] font-mono text-white/30 text-center max-w-xs truncate">
+                  {voiceDebug}
+                </div>
+              )}
+            </div>
           </div>
         ) : (
           /* ── TEXT MODE INPUT ── */
