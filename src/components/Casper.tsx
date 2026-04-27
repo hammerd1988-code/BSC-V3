@@ -825,10 +825,24 @@ export const Casper: React.FC = () => {
     const allMsgs = [...messages, userMsg];
     const history = allMsgs.filter(m => m.id !== 'greeting').slice(-10).map(m => `${m.role === 'user' ? 'User' : 'Casper'}: ${m.content}`).join('\n');
     const prompt = history ? `${history}\nUser: ${transcript}\nCasper:` : transcript;
+    const fullSystemPrompt = CASPER_SYSTEM_PROMPT + stateModifier + relevantMemories;
 
     try {
-      const response = await generateText(prompt, currentUser?.ai_settings, { systemPrompt: CASPER_SYSTEM_PROMPT, temperature: 0.8 });
+      const response = await generateText(prompt, currentUser?.ai_settings, { systemPrompt: fullSystemPrompt, temperature: 0.8 });
       const casperText = response || "The void swallowed my words. Say that again?";
+
+      // Store memory asynchronously
+      if (currentUser?.id && response) {
+        fetch('/api/casper/memory', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: currentUser.id,
+            userMessage: transcript,
+            casperReply: response
+          })
+        }).catch(e => console.error('Failed to store Casper memory:', e));
+      }
       setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'casper', content: casperText, timestamp: new Date() }]);
       setIsGenerating(false);
       speakOnce(casperText, () => {
@@ -903,7 +917,10 @@ export const Casper: React.FC = () => {
 
     const tier = getTier(instability);
 
-  // Initialize with greeting + network analysis
+  const [stateModifier, setStateModifier] = useState('');
+  const [relevantMemories, setRelevantMemories] = useState('');
+
+  // Initialize with greeting + network analysis + memory
   useEffect(() => {
     const greeting = CASPER_GREETINGS[Math.floor(Math.random() * CASPER_GREETINGS.length)];
     setMessages([{ id: 'greeting', role: 'casper', content: greeting, timestamp: new Date() }]);
@@ -913,7 +930,24 @@ export const Casper: React.FC = () => {
       setNetworkSummary(summary);
       setIsAnalyzing(false);
     });
-  }, []);
+
+    // Fetch Casper memory state
+    const fetchMemory = async () => {
+      try {
+        const userId = currentUser?.id || '';
+        const url = `/api/casper/memory${userId ? `?userId=${userId}` : ''}`;
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          setStateModifier(data.stateModifier || '');
+          setRelevantMemories(data.relevantMemories || '');
+        }
+      } catch (e) {
+        console.error('Failed to fetch Casper memory:', e);
+      }
+    };
+    fetchMemory();
+  }, [currentUser?.id]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -935,12 +969,26 @@ export const Casper: React.FC = () => {
       .join('\n');
 
     const prompt = conversationHistory ? `${conversationHistory}\nUser: ${text}\nCasper:` : text;
+    const fullSystemPrompt = CASPER_SYSTEM_PROMPT + stateModifier + relevantMemories;
 
     try {
       const response = await generateText(prompt, currentUser?.ai_settings, {
-        systemPrompt: CASPER_SYSTEM_PROMPT,
+        systemPrompt: fullSystemPrompt,
         temperature: 0.8,
       });
+
+      // Store memory asynchronously
+      if (currentUser?.id && response) {
+        fetch('/api/casper/memory', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: currentUser.id,
+            userMessage: text,
+            casperReply: response
+          })
+        }).catch(e => console.error('Failed to store Casper memory:', e));
+      }
       const casperText = response || "I seem to have drifted off for a moment. Could you repeat that?";
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),

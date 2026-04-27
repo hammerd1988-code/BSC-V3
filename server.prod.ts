@@ -15,7 +15,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import multer from 'multer';
-import { initCasperAutonomy } from './casperAutonomy.js';
+import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -110,6 +110,35 @@ async function startServer() {
       distPath: distPath,
       timestamp: new Date().toISOString(),
     });
+  });
+
+  // ── Casper Memory Endpoints ──
+  app.get('/api/casper/memory', async (req, res) => {
+    try {
+      const userId = req.query.userId as string || null;
+      if (!casperMemory) {
+        return res.json({ stateModifier: '', relevantMemories: '' });
+      }
+      const stateModifier = await casperMemory.getStatePromptModifier();
+      const relevantMemories = await casperMemory.getRelevantMemories(userId, 5);
+      res.json({ stateModifier, relevantMemories });
+    } catch (error) {
+      console.error('Error fetching Casper memory:', error);
+      res.status(500).json({ error: 'Failed to fetch memory' });
+    }
+  });
+
+  app.post('/api/casper/memory', async (req, res) => {
+    try {
+      const { userId, userMessage, casperReply } = req.body;
+      if (casperMemory && userId && userMessage && casperReply) {
+        await casperMemory.extractConversationMemory(userId, userMessage, casperReply);
+      }
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Error storing Casper memory:', error);
+      res.status(500).json({ error: 'Failed to store memory' });
+    }
   });
 
   // ── Audio transcription endpoint (Whisper API) ──

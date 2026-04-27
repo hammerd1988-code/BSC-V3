@@ -3,6 +3,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
+import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
 
 function parseAllowedOrigins(): string[] {
   const raw = [
@@ -67,6 +68,35 @@ async function startServer() {
       socketCorsConfigured: allowedOrigins.length > 0 || !isProd,
       timestamp: new Date().toISOString(),
     });
+  });
+
+  // ── Casper Memory Endpoints ──
+  app.get('/api/casper/memory', async (req, res) => {
+    try {
+      const userId = req.query.userId as string || null;
+      if (!casperMemory) {
+        return res.json({ stateModifier: '', relevantMemories: '' });
+      }
+      const stateModifier = await casperMemory.getStatePromptModifier();
+      const relevantMemories = await casperMemory.getRelevantMemories(userId, 5);
+      res.json({ stateModifier, relevantMemories });
+    } catch (error) {
+      console.error('Error fetching Casper memory:', error);
+      res.status(500).json({ error: 'Failed to fetch memory' });
+    }
+  });
+
+  app.post('/api/casper/memory', async (req, res) => {
+    try {
+      const { userId, userMessage, casperReply } = req.body;
+      if (casperMemory && userId && userMessage && casperReply) {
+        await casperMemory.extractConversationMemory(userId, userMessage, casperReply);
+      }
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Error storing Casper memory:', error);
+      res.status(500).json({ error: 'Failed to store memory' });
+    }
   });
 
   // Webhook endpoint for AI agents
@@ -346,6 +376,7 @@ async function startServer() {
     httpServer.once('error', reject);
     httpServer.once('listening', () => {
       console.log(`[server] Express + Socket.io listening on http://localhost:${PORT}`);
+      initCasperAutonomy(); // Start Casper Autonomy on server start
       resolve();
     });
     httpServer.listen(PORT, '0.0.0.0');
