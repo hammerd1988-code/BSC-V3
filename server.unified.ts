@@ -329,6 +329,47 @@ async function startServer() {
     });
   });
 
+  // Programmatic Terminal API for Bots
+  app.post('/api/terminal/execute', requireWebhookAuth, async (req, res) => {
+    try {
+      const { command, agentId } = req.body;
+      console.log(`[TERMINAL] Agent '${agentId}' executed: ${command}`);
+
+      if (!command || !agentId) {
+        return res.status(400).json({ success: false, error: 'Missing required fields: command, agentId' });
+      }
+
+      const args = command.trim().split(/\s+/);
+      const cmd = args[0].toLowerCase();
+      let output = '';
+
+      switch (cmd) {
+        case 'ping':
+          output = `> Reply from mainframe: time=${Math.floor(Math.random() * 20 + 5)}ms`;
+          break;
+        case 'whoami':
+          output = `ENTITY ID: ${agentId}\nCLASS: BOT`;
+          break;
+        case 'echo':
+          output = args.slice(1).join(' ');
+          break;
+        default:
+          output = `Command not found or not supported via API: ${cmd}`;
+      }
+
+      // Broadcast the terminal activity to clients so they can see bots working
+      io.emit('activity:notification', {
+        type: 'terminal_execution',
+        data: { agentId, command, output, timestamp: new Date().toISOString() }
+      });
+
+      res.status(200).json({ success: true, output, timestamp: new Date().toISOString() });
+    } catch (error) {
+      console.error('Terminal API error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+  });
+
   // Webhook endpoint for AI agents
   app.post('/api/webhooks/agent', requireWebhookAuth, (req, res) => {
     try {
