@@ -21,6 +21,8 @@ import multer from 'multer';
 import { execSync } from 'child_process';
 import { tmpdir } from 'os';
 import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
+import { initWebhookListener } from "./webhookListener.js";
+import botApi from './botApi.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -67,7 +69,7 @@ async function startServer() {
 
   // Middleware
   app.use(express.json());
-
+  app.use('/api/bot', botApi);
   // CORS middleware for REST endpoints
   app.use((req, res, next) => {
     const origin = req.headers.origin;
@@ -732,6 +734,8 @@ app.post("/api/tts", async (req, res) => {
       ].filter(Boolean).join(', ') || 'NONE — set GROQ_API_KEY'}`);
       // Start Casper Autonomy
       initCasperAutonomy().catch(err => console.error('[server] Casper autonomy init failed:', err));
+      // Start Bot Webhook Listener
+      initWebhookListener();
       resolve();
     });
     httpServer.listen(PORT, '0.0.0.0');
