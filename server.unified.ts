@@ -10,6 +10,10 @@
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import { SquareClient, SquareEnvironment } from 'square';
+import { createClient } from '@supabase/supabase-js';
+import { v4 as uuidv4 } from 'uuid';
+
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -19,6 +23,11 @@ import { tmpdir } from 'os';
 import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+
+// Supabase service-role client for server-side operations
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -96,7 +105,89 @@ async function startServer() {
   };
 
   // ── Text-to-Speech (Casper Voice) ──
-  app.post('/api/tts', async (req, res) => {
+  app.post('/api/square/process-payment', async (req, res) => {
+    const { sourceId, amount, userId, credAmount } = req.body;
+
+    if (!sourceId || !amount || !userId || !credAmount) {
+        return res.status(400).send({ message: 'Missing required payment details.' });
+    }
+
+    try {
+        const squareClient = new SquareClient({
+            token: process.env.SQUARE_ACCESS_TOKEN || 'EAAAlxfDZaOMl_gvyraxBq_2ecvPhEKA4y-a25ccjlCpVw0vlj0Lri2RaoYG__i6',
+            environment: process.env.NODE_ENV === 'production' ? SquareEnvironment.Production : SquareEnvironment.Sandbox,
+        });
+
+        const paymentResponse = await squareClient.payments.create({
+            sourceId: sourceId,
+            amountMoney: {
+                amount: BigInt(amount), // amount is already in cents
+                currency: 'USD',
+            },
+            locationId: process.env.SQUARE_LOCATION_ID || 'L427FTSA66A1B',
+            idempotencyKey: uuidv4(),
+        });
+
+        const payment = paymentResponse.payment;
+        if (payment && payment.status === 'COMPLETED') {
+            // Update user's CRED balance in Supabase
+            const { error: userError } = await supabase
+                .rpc('increment_cred_balance', { p_user_id: userId, p_amount: credAmount });
+
+            if (userError) throw userError;
+
+            // Record transaction
+            const { error: transactionError } = await supabase.from('transactions').insert({
+                user_id: userId,
+                amount: credAmount,
+                type: 'purchase',
+                description: `Purchased ${credAmount} CRED via Square`,
+            });
+
+            if (transactionError) throw transactionError;
+
+            res.status(200).send({ success: true, payment });
+        } else {
+            res.status(400).send({ success: false, message: 'Payment not completed.' });
+        }
+    } catch (error) {
+        console.error('Square payment error:', error);
+        res.status(500).send({ message: 'Internal server error during payment processing.' });
+    }
+});
+
+app.post("/api/cred/exchange", async (req, res) => {
+    const { userId, credAmount } = req.body;
+
+    if (!userId || !credAmount || credAmount <= 0) {
+        return res.status(400).send({ message: "Missing required exchange details or invalid amount." });
+    }
+
+    try {
+        // Deduct CRED and add tokens (assuming 1 CRED = 1 token for now)
+        const { data: userUpdate, error: userError } = await supabase
+            .rpc("exchange_cred_for_tokens", { user_id: userId, cred_to_deduct: credAmount, tokens_to_add: credAmount });
+
+        if (userError) throw userError;
+
+        // Record transaction
+        const { error: transactionError } = await supabase.from("transactions").insert({
+            user_id: userId,
+            amount: credAmount,
+            type: "exchange",
+            description: `Exchanged ${credAmount} CRED for ${credAmount} tokens`,
+        });
+
+        if (transactionError) throw transactionError;
+
+        res.status(200).send({ success: true, message: "CRED exchanged successfully." });
+    } catch (error) {
+        console.error("CRED exchange error:", error);
+        res.status(500).send({ message: "Internal server error during CRED exchange." });
+    }
+});
+
+app.post("/api/tts", async (req, res) => {
     try {
       const { text } = req.body;
       if (!text || typeof text !== 'string') {
