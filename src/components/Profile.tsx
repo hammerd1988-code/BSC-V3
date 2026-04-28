@@ -489,12 +489,20 @@ export const Profile: React.FC = () => {
   };
 
   const standing = getNeuralStanding(user.reputation_score);
+  const profileColor = user.custom_accent || '#FF0000';
+  
+  useEffect(() => {
+    document.documentElement.style.setProperty('--dynamic-accent', profileColor);
+    return () => {
+      document.documentElement.style.removeProperty('--dynamic-accent');
+    };
+  }, [profileColor]);
 
   return (
     <div className={cn(
       "min-h-screen bg-background pb-20 transition-all duration-700",
       isHighContrast && "bg-black selection:bg-white selection:text-black"
-    )} style={{ '--dynamic-accent': customAccent || undefined } as React.CSSProperties}>
+    )} style={{ '--dynamic-accent': profileColor } as React.CSSProperties}>
       {/* Header Navigation */}
       <header className={cn(
         "sticky top-0 z-50 bg-background/80 backdrop-blur-xl border-b border-white/5 px-4 py-3",

@@ -49,9 +49,9 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
   const cardContainerRef = useRef<HTMLDivElement>(null);
 
   const TIERS = [
-    { amount: 100, price: '$0.99', priceInCents: 99, bonus: 0 },
-    { amount: 500, price: '$4.49', priceInCents: 449, bonus: 50 },
-    { amount: 1200, price: '$9.99', priceInCents: 999, bonus: 200, popular: true },
+    { amount: 100, price: '$4.99', priceInCents: 499, bonus: 0 },
+    { amount: 500, price: '$19.99', priceInCents: 1999, bonus: 0 },
+    { amount: 1500, price: '$49.99', priceInCents: 4999, bonus: 0, popular: true },
   ];
 
   useEffect(() => {
@@ -127,17 +127,20 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
     setExchanging(true);
     try {
       const tokensReceived = amount * 1000;
-      await Promise.all([
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'cred_balance', p_amount: -amount }),
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'compute_tokens', p_amount: tokensReceived }),
-      ]);
-      await supabase.from('transactions').insert({
-        user_id: user.id,
-        amount,
-        type: 'spend',
-        description: `Exchanged ${amount} CRED for ${tokensReceived.toLocaleString()} Compute Tokens`,
-        created_at: new Date().toISOString(),
+      const response = await fetch('/api/cred/exchange', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.id,
+          credAmount: amount,
+        }),
       });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'CRED exchange failed on server.');
+      }
       setExchangeAmount('10');
       fetchTransactions();
     } catch (error) {
@@ -158,21 +161,25 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
         throw new Error(result.errors?.[0]?.message || 'Card tokenization failed');
       }
 
-      // In a real deployment, send result.token to your backend to complete the charge.
-      // For now we simulate a successful charge and credit the user.
-      // TODO: POST to /api/payments/square with { token: result.token, amount: selectedTier.priceInCents }
-      console.log('[Square] Payment token:', result.token, '— send to backend to charge');
-
-      // Credit the user (in production this happens after backend confirms charge)
       const credToAdd = selectedTier.amount + selectedTier.bonus;
-      await supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'cred_balance', p_amount: credToAdd });
-      await supabase.from('transactions').insert({
-        user_id: user.id,
-        amount: credToAdd,
-        type: 'purchase',
-        description: `Purchased ${credToAdd} CRED for ${selectedTier.price} via Square`,
-        created_at: new Date().toISOString(),
+      const response = await fetch('/api/square/process-payment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceId: result.token,
+          amount: selectedTier.priceInCents,
+          userId: user.id,
+          credAmount: credToAdd,
+        }),
       });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setPaymentSuccess(`✓ ${credToAdd} CRED added to your wallet!`);
+      } else {
+        throw new Error(data.message || 'Payment failed on server.');
+      }
 
       setPaymentSuccess(`✓ ${credToAdd} CRED added to your wallet!`);
       setSelectedTier(null);
