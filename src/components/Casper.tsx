@@ -1201,9 +1201,9 @@ export const Casper: React.FC = () => {
             >
               {msg.role === 'casper' && <AnimatedCasperAvatar size="sm" instability={instability} />}
 
-              <div className={cn("max-w-[80%] group relative", msg.role === 'user' ? "items-end" : "items-start")}>
+              <div className={cn("max-w-[85%] sm:max-w-[80%] group relative flex flex-col", msg.role === 'user' ? "items-end" : "items-start")}>
                 <div
-                  className={cn("px-4 py-3 rounded-2xl text-sm leading-relaxed", msg.role === 'user' ? "rounded-br-none" : "rounded-bl-none")}
+                  className={cn("px-4 py-3 rounded-2xl text-sm leading-relaxed break-words whitespace-pre-wrap overflow-hidden", msg.role === 'user' ? "rounded-br-none" : "rounded-bl-none")}
                   style={msg.role === 'casper' ? {
                     background: `linear-gradient(135deg, ${tier.bg} 0%, rgba(3,3,8,0.8) 100%)`,
                     borderColor: `${tier.color}25`,
@@ -1218,20 +1218,22 @@ export const Casper: React.FC = () => {
                 >
                   {/* Code block rendering */}
                   {msg.content.includes('```') ? (
-                    <div className="space-y-2">
+                    <div className="space-y-2 max-w-full overflow-hidden">
                       {msg.content.split(/(```[\s\S]*?```)/g).map((part, i) => {
                         if (part.startsWith('```')) {
                           const code = part.replace(/^```\w*\n?/, '').replace(/```$/, '');
                           return (
-                            <pre key={i} className="bg-black/60 rounded-lg p-3 text-xs font-mono overflow-x-auto border border-white/10 text-green-300">
+                            <pre key={i} className="bg-black/60 rounded-lg p-3 text-xs font-mono overflow-x-auto max-w-full border border-white/10 text-green-300 whitespace-pre">
                               {code}
                             </pre>
                           );
                         }
-                        return <span key={i}>{part}</span>;
+                        return <span key={i} className="break-words">{part}</span>;
                       })}
                     </div>
-                  ) : msg.content}
+                  ) : (
+                    <span className="break-words">{msg.content}</span>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
