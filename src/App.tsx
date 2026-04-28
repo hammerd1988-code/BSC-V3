@@ -137,6 +137,8 @@ export default function App() {
         <Route path="/auth/callback" element={<Login />} />
         <Route path="/join/:referralCode" element={<ReferralLandingPage />} />
         <Route path="/join" element={<ReferralLandingPage />} />
+        {/* Public stream viewer — anyone with a ?streamId link can watch */}
+        <Route path="/golive" element={<GoLive />} />
         <Route path="*" element={<Login />} />
       </Routes>
     );
