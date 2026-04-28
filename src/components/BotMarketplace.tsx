@@ -825,9 +825,12 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
     update({ [type]: (form as any)[type].filter((_: any, i: number) => i !== idx) });
   };
 
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
   const handleSubmit = async () => {
     if (!currentUser) return;
     setSaving(true);
+    setErrorMsg(null);
     try {
       const { error } = await supabase.from('bot_listings').insert({
         creator_id: currentUser.id,
@@ -854,7 +857,10 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
         language_style: form.language_style,
         catchphrases: form.catchphrases,
       });
-      if (error) throw error;
+      if (error) {
+        setErrorMsg(error.message);
+        throw error;
+      }
       onPublished();
     } catch (err) {
       handleDbError(err, 'CREATE', 'bot_listings');
@@ -1236,6 +1242,14 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
         </div>
 
         {/* Footer nav */}
+        {errorMsg && (
+          <div className="px-5 pt-3">
+            <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-xs font-bold flex items-center gap-2">
+              <Shield className="w-4 h-4" />
+              {errorMsg}
+            </div>
+          </div>
+        )}
         <div className="p-5 border-t border-white/10 flex gap-3">
           {stepIdx > 0 && (
             <button onClick={() => setStep(STEPS[stepIdx - 1])} className="px-5 py-3 border border-white/10 text-gray-400 rounded-xl hover:bg-white/5 transition-colors text-sm font-bold">
