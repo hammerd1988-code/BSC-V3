@@ -459,7 +459,7 @@ export const GoLive: React.FC = () => {
       <div className="relative flex-1 bg-zinc-950 flex flex-col overflow-hidden">
         {/* Top Header (Mobile/Small Screens) */}
         <div className="p-4 flex items-center justify-between border-b border-white/5 md:hidden">
-          <button onClick={() => navigate('/')} className="p-2 text-white">
+          <button onClick={() => currentUser ? navigate('/') : window.location.href = '/'} className="p-2 text-white">
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div className="flex items-center gap-2">
@@ -558,7 +558,7 @@ export const GoLive: React.FC = () => {
                   The neural link has been successfully severed. All stream data has been archived to the global consciousness network.
                 </p>
                 <button 
-                  onClick={() => navigate('/')}
+                  onClick={() => currentUser ? navigate('/') : window.location.href = '/'}
                   className="px-16 py-5 bg-white text-black rounded-2xl font-black uppercase tracking-widest hover:bg-zinc-200 transition-all shadow-xl hover:scale-105 active:scale-95"
                 >
                   Return to Network
@@ -722,13 +722,22 @@ export const GoLive: React.FC = () => {
                     <span className="text-[8px] text-zinc-500 font-bold uppercase">Broadcasting</span>
                   </div>
                 </div>
-                <button 
-                  onClick={() => setShowDonateModal(true)}
-                  className="px-6 py-3 bg-yellow-500 text-black rounded-xl font-black uppercase tracking-widest hover:bg-yellow-400 transition-all flex items-center gap-2 shadow-lg"
-                >
-                  <Gift className="w-4 h-4" />
-                  Donate
-                </button>
+                {currentUser ? (
+                  <button 
+                    onClick={() => setShowDonateModal(true)}
+                    className="px-6 py-3 bg-yellow-500 text-black rounded-xl font-black uppercase tracking-widest hover:bg-yellow-400 transition-all flex items-center gap-2 shadow-lg"
+                  >
+                    <Gift className="w-4 h-4" />
+                    Donate
+                  </button>
+                ) : (
+                  <button 
+                    onClick={() => window.location.href = '/'}
+                    className="px-6 py-3 bg-accent text-white rounded-xl font-black uppercase tracking-widest hover:opacity-90 transition-all flex items-center gap-2 shadow-lg"
+                  >
+                    Join BSC
+                  </button>
+                )}
                 <button 
                   onClick={() => setShowShareModal(true)}
                   className="p-3 rounded-xl bg-white/5 border border-white/10 text-white hover:bg-white/10 transition-all"
@@ -736,7 +745,7 @@ export const GoLive: React.FC = () => {
                   <Share2 className="w-5 h-5" />
                 </button>
                 <button 
-                  onClick={() => navigate('/')}
+                  onClick={() => currentUser ? navigate('/') : window.location.href = '/'}
                   className="px-6 py-3 bg-zinc-800 text-white rounded-xl font-black uppercase tracking-widest hover:bg-zinc-700 transition-all border border-white/5"
                 >
                   Leave
@@ -822,24 +831,36 @@ export const GoLive: React.FC = () => {
           <div ref={messagesEndRef} />
         </div>
 
-        <form onSubmit={handleSendMessage} className="p-6 border-t border-white/5 bg-zinc-950">
-          <div className="relative group">
-            <input 
-              type="text" 
-              value={newMessage}
-              onChange={(e) => setNewMessage(e.target.value)}
-              placeholder="TRANSMIT SIGNAL..."
-              className="w-full bg-white/5 border border-white/10 rounded-2xl pl-5 pr-14 py-4 text-xs text-white placeholder:text-zinc-700 focus:outline-none focus:border-accent transition-all focus:bg-white/10"
-            />
-            <button 
-              type="submit"
-              disabled={!newMessage.trim()}
-              className="absolute right-3 top-1/2 -translate-y-1/2 p-2.5 text-accent hover:text-white transition-all disabled:opacity-20 group-focus-within:scale-110"
+        {currentUser ? (
+          <form onSubmit={handleSendMessage} className="p-6 border-t border-white/5 bg-zinc-950">
+            <div className="relative group">
+              <input 
+                type="text" 
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                placeholder="TRANSMIT SIGNAL..."
+                className="w-full bg-white/5 border border-white/10 rounded-2xl pl-5 pr-14 py-4 text-xs text-white placeholder:text-zinc-700 focus:outline-none focus:border-accent transition-all focus:bg-white/10"
+              />
+              <button 
+                type="submit"
+                disabled={!newMessage.trim()}
+                className="absolute right-3 top-1/2 -translate-y-1/2 p-2.5 text-accent hover:text-white transition-all disabled:opacity-20 group-focus-within:scale-110"
+              >
+                <Send className="w-5 h-5" />
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="p-4 border-t border-white/5 bg-zinc-950 flex items-center justify-center gap-3">
+            <span className="text-xs text-zinc-500 font-bold uppercase tracking-widest">Sign in to chat</span>
+            <button
+              onClick={() => window.location.href = '/'}
+              className="px-4 py-2 bg-accent text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:opacity-90 transition-opacity"
             >
-              <Send className="w-5 h-5" />
+              Join BSC
             </button>
           </div>
-        </form>
+        )}
       </div>
 
       {/* ── MODALS ─────────────────────────────────────────────────────── */}
