@@ -147,6 +147,57 @@ async function startServer() {
     }
   });
 
+  // ── Text-to-Speech (OpenAI Onyx) ──
+  app.post('/api/tts', async (req, res) => {
+    try {
+      const { text, speed } = req.body;
+
+      if (!text || typeof text !== 'string') {
+        return res.status(400).json({ error: 'text is required' });
+      }
+
+      const apiKey = process.env.OPENAI_TTS_KEY || process.env.OPENAI_API_KEY;
+      if (!apiKey) {
+        console.warn('[tts] OPENAI_TTS_KEY/OPENAI_API_KEY is not configured');
+        return res.status(503).json({ error: 'TTS unavailable — falling back to browser TTS' });
+      }
+
+      const input = text.slice(0, 4096);
+      const speechSpeed = typeof speed === 'number' ? Math.max(0.25, Math.min(4.0, speed)) : 1.05;
+
+      const response = await fetch('https://api.openai.com/v1/audio/speech', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'tts-1',
+          voice: 'onyx',
+          input,
+          speed: speechSpeed,
+          response_format: 'mp3',
+        }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        console.warn(`[tts] OpenAI returned ${response.status}: ${errText.slice(0, 300)}`);
+        return res.status(503).json({ error: 'TTS unavailable — falling back to browser TTS' });
+      }
+
+      const audioBuffer = Buffer.from(await response.arrayBuffer());
+      res.set('Content-Type', 'audio/mpeg');
+      res.set('Content-Length', String(audioBuffer.byteLength));
+      res.set('Cache-Control', 'no-cache');
+      return res.send(audioBuffer);
+    } catch (e: any) {
+      console.error('[tts] Error:', e.message);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+
   // ── Audio transcription endpoint (Whisper API) ──
   app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
     try {

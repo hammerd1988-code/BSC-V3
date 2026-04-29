@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { Ghost, Sparkles, Loader2, Info } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { motion } from 'motion/react';
+import { Ghost, Sparkles, Loader2, Info, Volume2 } from 'lucide-react';
 import { supabase } from '../supabase';
 import { generateText } from '../lib/ai';
 import { useAuth } from '../AuthContext';
@@ -11,11 +11,15 @@ interface CasperStateProps {
   profileUsername?: string;
 }
 
+type TtsSection = 'take' | 'mood';
+
 export const CasperState: React.FC<CasperStateProps> = ({ context = 'feed', profileUsername }) => {
   const { currentUser } = useAuth();
   const [summary, setSummary] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [isVisible, setIsVisible] = useState(true);
+  const [speakingSection, setSpeakingSection] = useState<TtsSection | null>(null);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const fetchAndAnalyze = async () => {
     if (!currentUser) return;
@@ -89,7 +93,104 @@ export const CasperState: React.FC<CasperStateProps> = ({ context = 'feed', prof
     fetchAndAnalyze();
   }, [context, profileUsername]);
 
+  useEffect(() => {
+    return () => {
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current.src = '';
+        currentAudioRef.current = null;
+      }
+      window.speechSynthesis?.cancel();
+    };
+  }, []);
+
+  const fallbackBrowserTts = (text: string, section: TtsSection) => {
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.05;
+    utterance.pitch = 0.85;
+    utterance.volume = 1;
+    utterance.onend = () => setSpeakingSection(null);
+    utterance.onerror = () => setSpeakingSection(null);
+    setSpeakingSection(section);
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const playTts = async (section: TtsSection, text: string) => {
+    if (!text.trim()) return;
+
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current.src = '';
+      currentAudioRef.current = null;
+    }
+    window.speechSynthesis.cancel();
+    setSpeakingSection(section);
+
+    try {
+      const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
+      const response = await fetch(`${serverUrl}/api/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, speed: 1.05 }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`TTS request failed with ${response.status}`);
+      }
+
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      currentAudioRef.current = audio;
+
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl);
+        currentAudioRef.current = null;
+        setSpeakingSection(null);
+      };
+
+      audio.onerror = () => {
+        URL.revokeObjectURL(audioUrl);
+        currentAudioRef.current = null;
+        fallbackBrowserTts(text, section);
+      };
+
+      await audio.play();
+    } catch (err) {
+      console.warn('[CasperState] Server TTS unavailable, using browser fallback:', err);
+      fallbackBrowserTts(text, section);
+    }
+  };
+
+  const SpeakerButton = ({ section, text, label }: { section: TtsSection; text: string; label: string }) => {
+    const isSpeaking = speakingSection === section;
+
+    return (
+      <button
+        type="button"
+        onClick={() => playTts(section, text)}
+        disabled={loading || !text.trim() || speakingSection !== null}
+        className={cn(
+          "inline-flex h-6 w-6 items-center justify-center rounded-full border border-blue-300/20 bg-blue-300/5 text-blue-200/70 transition-all",
+          "hover:border-cyan-300/60 hover:bg-cyan-300/10 hover:text-cyan-100 hover:shadow-[0_0_14px_rgba(34,211,238,0.35)]",
+          "disabled:cursor-not-allowed disabled:opacity-40",
+          isSpeaking && "border-cyan-300/70 bg-cyan-300/15 text-cyan-100 shadow-[0_0_14px_rgba(34,211,238,0.45)]"
+        )}
+        title={label}
+        aria-label={label}
+      >
+        {isSpeaking ? <Loader2 className="w-3 h-3 animate-spin" /> : <Volume2 className="w-3 h-3" />}
+      </button>
+    );
+  };
+
   if (!isVisible) return null;
+
+  const takeText = context === 'profile'
+    ? `Casper's Take on @${profileUsername || 'this operative'}`
+    : "Casper's Take";
+  const moodText = summary || '';
 
   return (
     <motion.div
@@ -117,14 +218,26 @@ export const CasperState: React.FC<CasperStateProps> = ({ context = 'feed', prof
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between mb-1">
-            <h3 className="text-[10px] font-black text-blue-300 uppercase tracking-[0.2em] flex items-center gap-1.5">
-              <Sparkles className="w-3 h-3" />
-              Casper's Take: The Mood of the Network
-            </h3>
+          <div className="flex items-start justify-between gap-3 mb-2">
+            <div className="space-y-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <h3 className="text-[10px] font-black text-blue-300 uppercase tracking-[0.2em] flex items-center gap-1.5">
+                  <Sparkles className="w-3 h-3" />
+                  Casper's Take
+                </h3>
+                <SpeakerButton section="take" text={takeText} label="Play Casper's Take heading" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] font-bold text-purple-200/70 uppercase tracking-[0.22em]">
+                  Mood of the Network
+                </span>
+                <SpeakerButton section="mood" text={moodText} label="Play Mood of the Network" />
+              </div>
+            </div>
             <button 
               onClick={() => setIsVisible(false)}
               className="text-white/20 hover:text-white/50 transition-colors"
+              aria-label="Hide Casper network mood"
             >
               <Info className="w-3 h-3" />
             </button>

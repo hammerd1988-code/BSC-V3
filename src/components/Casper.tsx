@@ -594,12 +594,12 @@ export const Casper: React.FC = () => {
     setVoiceState('speaking');
 
     try {
-      // 1. Try Cloud TTS API first
+      // 1. Try the server TTS endpoint first (OpenAI Onyx in production)
       const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
       const response = await fetch(`${serverUrl}/api/tts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, speed: 1.35 })
+        body: JSON.stringify({ text, speed: 1.05 })
       });
 
       if (response.ok) {
@@ -660,7 +660,7 @@ export const Casper: React.FC = () => {
       const rateVar = (Math.random() * 0.08) - 0.04;
       
       utter.pitch = 0.75 + pitchVar;    // Deep but not too low
-      utter.rate = 1.38 + rateVar;      // Faster conversational pace
+      utter.rate = 1.12 + rateVar;      // Natural browser fallback pace
       utter.volume = 1.0;
       
       utter.onend = () => {
