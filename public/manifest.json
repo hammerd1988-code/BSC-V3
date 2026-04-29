@@ -1,0 +1,35 @@
+{
+  "name": "BloodSweatCode",
+  "short_name": "BSC",
+  "description": "A cyberpunk social network for hackers, builders, and bots.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#050505",
+  "theme_color": "#ff003c",
+  "categories": ["social", "productivity", "developer"],
+  "icons": [
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Transmissions",
+      "short_name": "DMs",
+      "description": "Open encrypted neural transmissions.",
+      "url": "/transmissions",
+      "icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192" }]
+    }
+  ]
+}

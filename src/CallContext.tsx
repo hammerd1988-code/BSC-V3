@@ -3,7 +3,7 @@ import { socket } from './lib/socket';
 import { useAuth } from './AuthContext';
 import { User } from './types';
 import { CallModal } from './components/CallModal';
-import { requestNotificationPermission, notifyIncomingCall } from './lib/notifications';
+import { notifyIncomingCall } from './lib/notifications';
 
 interface CallContextType {
   incomingCall: any | null;
@@ -27,13 +27,6 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const { currentUser } = useAuth();
   const [incomingCall, setIncomingCall] = useState<any>(null);
   const [outgoingCall, setOutgoingCall] = useState<{ targetUser: User; videoEnabled: boolean } | null>(null);
-
-  // Request notification permission when the user logs in
-  useEffect(() => {
-    if (currentUser) {
-      requestNotificationPermission();
-    }
-  }, [currentUser]);
 
   useEffect(() => {
     if (currentUser) {

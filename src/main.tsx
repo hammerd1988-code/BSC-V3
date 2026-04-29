@@ -6,6 +6,7 @@ import './index.css';
 import { AuthProvider } from './AuthContext.tsx';
 import { CallProvider } from './CallContext.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
+import { registerServiceWorker } from './lib/notifications.ts';
 
 // Global handler for stale-chunk errors that occur outside React's error boundary
 // (e.g., dynamic imports in event handlers or route lazy-loads)
@@ -41,6 +42,8 @@ window.addEventListener('load', () => {
     }
   }, 3000);
 });
+
+void registerServiceWorker();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

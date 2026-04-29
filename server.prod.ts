@@ -11,14 +11,21 @@
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import { createClient } from '@supabase/supabase-js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import multer from 'multer';
 import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
 import botApi from './botApi.js';
+import { registerPushRoutes } from './pushNotifications.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+
+// Supabase service-role client for server-side push subscription and notification operations
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -76,6 +83,7 @@ async function startServer() {
 
   // Bot API routes for external agents such as Sapphire.
   app.use('/api/bot', botApi);
+  registerPushRoutes(app, supabase);
 
   // Webhook Authentication Middleware
   const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {

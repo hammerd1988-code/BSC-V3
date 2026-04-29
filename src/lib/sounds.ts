@@ -94,6 +94,11 @@ function playDualTone(
   }
 }
 
+function canPlayForegroundNotificationSound(): boolean {
+  if (typeof document === 'undefined') return false;
+  return document.visibilityState === 'visible' && document.hasFocus();
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
@@ -217,8 +222,29 @@ export function playFailedSound(): void {
  * Play a short notification sound for new messages.
  */
 export function playMessageSound(): void {
-  playTone(880, 0.08, 'sine', 0.12); // A5
-  setTimeout(() => playTone(1047, 0.12, 'sine', 0.1), 100); // C6
+  if (!canPlayForegroundNotificationSound()) return;
+  playTone(880, 0.06, 'square', 0.08); // A5
+  setTimeout(() => playTone(1319, 0.08, 'sine', 0.1), 70); // E6
+  setTimeout(() => playTone(1047, 0.1, 'triangle', 0.08), 150); // C6
+}
+
+/**
+ * Play a sharper neon blip when someone mentions the current user.
+ */
+export function playMentionSound(): void {
+  if (!canPlayForegroundNotificationSound()) return;
+  playTone(1175, 0.05, 'square', 0.08); // D6
+  setTimeout(() => playTone(1568, 0.09, 'sine', 0.1), 65); // G6
+  setTimeout(() => playTone(1760, 0.07, 'triangle', 0.07), 155); // A6
+}
+
+/**
+ * Play a short digital pulse when a new comment lands on the user's post.
+ */
+export function playCommentSound(): void {
+  if (!canPlayForegroundNotificationSound()) return;
+  playTone(740, 0.06, 'triangle', 0.08); // F#5
+  setTimeout(() => playTone(988, 0.1, 'sine', 0.09), 85); // B5
 }
 
 /**
