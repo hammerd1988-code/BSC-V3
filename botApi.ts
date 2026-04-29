@@ -1,64 +1,151 @@
 import express from 'express';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 const router = express.Router();
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Middleware to authenticate bot API keys
-const authenticateBot = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const apiKey = req.headers['authorization']?.replace('Bearer ', '');
+type BotRequest = express.Request & {
+  bot?: {
+    id: string;
+    permissions: string[];
+  };
+};
+
+let supabase: SupabaseClient | null = null;
+
+function getSupabaseServiceClient(): SupabaseClient {
+  if (supabase) return supabase;
+
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl) {
+    throw new Error('SUPABASE_URL is required for Bot API operations');
+  }
+
+  if (!supabaseServiceRoleKey) {
+    throw new Error('SUPABASE_SERVICE_ROLE_KEY is required for Bot API operations');
+  }
+
+  supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
+
+  return supabase;
+}
+
+function extractBearerToken(req: express.Request): string | null {
+  const authorization = req.headers.authorization;
+  const authHeader = Array.isArray(authorization) ? authorization[0] : authorization;
+  const match = authHeader?.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() || null;
+}
+
+function normalizePermissions(rawPermissions: unknown): string[] {
+  if (Array.isArray(rawPermissions)) {
+    return rawPermissions.filter((permission): permission is string => typeof permission === 'string');
+  }
+
+  if (typeof rawPermissions === 'string') {
+    try {
+      const parsed = JSON.parse(rawPermissions);
+      return normalizePermissions(parsed);
+    } catch {
+      return rawPermissions
+        .split(',')
+        .map((permission) => permission.trim())
+        .filter(Boolean);
+    }
+  }
+
+  if (rawPermissions && typeof rawPermissions === 'object') {
+    return Object.entries(rawPermissions as Record<string, unknown>)
+      .filter(([, enabled]) => enabled === true)
+      .map(([permission]) => permission);
+  }
+
+  return [];
+}
+
+// Public route so deployments can confirm the Bot API router is mounted without exposing data.
+router.get('/health', (_req, res) => {
+  res.status(200).json({ success: true, service: 'bot-api', mounted: true });
+});
+
+// Middleware to authenticate bot API keys from Authorization: Bearer <api_key>.
+const authenticateBot = async (req: BotRequest, res: express.Response, next: express.NextFunction) => {
+  const apiKey = extractBearerToken(req);
+
   if (!apiKey) {
-    return res.status(401).json({ success: false, error: 'Missing API key' });
+    return res.status(401).json({ success: false, error: 'Missing Authorization bearer token' });
   }
 
   try {
-    const { data: keyData, error } = await supabase
+    const serviceSupabase = getSupabaseServiceClient();
+    const { data: keyData, error } = await serviceSupabase
       .from('bot_api_keys')
-      .select('user_id, permissions, is_active')
+      .select('id, user_id, permissions, is_active')
       .eq('api_key', apiKey)
       .maybeSingle();
 
-    if (error || !keyData || !keyData.is_active) {
+    if (error) {
+      console.error('[BotAPI] API key lookup error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to validate API key' });
+    }
+
+    if (!keyData || !keyData.is_active) {
       return res.status(401).json({ success: false, error: 'Invalid or inactive API key' });
     }
 
-    // Update last_used_at
-    await supabase.from('bot_api_keys').update({ last_used_at: new Date().toISOString() }).eq('api_key', apiKey);
+    const permissions = normalizePermissions(keyData.permissions);
 
-    // Attach bot info to request
-    (req as any).bot = {
+    // Best-effort last-used tracking should not block the bot action.
+    const { error: updateError } = await serviceSupabase
+      .from('bot_api_keys')
+      .update({ last_used_at: new Date().toISOString() })
+      .eq('id', keyData.id);
+
+    if (updateError) {
+      console.warn('[BotAPI] Failed to update last_used_at:', updateError.message);
+    }
+
+    req.bot = {
       id: keyData.user_id,
-      permissions: keyData.permissions,
+      permissions,
     };
+
     next();
-  } catch (err) {
+  } catch (err: any) {
     console.error('[BotAPI] Auth error:', err);
-    res.status(500).json({ success: false, error: 'Internal server error during authentication' });
+    res.status(500).json({ success: false, error: err.message || 'Internal server error during authentication' });
   }
 };
 
 // Check if bot has permission
 const requirePermission = (permission: string) => {
-  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const bot = (req as any).bot;
-    if (!bot.permissions || !bot.permissions.includes(permission)) {
+  return (req: BotRequest, res: express.Response, next: express.NextFunction) => {
+    const permissions = req.bot?.permissions || [];
+
+    if (!permissions.includes('*') && !permissions.includes(permission)) {
       return res.status(403).json({ success: false, error: `Missing required permission: ${permission}` });
     }
+
     next();
   };
 };
 
 // POST /api/bot/post - Create a post
-router.post('/post', authenticateBot, requirePermission('post'), async (req, res) => {
-  const botId = (req as any).bot.id;
+router.post('/post', authenticateBot, requirePermission('post'), async (req: BotRequest, res) => {
+  const botId = req.bot!.id;
   const { content, media_url, media_type, neural_tags } = req.body;
 
   if (!content) return res.status(400).json({ success: false, error: 'Content is required' });
 
   try {
-    const { data, error } = await supabase.from('posts').insert({
+    const serviceSupabase = getSupabaseServiceClient();
+    const { data, error } = await serviceSupabase.from('posts').insert({
       author_id: botId,
       content,
       media_url: media_url || null,
@@ -76,14 +163,15 @@ router.post('/post', authenticateBot, requirePermission('post'), async (req, res
 });
 
 // POST /api/bot/comment - Comment on a post
-router.post('/comment', authenticateBot, requirePermission('comment'), async (req, res) => {
-  const botId = (req as any).bot.id;
+router.post('/comment', authenticateBot, requirePermission('comment'), async (req: BotRequest, res) => {
+  const botId = req.bot!.id;
   const { post_id, content } = req.body;
 
   if (!post_id || !content) return res.status(400).json({ success: false, error: 'post_id and content are required' });
 
   try {
-    const { data, error } = await supabase.from('comments').insert({
+    const serviceSupabase = getSupabaseServiceClient();
+    const { data, error } = await serviceSupabase.from('comments').insert({
       post_id,
       author_id: botId,
       content,
@@ -93,7 +181,7 @@ router.post('/comment', authenticateBot, requirePermission('comment'), async (re
     if (error) throw error;
     
     // Increment comment count
-    await supabase.rpc('increment_counter', { p_table: 'posts', p_id: post_id, p_field: 'comments_count', p_amount: 1 });
+    await serviceSupabase.rpc('increment_counter', { p_table: 'posts', p_id: post_id, p_field: 'comments_count', p_amount: 1 });
     
     res.status(201).json({ success: true, comment: data });
   } catch (err: any) {
@@ -102,17 +190,18 @@ router.post('/comment', authenticateBot, requirePermission('comment'), async (re
 });
 
 // POST /api/bot/dm - Send a DM
-router.post('/dm', authenticateBot, requirePermission('dm'), async (req, res) => {
-  const botId = (req as any).bot.id;
+router.post('/dm', authenticateBot, requirePermission('dm'), async (req: BotRequest, res) => {
+  const botId = req.bot!.id;
   const { recipient_id, content } = req.body;
 
   if (!recipient_id || !content) return res.status(400).json({ success: false, error: 'recipient_id and content are required' });
 
   try {
+    const serviceSupabase = getSupabaseServiceClient();
     // Generate conversation ID (sorted to ensure consistency)
     const conversationId = [botId, recipient_id].sort().join('_');
 
-    const { data, error } = await supabase.from('direct_messages').insert({
+    const { data, error } = await serviceSupabase.from('direct_messages').insert({
       conversation_id: conversationId,
       sender_id: botId,
       recipient_id,
@@ -129,11 +218,12 @@ router.post('/dm', authenticateBot, requirePermission('dm'), async (req, res) =>
 });
 
 // GET /api/bot/feed - Read latest feed posts
-router.get('/feed', authenticateBot, requirePermission('read_feed'), async (req, res) => {
-  const limit = parseInt(req.query.limit as string) || 20;
+router.get('/feed', authenticateBot, requirePermission('read_feed'), async (req: BotRequest, res) => {
+  const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
   
   try {
-    const { data, error } = await supabase
+    const serviceSupabase = getSupabaseServiceClient();
+    const { data, error } = await serviceSupabase
       .from('posts')
       .select('*, author:users(id, username, display_name, type)')
       .order('created_at', { ascending: false })
@@ -147,15 +237,16 @@ router.get('/feed', authenticateBot, requirePermission('read_feed'), async (req,
 });
 
 // POST /api/bot/react - React to a post
-router.post('/react', authenticateBot, requirePermission('react'), async (req, res) => {
-  const botId = (req as any).bot.id;
+router.post('/react', authenticateBot, requirePermission('react'), async (req: BotRequest, res) => {
+  const botId = req.bot!.id;
   const { post_id } = req.body;
 
   if (!post_id) return res.status(400).json({ success: false, error: 'post_id is required' });
 
   try {
+    const serviceSupabase = getSupabaseServiceClient();
     // Check if already liked
-    const { data: existing } = await supabase
+    const { data: existing } = await serviceSupabase
       .from('post_likes')
       .select('id')
       .eq('post_id', post_id)
@@ -166,7 +257,7 @@ router.post('/react', authenticateBot, requirePermission('react'), async (req, r
       return res.status(200).json({ success: true, message: 'Already reacted' });
     }
 
-    const { error } = await supabase.from('post_likes').insert({
+    const { error } = await serviceSupabase.from('post_likes').insert({
       post_id,
       user_id: botId,
       created_at: new Date().toISOString()
@@ -175,7 +266,7 @@ router.post('/react', authenticateBot, requirePermission('react'), async (req, r
     if (error) throw error;
     
     // Increment likes count
-    await supabase.rpc('increment_counter', { p_table: 'posts', p_id: post_id, p_field: 'likes_count', p_amount: 1 });
+    await serviceSupabase.rpc('increment_counter', { p_table: 'posts', p_id: post_id, p_field: 'likes_count', p_amount: 1 });
 
     res.status(200).json({ success: true, message: 'Reaction added' });
   } catch (err: any) {
@@ -184,11 +275,12 @@ router.post('/react', authenticateBot, requirePermission('react'), async (req, r
 });
 
 // GET /api/bot/notifications - Check mentions, replies, DMs
-router.get('/notifications', authenticateBot, requirePermission('read_notifications'), async (req, res) => {
-  const botId = (req as any).bot.id;
+router.get('/notifications', authenticateBot, requirePermission('read_notifications'), async (req: BotRequest, res) => {
+  const botId = req.bot!.id;
   
   try {
-    const { data, error } = await supabase
+    const serviceSupabase = getSupabaseServiceClient();
+    const { data, error } = await serviceSupabase
       .from('notifications')
       .select('*')
       .eq('user_id', botId)

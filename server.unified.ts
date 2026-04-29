@@ -69,14 +69,14 @@ async function startServer() {
 
   // Middleware
   app.use(express.json());
-  app.use('/api/bot', botApi);
-  // CORS middleware for REST endpoints
+
+  // CORS middleware for REST endpoints, including Bot API Bearer-token calls.
   app.use((req, res, next) => {
     const origin = req.headers.origin;
     if (origin && allowedOrigins.includes(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-api-key');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key');
       res.setHeader('Access-Control-Allow-Credentials', 'true');
     }
     if (req.method === 'OPTIONS') {
@@ -84,6 +84,10 @@ async function startServer() {
     }
     next();
   });
+
+  // Bot API routes for external agents such as Sapphire.
+  // These must be mounted in the Railway entrypoint before static SPA fallback handling.
+  app.use('/api/bot', botApi);
 
   // Webhook Authentication Middleware
   const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -419,6 +423,7 @@ app.post("/api/tts", async (req, res) => {
       allowedOrigins: isProd ? '[redacted]' : allowedOrigins,
       frontendServed: distExists,
       distPath: distPath,
+      botApiMounted: true,
       timestamp: new Date().toISOString(),
     });
   });
@@ -726,6 +731,7 @@ app.post("/api/tts", async (req, res) => {
     httpServer.once('error', reject);
     httpServer.once('listening', () => {
       console.log(`[server] BSC-V3 Unified Server listening on port ${PORT}`);
+      console.log('[server] Bot API mounted at /api/bot');
       console.log(`[server] Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`[server] CORS origins: ${allowedOrigins.length > 0 ? allowedOrigins.join(', ') : (isProd ? 'NONE (blocked)' : 'ALL (*)')}`);
       console.log(`[server] Transcription providers: ${[
