@@ -4,6 +4,7 @@ import { Server } from 'socket.io';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
+import botApi from './botApi.js';
 
 function parseAllowedOrigins(): string[] {
   const raw = [
@@ -38,6 +39,9 @@ async function startServer() {
   // Middleware for parsing JSON bodies
   app.use(express.json());
 
+  // Bot API routes for external agents such as Sapphire.
+  app.use('/api/bot', botApi);
+
   // Webhook Authentication Middleware
   const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const apiKey = req.headers['x-api-key'] || req.body.apiKey;
@@ -66,6 +70,8 @@ async function startServer() {
       environment: process.env.NODE_ENV || 'development',
       uptimeSeconds: Math.round(process.uptime()),
       socketCorsConfigured: allowedOrigins.length > 0 || !isProd,
+      botApiMounted: true,
+      runtimeEntrypoint: 'server.ts',
       timestamp: new Date().toISOString(),
     });
   });

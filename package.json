@@ -7,7 +7,7 @@
     "dev": "vite",
     "dev:full": "tsx server.ts",
     "build": "vite build",
-    "start": "tsx server.ts",
+    "start": "tsx server.unified.ts",
     "start:prod": "tsx server.prod.ts",
     "start:unified": "tsx server.unified.ts",
     "preview": "vite preview",
