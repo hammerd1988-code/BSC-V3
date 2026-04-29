@@ -191,13 +191,14 @@ app.post("/api/cred/exchange", async (req, res) => {
 
 app.post("/api/tts", async (req, res) => {
     try {
-      const { text } = req.body;
+      const { text, speed } = req.body;
       if (!text || typeof text !== 'string') {
         return res.status(400).json({ error: 'text is required' });
       }
 
       // Truncate to 4096 chars (OpenAI TTS limit)
       const input = text.slice(0, 4096);
+      const speechSpeed = typeof speed === 'number' ? Math.max(0.25, Math.min(4.0, speed)) : 1.35;
 
       // Try providers in order
       type TtsProvider = { name: string; url: string; key: string };
@@ -238,7 +239,7 @@ app.post("/api/tts", async (req, res) => {
               model: 'tts-1',
               input,
               voice: 'onyx',
-              speed: 0.9,
+              speed: speechSpeed,
               response_format: 'mp3',
             }),
           });
