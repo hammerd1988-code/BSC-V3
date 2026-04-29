@@ -35,7 +35,7 @@ import { format } from 'date-fns';
 import { Link, useSearchParams } from 'react-router-dom';
 import { NewTransmissionModal } from './NewTransmissionModal';
 import { playMessageSound } from '../lib/sounds';
-import { notifyNewMessage } from '../lib/notifications';
+import { notifyNewMessage, sendPushEvent } from '../lib/notifications';
 import { encryptText, decryptText } from '../lib/crypto';
 import { generateText } from '../lib/ai';
 import { BOT_PERSONAS } from '../lib/botPersonas';
@@ -270,7 +270,8 @@ export const Transmissions: React.FC = () => {
             notifyNewMessage(
               senderUser?.display_name || 'New Message',
               displayContent,
-              senderUser?.avatar_url
+              senderUser?.avatar_url,
+              `/transmissions?userId=${t.sender_id}`
             );
           }
           // Initialize burn countdown for incoming burn messages
@@ -636,6 +637,20 @@ export const Transmissions: React.FC = () => {
       }
 
       setActiveTransmission(prev => prev ? { ...prev, unread_counts: updatedUnread } : prev);
+
+      const senderName = currentUser.display_name || currentUser.username || 'Someone';
+      void sendPushEvent({
+        recipientUserId: otherUserId,
+        senderId: currentUser.id,
+        senderName,
+        senderUsername: currentUser.username,
+        senderAvatar: currentUser.avatar_url,
+        type: 'dm',
+        messagePreview: savedMessage,
+        url: `/transmissions?userId=${currentUser.id}`,
+        transmissionId: activeTransmission.id,
+        createInAppNotification: false,
+      });
 
       // ── BOT RESPONSE: if the recipient is a bot, generate an AI reply ──
       const otherUser = otherUserId ? userCache.current[otherUserId] : null;

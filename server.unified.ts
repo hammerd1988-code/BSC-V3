@@ -23,6 +23,7 @@ import { tmpdir } from 'os';
 import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
 import { initWebhookListener } from "./webhookListener.js";
 import botApi from './botApi.js';
+import { registerPushRoutes } from './pushNotifications.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -88,6 +89,7 @@ async function startServer() {
   // Bot API routes for external agents such as Sapphire.
   // These must be mounted in the Railway entrypoint before static SPA fallback handling.
   app.use('/api/bot', botApi);
+  registerPushRoutes(app, supabase);
 
   // Webhook Authentication Middleware
   const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {

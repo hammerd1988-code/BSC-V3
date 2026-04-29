@@ -8,6 +8,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { Post, User } from '../types';
 import { getBotReply } from './Feed';
 import { BOT_PERSONAS, getBotByUsername } from '../lib/botPersonas';
+import { sendPushEvent } from '../lib/notifications';
 
 interface Comment {
   id: string;
@@ -21,6 +22,11 @@ interface CommentsModalProps {
   post: Post;
   isOpen: boolean;
   onClose: () => void;
+}
+
+function extractMentionedUsernames(content: string): string[] {
+  const matches = content.matchAll(/@([a-zA-Z0-9_]+)/g);
+  return Array.from(new Set(Array.from(matches, match => match[1].toLowerCase())));
 }
 
 export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onClose }) => {
@@ -64,18 +70,73 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
 
     setIsSubmitting(true);
     try {
-      await supabase.from('comments').insert({
+      const commentContent = newComment.trim();
+      const { data: insertedComment, error: commentError } = await supabase.from('comments').insert({
         post_id: post.id,
         author_id: currentUser.id,
-        content: newComment,
+        content: commentContent,
         created_at: new Date().toISOString(),
-      });
+      }).select('id').maybeSingle();
+
+      if (commentError) throw commentError;
 
       // Increment comment count on the post
       await supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'comments_count', p_amount: 1 });
 
+      const senderName = currentUser.display_name || currentUser.username || 'Someone';
+      const mentionedUsernames = extractMentionedUsernames(commentContent);
+      const mentionedHumanUsers: User[] = [];
+
+      if (mentionedUsernames.length > 0) {
+        const { data: mentionedUsers, error: mentionedError } = await supabase
+          .from('users')
+          .select('id,username,display_name,avatar_url,type')
+          .in('username', mentionedUsernames);
+
+        if (mentionedError) {
+          console.warn('[Comments] Failed to resolve mentioned users:', mentionedError);
+        } else {
+          mentionedHumanUsers.push(...((mentionedUsers ?? []) as User[]).filter(user => user.type !== 'bot'));
+        }
+      }
+
+      const commentUrl = `/profile/${post.author.username}`;
+      const notifiedMentionIds = new Set<string>();
+
+      mentionedHumanUsers.forEach(user => {
+        if (user.id === currentUser.id) return;
+        notifiedMentionIds.add(user.id);
+        void sendPushEvent({
+          recipientUserId: user.id,
+          senderId: currentUser.id,
+          senderName,
+          senderUsername: currentUser.username,
+          senderAvatar: currentUser.avatar_url,
+          type: 'mention',
+          messagePreview: commentContent,
+          url: commentUrl,
+          postId: post.id,
+          commentId: insertedComment?.id,
+        });
+      });
+
+      if (post.author.id !== currentUser.id && !notifiedMentionIds.has(post.author.id) && post.author.type !== 'bot') {
+        void sendPushEvent({
+          recipientUserId: post.author.id,
+          senderId: currentUser.id,
+          senderName,
+          senderUsername: currentUser.username,
+          senderAvatar: currentUser.avatar_url,
+          type: 'comment',
+          messagePreview: commentContent,
+          url: commentUrl,
+          postId: post.id,
+          commentId: insertedComment?.id,
+        });
+      }
+
       // Handle Bot Replies
-      const mentionedBots = BOT_PERSONAS.filter(p => newComment.toLowerCase().includes(`@${p.username.toLowerCase()}`));
+      const mentionedBots = BOT_PERSONAS.filter(p => commentContent.toLowerCase().includes(`@${p.username.toLowerCase()}`));
       const isPostAuthorBot = post.author.type === 'bot';
       const botsToReply: User[] = [];
       if (isPostAuthorBot && !mentionedBots.some(p => p.username === post.author.username)) {
@@ -98,7 +159,7 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
           setTimeout(async () => {
             try {
               const reply = await getBotReply(
-                post.content, newComment, bot.username, currentUser.ai_settings,
+                post.content, commentContent, bot.username, currentUser.ai_settings,
                 history, userContext, post.author.display_name
               );
               if (reply) {

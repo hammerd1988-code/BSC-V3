@@ -8,13 +8,25 @@ import { handleDbError } from '../lib/errors';
 import { CreatePostModal } from './CreatePostModal';
 import { cn } from '../lib/utils';
 import { formatDistanceToNow } from 'date-fns';
+import { playCommentSound, playMentionSound } from '../lib/sounds';
+import { NotificationEnableButton } from './NotificationEnableButton';
 
 interface AppNotification {
   id: string;
   type: string;
   data: Record<string, any>;
+  payload?: Record<string, any>;
   read: boolean;
+  is_read?: boolean;
   created_at: string;
+}
+
+function normalizeNotification(row: any): AppNotification {
+  return {
+    ...row,
+    data: row.data ?? row.payload ?? {},
+    read: row.read ?? row.is_read ?? false,
+  };
 }
 
 export const Navigation: React.FC = () => {
@@ -73,7 +85,7 @@ export const Navigation: React.FC = () => {
         .eq('user_id', currentUser.id)
         .order('created_at', { ascending: false })
         .limit(20);
-      const notifs = (data ?? []) as AppNotification[];
+      const notifs = (data ?? []).map(normalizeNotification);
       setNotifications(notifs);
       setNotifUnread(notifs.filter(n => !n.read).length);
     };
@@ -87,7 +99,12 @@ export const Navigation: React.FC = () => {
         schema: 'public',
         table: 'notifications',
         filter: `user_id=eq.${currentUser.id}`,
-      }, () => fetchNotifications())
+      }, (payload) => {
+        const notif = normalizeNotification(payload.new);
+        if (notif.type === 'mention') playMentionSound();
+        if (notif.type === 'comment') playCommentSound();
+        void fetchNotifications();
+      })
       .on('postgres_changes', {
         event: 'UPDATE',
         schema: 'public',
@@ -103,9 +120,9 @@ export const Navigation: React.FC = () => {
     if (!currentUser || notifUnread === 0) return;
     await supabase
       .from('notifications')
-      .update({ read: true })
+      .update({ is_read: true })
       .eq('user_id', currentUser.id)
-      .eq('read', false);
+      .eq('is_read', false);
     setNotifUnread(0);
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
   };
@@ -113,12 +130,14 @@ export const Navigation: React.FC = () => {
   const handleNotificationClick = async (notif: AppNotification) => {
     // Mark as read
     if (!notif.read) {
-      await supabase.from('notifications').update({ read: true }).eq('id', notif.id);
+      await supabase.from('notifications').update({ is_read: true }).eq('id', notif.id);
       setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, read: true } : n));
       setNotifUnread(prev => Math.max(0, prev - 1));
     }
     // Navigate to relevant profile
-    if (notif.data?.from_username) {
+    if (notif.data?.url) {
+      navigate(notif.data.url);
+    } else if (notif.data?.from_username) {
       navigate(`/profile/${notif.data.from_username}`);
     }
     setShowNotifications(false);
@@ -127,6 +146,8 @@ export const Navigation: React.FC = () => {
   const getNotifIcon = (type: string) => {
     if (type === 'friend_request') return <HeartHandshake className="w-4 h-4 text-pink-400" />;
     if (type === 'friend_accepted') return <CheckCircle2 className="w-4 h-4 text-green-400" />;
+    if (type === 'mention') return <Bell className="w-4 h-4 text-cyan-300" />;
+    if (type === 'comment') return <Bell className="w-4 h-4 text-purple-300" />;
     return <Bell className="w-4 h-4 text-accent" />;
   };
 
@@ -134,6 +155,8 @@ export const Navigation: React.FC = () => {
     const name = notif.data?.from_display_name || notif.data?.from_username || 'Someone';
     if (notif.type === 'friend_request') return `${name} sent you a friend request`;
     if (notif.type === 'friend_accepted') return `${name} accepted your friend request`;
+    if (notif.type === 'mention') return `${name} mentioned you: ${notif.data?.preview || notif.data?.message || ''}`;
+    if (notif.type === 'comment') return `${name} commented: ${notif.data?.preview || notif.data?.message || ''}`;
     return notif.data?.message || 'New notification';
   };
 
@@ -408,6 +431,8 @@ export const Navigation: React.FC = () => {
                     <UserIcon className="w-4 h-4" />
                     View Profile
                   </Link>
+
+                  <NotificationEnableButton />
 
                   <button
                     onClick={() => {
