@@ -16,6 +16,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import multer from 'multer';
 import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
+import botApi from './botApi.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -64,7 +65,7 @@ async function startServer() {
     if (origin && allowedOrigins.includes(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-api-key');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key');
       res.setHeader('Access-Control-Allow-Credentials', 'true');
     }
     if (req.method === 'OPTIONS') {
@@ -72,6 +73,9 @@ async function startServer() {
     }
     next();
   });
+
+  // Bot API routes for external agents such as Sapphire.
+  app.use('/api/bot', botApi);
 
   // Webhook Authentication Middleware
   const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -108,6 +112,8 @@ async function startServer() {
       allowedOrigins: isProd ? '[redacted]' : allowedOrigins,
       frontendServed: distExists,
       distPath: distPath,
+      botApiMounted: true,
+      runtimeEntrypoint: 'server.prod.ts',
       timestamp: new Date().toISOString(),
     });
   });

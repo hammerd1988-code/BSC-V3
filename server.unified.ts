@@ -424,6 +424,8 @@ app.post("/api/tts", async (req, res) => {
       frontendServed: distExists,
       distPath: distPath,
       botApiMounted: true,
+      runtimeEntrypoint: 'server.unified.ts',
+      botApiCommitMarker: 'bot-api-mounted-2026-04-29',
       timestamp: new Date().toISOString(),
     });
   });
