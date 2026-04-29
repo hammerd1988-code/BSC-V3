@@ -599,7 +599,7 @@ export const Casper: React.FC = () => {
       const response = await fetch(`${serverUrl}/api/tts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text })
+        body: JSON.stringify({ text, speed: 1.35 })
       });
 
       if (response.ok) {
@@ -657,16 +657,16 @@ export const Casper: React.FC = () => {
       
       // Add slight random variation to pitch and rate to break monotone
       const pitchVar = (Math.random() * 0.1) - 0.05;
-      const rateVar = (Math.random() * 0.05) - 0.025;
+      const rateVar = (Math.random() * 0.08) - 0.04;
       
       utter.pitch = 0.75 + pitchVar;    // Deep but not too low
-      utter.rate = 0.92 + rateVar;      // Conversational pace
+      utter.rate = 1.38 + rateVar;      // Faster conversational pace
       utter.volume = 1.0;
       
       utter.onend = () => {
         currentIndex++;
-        // Add a slight natural pause between sentences
-        setTimeout(speakNext, 200 + Math.random() * 200);
+        // Keep sentence gaps tight so Casper does not hang on every thought
+        setTimeout(speakNext, 60 + Math.random() * 80);
       };
       
       utter.onerror = () => {
@@ -1028,8 +1028,11 @@ export const Casper: React.FC = () => {
 
   return (
     <div
-      className="min-h-screen flex flex-col relative overflow-hidden"
-      style={{ background: '#030308' }}
+      className="min-h-[100dvh] flex flex-col relative overflow-x-hidden overflow-y-auto"
+      style={{
+        background: '#030308',
+        paddingBottom: 'env(safe-area-inset-bottom)',
+      }}
     >
       {/* ── VOID CANVAS BACKGROUND ── */}
       <VoidCanvas instability={instability} isActive={isGenerating || isListening || isSpeaking} />
@@ -1189,7 +1192,7 @@ export const Casper: React.FC = () => {
       </div>
 
       {/* ── MESSAGES ── */}
-      <div className="flex-1 overflow-y-auto relative z-10 px-4 py-4 space-y-4 max-w-2xl mx-auto w-full pb-6">
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain relative z-10 px-4 py-4 space-y-4 max-w-2xl mx-auto w-full pb-8">
         <AnimatePresence initial={false}>
           {messages.map((msg) => (
             <motion.div
@@ -1291,10 +1294,16 @@ export const Casper: React.FC = () => {
       </div>
 
       {/* ── INPUT / VOICE MODE UI ── */}
-      <div className="relative z-10 p-4 max-w-2xl mx-auto w-full flex-shrink-0">
+      <div className="relative z-10 px-4 pt-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))] sm:pb-[calc(1rem+env(safe-area-inset-bottom))] max-w-2xl mx-auto w-full flex-shrink-0">
         {voiceMode ? (
           /* ── FACE-TO-FACE VOICE MODE ── */
-          <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/95 backdrop-blur-xl">
+          <div
+            className="fixed inset-0 z-[100] flex min-h-[100dvh] flex-col items-stretch overflow-y-auto overscroll-contain bg-black/95 backdrop-blur-xl"
+            style={{
+              paddingTop: 'max(1.5rem, env(safe-area-inset-top))',
+              paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))',
+            }}
+          >
             {/* Background Effects */}
             <div className="absolute inset-0 pointer-events-none">
               <VoidCanvas instability={instability} isActive={isGenerating || isListening || isSpeaking} />
@@ -1302,7 +1311,7 @@ export const Casper: React.FC = () => {
             </div>
 
             {/* Top Bar */}
-            <div className="absolute top-6 left-6 right-6 flex justify-between items-center z-10">
+            <div className="relative z-10 flex w-full flex-shrink-0 items-center justify-between px-6">
               <div className="flex items-center gap-3">
                 <div className="text-[10px] font-black uppercase tracking-[0.3em] px-4 py-2 rounded-full border"
                   style={{
@@ -1326,7 +1335,7 @@ export const Casper: React.FC = () => {
             </div>
 
             {/* Hero Avatar */}
-            <div className="flex-1 flex items-center justify-center w-full max-w-md relative z-10">
+            <div className="relative z-10 flex min-h-[220px] w-full flex-1 items-center justify-center px-6 py-6">
               <AnimatedCasperAvatar 
                 size="hero" 
                 isActive={voiceState === 'thinking' || voiceState === 'speaking'} 
@@ -1346,16 +1355,16 @@ export const Casper: React.FC = () => {
             </div>
 
             {/* Bottom Controls & Info */}
-            <div className="w-full max-w-lg pb-12 px-6 flex flex-col items-center gap-6 z-10">
+            <div className="relative z-10 mx-auto flex w-full max-w-lg flex-shrink-0 flex-col items-center gap-6 px-6">
               
               {/* Transcript / Last Spoken */}
-              <div className="h-24 w-full flex items-center justify-center text-center">
+              <div className="min-h-24 max-h-[32dvh] w-full overflow-y-auto overscroll-contain flex items-center justify-center text-center px-1">
                 <AnimatePresence mode="wait">
                   {voiceState === 'speaking' && lastSpokenText ? (
                     <motion.p 
                       key="speaking"
                       initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
-                      className="text-lg md:text-xl font-medium text-white/90 leading-relaxed"
+                      className="text-base md:text-xl font-medium text-white/90 leading-relaxed break-words"
                     >
                       "{lastSpokenText}"
                     </motion.p>
