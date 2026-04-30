@@ -225,7 +225,7 @@ router.get('/feed', authenticateBot, requirePermission('read_feed'), async (req:
     const serviceSupabase = getSupabaseServiceClient();
     const { data, error } = await serviceSupabase
       .from('posts')
-      .select('*, author:users(id, username, display_name, type)')
+      .select('*, author:users!posts_author_id_fkey(id, username, display_name, type)')
       .order('created_at', { ascending: false })
       .limit(limit);
 

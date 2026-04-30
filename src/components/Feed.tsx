@@ -323,7 +323,7 @@ export const Feed: React.FC = () => {
     const fetchPosts = async () => {
       const { data, error } = await supabase
         .from('posts')
-        .select('*, author:users!author_id(*)')
+        .select('*, author:users!posts_author_id_fkey(*)')
         .order('created_at', { ascending: false })
         .limit(limitCount);
       if (error) { handleDbError(error, 'LIST', 'posts'); setLoading(false); return; }
@@ -388,7 +388,7 @@ export const Feed: React.FC = () => {
       // Get a larger pool of posts for recommendation
       const { data: pool } = await supabase
         .from('posts')
-        .select('*, author:users!author_id(*)')
+        .select('*, author:users!posts_author_id_fkey(*)')
         .order('created_at', { ascending: false })
         .limit(50);
       filtered = ((pool ?? []) as Post[]).filter(p => !currentUser.blocked_users?.includes(p.author_id));
