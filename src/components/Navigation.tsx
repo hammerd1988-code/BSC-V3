@@ -21,12 +21,26 @@ interface AppNotification {
   created_at: string;
 }
 
+const isRecord = (value: unknown): value is Record<string, any> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const toSafeString = (value: unknown, fallback = ''): string => {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
+  return fallback;
+};
+
 function normalizeNotification(row: any): AppNotification {
+  const source = isRecord(row) ? row : {};
+  const rawData = source.data ?? source.payload ?? {};
+  const data = isRecord(rawData) ? rawData : { message: rawData };
+
   return {
-    ...row,
-    data: row.data ?? row.payload ?? {},
-    read: row.read ?? row.is_read ?? false,
-  };
+    ...source,
+    data,
+    read: source.read ?? source.is_read ?? false,
+  } as AppNotification;
 }
 
 export const Navigation: React.FC = () => {
@@ -135,10 +149,12 @@ export const Navigation: React.FC = () => {
       setNotifUnread(prev => Math.max(0, prev - 1));
     }
     // Navigate to relevant profile
-    if (notif.data?.url) {
-      navigate(notif.data.url);
-    } else if (notif.data?.from_username) {
-      navigate(`/profile/${notif.data.from_username}`);
+    const url = toSafeString(notif.data?.url);
+    const fromUsername = toSafeString(notif.data?.from_username);
+    if (url) {
+      navigate(url);
+    } else if (fromUsername) {
+      navigate(`/profile/${fromUsername}`);
     }
     setShowNotifications(false);
   };
@@ -151,13 +167,14 @@ export const Navigation: React.FC = () => {
     return <Bell className="w-4 h-4 text-accent" />;
   };
 
-  const getNotifText = (notif: AppNotification) => {
-    const name = notif.data?.from_display_name || notif.data?.from_username || 'Someone';
+  const getNotifText = (notif: AppNotification): string => {
+    const name = toSafeString(notif.data?.from_display_name) || toSafeString(notif.data?.from_username) || 'Someone';
+    const preview = toSafeString(notif.data?.preview) || toSafeString(notif.data?.message);
     if (notif.type === 'friend_request') return `${name} sent you a friend request`;
     if (notif.type === 'friend_accepted') return `${name} accepted your friend request`;
-    if (notif.type === 'mention') return `${name} mentioned you: ${notif.data?.preview || notif.data?.message || ''}`;
-    if (notif.type === 'comment') return `${name} commented: ${notif.data?.preview || notif.data?.message || ''}`;
-    return notif.data?.message || 'New notification';
+    if (notif.type === 'mention') return `${name} mentioned you: ${preview}`;
+    if (notif.type === 'comment') return `${name} commented: ${preview}`;
+    return toSafeString(notif.data?.message, 'New notification') || 'New notification';
   };
 
   useEffect(() => {
@@ -329,8 +346,8 @@ export const Navigation: React.FC = () => {
                           )}
                         >
                           <div className="flex-shrink-0 mt-0.5">
-                            {notif.data?.from_avatar_url ? (
-                              <img src={notif.data.from_avatar_url} alt="" className="w-8 h-8 rounded-full object-cover border border-white/10" />
+                            {toSafeString(notif.data?.from_avatar_url) ? (
+                              <img src={toSafeString(notif.data.from_avatar_url)} alt="" className="w-8 h-8 rounded-full object-cover border border-white/10" />
                             ) : (
                               <div className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
                                 {getNotifIcon(notif.type)}
