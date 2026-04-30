@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Generate a short original spooky giggle cue for Casper voice mode.
+"""Generate a clean short ghost giggle cue for Casper voice mode.
 
-This creates an original WAV asset inspired by the feel of a ghostly 1990s game
-laugh without sampling or copying any copyrighted source audio.
+The output is an original synthesized WAV inspired by a playful retro ghost laugh:
+short, clear, spooky, and deliberately normalized below clipping. It does not
+sample or copy any source-game audio.
 """
 
 from __future__ import annotations
@@ -13,87 +14,131 @@ import struct
 import wave
 from pathlib import Path
 
-SAMPLE_RATE = 44_100
-DURATION = 1.18
+SAMPLE_RATE = 48_000
+DURATION = 1.42
+TARGET_PEAK = 0.48  # roughly -6.4 dBFS, leaves headroom and avoids clipping
 OUT_PATH = Path(__file__).resolve().parents[1] / "public" / "sounds" / "boo-laugh-sm64-style.wav"
 
-random.seed(64)
+random.seed(64064)
 
 
-def envelope(t: float, start: float, duration: float) -> float:
-    if t < start or t > start + duration:
+def clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
+
+
+def smoothstep(x: float) -> float:
+    x = clamp(x, 0.0, 1.0)
+    return x * x * (3.0 - 2.0 * x)
+
+
+def syllable_envelope(t: float, start: float, dur: float) -> float:
+    if t < start or t >= start + dur:
         return 0.0
-    x = (t - start) / duration
-    attack = min(x / 0.10, 1.0)
-    decay = max(0.0, 1.0 - x) ** 0.85
-    wobble = 0.86 + 0.14 * math.sin(2 * math.pi * 8.0 * (t - start))
-    return attack * decay * wobble
+    x = (t - start) / dur
+    attack = smoothstep(x / 0.12)
+    release = 1.0 - smoothstep((x - 0.42) / 0.58)
+    return attack * release
 
 
-def voice_burst(t: float, start: float, duration: float, base: float, bend: float, phase: float) -> float:
-    env = envelope(t, start, duration)
-    if env <= 0.0:
-        return 0.0
-
-    local = t - start
-    pitch = base + bend * math.sin(2 * math.pi * 2.6 * local + phase) - 38.0 * (local / duration)
-    vibrato = 16.0 * math.sin(2 * math.pi * 12.0 * local + phase * 0.5)
-    freq = max(80.0, pitch + vibrato)
-
-    # Several detuned components create a synthetic ghostly giggle timbre.
-    s1 = math.sin(2 * math.pi * freq * local + phase)
-    s2 = 0.48 * math.sin(2 * math.pi * (freq * 1.51) * local + phase * 1.7)
-    s3 = 0.25 * math.sin(2 * math.pi * (freq * 0.50) * local + phase * 0.3)
-    throat = 0.16 * math.sin(2 * math.pi * 72.0 * local)
-    return env * (s1 + s2 + s3 + throat)
+def one_pole_lowpass(samples: list[float], cutoff_hz: float) -> list[float]:
+    rc = 1.0 / (2.0 * math.pi * cutoff_hz)
+    dt = 1.0 / SAMPLE_RATE
+    alpha = dt / (rc + dt)
+    out: list[float] = []
+    y = 0.0
+    for x in samples:
+        y += alpha * (x - y)
+        out.append(y)
+    return out
 
 
-def highpass_noise(previous: float, current: float) -> float:
-    return current - previous
+def synthesize() -> list[float]:
+    total = int(SAMPLE_RATE * DURATION)
+    samples = [0.0 for _ in range(total)]
 
-
-def main() -> None:
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    total_samples = int(SAMPLE_RATE * DURATION)
-    frames: list[bytes] = []
-    last_noise = 0.0
-
-    bursts = [
-        (0.03, 0.34, 485.0, 92.0, 0.1),
-        (0.25, 0.32, 620.0, -70.0, 1.2),
-        (0.49, 0.36, 545.0, 115.0, 2.2),
-        (0.74, 0.34, 430.0, -45.0, 0.7),
+    # Four small giggle syllables with rounded pitch motion. Frequencies are kept
+    # musical and moderate so the result stays clear rather than harsh/distorted.
+    syllables = [
+        # start, duration, base, upward glide, downward finish, phase
+        (0.04, 0.31, 392.0, 128.0, 38.0, 0.0),
+        (0.28, 0.28, 523.25, 96.0, 62.0, 1.1),
+        (0.51, 0.34, 466.16, 140.0, 44.0, 2.0),
+        (0.79, 0.39, 349.23, 82.0, 72.0, 0.7),
     ]
 
-    for i in range(total_samples):
+    for i in range(total):
         t = i / SAMPLE_RATE
-        sample = 0.0
+        value = 0.0
 
-        for args in bursts:
-            sample += voice_burst(t, *args)
+        for start, dur, base, lift, fall, phase in syllables:
+            env = syllable_envelope(t, start, dur)
+            if env <= 0.0:
+                continue
 
-        # Breath/noise layer for a haunted texture.
-        raw_noise = random.uniform(-1.0, 1.0)
-        hiss = highpass_noise(last_noise, raw_noise)
-        last_noise = raw_noise
-        global_env = min(t / 0.04, 1.0) * max(0.0, 1.0 - (t / DURATION)) ** 0.55
-        sample += 0.045 * hiss * global_env
+            local = t - start
+            x = local / dur
+            # A soft laugh-like pitch arc: rise quickly, then curl downward.
+            pitch = base + lift * math.sin(math.pi * clamp(x, 0.0, 1.0)) - fall * smoothstep(x)
+            pitch += 10.0 * math.sin(2.0 * math.pi * 6.2 * local + phase)
+            pitch += 4.0 * math.sin(2.0 * math.pi * 13.0 * local + phase * 0.33)
 
-        # Add a quiet low echo tail.
-        if t > 0.18:
-            sample += 0.18 * math.sin(2 * math.pi * 210.0 * (t - 0.18)) * max(0.0, 1.0 - (t - 0.18) / 1.0) ** 2
+            # Integrating phase per sample would be ideal, but this bounded glide
+            # is smooth enough at this length and keeps the script dependency-free.
+            fundamental = math.sin(2.0 * math.pi * pitch * local + phase)
+            airy_harmonic = 0.28 * math.sin(2.0 * math.pi * pitch * 1.5 * local + phase * 1.7)
+            hollow_body = 0.20 * math.sin(2.0 * math.pi * pitch * 0.5 * local + phase * 0.4)
+            whisper = 0.018 * random.uniform(-1.0, 1.0)
 
-        # Soft clipping and normalize to comfortable volume.
-        sample = math.tanh(sample * 1.15) * 0.58
-        frames.append(struct.pack("<h", int(max(-1.0, min(1.0, sample)) * 32767)))
+            value += env * (0.46 * fundamental + 0.23 * airy_harmonic + 0.18 * hollow_body + whisper)
 
+        samples[i] = value
+
+    # Gentle pre-filtering removes brittle high-frequency noise before echo.
+    samples = one_pole_lowpass(samples, 5_800.0)
+
+    # Add a very light slapback/room tail for spooky space without overload.
+    delay_1 = int(0.115 * SAMPLE_RATE)
+    delay_2 = int(0.235 * SAMPLE_RATE)
+    wet = samples[:]
+    for i in range(total):
+        if i >= delay_1:
+            wet[i] += 0.18 * samples[i - delay_1]
+        if i >= delay_2:
+            wet[i] += 0.09 * samples[i - delay_2]
+
+    # Fade in/out and normalize with headroom. No hard clipping or tanh saturation.
+    fade_in = int(0.018 * SAMPLE_RATE)
+    fade_out = int(0.110 * SAMPLE_RATE)
+    for i in range(total):
+        if i < fade_in:
+            wet[i] *= smoothstep(i / fade_in)
+        if i > total - fade_out:
+            wet[i] *= smoothstep((total - i) / fade_out)
+
+    peak = max(abs(x) for x in wet) or 1.0
+    gain = TARGET_PEAK / peak
+    return [clamp(x * gain, -0.999, 0.999) for x in wet]
+
+
+def write_wav(samples: list[float]) -> None:
+    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    frames = b"".join(struct.pack("<h", int(sample * 32767)) for sample in samples)
     with wave.open(str(OUT_PATH), "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
         wav.setframerate(SAMPLE_RATE)
-        wav.writeframes(b"".join(frames))
+        wav.writeframes(frames)
 
-    print(f"Wrote {OUT_PATH} ({OUT_PATH.stat().st_size} bytes)")
+
+def main() -> None:
+    samples = synthesize()
+    write_wav(samples)
+    peak = max(abs(x) for x in samples)
+    rms = math.sqrt(sum(x * x for x in samples) / len(samples))
+    print(f"Wrote {OUT_PATH}")
+    print(f"Duration: {len(samples) / SAMPLE_RATE:.2f}s | Peak: {peak:.3f} | RMS: {rms:.3f}")
+    if peak >= 0.99:
+        raise SystemExit("Generated audio clipped unexpectedly")
 
 
 if __name__ == "__main__":
