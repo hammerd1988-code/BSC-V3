@@ -572,8 +572,32 @@ export const Casper: React.FC = () => {
     return v.find(x => x.lang.startsWith('en')) || v[0] || null;
   };
 
-  // Track the current audio element so we can cancel it if needed
+  // Track audio playback so mobile browsers keep Casper's voice unlocked after the initial tap.
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const persistentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const currentAudioUrlRef = useRef<string | null>(null);
+
+  const SILENT_AUDIO_UNLOCK_SRC = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYoRBqpAAAAAAD/+1DEAAAHAAGf9AAAIgAANIAAAAQAAAGkAAAAIAAANIAAAARMQU1FMy4xMDBVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVQ==';
+
+  const unlockPersistentAudio = useCallback(async () => {
+    if (persistentAudioRef.current) return;
+
+    const audio = new Audio();
+    audio.preload = 'auto';
+    audio.src = SILENT_AUDIO_UNLOCK_SRC;
+
+    try {
+      await audio.play();
+      audio.pause();
+      audio.currentTime = 0;
+      persistentAudioRef.current = audio;
+      console.log('[VOICE] Persistent audio element unlocked');
+    } catch (e) {
+      // Keep the element around anyway; desktop browsers and some Android browsers may still allow reuse.
+      persistentAudioRef.current = audio;
+      console.warn('[VOICE] Persistent audio unlock failed; playback fallback may be needed:', e);
+    }
+  }, []);
 
   // ── TTS: Speak text aloud ──
   const speakOnce = useCallback(async (text: string, onDone?: () => void) => {
@@ -583,11 +607,13 @@ export const Casper: React.FC = () => {
     const synth = window.speechSynthesis;
     synth.cancel();
     
-    // Cancel any ongoing audio playback
+    // Cancel any ongoing audio playback, but keep the persistent element unlocked for mobile.
     if (currentAudioRef.current) {
       currentAudioRef.current.pause();
-      currentAudioRef.current.src = '';
-      currentAudioRef.current = null;
+    }
+    if (currentAudioUrlRef.current) {
+      URL.revokeObjectURL(currentAudioUrlRef.current);
+      currentAudioUrlRef.current = null;
     }
 
     setLastSpokenText(text);
@@ -605,20 +631,27 @@ export const Casper: React.FC = () => {
       if (response.ok) {
         const audioBlob = await response.blob();
         const audioUrl = URL.createObjectURL(audioBlob);
-        const audio = new Audio(audioUrl);
+        currentAudioUrlRef.current = audioUrl;
+
+        const audio = persistentAudioRef.current || new Audio();
+        audio.pause();
+        audio.src = audioUrl;
+        audio.currentTime = 0;
         currentAudioRef.current = audio;
         
         audio.onended = () => {
           setVoiceState('idle');
           URL.revokeObjectURL(audioUrl);
-          currentAudioRef.current = null;
+          if (currentAudioUrlRef.current === audioUrl) currentAudioUrlRef.current = null;
+          if (currentAudioRef.current === audio) currentAudioRef.current = null;
           onDone?.();
         };
         
         audio.onerror = () => {
           console.warn('[VOICE] Audio playback failed, falling back to browser TTS');
           URL.revokeObjectURL(audioUrl);
-          currentAudioRef.current = null;
+          if (currentAudioUrlRef.current === audioUrl) currentAudioUrlRef.current = null;
+          if (currentAudioRef.current === audio) currentAudioRef.current = null;
           fallbackBrowserTts(text, onDone);
         };
         
@@ -866,6 +899,9 @@ export const Casper: React.FC = () => {
 
   // ── ENTER VOICE MODE ──
   const enterVoiceMode = useCallback(async () => {
+    // Unlock a reusable audio element inside the original user tap so mobile TTS can play later.
+    await unlockPersistentAudio();
+
     // Request mic permission first
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -894,7 +930,7 @@ export const Casper: React.FC = () => {
       // After greeting, start listening
       if (voiceActiveRef.current) startListeningSession();
     });
-  }, [speakOnce, startListeningSession]);
+  }, [speakOnce, startListeningSession, unlockPersistentAudio]);
 
   // ── EXIT VOICE MODE ──
   const exitVoiceMode = useCallback(() => {
@@ -904,6 +940,11 @@ export const Casper: React.FC = () => {
     if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
     if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
     audioCtxRef.current?.close(); audioCtxRef.current = null;
+    if (currentAudioRef.current) currentAudioRef.current.pause();
+    if (currentAudioUrlRef.current) {
+      URL.revokeObjectURL(currentAudioUrlRef.current);
+      currentAudioUrlRef.current = null;
+    }
     window.speechSynthesis.cancel();
     setVoiceMode(false);
     setVoiceState('idle');
