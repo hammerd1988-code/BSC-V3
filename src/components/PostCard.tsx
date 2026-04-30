@@ -617,8 +617,8 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
 
       {/* Actions */}
       <div className={cn("p-4 flex flex-col border-t border-white/5", isVoidArchitect && "bg-zinc-950/50 border-white/10")}>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-6">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-3">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-3 [&>*]:shrink-0">
             <button
               onClick={handleLike}
               className="flex items-center space-x-1.5 group"
@@ -772,7 +772,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
             )}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="ml-auto flex shrink-0 items-center gap-3">
             {/* View count */}
             <div className="flex items-center gap-1 text-gray-600" title="Views">
               <Eye className="w-3.5 h-3.5" />

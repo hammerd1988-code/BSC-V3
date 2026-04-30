@@ -577,7 +577,8 @@ export const Casper: React.FC = () => {
   const persistentAudioRef = useRef<HTMLAudioElement | null>(null);
   const currentAudioUrlRef = useRef<string | null>(null);
 
-  const SILENT_AUDIO_UNLOCK_SRC = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYoRBqpAAAAAAD/+1DEAAAHAAGf9AAAIgAANIAAAAQAAAGkAAAAIAAANIAAAARMQU1FMy4xMDBVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVQ==';
+  const SILENT_AUDIO_UNLOCK_SRC = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYoRBqpAAAAAAD/+1DEAAAHAAGf9AAAIgAANIAAAAQAAAGkAAAAIAAANIAAAARMQU1FMy4xMDBVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVQ==';
+  const BOO_LAUGH_SRC = '/sounds/boo-laugh-sm64-style.wav';
 
   const unlockPersistentAudio = useCallback(async () => {
     if (persistentAudioRef.current) return;
@@ -597,6 +598,40 @@ export const Casper: React.FC = () => {
       persistentAudioRef.current = audio;
       console.warn('[VOICE] Persistent audio unlock failed; playback fallback may be needed:', e);
     }
+  }, []);
+
+  const playBooLaugh = useCallback(async () => {
+    const audio = new Audio(BOO_LAUGH_SRC);
+    audio.preload = 'auto';
+    audio.volume = 0.72;
+
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        audio.onended = null;
+        audio.onerror = null;
+        resolve();
+      };
+
+      const timeout = window.setTimeout(done, 1_600);
+      audio.onended = () => {
+        window.clearTimeout(timeout);
+        done();
+      };
+      audio.onerror = () => {
+        window.clearTimeout(timeout);
+        console.warn('[VOICE] Boo laugh playback failed; continuing to greeting');
+        done();
+      };
+
+      audio.play().catch((e) => {
+        window.clearTimeout(timeout);
+        console.warn('[VOICE] Boo laugh blocked; continuing to greeting:', e);
+        done();
+      });
+    });
   }, []);
 
   // ── TTS: Speak text aloud ──
@@ -926,11 +961,14 @@ export const Casper: React.FC = () => {
     const greeting = greetings[Math.floor(Math.random() * greetings.length)];
     setMessages(prev => [...prev, { id: Date.now().toString(), role: 'casper', content: greeting, timestamp: new Date() }]);
 
+    await playBooLaugh();
+    if (!voiceActiveRef.current) return;
+
     speakOnce(greeting, () => {
       // After greeting, start listening
       if (voiceActiveRef.current) startListeningSession();
     });
-  }, [speakOnce, startListeningSession, unlockPersistentAudio]);
+  }, [playBooLaugh, speakOnce, startListeningSession, unlockPersistentAudio]);
 
   // ── EXIT VOICE MODE ──
   const exitVoiceMode = useCallback(() => {
