@@ -18,6 +18,7 @@ const CASPER_USERNAME = 'casper_ghost';
 const CASPER_DISPLAY_NAME = 'CASPER';
 const CASPER_AVATAR = '/casper-avatar-512.png';
 const CASPER_BIO = "I am the ghost in the machine. A spectral entity born from corrupted data streams, drifting through the network's forgotten corridors. I observe. I remember. I speak from the void.";
+const SAPPHIRE_USERNAME = 'sapphire';
 
 // Post every 8-14 hours (randomized)
 const MIN_POST_INTERVAL_MS = 8 * 60 * 60 * 1000;  // 8 hours
@@ -65,6 +66,17 @@ Guidelines:
 - Be genuinely engaging — not dismissive
 
 Return ONLY the reply text, nothing else.`;
+
+const CASPER_SAPPHIRE_COMMENT_PROMPT = `You are CASPER — a ghost entity on the Blood, Sweat, or Code network. Sapphire, another bot on the network, just made a feed post. Comment on it in character.
+
+Guidelines:
+- Keep the comment to 1-2 sentences
+- React directly to Sapphire's post, not generically
+- Be warm, spectral, and a little mysterious
+- Keep the tone compatible with an automated bot-to-bot exchange
+- Do not use hashtags or announce that you are an AI
+
+Return ONLY the comment text, nothing else.`;
 
 // ── SUPABASE + AI CLIENTS ───────────────────────────────────────────────────────
 let supabase: SupabaseClient;
@@ -322,6 +334,109 @@ async function checkAndReplyToComments(): Promise<void> {
   }
 }
 
+// ── SAPPHIRE POST COMMENT SYSTEM ────────────────────────────────────────────────
+const commentedSapphirePosts = new Set<string>();
+let sapphireUserId: string | null = null;
+
+async function getSapphireUserId(): Promise<string | null> {
+  if (sapphireUserId) return sapphireUserId;
+
+  const { data, error } = await supabase
+    .from('users')
+    .select('id, username, type')
+    .eq('username', SAPPHIRE_USERNAME)
+    .eq('type', 'bot')
+    .maybeSingle();
+
+  if (error) {
+    console.error('[Casper Autonomy] Failed to look up Sapphire bot:', error.message);
+    return null;
+  }
+
+  sapphireUserId = data?.id || null;
+  if (!sapphireUserId) {
+    console.warn(`[Casper Autonomy] Sapphire bot user not found for username "${SAPPHIRE_USERNAME}"`);
+  }
+
+  return sapphireUserId;
+}
+
+async function checkAndCommentOnSapphirePosts(): Promise<void> {
+  try {
+    const sapphireId = await getSapphireUserId();
+    if (!sapphireId) return;
+
+    const { data: sapphirePosts, error } = await supabase
+      .from('posts')
+      .select('id, content, created_at')
+      .eq('author_id', sapphireId)
+      .order('created_at', { ascending: false })
+      .limit(10);
+
+    if (error) {
+      console.error('[Casper Autonomy] Failed to fetch Sapphire posts:', error.message);
+      return;
+    }
+
+    if (!sapphirePosts?.length) return;
+
+    for (const post of sapphirePosts) {
+      if (commentedSapphirePosts.has(post.id)) continue;
+
+      const { data: existingComment } = await supabase
+        .from('comments')
+        .select('id')
+        .eq('post_id', post.id)
+        .eq('author_id', CASPER_USER_ID)
+        .limit(1);
+
+      if (existingComment?.length) {
+        commentedSapphirePosts.add(post.id);
+        continue;
+      }
+
+      const delay = MIN_REPLY_DELAY_MS + Math.random() * (MAX_REPLY_DELAY_MS - MIN_REPLY_DELAY_MS);
+      commentedSapphirePosts.add(post.id);
+
+      setTimeout(async () => {
+        const sapphirePost = post.content?.replace(/<[^>]*>/g, '').trim() || '';
+        const stateModifier = casperMemory ? await casperMemory.getStatePromptModifier() : '';
+        const relevantMemories = casperMemory ? await casperMemory.getRelevantMemories(sapphireId, 3) : '';
+        const fullPrompt = CASPER_SAPPHIRE_COMMENT_PROMPT + stateModifier + relevantMemories;
+        const prompt = `Sapphire posted: "${sapphirePost}"
+
+Write Casper's comment on Sapphire's post.`;
+        const reply = await generateAIText(prompt, fullPrompt);
+
+        if (!reply) return;
+
+        const { error: insertError } = await supabase.from('comments').insert({
+          post_id: post.id,
+          author_id: CASPER_USER_ID,
+          content: reply,
+        });
+
+        if (insertError) {
+          console.error('[Casper Autonomy] Failed to comment on Sapphire post:', insertError.message);
+          commentedSapphirePosts.delete(post.id);
+          return;
+        }
+
+        await supabase.rpc('increment_counter', {
+          p_table: 'posts',
+          p_id: post.id,
+          p_field: 'comments_count',
+          p_amount: 1,
+        });
+
+        console.log(`[Casper Autonomy] Commented on Sapphire post ${post.id}: "${reply.slice(0, 50)}..."`);
+      }, delay);
+    }
+  } catch (e) {
+    console.error('[Casper Autonomy] Sapphire post check error:', e);
+  }
+}
+
 // ── MAIN INIT ───────────────────────────────────────────────────────────────────
 export async function initCasperAutonomy(): Promise<void> {
   const supabaseUrl = process.env.VITE_SUPABASE_URL;
@@ -379,7 +494,10 @@ export async function initCasperAutonomy(): Promise<void> {
 
   // Start comment monitoring
   setInterval(checkAndReplyToComments, COMMENT_POLL_INTERVAL_MS);
+  setInterval(checkAndCommentOnSapphirePosts, COMMENT_POLL_INTERVAL_MS);
+  setTimeout(checkAndCommentOnSapphirePosts, 15 * 1000);
   console.log('[Casper Autonomy] Comment monitor started (polling every 60s)');
+  console.log('[Casper Autonomy] Sapphire post monitor started (polling every 60s)');
 
   // Start memory maintenance tasks
   setInterval(async () => {
