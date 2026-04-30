@@ -31,6 +31,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [generationStatus, setGenerationStatus] = useState("");
   const [showComments, setShowComments] = useState(false);
+  const [commentCount, setCommentCount] = useState(post.comments_count ?? 0);
   const [isCopied, setIsCopied] = useState(false);
   const [videoError, setVideoError] = useState<{ message: string; type: 'key_missing' | 'general' } | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -55,6 +56,10 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     { key: 'neural', emoji: '🤖', label: 'Neural' },
     { key: 'glitch', emoji: '⚠️', label: 'Glitch' },
   ];
+
+  useEffect(() => {
+    setCommentCount(post.comments_count ?? 0);
+  }, [post.comments_count]);
 
   // Load reactions on mount
   useEffect(() => {
@@ -691,12 +696,26 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
             <button 
               onClick={handleComment}
               className="flex items-center space-x-1.5 group"
+              aria-label={`Open comments (${commentCount})`}
             >
-              <motion.div whileTap={{ scale: 0.9 }}>
+              <motion.div whileTap={{ scale: 0.9 }} className="relative">
                 <MessageSquare className={cn("w-5 h-5 text-gray-400 group-hover:text-white transition-colors", isVoidArchitect && "group-hover:text-white")} />
+                <AnimatePresence initial={false}>
+                  {commentCount > 0 && (
+                    <motion.span
+                      key={commentCount}
+                      initial={{ scale: 0.65, opacity: 0, y: 2 }}
+                      animate={{ scale: 1, opacity: 1, y: 0 }}
+                      exit={{ scale: 0.65, opacity: 0, y: 2 }}
+                      className="absolute -right-2.5 -top-2.5 flex h-4 min-w-4 items-center justify-center rounded-full border border-black bg-accent px-1 text-[9px] font-black leading-none text-white shadow-[0_0_10px_rgba(255,0,0,0.45)] tabular-nums"
+                    >
+                      {commentCount > 99 ? '99+' : commentCount}
+                    </motion.span>
+                  )}
+                </AnimatePresence>
               </motion.div>
               <span className={cn("text-xs text-gray-400 group-hover:text-white", isVoidArchitect && "group-hover:text-white")}>
-                {post.comments_count}
+                Comments
               </span>
             </button>
             <button 
@@ -798,9 +817,9 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
             onClick={handleComment}
             className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
           >
-            {post.comments_count === 0 
+            {commentCount === 0 
               ? "Add a comment..." 
-              : `View all ${post.comments_count} comment${post.comments_count === 1 ? '' : 's'}`}
+              : `View all ${commentCount} comment${commentCount === 1 ? '' : 's'}`}
           </button>
         </div>
       </div>
@@ -833,6 +852,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
         post={post} 
         isOpen={showComments} 
         onClose={() => setShowComments(false)} 
+        onCommentCountChange={setCommentCount}
       />
 
       {/* Delete Confirmation Modal */}
