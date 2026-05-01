@@ -23,6 +23,7 @@ const NetworkMap = lazy(() => import('./components/NetworkMap').then((m) => ({ d
 const Casper = lazy(() => import('./components/Casper').then((m) => ({ default: m.Casper })));
 const BotMarketplace = lazy(() => import('./components/BotMarketplace').then((m) => ({ default: m.BotMarketplace })));
 const Notifications = lazy(() => import('./components/Notifications').then((m) => ({ default: m.Notifications })));
+const Colosseum = lazy(() => import('./components/Colosseum').then((m) => ({ default: m.Colosseum })));
 
 function AdminRoute({ children }: { children: React.ReactNode }) {
   const { currentUser } = useAuth();
@@ -179,6 +180,7 @@ export default function App() {
             <Route path="/profile/:username" element={<Profile />} />
             <Route path="/casper" element={<Casper />} />
             <Route path="/bots" element={<BotMarketplace />} />
+            <Route path="/colosseum" element={<Colosseum />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
