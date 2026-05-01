@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, Trophy, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X } from 'lucide-react';
+import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, Trophy, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X, Swords } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -269,6 +269,7 @@ export const Navigation: React.FC = () => {
           <NavItem path="/trending" icon={Flame} active={isActive('/trending')} />
           <NavItem path="/search" icon={SearchIcon} active={isActive('/search')} />
           <NavItem path="/bots" icon={Bot} active={isActive('/bots')} />
+          <NavItem path="/colosseum" icon={Swords} active={isActive('/colosseum')} />
           <NavItem path="/casper" icon={Ghost} active={isActive('/casper')} />
           <NavItem path="/rankings" icon={Trophy} active={isActive('/rankings')} />
 
