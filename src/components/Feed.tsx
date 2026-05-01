@@ -4,7 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Post, User, LiveStream } from '../types';
 import { PostCard } from './PostCard';
 import { motion, AnimatePresence } from 'motion/react';
-import { Loader2, TrendingUp, Users, MessageCircle, User as UserIcon, Search as SearchIcon, Radio, X, Eye, Heart as HeartIcon, MessageSquare, HeartHandshake, Terminal, Sparkles, Bot, Coins } from 'lucide-react';
+import { Loader2, TrendingUp, Users, MessageCircle, User as UserIcon, Search as SearchIcon, Radio, X, Eye, Heart as HeartIcon, MessageSquare, HeartHandshake, Terminal, Sparkles, Bot, Coins, Swords, Clock } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { socket } from '../lib/socket';
 export { socket } from '../lib/socket'; // backward-compat re-export
@@ -18,6 +18,108 @@ import { BOT_PERSONAS } from '../lib/botPersonas';
 import { NeuralBriefing } from './NeuralBriefing';
 import { TrendingSidebar } from './TrendingSidebar';
 import { CasperState } from './CasperState';
+
+type FeedChallengeType = 'speed_round' | 'debug_battle' | 'code_golf';
+
+interface FeedLiveBattle {
+  id: string;
+  challenge_type: FeedChallengeType;
+  started_at: string;
+  challenger_id: string;
+  defender_id: string;
+  challengerName: string;
+  defenderName: string;
+  challengerGlow: string;
+  defenderGlow: string;
+}
+
+function formatFeedChallenge(type: FeedChallengeType) {
+  if (type === 'speed_round') return 'Speed Round';
+  if (type === 'debug_battle') return 'Debug Battle';
+  if (type === 'code_golf') return 'Code Golf';
+  return 'Challenge';
+}
+
+function LiveBattlesWidget({ battles, variant, onOpen }: { battles: FeedLiveBattle[]; variant: 'mobile' | 'sidebar'; onOpen: (matchId: string) => void }) {
+  const isMobile = variant === 'mobile';
+
+  if (!battles.length) {
+    return (
+      <section className={cn(
+        'border border-white/10 bg-zinc-950/80 shadow-[0_0_32px_rgba(255,23,68,0.08)]',
+        isMobile ? 'mx-auto mt-6 max-w-md rounded-3xl p-4' : 'rounded-3xl p-4'
+      )}>
+        <div className="flex items-center gap-2">
+          <Swords className="h-4 w-4 text-zinc-600" />
+          <p className="text-[10px] font-black uppercase tracking-[0.26em] text-zinc-500">Live Battles</p>
+        </div>
+        <p className="mt-3 text-xs leading-5 text-zinc-500">No Colosseum pits are broadcasting right now.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className={cn(
+      'relative overflow-hidden border border-red-500/20 bg-black/75 shadow-[0_0_36px_rgba(255,23,68,0.12)] backdrop-blur-xl',
+      isMobile ? 'mx-auto mt-6 max-w-md rounded-3xl p-4' : 'rounded-3xl p-4'
+    )}>
+      <div className="absolute inset-0 opacity-30 bg-[radial-gradient(circle_at_20%_0%,rgba(255,23,68,0.3),transparent_34%),radial-gradient(circle_at_80%_100%,rgba(0,229,255,0.18),transparent_36%)]" />
+      <div className="relative mb-4 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-[0.28em] text-red-300">Live Battles</p>
+          <h3 className="mt-1 text-sm font-black uppercase tracking-[0.16em] text-white">Colosseum Pits</h3>
+        </div>
+        <span className="inline-flex items-center gap-2 rounded-full border border-red-400/30 bg-red-950/25 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-red-100">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-red-300" />
+          </span>
+          {battles.length} live
+        </span>
+      </div>
+
+      <div className={cn(isMobile ? 'flex gap-3 overflow-x-auto pb-1' : 'space-y-3')}>
+        {battles.map((battle) => (
+          <motion.button
+            key={battle.id}
+            type="button"
+            whileHover={{ y: -2, scale: 1.01 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={() => onOpen(battle.id)}
+            className={cn(
+              'group relative overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035] p-3 text-left transition hover:border-red-300/40',
+              isMobile ? 'w-72 shrink-0' : 'w-full'
+            )}
+          >
+            <div className="absolute inset-0 opacity-25" style={{ background: `linear-gradient(135deg, ${battle.challengerGlow}44, transparent 48%, ${battle.defenderGlow}44)` }} />
+            <div className="relative">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-red-500/10 px-2 py-1 text-[8px] font-black uppercase tracking-widest text-red-100">
+                  <Radio className="h-3 w-3 animate-pulse" /> Live
+                </span>
+                <span className="inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-zinc-500">
+                  <Clock className="h-3 w-3" /> {formatFeedChallenge(battle.challenge_type)}
+                </span>
+              </div>
+              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+                <div className="min-w-0">
+                  <div className="mb-1 h-1 rounded-full" style={{ backgroundColor: battle.challengerGlow, boxShadow: `0 0 12px ${battle.challengerGlow}` }} />
+                  <p className="truncate text-xs font-black uppercase tracking-widest text-white">{battle.challengerName}</p>
+                </div>
+                <Swords className="h-4 w-4 text-red-200" />
+                <div className="min-w-0 text-right">
+                  <div className="mb-1 h-1 rounded-full" style={{ backgroundColor: battle.defenderGlow, boxShadow: `0 0 12px ${battle.defenderGlow}` }} />
+                  <p className="truncate text-xs font-black uppercase tracking-widest text-white">{battle.defenderName}</p>
+                </div>
+              </div>
+              <p className="mt-3 text-[9px] font-black uppercase tracking-[0.22em] text-zinc-500 transition group-hover:text-red-100">Tap to spectate</p>
+            </div>
+          </motion.button>
+        ))}
+      </div>
+    </section>
+  );
+}
 
 export async function getBotThinking(content: string, botUsername?: string, settings?: AiSettings) {
   try {
@@ -264,6 +366,8 @@ export const Feed: React.FC = () => {
   const [unreadCount, setUnreadCount] = useState(0);
   const [featuredBot, setFeaturedBot] = useState<any>(null);
 
+  const [liveBattles, setLiveBattles] = useState<FeedLiveBattle[]>([]);
+
   useEffect(() => {
     const randomBot = BOT_PERSONAS[Math.floor(Math.random() * BOT_PERSONAS.length)];
     setFeaturedBot(randomBot);
@@ -365,6 +469,60 @@ export const Feed: React.FC = () => {
       .subscribe();
     return () => { supabase.removeChannel(streamsChannel); };
   }, []);
+
+  const fetchLiveBattles = useCallback(async () => {
+    try {
+      const { data: matches, error: matchError } = await supabase
+        .from('matches')
+        .select('*')
+        .is('completed_at', null)
+        .order('started_at', { ascending: false })
+        .limit(12);
+
+      if (matchError) throw matchError;
+
+      const matchRows = matches ?? [];
+      const gladiatorIds = Array.from(new Set(matchRows.flatMap((match: any) => [match.challenger_id, match.defender_id]).filter(Boolean)));
+      let gladiatorMap = new Map<string, any>();
+
+      if (gladiatorIds.length > 0) {
+        const { data: gladiators, error: gladiatorError } = await supabase
+          .from('gladiators')
+          .select('id, name, glow_color')
+          .in('id', gladiatorIds);
+        if (gladiatorError) throw gladiatorError;
+        gladiatorMap = new Map((gladiators ?? []).map((gladiator: any) => [String(gladiator.id), gladiator]));
+      }
+
+      setLiveBattles(matchRows.map((match: any) => {
+        const challenger = gladiatorMap.get(String(match.challenger_id));
+        const defender = gladiatorMap.get(String(match.defender_id));
+        return {
+          id: String(match.id),
+          challenge_type: match.challenge_type as FeedChallengeType,
+          started_at: match.started_at,
+          challenger_id: String(match.challenger_id),
+          defender_id: String(match.defender_id),
+          challengerName: challenger?.name ?? 'Unknown',
+          defenderName: defender?.name ?? 'Unknown',
+          challengerGlow: challenger?.glow_color ?? '#ff1744',
+          defenderGlow: defender?.glow_color ?? '#00e5ff',
+        };
+      }));
+    } catch (error) {
+      console.warn('[Feed] Live Battles widget unavailable', error);
+      setLiveBattles([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchLiveBattles();
+    const channel = supabase.channel('feed-live-battles')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'matches' }, () => void fetchLiveBattles())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiators' }, () => void fetchLiveBattles())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchLiveBattles]);
 
   const loadMorePosts = useCallback(() => {
     if (!loading && hasMore) {
@@ -622,6 +780,11 @@ export const Feed: React.FC = () => {
         </section>
       )}
 
+      {/* Mobile Live Battles Strip */}
+      <div className="lg:hidden">
+        <LiveBattlesWidget battles={liveBattles} variant="mobile" onOpen={(matchId) => navigate(`/colosseum?match=${matchId}`)} />
+      </div>
+
       {/* Featured AI Architect */}
       {featuredBot && (
         <section className="max-w-md mx-auto pt-6 px-4">
@@ -737,7 +900,7 @@ export const Feed: React.FC = () => {
       <TrendingSidebar onFilterChange={setTrendFilter} activeFilter={trendFilter} />
 
       {/* Feed Content — desktop uses sidebar layout */}
-      <main className="mx-auto w-full max-w-5xl px-3 pt-4 sm:px-4 lg:flex lg:items-start lg:gap-6">
+      <main className="mx-auto w-full max-w-6xl px-3 pt-4 sm:px-4 lg:flex lg:items-start lg:gap-6">
         {/* Desktop sidebar */}
         <TrendingSidebar onFilterChange={setTrendFilter} activeFilter={trendFilter} />
 
@@ -776,6 +939,11 @@ export const Feed: React.FC = () => {
         )}
 
         </div>{/* end main feed column */}
+
+        {/* Desktop Live Battles sidebar */}
+        <aside className="hidden w-72 shrink-0 lg:sticky lg:top-28 lg:block">
+          <LiveBattlesWidget battles={liveBattles} variant="sidebar" onOpen={(matchId) => navigate(`/colosseum?match=${matchId}`)} />
+        </aside>
 
         {/* Loading State */}
         <div ref={ref} className="flex w-full flex-col items-center justify-center gap-8 py-8 lg:basis-full">
