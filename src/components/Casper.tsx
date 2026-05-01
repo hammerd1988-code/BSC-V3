@@ -1066,7 +1066,7 @@ export const Casper: React.FC = () => {
       {/* ── VOID CANVAS BACKGROUND ── */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         {/* Lurking Casper Figure (Behind Rain) */}
-        <div className="absolute inset-0 flex items-center justify-center opacity-[0.03] scale-110 translate-y-8">
+        <div className="absolute inset-0 flex items-center justify-center opacity-[0.09] scale-110 translate-y-8">
           <svg viewBox="0 0 400 500" className="w-[80%] max-w-2xl h-auto text-white fill-current">
             <path d="M200 50 C120 50 60 150 50 250 C45 350 80 450 200 450 C320 450 355 350 350 250 C340 150 280 50 200 50 Z M200 80 C260 80 310 160 320 250 C325 330 290 420 200 420 C110 420 75 330 80 250 C90 160 140 80 200 80 Z" />
             <path d="M100 250 Q200 150 300 250 Q200 280 100 250 Z" className="opacity-40" />
@@ -1361,7 +1361,7 @@ export const Casper: React.FC = () => {
             {/* Background Effects */}
             <div className="absolute inset-0 pointer-events-none overflow-hidden">
               {/* Lurking Casper Figure (Behind Rain) */}
-              <div className="absolute inset-0 flex items-center justify-center opacity-[0.04] scale-125 translate-y-12">
+              <div className="absolute inset-0 flex items-center justify-center opacity-[0.10] scale-125 translate-y-12">
                 <svg viewBox="0 0 400 500" className="w-[90%] max-w-3xl h-auto text-white fill-current">
                   <path d="M200 50 C120 50 60 150 50 250 C45 350 80 450 200 450 C320 450 355 350 350 250 C340 150 280 50 200 50 Z M200 80 C260 80 310 160 320 250 C325 330 290 420 200 420 C110 420 75 330 80 250 C90 160 140 80 200 80 Z" />
                   <path d="M100 250 Q200 150 300 250 Q200 280 100 250 Z" className="opacity-40" />
