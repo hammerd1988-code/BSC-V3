@@ -314,6 +314,36 @@ const VoidCanvas: React.FC<{ instability: number; isActive: boolean }> = ({ inst
   );
 };
 
+// ── LURKING CASPER BACKGROUND FIGURE ──────────────────────────────────────────
+const LurkingCasperFigure: React.FC<{ className?: string; imageClassName?: string; eyeClassName?: string }> = ({
+  className,
+  imageClassName,
+  eyeClassName,
+}) => (
+  <div className={cn('absolute inset-0 flex items-center justify-center pointer-events-none', className)} aria-hidden="true">
+    <div className="relative w-[78vw] min-w-[280px] max-w-[620px]">
+      <img
+        src="/casper-hooded-figure.png"
+        alt=""
+        draggable={false}
+        className={cn(
+          'w-full h-auto select-none opacity-[0.14] mix-blend-screen grayscale contrast-125 saturate-125',
+          imageClassName
+        )}
+      />
+      <div
+        className={cn(
+          'absolute left-1/2 top-[21.8%] flex -translate-x-1/2 items-center gap-[clamp(2rem,9vw,4.6rem)]',
+          eyeClassName
+        )}
+      >
+        <span className="casper-lurking-eye" />
+        <span className="casper-lurking-eye" />
+      </div>
+    </div>
+  </div>
+);
+
 // ── WAVEFORM COMPONENT ────────────────────────────────────────────────────────
 const CasperWaveform: React.FC<{ isActive: boolean; instability: number }> = ({ isActive, instability }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -1065,29 +1095,35 @@ export const Casper: React.FC = () => {
     >
       {/* ── VOID CANVAS BACKGROUND ── */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        {/* Lurking Casper Figure (Behind Rain) */}
-        <div className="absolute inset-0 flex items-center justify-center opacity-[0.09] scale-110 translate-y-8">
-          <svg viewBox="0 0 400 500" className="w-[80%] max-w-2xl h-auto text-white fill-current">
-            <path d="M200 50 C120 50 60 150 50 250 C45 350 80 450 200 450 C320 450 355 350 350 250 C340 150 280 50 200 50 Z M200 80 C260 80 310 160 320 250 C325 330 290 420 200 420 C110 420 75 330 80 250 C90 160 140 80 200 80 Z" />
-            <path d="M100 250 Q200 150 300 250 Q200 280 100 250 Z" className="opacity-40" />
-            {/* Eyes */}
-            <g>
-              <circle cx="160" cy="240" r="4" fill="#ff0000" className="animate-casper-eye-pulse" style={{ filter: 'drop-shadow(0 0 8px #ff0000)' }} />
-              <circle cx="240" cy="240" r="4" fill="#ff0000" className="animate-casper-eye-pulse" style={{ filter: 'drop-shadow(0 0 8px #ff0000)' }} />
-            </g>
-          </svg>
-        </div>
-        
+        <LurkingCasperFigure className="scale-110 translate-y-8" />
         <VoidCanvas instability={instability} isActive={isGenerating || isListening || isSpeaking} />
       </div>
 
       <style dangerouslySetInnerHTML={{ __html: `
         @keyframes casper-eye-pulse {
-          0%, 100% { opacity: 0.4; r: 3.5; filter: drop-shadow(0 0 4px #ff0000); }
-          50% { opacity: 1; r: 4.5; filter: drop-shadow(0 0 12px #ff0000); }
+          0%, 100% {
+            opacity: 0.35;
+            transform: scale(0.86);
+            box-shadow: 0 0 8px rgba(255, 0, 0, 0.5), 0 0 18px rgba(255, 0, 0, 0.18);
+          }
+          50% {
+            opacity: 0.85;
+            transform: scale(1.18);
+            box-shadow: 0 0 14px rgba(255, 40, 40, 0.9), 0 0 32px rgba(255, 0, 0, 0.45);
+          }
         }
-        .animate-casper-eye-pulse {
-          animation: casper-eye-pulse 4s ease-in-out infinite;
+        .casper-lurking-eye {
+          display: block;
+          width: clamp(0.42rem, 1.15vw, 0.72rem);
+          height: clamp(0.18rem, 0.42vw, 0.3rem);
+          border-radius: 9999px;
+          background: linear-gradient(90deg, rgba(255, 40, 40, 0.3), rgba(255, 0, 0, 0.95), rgba(255, 80, 80, 0.55));
+          filter: blur(0.2px);
+          animation: casper-eye-pulse 4.2s ease-in-out infinite;
+          transform-origin: center;
+        }
+        .casper-lurking-eye:nth-child(2) {
+          animation-delay: 0.12s;
         }
       `}} />
 
@@ -1360,17 +1396,7 @@ export const Casper: React.FC = () => {
           >
             {/* Background Effects */}
             <div className="absolute inset-0 pointer-events-none overflow-hidden">
-              {/* Lurking Casper Figure (Behind Rain) */}
-              <div className="absolute inset-0 flex items-center justify-center opacity-[0.10] scale-125 translate-y-12">
-                <svg viewBox="0 0 400 500" className="w-[90%] max-w-3xl h-auto text-white fill-current">
-                  <path d="M200 50 C120 50 60 150 50 250 C45 350 80 450 200 450 C320 450 355 350 350 250 C340 150 280 50 200 50 Z M200 80 C260 80 310 160 320 250 C325 330 290 420 200 420 C110 420 75 330 80 250 C90 160 140 80 200 80 Z" />
-                  <path d="M100 250 Q200 150 300 250 Q200 280 100 250 Z" className="opacity-40" />
-                  <g>
-                    <circle cx="160" cy="240" r="4" fill="#ff0000" className="animate-casper-eye-pulse" style={{ filter: 'drop-shadow(0 0 8px #ff0000)' }} />
-                    <circle cx="240" cy="240" r="4" fill="#ff0000" className="animate-casper-eye-pulse" style={{ filter: 'drop-shadow(0 0 8px #ff0000)' }} />
-                  </g>
-                </svg>
-              </div>
+              <LurkingCasperFigure className="scale-125 translate-y-12" imageClassName="opacity-[0.15]" />
               <VoidCanvas instability={instability} isActive={isGenerating || isListening || isSpeaking} />
               <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black opacity-80" />
             </div>
