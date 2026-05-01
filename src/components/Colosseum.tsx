@@ -11,9 +11,11 @@ import {
   Clock,
   Crown,
   Eye,
+  EyeOff,
   Flame,
   Gauge,
   Loader2,
+  Lock,
   Radio,
   Shield,
   Skull,
@@ -50,6 +52,19 @@ interface Gladiator {
   losses: number;
   cred: number;
   created_at: string;
+  model: string | null;
+}
+
+interface GladiatorAiMove {
+  gladiator_id: string;
+  gladiator_name: string;
+  source: string;
+  model: string;
+  uses_custom_key: boolean;
+  prompt: string;
+  solution: string;
+  latency_ms: number;
+  received_at: string;
 }
 
 interface MatchRow {
@@ -150,6 +165,17 @@ const CHALLENGES: Array<{
 ];
 
 const GLOW_COLORS = ['#ff1744', '#00e5ff', '#ff2bd6', '#f9ff6b', '#8b5cf6', '#22c55e'];
+
+const MODEL_OPTIONS = [
+  { value: 'platform_default', label: 'Platform Default' },
+  { value: 'gpt-4.1', label: 'gpt-4.1' },
+  { value: 'gpt-4.1-mini', label: 'gpt-4.1-mini' },
+  { value: 'gpt-4.1-nano', label: 'gpt-4.1-nano' },
+  { value: 'claude-sonnet', label: 'claude-sonnet' },
+  { value: 'claude-haiku', label: 'claude-haiku' },
+  { value: 'gemini-2.5-flash', label: 'gemini-2.5-flash' },
+  { value: 'gemini-2.5-pro', label: 'gemini-2.5-pro' },
+];
 
 const DEFAULT_STATS: GladiatorStats = { speed: 52, accuracy: 54, endurance: 50 };
 
@@ -299,6 +325,40 @@ function sapphireSolutionBonus(move: SapphireMove | null | undefined, type: Chal
       ? Number(solution.length < 900) * 8
       : Number(solution.includes('optimize') || solution.includes('fast') || solution.includes('complexity')) * 8;
   return Math.min(48, 12 + codeSignals * 4 + challengeSignal + Math.min(16, Math.floor(move.solution.length / 180)));
+}
+
+function aiMoveBonus(move: GladiatorAiMove | undefined, type: ChallengeType) {
+  if (!move?.solution) return 0;
+  const solution = move.solution.toLowerCase();
+  const codeSignals = ['function', 'const ', 'let ', 'return', 'class ', 'def ', '=>', '{', ';'].filter((token) => solution.includes(token)).length;
+  const challengeSignal = type === 'debug_battle'
+    ? Number(solution.includes('fix') || solution.includes('bug') || solution.includes('patch')) * 7
+    : type === 'code_golf'
+      ? Number(solution.length < 900) * 7
+      : Number(solution.includes('optimize') || solution.includes('fast') || solution.includes('complexity')) * 7;
+  const customKeySignal = move.uses_custom_key ? 6 : 0;
+  return Math.min(42, 8 + codeSignals * 3 + challengeSignal + customKeySignal + Math.min(14, Math.floor(move.solution.length / 220)));
+}
+
+async function requestGladiatorAiMoves(match: MatchRow, type: ChallengeType, challenger: Gladiator, defender: Gladiator): Promise<GladiatorAiMove[]> {
+  const response = await fetch('/api/colosseum/gladiator-solutions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      matchId: match.id,
+      challengeType: type,
+      challengerId: challenger.id,
+      defenderId: defender.id,
+      prompt: buildCombatChallengePrompt(type, challenger, defender),
+    }),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(payload?.error || 'Gladiator AI solution generation failed');
+  }
+
+  return (payload?.moves ?? []) as GladiatorAiMove[];
 }
 
 async function requestSapphireMove(match: MatchRow, type: ChallengeType, challenger: Gladiator, defender: Gladiator): Promise<SapphireMove | null> {
@@ -896,7 +956,14 @@ export const Colosseum: React.FC = () => {
     avatar_url: '',
     personality: '',
     glow_color: GLOW_COLORS[0],
+    api_key: '',
+    model: 'platform_default',
   });
+
+  const [showForgeApiKey, setShowForgeApiKey] = useState(false);
+  const [showConfigApiKey, setShowConfigApiKey] = useState(false);
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [configForm, setConfigForm] = useState({ api_key: '', model: 'platform_default' });
 
   const [tournaments, setTournaments] = useState<TournamentRow[]>([]);
   const [tournamentEntries, setTournamentEntries] = useState<TournamentEntryRow[]>([]);
@@ -920,6 +987,7 @@ export const Colosseum: React.FC = () => {
     losses: Number(row.losses ?? 0),
     cred: Number(row.cred ?? 0),
     created_at: row.created_at,
+    model: row.model ?? null,
   });
 
   const fetchArena = useCallback(async () => {
@@ -930,7 +998,7 @@ export const Colosseum: React.FC = () => {
         { data: activeMatchRows, error: activeMatchError },
         { data: recentMatchRows, error: recentMatchError },
       ] = await Promise.all([
-        supabase.from('gladiators').select('*').order('wins', { ascending: false }).order('cred', { ascending: false }),
+        supabase.from('gladiators').select('id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model').order('wins', { ascending: false }).order('cred', { ascending: false }),
         supabase.from('matches').select('*').is('completed_at', null).order('started_at', { ascending: false }),
         supabase.from('matches').select('*').not('completed_at', 'is', null).order('started_at', { ascending: false }).limit(30),
       ]);
@@ -1017,6 +1085,13 @@ export const Colosseum: React.FC = () => {
   const selectedGladiator = selectedGladiatorId ? gladiatorById.get(selectedGladiatorId) : null;
   const selectedOpponent = selectedOpponentId ? gladiatorById.get(selectedOpponentId) : null;
 
+  useEffect(() => {
+    if (selectedGladiator && selectedGladiator.user_id === currentUser?.id) {
+      setConfigForm({ api_key: '', model: selectedGladiator.model ?? 'platform_default' });
+      setShowConfigApiKey(false);
+    }
+  }, [selectedGladiator?.id, selectedGladiator?.model, selectedGladiator?.user_id, currentUser?.id]);
+
   const createGladiator = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!currentUser || !form.name.trim()) return;
@@ -1039,6 +1114,8 @@ export const Colosseum: React.FC = () => {
           personality: form.personality.trim(),
           glow_color: form.glow_color,
           stats,
+          api_key: form.api_key.trim() || null,
+          model: form.api_key.trim() ? (form.model === 'platform_default' ? null : form.model) : null,
         })
         .select('*')
         .single();
@@ -1047,13 +1124,43 @@ export const Colosseum: React.FC = () => {
       const created = normalizeGladiator(data);
       setGladiators((prev) => [created, ...prev]);
       setSelectedGladiatorId(created.id);
-      setForm({ name: '', avatar_url: '', personality: '', glow_color: GLOW_COLORS[0] });
+      setForm({ name: '', avatar_url: '', personality: '', glow_color: GLOW_COLORS[0], api_key: '', model: 'platform_default' });
       setNotice(`${created.name} has entered the pit. The crowd is watching.`);
     } catch (err) {
       handleDbError(err, 'CREATE', 'gladiators');
       setNotice('Gladiator creation failed. Check auth and migration status, then try again.');
     } finally {
       setCreating(false);
+    }
+  };
+
+  const saveGladiatorAiConfig = async () => {
+    if (!currentUser || !selectedGladiator || selectedGladiator.user_id !== currentUser.id) return;
+
+    setSavingConfig(true);
+    setNotice(null);
+    try {
+      const updatePayload: Record<string, string | null> = {
+        model: configForm.model === 'platform_default' ? null : configForm.model,
+      };
+      if (configForm.api_key.trim()) {
+        updatePayload.api_key = configForm.api_key.trim();
+      }
+
+      const { error } = await supabase
+        .from('gladiators')
+        .update(updatePayload)
+        .eq('id', selectedGladiator.id);
+      if (error) throw error;
+
+      setConfigForm((prev) => ({ ...prev, api_key: '' }));
+      setNotice(`${selectedGladiator.name}'s private AI core has been updated.`);
+      await fetchArena();
+    } catch (err) {
+      handleDbError(err, 'UPDATE', 'gladiators');
+      setNotice('Could not update this gladiator AI core. Confirm you own this gladiator and the migration is applied.');
+    } finally {
+      setSavingConfig(false);
     }
   };
 
@@ -1132,16 +1239,24 @@ export const Colosseum: React.FC = () => {
         `${selectedOpponent.name} answers from the shadow cage.`,
       ];
       let sapphireMove: SapphireMove | null = null;
-      const sapphireInMatch = isSapphireGladiator(selectedGladiator) || isSapphireGladiator(selectedOpponent);
-      if (sapphireInMatch) {
-        logs.push('Sapphire house AI uplink opened. Waiting for live solution packet.');
-        try {
-          sapphireMove = await requestSapphireMove(match, challengeType, selectedGladiator, selectedOpponent);
-          logs.push(`Sapphire returned a live combat solution in ${sapphireMove?.latency_ms ?? 0}ms.`);
-        } catch (err) {
-          console.warn('[Colosseum] Sapphire live move failed', err);
-          logs.push('Sapphire live API failed to answer. Pit simulation fallback engaged.');
-        }
+      let aiMoves: GladiatorAiMove[] = [];
+      logs.push('Private AI cores queued. Server is generating combat solutions without exposing keys.');
+      try {
+        aiMoves = await requestGladiatorAiMoves(match, challengeType, selectedGladiator, selectedOpponent);
+        const sapphireGeneratedMove = aiMoves.find((move) => move.source === 'sapphire-api');
+        sapphireMove = sapphireGeneratedMove ? {
+          source: sapphireGeneratedMove.source,
+          prompt: sapphireGeneratedMove.prompt,
+          solution: sapphireGeneratedMove.solution,
+          latency_ms: sapphireGeneratedMove.latency_ms,
+          received_at: sapphireGeneratedMove.received_at,
+        } : null;
+        aiMoves.forEach((move) => {
+          logs.push(`${move.gladiator_name} returned a ${move.source} solution using ${move.model}.`);
+        });
+      } catch (err) {
+        console.warn('[Colosseum] Gladiator AI solution generation failed', err);
+        logs.push('Server-side AI cores did not answer. Pit simulation fallback engaged.');
       }
       setSimulation({
         matchId: match.id,
@@ -1155,7 +1270,7 @@ export const Colosseum: React.FC = () => {
         status: 'booting',
       });
       setMatches((prev) => [match, ...prev]);
-      setTimeout(() => runSimulation(match, selectedGladiator, selectedOpponent, challengeType, logs, sapphireMove), 650);
+      setTimeout(() => runSimulation(match, selectedGladiator, selectedOpponent, challengeType, logs, sapphireMove, aiMoves), 650);
     } catch (err) {
       handleDbError(err, 'CREATE', 'matches');
       setNotice('Challenge could not start. Select one of your gladiators and a valid opponent.');
@@ -1164,9 +1279,13 @@ export const Colosseum: React.FC = () => {
     }
   };
 
-  const runSimulation = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, openingLogs: string[], sapphireMove?: SapphireMove | null) => {
+  const runSimulation = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, openingLogs: string[], sapphireMove?: SapphireMove | null, aiMoves: GladiatorAiMove[] = []) => {
     let challengerScore = scoreFor(challenger, type);
     let defenderScore = scoreFor(defender, type);
+    const challengerMove = aiMoves.find((move) => move.gladiator_id === challenger.id);
+    const defenderMove = aiMoves.find((move) => move.gladiator_id === defender.id);
+    challengerScore += aiMoveBonus(challengerMove, type);
+    defenderScore += aiMoveBonus(defenderMove, type);
     if (isSapphireGladiator(challenger)) challengerScore += sapphireSolutionBonus(sapphireMove, type);
     if (isSapphireGladiator(defender)) defenderScore += sapphireSolutionBonus(sapphireMove, type);
     const winner = challengerScore >= defenderScore ? challenger : defender;
@@ -1179,6 +1298,7 @@ export const Colosseum: React.FC = () => {
       defender_id: defender.id,
       started_at: match.started_at,
       sapphire_move: sapphireMove ?? null,
+      ai_moves: aiMoves,
     };
     const combatLines = type === 'speed_round'
       ? ['Clock pressure spikes. Syntax sparks across the pit wall.', 'Both bots deploy hot paths through the runtime maze.', 'The crowd holograms slam the rail as latency drops.']
@@ -1396,6 +1516,44 @@ export const Colosseum: React.FC = () => {
                   ))}
                 </div>
               </div>
+              <div className="rounded-3xl border border-cyan-300/15 bg-cyan-950/10 p-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <Lock className="h-4 w-4 text-cyan-200" />
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-200">Optional Private AI Core</p>
+                    <p className="mt-1 text-[11px] leading-5 text-zinc-500">Optional. Bring your own API key to power your gladiator with a specific AI model. Your key is stored securely and never shared.</p>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <div className="relative">
+                    <input
+                      value={form.api_key}
+                      onChange={(event) => setForm((prev) => ({ ...prev, api_key: event.target.value }))}
+                      type={showForgeApiKey ? 'text' : 'password'}
+                      placeholder="API Key optional"
+                      autoComplete="off"
+                      className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 pr-12 text-sm text-white outline-none transition focus:border-cyan-300/60"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowForgeApiKey((prev) => !prev)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 transition hover:text-white"
+                      aria-label={showForgeApiKey ? 'Hide API key' : 'Reveal API key'}
+                    >
+                      {showForgeApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  <select
+                    value={form.model}
+                    onChange={(event) => setForm((prev) => ({ ...prev, model: event.target.value }))}
+                    disabled={!form.api_key.trim()}
+                    className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/60 disabled:opacity-50"
+                  >
+                    {MODEL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </div>
+              </div>
+
               <button
                 type="submit"
                 disabled={creating || !form.name.trim()}
@@ -1404,6 +1562,53 @@ export const Colosseum: React.FC = () => {
                 {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Flame className="h-4 w-4 transition group-hover:scale-110" />}
                 Enter The Pit
               </button>
+
+              {selectedGladiator && selectedGladiator.user_id === currentUser?.id && (
+                <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-[0.24em] text-zinc-500">Edit AI Core</p>
+                      <p className="mt-1 text-xs font-bold text-white">{selectedGladiator.name}</p>
+                    </div>
+                    <span className="rounded-full border border-cyan-300/20 bg-cyan-950/20 px-2 py-1 text-[8px] font-black uppercase tracking-widest text-cyan-100">Owner Only</span>
+                  </div>
+                  <div className="space-y-3">
+                    <div className="relative">
+                      <input
+                        value={configForm.api_key}
+                        onChange={(event) => setConfigForm((prev) => ({ ...prev, api_key: event.target.value }))}
+                        type={showConfigApiKey ? 'text' : 'password'}
+                        placeholder="Paste new API key or leave blank to keep current"
+                        autoComplete="off"
+                        className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 pr-12 text-sm text-white outline-none transition focus:border-cyan-300/60"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfigApiKey((prev) => !prev)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 transition hover:text-white"
+                        aria-label={showConfigApiKey ? 'Hide API key' : 'Reveal API key'}
+                      >
+                        {showConfigApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <select
+                      value={configForm.model}
+                      onChange={(event) => setConfigForm((prev) => ({ ...prev, model: event.target.value }))}
+                      className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/60"
+                    >
+                      {MODEL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={saveGladiatorAiConfig}
+                      disabled={savingConfig}
+                      className="flex w-full items-center justify-center gap-2 rounded-2xl border border-cyan-300/35 bg-cyan-500/15 px-4 py-3 text-[10px] font-black uppercase tracking-[0.22em] text-cyan-100 transition hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {savingConfig ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />} Save Private Core
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </form>
         </section>

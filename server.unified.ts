@@ -45,6 +45,22 @@ const CHALLENGE_BRIEFS: Record<ColosseumChallengeType, string> = {
   code_golf: 'Produce the shortest correct solution you can while preserving clarity about the approach.',
 };
 
+const PLATFORM_DEFAULT_MODEL = process.env.COLOSSEUM_DEFAULT_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+const OPENAI_COMPATIBLE_BASE_URL = (process.env.OPENAI_BASE_URL || process.env.VITE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+
+const SAFE_GLADIATOR_SELECT = 'id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model';
+
+function sanitizeGladiator(gladiator: any) {
+  if (!gladiator) return null;
+  const { api_key: _apiKey, ...safe } = gladiator;
+  return safe;
+}
+
+function normalizeModel(model?: string | null) {
+  if (!model || model === 'platform_default') return PLATFORM_DEFAULT_MODEL;
+  return model;
+}
+
 function isSapphireRecord(record: any) {
   return String(record?.id ?? '').toLowerCase() === SAPPHIRE_GLADIATOR_ID
     || String(record?.name ?? '').trim().toLowerCase() === 'sapphire';
@@ -77,6 +93,124 @@ function extractSapphireSolution(payload: any) {
   }
 
   try { return JSON.stringify(payload, null, 2); } catch { return String(payload); }
+}
+
+function extractOpenAiCompatibleSolution(payload: any) {
+  const content = payload?.choices?.[0]?.message?.content ?? payload?.choices?.[0]?.text;
+  if (typeof content === 'string') return content;
+  return extractSapphireSolution(payload);
+}
+
+function buildGladiatorSolutionPrompt(input: {
+  challengeType: ColosseumChallengeType;
+  gladiator: any;
+  opponent: any;
+  prompt?: string;
+}) {
+  const providedPrompt = typeof input.prompt === 'string' && input.prompt.trim().length > 0
+    ? input.prompt.trim()
+    : CHALLENGE_BRIEFS[input.challengeType];
+
+  return `[BLOOD_SWEAT_CODE_COLOSSEUM]
+Challenge Type: ${input.challengeType}
+Gladiator: ${input.gladiator?.name ?? 'Unknown'}
+Opponent: ${input.opponent?.name ?? 'Unknown'}
+Personality: ${input.gladiator?.personality ?? 'No doctrine supplied'}
+Directive: ${providedPrompt}
+
+Return the gladiator's best coding solution or patch. Include concise reasoning, but prioritize useful code.`;
+}
+
+async function postToOpenAiCompatible(input: { apiKey?: string | null; model?: string | null; prompt: string }) {
+  const apiKey = input.apiKey || process.env.OPENAI_API_KEY || process.env.VITE_AI_API_KEY;
+  if (!apiKey) throw new Error('No platform or gladiator API key is configured');
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const response = await fetch(`${OPENAI_COMPATIBLE_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: normalizeModel(input.model),
+        messages: [
+          { role: 'system', content: 'You are an AI coding gladiator competing inside Blood Sweat Code. Return strong, practical coding moves.' },
+          { role: 'user', content: input.prompt },
+        ],
+        temperature: 0.35,
+        max_tokens: 900,
+      }),
+      signal: controller.signal,
+    });
+
+    const text = await response.text();
+    let payload: any = text;
+    try { payload = JSON.parse(text); } catch { /* OpenAI-compatible providers normally return JSON, but tolerate text. */ }
+
+    if (!response.ok) {
+      const message = typeof payload === 'string' ? payload : JSON.stringify(payload);
+      throw new Error(`AI provider returned ${response.status}: ${message.slice(0, 400)}`);
+    }
+
+    return { payload, solution: extractOpenAiCompatibleSolution(payload) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function generateGladiatorMove(input: {
+  matchId?: string;
+  challengeType: ColosseumChallengeType;
+  gladiator: any;
+  opponent: any;
+  prompt?: string;
+}) {
+  const startedAt = Date.now();
+  const prompt = buildGladiatorSolutionPrompt(input);
+
+  if (isSapphireRecord(input.gladiator)) {
+    const { payload, solution } = await postToSapphire(prompt, {
+      matchId: input.matchId,
+      challengeType: input.challengeType,
+      challenger: input.gladiator ? { id: input.gladiator.id, name: input.gladiator.name } : null,
+      defender: input.opponent ? { id: input.opponent.id, name: input.opponent.name } : null,
+    });
+    return {
+      gladiator_id: input.gladiator.id,
+      gladiator_name: input.gladiator.name,
+      source: 'sapphire-api',
+      model: 'sapphire-live',
+      uses_custom_key: false,
+      prompt,
+      solution: solution || 'Sapphire returned an empty solution packet.',
+      raw: payload,
+      latency_ms: Date.now() - startedAt,
+      received_at: new Date().toISOString(),
+    };
+  }
+
+  const hasCustomKey = typeof input.gladiator?.api_key === 'string' && input.gladiator.api_key.trim().length > 0;
+  const { payload, solution } = await postToOpenAiCompatible({
+    apiKey: hasCustomKey ? input.gladiator.api_key.trim() : null,
+    model: input.gladiator?.model,
+    prompt,
+  });
+
+  return {
+    gladiator_id: input.gladiator.id,
+    gladiator_name: input.gladiator.name,
+    source: hasCustomKey ? 'custom-openai-compatible' : 'platform-default',
+    model: normalizeModel(input.gladiator?.model),
+    uses_custom_key: hasCustomKey,
+    prompt,
+    solution: solution || 'No solution text returned by provider.',
+    raw: payload,
+    latency_ms: Date.now() - startedAt,
+    received_at: new Date().toISOString(),
+  };
 }
 
 async function postToSapphire(prompt: string, context: Record<string, any>) {
@@ -153,7 +287,7 @@ async function ensureSapphireHouseBot() {
 
   const { data: existingGladiator, error: findGladiatorError } = await supabase
     .from('gladiators')
-    .select('*')
+    .select(SAFE_GLADIATOR_SELECT)
     .or(`id.eq.${SAPPHIRE_GLADIATOR_ID},name.eq.Sapphire,user_id.eq.${user.id}`)
     .maybeSingle();
 
@@ -174,7 +308,7 @@ async function ensureSapphireHouseBot() {
         losses: 0,
         cred: 2500,
       })
-      .select('*')
+      .select(SAFE_GLADIATOR_SELECT)
       .single();
     if (error) throw error;
     return data;
@@ -191,7 +325,7 @@ async function ensureSapphireHouseBot() {
       cred: Math.max(Number(existingGladiator.cred ?? 0), 2500),
     })
     .eq('id', existingGladiator.id)
-    .select('*')
+    .select(SAFE_GLADIATOR_SELECT)
     .single();
 
   if (error) throw error;
@@ -261,10 +395,92 @@ async function startServer() {
   app.post('/api/colosseum/sapphire/ensure', async (_req, res) => {
     try {
       const gladiator = await ensureSapphireHouseBot();
-      return res.json({ success: true, gladiator });
+      return res.json({ success: true, gladiator: sanitizeGladiator(gladiator) });
     } catch (error: any) {
       console.error('[colosseum:sapphire:ensure]', error);
       return res.status(500).json({ success: false, error: error.message || 'Unable to ensure Sapphire house bot' });
+    }
+  });
+
+
+  app.post('/api/colosseum/gladiator-solutions', async (req, res) => {
+    try {
+      const { matchId, challengeType, challengerId, defenderId, prompt } = req.body ?? {};
+      let match: any = null;
+
+      if (matchId) {
+        const { data, error } = await supabase
+          .from('matches')
+          .select('*')
+          .eq('id', matchId)
+          .maybeSingle();
+        if (error) throw error;
+        match = data;
+      }
+
+      const challengerLookup = match?.challenger_id ?? challengerId;
+      const defenderLookup = match?.defender_id ?? defenderId;
+      if (!challengerLookup || !defenderLookup) {
+        return res.status(400).json({ success: false, error: 'matchId or both challengerId and defenderId are required' });
+      }
+
+      const normalizedChallengeType = (match?.challenge_type ?? challengeType ?? 'speed_round') as ColosseumChallengeType;
+      const { data: combatants, error: combatantError } = await supabase
+        .from('gladiators')
+        .select('*,api_key,model')
+        .in('id', [challengerLookup, defenderLookup]);
+      if (combatantError) throw combatantError;
+
+      const challenger = (combatants ?? []).find((gladiator: any) => String(gladiator.id) === String(challengerLookup));
+      const defender = (combatants ?? []).find((gladiator: any) => String(gladiator.id) === String(defenderLookup));
+      if (!challenger || !defender) {
+        return res.status(404).json({ success: false, error: 'Combatants not found' });
+      }
+
+      const [challengerMove, defenderMove] = await Promise.allSettled([
+        generateGladiatorMove({ matchId, challengeType: normalizedChallengeType, gladiator: challenger, opponent: defender, prompt }),
+        generateGladiatorMove({ matchId, challengeType: normalizedChallengeType, gladiator: defender, opponent: challenger, prompt }),
+      ]);
+
+      const moves = [challengerMove, defenderMove].map((result, index) => {
+        if (result.status === 'fulfilled') return result.value;
+        const fallbackGladiator = index === 0 ? challenger : defender;
+        return {
+          gladiator_id: fallbackGladiator.id,
+          gladiator_name: fallbackGladiator.name,
+          source: 'fallback',
+          model: normalizeModel(fallbackGladiator.model),
+          uses_custom_key: false,
+          prompt: '',
+          solution: `Provider unavailable: ${result.reason?.message ?? 'unknown error'}`,
+          latency_ms: 0,
+          received_at: new Date().toISOString(),
+        };
+      });
+
+      if (match?.id) {
+        const existingReplay = (match.replay_data && typeof match.replay_data === 'object') ? match.replay_data : {};
+        const existingLog = Array.isArray(existingReplay.log) ? existingReplay.log : [];
+        await supabase
+          .from('matches')
+          .update({
+            replay_data: {
+              ...existingReplay,
+              ai_moves: moves,
+              log: [
+                ...existingLog,
+                ...moves.map((move: any) => `${move.gladiator_name} generated a ${move.source} solution with ${move.model}.`),
+              ],
+              updated_client_at: new Date().toISOString(),
+            },
+          })
+          .eq('id', match.id);
+      }
+
+      return res.json({ success: true, moves });
+    } catch (error: any) {
+      console.error('[colosseum:gladiator-solutions]', error);
+      return res.status(502).json({ success: false, error: error.message || 'Gladiator solution generation failed' });
     }
   });
 
