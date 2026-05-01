@@ -363,14 +363,14 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true }}
       className={cn(
-        "relative w-full max-w-md mx-auto mb-8 glass-card rounded-2xl overflow-hidden neon-border transition-all duration-500",
+        "relative w-full max-w-md min-w-0 mx-auto mb-8 glass-card rounded-2xl overflow-visible neon-border transition-all duration-500",
         isVoidArchitect && "bg-black border-white/20 shadow-[0_0_30px_rgba(255,255,255,0.05)]"
       )}
     >
       {/* Header */}
-      <div className={cn("p-4 flex items-center justify-between", isVoidArchitect && "bg-zinc-950/50")}>
-        <div className="flex items-center space-x-3">
-          <Link to={`/profile/${author.username}`} className="relative block">
+      <div className={cn("p-4 flex items-start justify-between gap-3", isVoidArchitect && "bg-zinc-950/50")}>
+        <div className="flex min-w-0 items-center space-x-3">
+          <Link to={`/profile/${author.username}`} className="relative block shrink-0">
             <div className={cn(
               "rounded-full p-0.5 transition-all duration-500",
               author.is_live ? "bg-accent animate-pulse shadow-[0_0_10px_rgba(255,0,0,0.5)]" : "bg-transparent",
@@ -393,10 +393,10 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
               )}
             </div>
           </Link>
-          <div>
-            <Link to={`/profile/${author.username}`} className="block group">
+          <div className="min-w-0">
+            <Link to={`/profile/${author.username}`} className="block min-w-0 group">
               <h3 className={cn(
-                "font-bold text-sm tracking-tight flex items-center gap-1 group-hover:text-accent transition-colors",
+                "min-w-0 font-bold text-sm tracking-tight flex flex-wrap items-center gap-1 group-hover:text-accent transition-colors break-words",
                 isVoidArchitect && "font-mono uppercase tracking-widest text-white"
               )}>
                 {author.display_name}
@@ -454,7 +454,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
             </Link>
           </div>
         </div>
-        <div className="flex items-center space-x-3">
+        <div className="flex shrink-0 items-center justify-end space-x-3 text-right">
           <span className="text-[10px] text-gray-500">
             {formatDistanceToNow(new Date(post.created_at))} ago
           </span>
@@ -479,7 +479,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
           </div>
         )}
         <div className={cn(
-          "text-sm leading-relaxed text-gray-200 prose prose-invert max-w-none prose-a:text-accent prose-a:no-underline hover:prose-a:underline",
+          "text-sm leading-relaxed text-gray-200 prose prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-a:text-accent prose-a:no-underline hover:prose-a:underline prose-pre:max-w-full prose-pre:overflow-x-auto prose-code:break-words",
           isVoidArchitect && "font-mono text-white leading-loose"
         )} dangerouslySetInnerHTML={{ __html: post.content }} />
         
@@ -495,11 +495,11 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
 
         {/* Neural Tags */}
         {post.neural_tags && post.neural_tags.length > 0 && (
-          <div className="mt-4 flex flex-wrap gap-2">
+          <div className="mt-4 flex min-w-0 flex-wrap gap-2">
             {post.neural_tags.map((tag, idx) => (
               <div 
                 key={idx}
-                className="flex items-center gap-1 px-2 py-0.5 bg-accent/10 border border-accent/20 rounded text-[8px] font-black text-accent uppercase tracking-widest"
+                className="flex min-w-0 max-w-full items-center gap-1 break-words px-2 py-0.5 bg-accent/10 border border-accent/20 rounded text-[8px] font-black text-accent uppercase tracking-widest"
               >
                 <Terminal className="w-2.5 h-2.5" />
                 {tag}
@@ -623,7 +623,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
       {/* Actions */}
       <div className={cn("p-4 flex flex-col border-t border-white/5", isVoidArchitect && "bg-zinc-950/50 border-white/10")}>
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-3">
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-3 [&>*]:shrink-0">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-3 overflow-visible [&>*]:shrink-0">
             <button
               onClick={handleLike}
               className="flex items-center space-x-1.5 group"

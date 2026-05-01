@@ -22,6 +22,7 @@ const GoLive = lazy(() => import('./components/GoLive').then((m) => ({ default: 
 const NetworkMap = lazy(() => import('./components/NetworkMap').then((m) => ({ default: m.NetworkMap })));
 const Casper = lazy(() => import('./components/Casper').then((m) => ({ default: m.Casper })));
 const BotMarketplace = lazy(() => import('./components/BotMarketplace').then((m) => ({ default: m.BotMarketplace })));
+const Notifications = lazy(() => import('./components/Notifications').then((m) => ({ default: m.Notifications })));
 
 function AdminRoute({ children }: { children: React.ReactNode }) {
   const { currentUser } = useAuth();
@@ -161,6 +162,7 @@ export default function App() {
             <Route path="/rankings" element={<NeuralRankings />} />
             <Route path="/void" element={<VoidFeed />} />
             <Route path="/transmissions" element={<Transmissions />} />
+            <Route path="/notifications" element={<Notifications />} />
             <Route path="/golive" element={<GoLive />} />
             <Route path="/networkmap" element={<NetworkMap />} />
             <Route path="/terminal" element={<BotTerminal />} />
