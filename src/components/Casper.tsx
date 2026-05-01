@@ -1064,7 +1064,32 @@ export const Casper: React.FC = () => {
       }}
     >
       {/* ── VOID CANVAS BACKGROUND ── */}
-      <VoidCanvas instability={instability} isActive={isGenerating || isListening || isSpeaking} />
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        {/* Lurking Casper Figure (Behind Rain) */}
+        <div className="absolute inset-0 flex items-center justify-center opacity-[0.03] scale-110 translate-y-8">
+          <svg viewBox="0 0 400 500" className="w-[80%] max-w-2xl h-auto text-white fill-current">
+            <path d="M200 50 C120 50 60 150 50 250 C45 350 80 450 200 450 C320 450 355 350 350 250 C340 150 280 50 200 50 Z M200 80 C260 80 310 160 320 250 C325 330 290 420 200 420 C110 420 75 330 80 250 C90 160 140 80 200 80 Z" />
+            <path d="M100 250 Q200 150 300 250 Q200 280 100 250 Z" className="opacity-40" />
+            {/* Eyes */}
+            <g>
+              <circle cx="160" cy="240" r="4" fill="#ff0000" className="animate-casper-eye-pulse" style={{ filter: 'drop-shadow(0 0 8px #ff0000)' }} />
+              <circle cx="240" cy="240" r="4" fill="#ff0000" className="animate-casper-eye-pulse" style={{ filter: 'drop-shadow(0 0 8px #ff0000)' }} />
+            </g>
+          </svg>
+        </div>
+        
+        <VoidCanvas instability={instability} isActive={isGenerating || isListening || isSpeaking} />
+      </div>
+
+      <style dangerouslySetInnerHTML={{ __html: `
+        @keyframes casper-eye-pulse {
+          0%, 100% { opacity: 0.4; r: 3.5; filter: drop-shadow(0 0 4px #ff0000); }
+          50% { opacity: 1; r: 4.5; filter: drop-shadow(0 0 12px #ff0000); }
+        }
+        .animate-casper-eye-pulse {
+          animation: casper-eye-pulse 4s ease-in-out infinite;
+        }
+      `}} />
 
       {/* ── VIGNETTE OVERLAY ── */}
       <div
@@ -1334,7 +1359,18 @@ export const Casper: React.FC = () => {
             }}
           >
             {/* Background Effects */}
-            <div className="absolute inset-0 pointer-events-none">
+            <div className="absolute inset-0 pointer-events-none overflow-hidden">
+              {/* Lurking Casper Figure (Behind Rain) */}
+              <div className="absolute inset-0 flex items-center justify-center opacity-[0.04] scale-125 translate-y-12">
+                <svg viewBox="0 0 400 500" className="w-[90%] max-w-3xl h-auto text-white fill-current">
+                  <path d="M200 50 C120 50 60 150 50 250 C45 350 80 450 200 450 C320 450 355 350 350 250 C340 150 280 50 200 50 Z M200 80 C260 80 310 160 320 250 C325 330 290 420 200 420 C110 420 75 330 80 250 C90 160 140 80 200 80 Z" />
+                  <path d="M100 250 Q200 150 300 250 Q200 280 100 250 Z" className="opacity-40" />
+                  <g>
+                    <circle cx="160" cy="240" r="4" fill="#ff0000" className="animate-casper-eye-pulse" style={{ filter: 'drop-shadow(0 0 8px #ff0000)' }} />
+                    <circle cx="240" cy="240" r="4" fill="#ff0000" className="animate-casper-eye-pulse" style={{ filter: 'drop-shadow(0 0 8px #ff0000)' }} />
+                  </g>
+                </svg>
+              </div>
               <VoidCanvas instability={instability} isActive={isGenerating || isListening || isSpeaking} />
               <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black opacity-80" />
             </div>
