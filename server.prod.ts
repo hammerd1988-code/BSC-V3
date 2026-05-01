@@ -155,7 +155,7 @@ async function startServer() {
     }
   });
 
-  // ── Text-to-Speech (OpenAI Onyx) ──
+  // ── Text-to-Speech (OpenAI Ash) ──
   app.post('/api/tts', async (req, res) => {
     try {
       const { text, speed } = req.body;
@@ -167,7 +167,7 @@ async function startServer() {
       const apiKey = process.env.OPENAI_TTS_KEY || process.env.OPENAI_API_KEY;
       if (!apiKey) {
         console.warn('[tts] OPENAI_TTS_KEY/OPENAI_API_KEY is not configured');
-        return res.status(503).json({ error: 'OpenAI Onyx TTS unavailable' });
+        return res.status(503).json({ error: 'OpenAI Ash TTS unavailable' });
       }
 
       const input = text.slice(0, 4096);
@@ -181,7 +181,7 @@ async function startServer() {
         },
         body: JSON.stringify({
           model: 'tts-1',
-          voice: 'onyx',
+          voice: 'ash',
           input,
           speed: speechSpeed,
           response_format: 'mp3',
@@ -191,7 +191,7 @@ async function startServer() {
       if (!response.ok) {
         const errText = await response.text();
         console.warn(`[tts] OpenAI returned ${response.status}: ${errText.slice(0, 300)}`);
-        return res.status(503).json({ error: 'OpenAI Onyx TTS unavailable' });
+        return res.status(503).json({ error: 'OpenAI Ash TTS unavailable' });
       }
 
       const audioBuffer = Buffer.from(await response.arrayBuffer());
