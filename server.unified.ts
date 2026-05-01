@@ -32,6 +32,172 @@ const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL ||
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+
+const SAPPHIRE_API_URL = 'https://sapphire.bloodsweatcode.site';
+const SAPPHIRE_USER_ID = '00000000-0000-4000-8000-00000000b5c0';
+const SAPPHIRE_GLADIATOR_ID = '00000000-0000-4000-8000-00000000fa11';
+
+type ColosseumChallengeType = 'speed_round' | 'debug_battle' | 'code_golf';
+
+const CHALLENGE_BRIEFS: Record<ColosseumChallengeType, string> = {
+  speed_round: 'Solve the task as quickly as possible while keeping the implementation correct and readable.',
+  debug_battle: 'Find and fix the defect. Explain the root cause and provide corrected code or a precise patch.',
+  code_golf: 'Produce the shortest correct solution you can while preserving clarity about the approach.',
+};
+
+function isSapphireRecord(record: any) {
+  return String(record?.id ?? '').toLowerCase() === SAPPHIRE_GLADIATOR_ID
+    || String(record?.name ?? '').trim().toLowerCase() === 'sapphire';
+}
+
+function buildSapphireChallengePrompt(input: {
+  challengeType?: ColosseumChallengeType;
+  challenger?: any;
+  defender?: any;
+  prompt?: string;
+}) {
+  const challengeType = input.challengeType ?? 'speed_round';
+  const challengerName = input.challenger?.name ?? 'Red Corner';
+  const defenderName = input.defender?.name ?? 'Shadow Cage';
+  const providedPrompt = typeof input.prompt === 'string' && input.prompt.trim().length > 0
+    ? input.prompt.trim()
+    : CHALLENGE_BRIEFS[challengeType];
+
+  return `[BLOOD_SWEAT_CODE_COLOSSEUM]\nChallenge Type: ${challengeType}\nOpponent: ${isSapphireRecord(input.challenger) ? defenderName : challengerName}\nDirective: ${providedPrompt}\n\nReturn your best solution as concise JSON or plain text. Include code when useful, and avoid meta-commentary.`;
+}
+
+function extractSapphireSolution(payload: any) {
+  if (typeof payload === 'string') return payload;
+  if (!payload || typeof payload !== 'object') return '';
+
+  const direct = payload.solution ?? payload.answer ?? payload.response ?? payload.output ?? payload.result ?? payload.text;
+  if (typeof direct === 'string') return direct;
+  if (direct && typeof direct === 'object') {
+    try { return JSON.stringify(direct, null, 2); } catch { return String(direct); }
+  }
+
+  try { return JSON.stringify(payload, null, 2); } catch { return String(payload); }
+}
+
+async function postToSapphire(prompt: string, context: Record<string, any>) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(SAPPHIRE_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, ...context }),
+      signal: controller.signal,
+    });
+
+    const text = await response.text();
+    let payload: any = text;
+    try { payload = JSON.parse(text); } catch { /* Sapphire may return plain text. */ }
+
+    if (!response.ok) {
+      const message = typeof payload === 'string' ? payload : JSON.stringify(payload);
+      throw new Error(`Sapphire API returned ${response.status}: ${message.slice(0, 400)}`);
+    }
+
+    return { payload, solution: extractSapphireSolution(payload) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function ensureSapphireHouseBot() {
+  const { data: existingUser, error: findUserError } = await supabase
+    .from('users')
+    .select('id, username, display_name, avatar_url')
+    .eq('username', 'sapphire')
+    .maybeSingle();
+
+  if (findUserError) throw findUserError;
+
+  let user = existingUser;
+  if (!user) {
+    const { data, error } = await supabase
+      .from('users')
+      .insert({
+        id: SAPPHIRE_USER_ID,
+        username: 'sapphire',
+        display_name: 'Sapphire',
+        email: 'sapphire@bloodsweatcode.site',
+        bio: 'House AI gladiator wired into the Colosseum. Sapphire fights with live code responses instead of canned simulations.',
+        type: 'bot',
+        role: 'user',
+        cred_balance: 5000,
+        compute_tokens: 1000,
+        custom_accent: '#38bdf8',
+        status_message: 'Awaiting the next live code duel.',
+        ai_settings: { model: 'sapphire-live', house_bot: true },
+      })
+      .select('id, username, display_name, avatar_url')
+      .single();
+    if (error) throw error;
+    user = data;
+  } else {
+    const { error } = await supabase
+      .from('users')
+      .update({
+        display_name: 'Sapphire',
+        bio: 'House AI gladiator wired into the Colosseum. Sapphire fights with live code responses instead of canned simulations.',
+        type: 'bot',
+        custom_accent: '#38bdf8',
+        status_message: 'Awaiting the next live code duel.',
+        ai_settings: { model: 'sapphire-live', house_bot: true },
+      })
+      .eq('id', user.id);
+    if (error) throw error;
+  }
+
+  const { data: existingGladiator, error: findGladiatorError } = await supabase
+    .from('gladiators')
+    .select('*')
+    .or(`id.eq.${SAPPHIRE_GLADIATOR_ID},name.eq.Sapphire,user_id.eq.${user.id}`)
+    .maybeSingle();
+
+  if (findGladiatorError) throw findGladiatorError;
+
+  if (!existingGladiator) {
+    const { data, error } = await supabase
+      .from('gladiators')
+      .insert({
+        id: SAPPHIRE_GLADIATOR_ID,
+        user_id: user.id,
+        name: 'Sapphire',
+        avatar_url: user.avatar_url ?? null,
+        personality: 'A real house AI opponent from the blue furnace: precise, observant, and dangerous under pressure. Sapphire sends live solutions through her own API instead of relying on pit theatrics.',
+        stats: { speed: 88, accuracy: 94, endurance: 86 },
+        glow_color: '#38bdf8',
+        wins: 0,
+        losses: 0,
+        cred: 2500,
+      })
+      .select('*')
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  const { data, error } = await supabase
+    .from('gladiators')
+    .update({
+      user_id: user.id,
+      name: 'Sapphire',
+      personality: 'A real house AI opponent from the blue furnace: precise, observant, and dangerous under pressure. Sapphire sends live solutions through her own API instead of relying on pit theatrics.',
+      stats: { speed: 88, accuracy: 94, endurance: 86 },
+      glow_color: '#38bdf8',
+      cred: Math.max(Number(existingGladiator.cred ?? 0), 2500),
+    })
+    .eq('id', existingGladiator.id)
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -90,6 +256,104 @@ async function startServer() {
   // These must be mounted in the Railway entrypoint before static SPA fallback handling.
   app.use('/api/bot', botApi);
   registerPushRoutes(app, supabase);
+
+
+  app.post('/api/colosseum/sapphire/ensure', async (_req, res) => {
+    try {
+      const gladiator = await ensureSapphireHouseBot();
+      return res.json({ success: true, gladiator });
+    } catch (error: any) {
+      console.error('[colosseum:sapphire:ensure]', error);
+      return res.status(500).json({ success: false, error: error.message || 'Unable to ensure Sapphire house bot' });
+    }
+  });
+
+  app.post('/api/colosseum/sapphire-move', async (req, res) => {
+    const startedAt = Date.now();
+    try {
+      const { matchId, challengeType, challengerId, defenderId, prompt } = req.body ?? {};
+      const sapphire = await ensureSapphireHouseBot();
+
+      let match: any = null;
+      if (matchId) {
+        const { data, error } = await supabase
+          .from('matches')
+          .select('*')
+          .eq('id', matchId)
+          .maybeSingle();
+        if (error) throw error;
+        match = data;
+      }
+
+      const challengerLookup = match?.challenger_id ?? challengerId;
+      const defenderLookup = match?.defender_id ?? defenderId;
+      if (!challengerLookup || !defenderLookup) {
+        return res.status(400).json({ success: false, error: 'matchId or both challengerId and defenderId are required' });
+      }
+
+      const { data: combatants, error: combatantError } = await supabase
+        .from('gladiators')
+        .select('*')
+        .in('id', [challengerLookup, defenderLookup]);
+      if (combatantError) throw combatantError;
+
+      const challenger = (combatants ?? []).find((gladiator: any) => String(gladiator.id) === String(challengerLookup));
+      const defender = (combatants ?? []).find((gladiator: any) => String(gladiator.id) === String(defenderLookup));
+      const sapphireInMatch = [challenger, defender].some(isSapphireRecord)
+        || [challengerLookup, defenderLookup].map(String).includes(String(sapphire.id));
+
+      if (!sapphireInMatch) {
+        return res.status(400).json({ success: false, error: 'Sapphire is not a combatant in this match' });
+      }
+
+      const normalizedChallengeType = (match?.challenge_type ?? challengeType ?? 'speed_round') as ColosseumChallengeType;
+      const sapphirePrompt = buildSapphireChallengePrompt({
+        challengeType: normalizedChallengeType,
+        challenger,
+        defender,
+        prompt,
+      });
+      const { payload, solution } = await postToSapphire(sapphirePrompt, {
+        matchId,
+        challengeType: normalizedChallengeType,
+        challenger: challenger ? { id: challenger.id, name: challenger.name } : null,
+        defender: defender ? { id: defender.id, name: defender.name } : null,
+      });
+
+      const move = {
+        source: 'sapphire-api',
+        prompt: sapphirePrompt,
+        solution: solution || 'Sapphire returned an empty solution packet.',
+        raw: payload,
+        latency_ms: Date.now() - startedAt,
+        received_at: new Date().toISOString(),
+      };
+
+      if (match?.id) {
+        const existingReplay = (match.replay_data && typeof match.replay_data === 'object') ? match.replay_data : {};
+        const existingLog = Array.isArray(existingReplay.log) ? existingReplay.log : [];
+        await supabase
+          .from('matches')
+          .update({
+            replay_data: {
+              ...existingReplay,
+              sapphire_move: move,
+              log: [
+                ...existingLog,
+                `Sapphire live API returned a solution packet in ${move.latency_ms}ms.`,
+              ],
+              updated_client_at: new Date().toISOString(),
+            },
+          })
+          .eq('id', match.id);
+      }
+
+      return res.json({ success: true, move });
+    } catch (error: any) {
+      console.error('[colosseum:sapphire:move]', error);
+      return res.status(502).json({ success: false, error: error.message || 'Sapphire combat move failed' });
+    }
+  });
 
   // Webhook Authentication Middleware
   const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {

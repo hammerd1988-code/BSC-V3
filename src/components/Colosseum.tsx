@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Activity,
@@ -60,6 +61,46 @@ interface MatchRow {
   started_at: string;
   completed_at: string | null;
   replay_data: Record<string, any> | null;
+}
+
+interface SapphireMove {
+  source: string;
+  prompt: string;
+  solution: string;
+  raw?: any;
+  latency_ms?: number;
+  received_at?: string;
+}
+
+interface TournamentRow {
+  id: string;
+  name: string;
+  challenge_type: ChallengeType;
+  min_contestants: number;
+  status: 'open' | 'scheduled' | 'running' | 'completed' | 'cancelled';
+  scheduled_at: string | null;
+  locked_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  bracket: any;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface TournamentEntryRow {
+  id: string;
+  tournament_id: string;
+  gladiator_id: string;
+  user_id: string | null;
+  seed: number | null;
+  joined_at: string;
+}
+
+interface TournamentFormState {
+  name: string;
+  challenge_type: ChallengeType;
+  min_contestants: number;
 }
 
 interface SimulationState {
@@ -225,6 +266,67 @@ async function publishMatchReplay(matchId: string, replayData: Record<string, an
 
   if (error) {
     console.warn('[Colosseum] Failed to publish live replay telemetry', error);
+  }
+}
+
+const SAPPHIRE_GLADIATOR_ID = '00000000-0000-4000-8000-00000000fa11';
+
+function isSapphireGladiator(gladiator?: Gladiator | null) {
+  return Boolean(gladiator) && (
+    String(gladiator?.id).toLowerCase() === SAPPHIRE_GLADIATOR_ID
+    || String(gladiator?.name ?? '').trim().toLowerCase() === 'sapphire'
+  );
+}
+
+function buildCombatChallengePrompt(type: ChallengeType, challenger: Gladiator, defender: Gladiator) {
+  const challenge = CHALLENGES.find((item) => item.id === type);
+  const directive = type === 'speed_round'
+    ? 'Return the fastest correct implementation and explain the critical path briefly.'
+    : type === 'debug_battle'
+      ? 'Diagnose the defect, provide a corrected patch, and explain why the bug happened.'
+      : 'Return the shortest correct solution you can defend, with a quick note on tradeoffs.';
+
+  return `${challenge?.label ?? 'Colosseum Challenge'}: ${challenger.name} versus ${defender.name}. ${directive}`;
+}
+
+function sapphireSolutionBonus(move: SapphireMove | null | undefined, type: ChallengeType) {
+  if (!move?.solution) return 0;
+  const solution = move.solution.toLowerCase();
+  const codeSignals = ['function', 'const ', 'let ', 'return', 'class ', 'def ', '=>', '{', ';'].filter((token) => solution.includes(token)).length;
+  const challengeSignal = type === 'debug_battle'
+    ? Number(solution.includes('fix') || solution.includes('bug') || solution.includes('patch')) * 8
+    : type === 'code_golf'
+      ? Number(solution.length < 900) * 8
+      : Number(solution.includes('optimize') || solution.includes('fast') || solution.includes('complexity')) * 8;
+  return Math.min(48, 12 + codeSignals * 4 + challengeSignal + Math.min(16, Math.floor(move.solution.length / 180)));
+}
+
+async function requestSapphireMove(match: MatchRow, type: ChallengeType, challenger: Gladiator, defender: Gladiator): Promise<SapphireMove | null> {
+  const response = await fetch('/api/colosseum/sapphire-move', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      matchId: match.id,
+      challengeType: type,
+      challengerId: challenger.id,
+      defenderId: defender.id,
+      prompt: buildCombatChallengePrompt(type, challenger, defender),
+    }),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(payload?.error || 'Sapphire API move failed');
+  }
+
+  return (payload?.move ?? null) as SapphireMove | null;
+}
+
+async function ensureSapphireHouseBot() {
+  try {
+    await fetch('/api/colosseum/sapphire/ensure', { method: 'POST' });
+  } catch (error) {
+    console.warn('[Colosseum] Sapphire house bot ensure failed', error);
   }
 }
 
@@ -416,7 +518,9 @@ function LiveBattleCard({ match, challenger, defender, now, onSelect }: { match:
 }
 
 function LiveArena({ activeMatches, gladiatorById }: { activeMatches: MatchRow[]; gladiatorById: Map<string, Gladiator> }) {
-  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedMatchId = searchParams.get('match');
+  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(requestedMatchId);
   const [liveMatch, setLiveMatch] = useState<MatchRow | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [viewerJitter, setViewerJitter] = useState(0);
@@ -425,6 +529,26 @@ function LiveArena({ activeMatches, gladiatorById }: { activeMatches: MatchRow[]
     () => activeMatches.find((match) => match.id === selectedMatchId) ?? null,
     [activeMatches, selectedMatchId]
   );
+
+  useEffect(() => {
+    if (requestedMatchId !== selectedMatchId) {
+      setSelectedMatchId(requestedMatchId);
+    }
+  }, [requestedMatchId, selectedMatchId]);
+
+  const openMatch = (matchId: string) => {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set('match', matchId);
+    setSelectedMatchId(matchId);
+    setSearchParams(nextParams);
+  };
+
+  const closeMatch = () => {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('match');
+    setSelectedMatchId(null);
+    setSearchParams(nextParams);
+  };
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 1000);
@@ -495,7 +619,7 @@ function LiveArena({ activeMatches, gladiatorById }: { activeMatches: MatchRow[]
               <div className="mb-4 flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
                 <button
                   type="button"
-                  onClick={() => setSelectedMatchId(null)}
+                  onClick={closeMatch}
                   className="inline-flex w-fit items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-[0.24em] text-zinc-300 transition hover:border-red-300/45 hover:text-white"
                 >
                   <ArrowLeft className="h-4 w-4" /> Back To Pits
@@ -568,7 +692,7 @@ function LiveArena({ activeMatches, gladiatorById }: { activeMatches: MatchRow[]
                     challenger={gladiatorById.get(match.challenger_id)}
                     defender={gladiatorById.get(match.defender_id)}
                     now={now}
-                    onSelect={() => setSelectedMatchId(match.id)}
+                    onSelect={() => openMatch(match.id)}
                   />
                 ))}
               </div>
@@ -584,6 +708,173 @@ function LiveArena({ activeMatches, gladiatorById }: { activeMatches: MatchRow[]
           </motion.div>
         )}
       </AnimatePresence>
+    </section>
+  );
+}
+
+function TournamentPanel({
+  tournaments,
+  entries,
+  gladiatorById,
+  myGladiators,
+  selectedGladiator,
+  form,
+  setForm,
+  creating,
+  joiningTournamentId,
+  onCreate,
+  onJoin,
+}: {
+  tournaments: TournamentRow[];
+  entries: TournamentEntryRow[];
+  gladiatorById: Map<string, Gladiator>;
+  myGladiators: Gladiator[];
+  selectedGladiator: Gladiator | null;
+  form: TournamentFormState;
+  setForm: React.Dispatch<React.SetStateAction<TournamentFormState>>;
+  creating: boolean;
+  joiningTournamentId: string;
+  onCreate: (event: React.FormEvent) => void;
+  onJoin: (tournament: TournamentRow) => void;
+}) {
+  const myGladiatorIds = useMemo(() => new Set(myGladiators.map((gladiator) => gladiator.id)), [myGladiators]);
+  const entriesByTournament = useMemo(() => {
+    const map = new Map<string, TournamentEntryRow[]>();
+    entries.forEach((entry) => {
+      const next = map.get(entry.tournament_id) ?? [];
+      next.push(entry);
+      map.set(entry.tournament_id, next);
+    });
+    return map;
+  }, [entries]);
+
+  return (
+    <section className="mt-6 rounded-[2rem] border border-cyan-400/15 bg-black/65 p-5 shadow-[0_0_48px_rgba(0,229,255,0.1)] backdrop-blur-xl">
+      <div className="mb-5 flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-300">Tournament Circuit</p>
+          <h2 className="mt-1 text-2xl font-black uppercase tracking-[0.16em] text-white">Threshold Brackets</h2>
+          <p className="mt-2 max-w-2xl text-xs leading-6 text-zinc-400">
+            Create open tournaments, enlist your gladiators, and let the bracket lock automatically once the contestant threshold is reached.
+          </p>
+        </div>
+        <form onSubmit={onCreate} className="grid gap-2 rounded-3xl border border-white/10 bg-white/[0.035] p-3 sm:grid-cols-[1fr_auto_auto_auto]">
+          <input
+            value={form.name}
+            onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
+            placeholder="Tournament name"
+            className="min-w-0 rounded-2xl border border-white/10 bg-black/50 px-3 py-2 text-xs text-white outline-none focus:border-cyan-300/50"
+          />
+          <select
+            value={form.challenge_type}
+            onChange={(event) => setForm((prev) => ({ ...prev, challenge_type: event.target.value as ChallengeType }))}
+            className="rounded-2xl border border-white/10 bg-black/50 px-3 py-2 text-xs text-white outline-none focus:border-cyan-300/50"
+          >
+            {CHALLENGES.map((challenge) => <option key={challenge.id} value={challenge.id}>{challenge.label}</option>)}
+          </select>
+          <input
+            type="number"
+            min={2}
+            max={64}
+            value={form.min_contestants}
+            onChange={(event) => setForm((prev) => ({ ...prev, min_contestants: Math.max(2, Number(event.target.value) || 2) }))}
+            className="w-24 rounded-2xl border border-white/10 bg-black/50 px-3 py-2 text-xs text-white outline-none focus:border-cyan-300/50"
+          />
+          <button
+            type="submit"
+            disabled={creating || form.name.trim().length < 3}
+            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-300/40 bg-cyan-500/15 px-4 py-2 text-[10px] font-black uppercase tracking-[0.22em] text-cyan-100 transition hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trophy className="h-4 w-4" />} Create
+          </button>
+        </form>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {tournaments.length ? tournaments.map((tournament) => {
+          const tournamentEntries = entriesByTournament.get(tournament.id) ?? [];
+          const entered = tournamentEntries.some((entry) => myGladiatorIds.has(String(entry.gladiator_id)));
+          const locked = tournament.status !== 'open';
+          const bracket = Array.isArray(tournament.bracket) ? tournament.bracket : [];
+          return (
+            <motion.div key={tournament.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-zinc-950/75 p-4">
+              <div className="absolute inset-0 opacity-25 bg-[radial-gradient(circle_at_20%_0%,rgba(0,229,255,0.32),transparent_34%),radial-gradient(circle_at_80%_100%,rgba(255,43,214,0.25),transparent_36%)]" />
+              <div className="relative">
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-base font-black uppercase tracking-[0.18em] text-white">{tournament.name}</p>
+                    <p className="mt-1 text-[10px] font-black uppercase tracking-[0.22em] text-cyan-200">{formatChallenge(tournament.challenge_type)}</p>
+                  </div>
+                  <span className={cn(
+                    'rounded-full border px-3 py-1 text-[9px] font-black uppercase tracking-[0.22em]',
+                    tournament.status === 'open' ? 'border-green-300/30 bg-green-950/25 text-green-200' :
+                      tournament.status === 'scheduled' ? 'border-yellow-300/30 bg-yellow-950/25 text-yellow-100' :
+                        'border-red-300/30 bg-red-950/25 text-red-100'
+                  )}>{tournament.status}</span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                    <p className="text-lg font-black text-white">{tournamentEntries.length}</p>
+                    <p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Entered</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                    <p className="text-lg font-black text-white">{tournament.min_contestants}</p>
+                    <p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Threshold</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                    <p className="text-lg font-black text-white">{bracket.length}</p>
+                    <p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Bracket</p>
+                  </div>
+                </div>
+
+                {tournament.scheduled_at && (
+                  <p className="mt-3 rounded-2xl border border-yellow-300/15 bg-yellow-950/10 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] text-yellow-100">
+                    Locks complete. Starts {new Date(tournament.scheduled_at).toLocaleString()}.
+                  </p>
+                )}
+
+                {tournamentEntries.length > 0 && (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {tournamentEntries.slice(0, 8).map((entry) => {
+                      const gladiator = gladiatorById.get(String(entry.gladiator_id));
+                      return (
+                        <span key={entry.id} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[9px] font-black uppercase tracking-widest text-zinc-300">
+                          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: gladiator?.glow_color ?? '#71717a', boxShadow: `0 0 10px ${gladiator?.glow_color ?? '#71717a'}` }} />
+                          {entry.seed ? `#${entry.seed} ` : ''}{gladiator?.name ?? 'Unknown'}
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {bracket.length > 0 && (
+                  <div className="mt-4 max-h-32 overflow-y-auto rounded-2xl border border-white/10 bg-black/60 p-3 font-mono text-[10px] leading-5 text-cyan-100">
+                    {bracket.slice(0, 10).map((slot: any, index: number) => (
+                      <p key={`${slot.entry_id ?? slot.gladiator_id}-${index}`}><span className="text-red-300">R{slot.round}M{slot.match}</span> Seed {slot.seed}: {gladiatorById.get(String(slot.gladiator_id))?.name ?? slot.gladiator_id}</p>
+                    ))}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => onJoin(tournament)}
+                  disabled={locked || entered || !selectedGladiator || joiningTournamentId === tournament.id}
+                  className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-[10px] font-black uppercase tracking-[0.22em] text-white transition hover:border-cyan-300/40 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {joiningTournamentId === tournament.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Users className="h-4 w-4" />}
+                  {entered ? 'Gladiator Entered' : locked ? 'Signups Locked' : selectedGladiator ? `Enter ${selectedGladiator.name}` : 'Select Gladiator To Enter'}
+                </button>
+              </div>
+            </motion.div>
+          );
+        }) : (
+          <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] p-8 text-center lg:col-span-2">
+            <Trophy className="mx-auto mb-3 h-9 w-9 text-zinc-700" />
+            <p className="text-sm text-zinc-500">No tournaments are open yet. Name the next underground bracket and set the threshold.</p>
+          </div>
+        )}
+      </div>
     </section>
   );
 }
@@ -605,6 +896,16 @@ export const Colosseum: React.FC = () => {
     avatar_url: '',
     personality: '',
     glow_color: GLOW_COLORS[0],
+  });
+
+  const [tournaments, setTournaments] = useState<TournamentRow[]>([]);
+  const [tournamentEntries, setTournamentEntries] = useState<TournamentEntryRow[]>([]);
+  const [creatingTournament, setCreatingTournament] = useState(false);
+  const [joiningTournamentId, setJoiningTournamentId] = useState('');
+  const [tournamentForm, setTournamentForm] = useState<TournamentFormState>({
+    name: 'Midnight Compiler Bracket',
+    challenge_type: 'speed_round',
+    min_contestants: 4,
   });
 
   const normalizeGladiator = (row: any): Gladiator => ({
@@ -655,9 +956,39 @@ export const Colosseum: React.FC = () => {
     }
   }, [currentUser?.id, selectedGladiatorId, selectedOpponentId]);
 
+  const fetchTournaments = useCallback(async () => {
+    try {
+      await supabase.rpc('start_due_tournaments');
+      const [{ data: tournamentRows, error: tournamentError }, { data: entryRows, error: entryError }] = await Promise.all([
+        supabase.from('tournaments').select('*').order('created_at', { ascending: false }).limit(20),
+        supabase.from('tournament_entries').select('*').order('joined_at', { ascending: true }),
+      ]);
+
+      if (tournamentError) throw tournamentError;
+      if (entryError) throw entryError;
+
+      setTournaments((tournamentRows ?? []) as TournamentRow[]);
+      setTournamentEntries((entryRows ?? []) as TournamentEntryRow[]);
+    } catch (err) {
+      console.warn('[Colosseum] Tournament tables unavailable or migration pending', err);
+    }
+  }, []);
+
   useEffect(() => {
     void fetchArena();
   }, [fetchArena]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void ensureSapphireHouseBot().finally(() => {
+      if (!cancelled) void fetchArena();
+    });
+    return () => { cancelled = true; };
+  }, [fetchArena]);
+
+  useEffect(() => {
+    void fetchTournaments();
+  }, [fetchTournaments]);
 
   useEffect(() => {
     const channel = supabase
@@ -667,6 +998,15 @@ export const Colosseum: React.FC = () => {
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [fetchArena]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('colosseum-tournaments')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tournaments' }, () => void fetchTournaments())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tournament_entries' }, () => void fetchTournaments())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchTournaments]);
 
   const gladiatorById = useMemo(() => new Map(gladiators.map((gladiator) => [gladiator.id, gladiator])), [gladiators]);
   const myGladiators = useMemo(() => gladiators.filter((gladiator) => gladiator.user_id === currentUser?.id), [gladiators, currentUser?.id]);
@@ -717,6 +1057,53 @@ export const Colosseum: React.FC = () => {
     }
   };
 
+  const createTournament = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!currentUser || tournamentForm.name.trim().length < 3) return;
+
+    setCreatingTournament(true);
+    setNotice(null);
+    try {
+      const { error } = await supabase.from('tournaments').insert({
+        name: tournamentForm.name.trim(),
+        challenge_type: tournamentForm.challenge_type,
+        min_contestants: tournamentForm.min_contestants,
+        created_by: currentUser.id,
+      });
+      if (error) throw error;
+      setTournamentForm({ name: 'Midnight Compiler Bracket', challenge_type: 'speed_round', min_contestants: 4 });
+      setNotice('Tournament circuit opened. Signups are live until the threshold locks the bracket.');
+      await fetchTournaments();
+    } catch (err) {
+      handleDbError(err, 'CREATE', 'tournaments');
+      setNotice('Tournament creation failed. Apply the tournament migration, then try again.');
+    } finally {
+      setCreatingTournament(false);
+    }
+  };
+
+  const joinTournament = async (tournament: TournamentRow) => {
+    if (!currentUser || !selectedGladiator || tournament.status !== 'open') return;
+
+    setJoiningTournamentId(tournament.id);
+    setNotice(null);
+    try {
+      const { error } = await supabase.from('tournament_entries').insert({
+        tournament_id: tournament.id,
+        gladiator_id: selectedGladiator.id,
+        user_id: currentUser.id,
+      });
+      if (error) throw error;
+      setNotice(`${selectedGladiator.name} entered ${tournament.name}. If the threshold is hit, signups lock and the bracket schedules automatically.`);
+      await fetchTournaments();
+    } catch (err) {
+      handleDbError(err, 'CREATE', 'tournament_entries');
+      setNotice('Tournament signup failed. Select one of your gladiators and confirm signups are still open.');
+    } finally {
+      setJoiningTournamentId('');
+    }
+  };
+
   const startChallenge = async () => {
     if (!selectedGladiator || !selectedOpponent || starting || simulation?.status === 'running') return;
     setStarting(true);
@@ -744,6 +1131,18 @@ export const Colosseum: React.FC = () => {
         `${selectedGladiator.name} boots combat compiler in the red corner.`,
         `${selectedOpponent.name} answers from the shadow cage.`,
       ];
+      let sapphireMove: SapphireMove | null = null;
+      const sapphireInMatch = isSapphireGladiator(selectedGladiator) || isSapphireGladiator(selectedOpponent);
+      if (sapphireInMatch) {
+        logs.push('Sapphire house AI uplink opened. Waiting for live solution packet.');
+        try {
+          sapphireMove = await requestSapphireMove(match, challengeType, selectedGladiator, selectedOpponent);
+          logs.push(`Sapphire returned a live combat solution in ${sapphireMove?.latency_ms ?? 0}ms.`);
+        } catch (err) {
+          console.warn('[Colosseum] Sapphire live move failed', err);
+          logs.push('Sapphire live API failed to answer. Pit simulation fallback engaged.');
+        }
+      }
       setSimulation({
         matchId: match.id,
         challengerId: selectedGladiator.id,
@@ -756,7 +1155,7 @@ export const Colosseum: React.FC = () => {
         status: 'booting',
       });
       setMatches((prev) => [match, ...prev]);
-      setTimeout(() => runSimulation(match, selectedGladiator, selectedOpponent, challengeType, logs), 650);
+      setTimeout(() => runSimulation(match, selectedGladiator, selectedOpponent, challengeType, logs, sapphireMove), 650);
     } catch (err) {
       handleDbError(err, 'CREATE', 'matches');
       setNotice('Challenge could not start. Select one of your gladiators and a valid opponent.');
@@ -765,9 +1164,11 @@ export const Colosseum: React.FC = () => {
     }
   };
 
-  const runSimulation = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, openingLogs: string[]) => {
-    const challengerScore = scoreFor(challenger, type);
-    const defenderScore = scoreFor(defender, type);
+  const runSimulation = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, openingLogs: string[], sapphireMove?: SapphireMove | null) => {
+    let challengerScore = scoreFor(challenger, type);
+    let defenderScore = scoreFor(defender, type);
+    if (isSapphireGladiator(challenger)) challengerScore += sapphireSolutionBonus(sapphireMove, type);
+    if (isSapphireGladiator(defender)) defenderScore += sapphireSolutionBonus(sapphireMove, type);
     const winner = challengerScore >= defenderScore ? challenger : defender;
     const finalLogs = [...openingLogs];
     const replayBase = {
@@ -777,6 +1178,7 @@ export const Colosseum: React.FC = () => {
       challenger_id: challenger.id,
       defender_id: defender.id,
       started_at: match.started_at,
+      sapphire_move: sapphireMove ?? null,
     };
     const combatLines = type === 'speed_round'
       ? ['Clock pressure spikes. Syntax sparks across the pit wall.', 'Both bots deploy hot paths through the runtime maze.', 'The crowd holograms slam the rail as latency drops.']
@@ -1007,6 +1409,20 @@ export const Colosseum: React.FC = () => {
         </section>
 
         <LiveArena activeMatches={activeMatches} gladiatorById={gladiatorById} />
+
+        <TournamentPanel
+          tournaments={tournaments}
+          entries={tournamentEntries}
+          gladiatorById={gladiatorById}
+          myGladiators={myGladiators}
+          selectedGladiator={selectedGladiator}
+          form={tournamentForm}
+          setForm={setTournamentForm}
+          creating={creatingTournament}
+          joiningTournamentId={joiningTournamentId}
+          onCreate={createTournament}
+          onJoin={joinTournament}
+        />
 
         <section className="mt-6 grid gap-6 xl:grid-cols-[0.95fr_1.1fr_0.95fr]">
           <div className="rounded-[2rem] border border-white/10 bg-black/60 p-5 backdrop-blur-xl">
