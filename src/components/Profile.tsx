@@ -459,6 +459,15 @@ export const Profile: React.FC = () => {
     return () => { supabase.removeChannel(channel); };
   }, [username, currentUser]);
 
+  const profileColor = user?.custom_accent || '#FF0000';
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--dynamic-accent', profileColor);
+    return () => {
+      document.documentElement.style.removeProperty('--dynamic-accent');
+    };
+  }, [profileColor]);
+
   if (authLoading) return (
     <div className="min-h-screen flex items-center justify-center bg-background">
       <Loader2 className="w-8 h-8 text-accent animate-spin" />
@@ -489,14 +498,6 @@ export const Profile: React.FC = () => {
   };
 
   const standing = getNeuralStanding(user.reputation_score);
-  const profileColor = user.custom_accent || '#FF0000';
-  
-  useEffect(() => {
-    document.documentElement.style.setProperty('--dynamic-accent', profileColor);
-    return () => {
-      document.documentElement.style.removeProperty('--dynamic-accent');
-    };
-  }, [profileColor]);
 
   return (
     <div className={cn(

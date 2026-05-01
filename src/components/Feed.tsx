@@ -452,7 +452,7 @@ export const Feed: React.FC = () => {
   })();
 
   return (
-    <div className="min-h-screen bg-background pb-20">
+    <div className="min-h-screen w-full overflow-x-hidden bg-background pb-20">
       {/* Real-time Notifications */}
       <div className="fixed top-20 right-4 z-[100] space-y-2 pointer-events-none">
         <AnimatePresence>
@@ -513,16 +513,16 @@ export const Feed: React.FC = () => {
       </div>
 
       {/* Top Navigation */}
-      <header className="sticky top-0 z-50 bg-background/80 backdrop-blur-xl border-b border-white/5 px-4 py-4">
-        <div className="max-w-md mx-auto flex flex-col gap-4">
-          <div className="flex items-center justify-between">
+      <header className="sticky top-0 z-50 border-b border-white/5 bg-background/80 px-3 py-4 backdrop-blur-xl sm:px-4">
+        <div className="mx-auto flex max-w-md min-w-0 flex-col gap-4">
+          <div className="flex min-w-0 items-center justify-between gap-3">
             <h1 
               onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-              className="text-xl font-black tracking-tighter text-accent italic cursor-pointer hover:opacity-80 transition-opacity"
+              className="min-w-0 shrink truncate text-xl font-black tracking-tighter text-accent italic cursor-pointer hover:opacity-80 transition-opacity"
             >
               BLOOD<span className="text-white">SWEAT</span>CODE
             </h1>
-            <div className="flex items-center space-x-4">
+            <div className="flex shrink-0 items-center gap-2 sm:gap-4">
               <div className="flex items-center gap-1.5 px-2 py-1 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
                 <Coins className="w-3.5 h-3.5 text-yellow-500" />
                 <span className="text-[10px] font-bold text-yellow-500 font-mono">
@@ -737,12 +737,12 @@ export const Feed: React.FC = () => {
       <TrendingSidebar onFilterChange={setTrendFilter} activeFilter={trendFilter} />
 
       {/* Feed Content — desktop uses sidebar layout */}
-      <main className="max-w-5xl mx-auto pt-4 px-4 lg:flex lg:gap-6 lg:items-start">
+      <main className="mx-auto w-full max-w-5xl px-3 pt-4 sm:px-4 lg:flex lg:items-start lg:gap-6">
         {/* Desktop sidebar */}
         <TrendingSidebar onFilterChange={setTrendFilter} activeFilter={trendFilter} />
 
         {/* Main feed column */}
-        <div className="flex-1 min-w-0">
+        <div className="mx-auto w-full max-w-md min-w-0 flex-1 lg:max-w-none">
         <NeuralBriefing recentPosts={displayPosts} />
         <CasperState context="feed" />
         {trendFilter && (
@@ -778,7 +778,7 @@ export const Feed: React.FC = () => {
         </div>{/* end main feed column */}
 
         {/* Loading State */}
-        <div ref={ref} className="py-8 flex flex-col justify-center items-center gap-8 w-full">
+        <div ref={ref} className="flex w-full flex-col items-center justify-center gap-8 py-8 lg:basis-full">
           {loading && feedType === 'latest' && (
             <>
               {[1, 2].map((i) => (

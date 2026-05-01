@@ -207,7 +207,7 @@ app.post("/api/cred/exchange", async (req, res) => {
       const apiKey = process.env.OPENAI_TTS_KEY || process.env.OPENAI_API_KEY;
       if (!apiKey) {
         console.warn('[tts] OPENAI_TTS_KEY/OPENAI_API_KEY is not configured');
-        return res.status(503).json({ error: 'TTS unavailable — falling back to browser TTS' });
+        return res.status(503).json({ error: 'OpenAI Onyx TTS unavailable' });
       }
 
       const input = text.slice(0, 4096);
@@ -231,7 +231,7 @@ app.post("/api/cred/exchange", async (req, res) => {
       if (!response.ok) {
         const errText = await response.text();
         console.warn(`[tts] OpenAI returned ${response.status}: ${errText.slice(0, 300)}`);
-        return res.status(503).json({ error: 'TTS unavailable — falling back to browser TTS' });
+        return res.status(503).json({ error: 'OpenAI Onyx TTS unavailable' });
       }
 
       const audioBuffer = Buffer.from(await response.arrayBuffer());

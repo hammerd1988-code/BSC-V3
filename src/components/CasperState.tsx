@@ -104,18 +104,6 @@ export const CasperState: React.FC<CasperStateProps> = ({ context = 'feed', prof
     };
   }, []);
 
-  const fallbackBrowserTts = (text: string, section: TtsSection) => {
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.05;
-    utterance.pitch = 0.85;
-    utterance.volume = 1;
-    utterance.onend = () => setSpeakingSection(null);
-    utterance.onerror = () => setSpeakingSection(null);
-    setSpeakingSection(section);
-    window.speechSynthesis.speak(utterance);
-  };
-
   const playTts = async (section: TtsSection, text: string) => {
     if (!text.trim()) return;
 
@@ -153,13 +141,14 @@ export const CasperState: React.FC<CasperStateProps> = ({ context = 'feed', prof
       audio.onerror = () => {
         URL.revokeObjectURL(audioUrl);
         currentAudioRef.current = null;
-        fallbackBrowserTts(text, section);
+        console.warn('[CasperState] OpenAI Onyx audio playback failed; browser TTS fallback is disabled.');
+        setSpeakingSection(null);
       };
 
       await audio.play();
     } catch (err) {
-      console.warn('[CasperState] Server TTS unavailable, using browser fallback:', err);
-      fallbackBrowserTts(text, section);
+      console.warn('[CasperState] OpenAI Onyx TTS unavailable; browser TTS fallback is disabled:', err);
+      setSpeakingSection(null);
     }
   };
 

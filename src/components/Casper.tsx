@@ -509,7 +509,6 @@ export const Casper: React.FC = () => {
   const levelFrameRef = useRef<number>(0);
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const speechDetectedRef = useRef(false);
-  const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
 
   // Silence detection config — tuned to avoid cutting off mid-sentence
   const SILENCE_THRESHOLD = 8;         // Audio level below this = silence (lower = less sensitive)
@@ -551,26 +550,6 @@ export const Casper: React.FC = () => {
     const shuffled = [...SUGGESTION_POOL].sort(() => 0.5 - Math.random());
     setQuickPrompts(shuffled.slice(0, 4));
   }, []);
-
-  // Load TTS voices
-  useEffect(() => {
-    const synth = window.speechSynthesis;
-    const load = () => { const v = synth.getVoices(); if (v.length) voicesRef.current = v; };
-    load();
-    synth.addEventListener('voiceschanged', load);
-    return () => { synth.removeEventListener('voiceschanged', load); synth.cancel(); };
-  }, []);
-
-  const pickVoice = (): SpeechSynthesisVoice | null => {
-    const v = voicesRef.current.length ? voicesRef.current : window.speechSynthesis.getVoices();
-    if (!v.length) return null;
-    // Prefer voices with better prosody/intonation
-    for (const name of ['Google UK English Male', 'Microsoft David', 'Daniel', 'Alex', 'Google US English']) {
-      const found = v.find(x => x.name.includes(name));
-      if (found) return found;
-    }
-    return v.find(x => x.lang.startsWith('en')) || v[0] || null;
-  };
 
   // Track audio playback so mobile browsers keep Casper's voice unlocked after the initial tap.
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -634,14 +613,15 @@ export const Casper: React.FC = () => {
     });
   }, []);
 
-  // ── TTS: Speak text aloud ──
+  // ── TTS: Speak text aloud through the server OpenAI Onyx endpoint only ──
   const speakOnce = useCallback(async (text: string, onDone?: () => void) => {
     if (!ttsEnabled) { onDone?.(); return; }
-    
-    // Cancel any ongoing browser TTS
-    const synth = window.speechSynthesis;
-    synth.cancel();
-    
+
+    // Browser speech synthesis is intentionally not used for Casper. The server
+    // endpoint returns OpenAI Onyx MP3 audio; if unavailable, the conversation
+    // continues silently instead of switching to browser TTS.
+    window.speechSynthesis.cancel();
+
     // Cancel any ongoing audio playback, but keep the persistent element unlocked for mobile.
     if (currentAudioRef.current) {
       currentAudioRef.current.pause();
@@ -651,11 +631,31 @@ export const Casper: React.FC = () => {
       currentAudioUrlRef.current = null;
     }
 
+    const finishWithoutBrowserTts = (reason: string, error?: unknown) => {
+      if (error) {
+        console.warn(`[VOICE] ${reason}; browser TTS fallback is disabled:`, error);
+      } else {
+        console.warn(`[VOICE] ${reason}; browser TTS fallback is disabled`);
+      }
+      if (currentAudioUrlRef.current) {
+        URL.revokeObjectURL(currentAudioUrlRef.current);
+        currentAudioUrlRef.current = null;
+      }
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current = null;
+      }
+      setVoiceState('idle');
+      if (voiceActiveRef.current) {
+        setVoiceDebug('OpenAI voice unavailable. Continuing without browser TTS.');
+      }
+      onDone?.();
+    };
+
     setLastSpokenText(text);
     setVoiceState('speaking');
 
     try {
-      // 1. Try the server TTS endpoint first (OpenAI Onyx in production)
       const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
       const response = await fetch(`${serverUrl}/api/tts`, {
         method: 'POST',
@@ -663,91 +663,41 @@ export const Casper: React.FC = () => {
         body: JSON.stringify({ text, speed: 1.05 })
       });
 
-      if (response.ok) {
-        const audioBlob = await response.blob();
-        const audioUrl = URL.createObjectURL(audioBlob);
-        currentAudioUrlRef.current = audioUrl;
-
-        const audio = persistentAudioRef.current || new Audio();
-        audio.pause();
-        audio.src = audioUrl;
-        audio.currentTime = 0;
-        currentAudioRef.current = audio;
-        
-        audio.onended = () => {
-          setVoiceState('idle');
-          URL.revokeObjectURL(audioUrl);
-          if (currentAudioUrlRef.current === audioUrl) currentAudioUrlRef.current = null;
-          if (currentAudioRef.current === audio) currentAudioRef.current = null;
-          onDone?.();
-        };
-        
-        audio.onerror = () => {
-          console.warn('[VOICE] Audio playback failed, falling back to browser TTS');
-          URL.revokeObjectURL(audioUrl);
-          if (currentAudioUrlRef.current === audioUrl) currentAudioUrlRef.current = null;
-          if (currentAudioRef.current === audio) currentAudioRef.current = null;
-          fallbackBrowserTts(text, onDone);
-        };
-        
-        await audio.play();
-        return; // Success!
-      } else {
-        console.warn(`[VOICE] Cloud TTS failed (${response.status}), falling back to browser TTS`);
-      }
-    } catch (e) {
-      console.warn('[VOICE] Cloud TTS request error, falling back to browser TTS:', e);
-    }
-
-    // 2. Fallback to Browser TTS if Cloud API fails
-    fallbackBrowserTts(text, onDone);
-  }, [ttsEnabled]);
-
-  // Browser TTS fallback with natural inflection tricks
-  const fallbackBrowserTts = (text: string, onDone?: () => void) => {
-    const synth = window.speechSynthesis;
-    
-    // Split into sentences for more natural rhythm
-    const sentences = text.match(/[^.!?]+[.!?]+|\s*$/g)?.filter(s => s.trim().length > 0) || [text];
-    let currentIndex = 0;
-
-    const speakNext = () => {
-      if (currentIndex >= sentences.length) {
-        setVoiceState('idle');
-        onDone?.();
+      if (!response.ok) {
+        finishWithoutBrowserTts(`OpenAI Onyx TTS failed with status ${response.status}`);
         return;
       }
 
-      const sentence = sentences[currentIndex];
-      const utter = new SpeechSynthesisUtterance(sentence);
-      const voice = pickVoice();
-      if (voice) utter.voice = voice;
-      
-      // Add slight random variation to pitch and rate to break monotone
-      const pitchVar = (Math.random() * 0.1) - 0.05;
-      const rateVar = (Math.random() * 0.08) - 0.04;
-      
-      utter.pitch = 0.75 + pitchVar;    // Deep but not too low
-      utter.rate = 1.12 + rateVar;      // Natural browser fallback pace
-      utter.volume = 1.0;
-      
-      utter.onend = () => {
-        currentIndex++;
-        // Keep sentence gaps tight so Casper does not hang on every thought
-        setTimeout(speakNext, 60 + Math.random() * 80);
-      };
-      
-      utter.onerror = () => {
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      currentAudioUrlRef.current = audioUrl;
+
+      const audio = persistentAudioRef.current || new Audio();
+      audio.pause();
+      audio.src = audioUrl;
+      audio.currentTime = 0;
+      currentAudioRef.current = audio;
+
+      audio.onended = () => {
         setVoiceState('idle');
+        URL.revokeObjectURL(audioUrl);
+        if (currentAudioUrlRef.current === audioUrl) currentAudioUrlRef.current = null;
+        if (currentAudioRef.current === audio) currentAudioRef.current = null;
         onDone?.();
       };
-      
-      if (synth.paused) synth.resume();
-      synth.speak(utter);
-    };
 
-    speakNext();
-  };
+      audio.onerror = () => {
+        URL.revokeObjectURL(audioUrl);
+        if (currentAudioUrlRef.current === audioUrl) currentAudioUrlRef.current = null;
+        if (currentAudioRef.current === audio) currentAudioRef.current = null;
+        finishWithoutBrowserTts('OpenAI Onyx audio playback failed');
+      };
+
+      await audio.play();
+    } catch (e) {
+      finishWithoutBrowserTts('OpenAI Onyx TTS request/playback error', e);
+    }
+  }, [ttsEnabled]);
 
   // ── START LISTENING: MediaRecorder (levels) + Server Whisper ──
   const startListeningSession = useCallback(async () => {

@@ -247,7 +247,7 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
     void handlePostComment();
   };
 
-  const visibleCommentCount = comments.length || post.comments_count || 0;
+  const visibleCommentCount = isLoading ? (post.comments_count ?? 0) : comments.length;
 
   return (
     <AnimatePresence>

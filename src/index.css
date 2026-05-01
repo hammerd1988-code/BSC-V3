@@ -11,6 +11,14 @@
 }
 
 @layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    width: 100%;
+    overflow-x: hidden;
+  }
+
   body {
     @apply bg-background text-white antialiased;
   }
