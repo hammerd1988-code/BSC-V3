@@ -166,15 +166,57 @@ const CHALLENGES: Array<{
 
 const GLOW_COLORS = ['#ff1744', '#00e5ff', '#ff2bd6', '#f9ff6b', '#8b5cf6', '#22c55e'];
 
-const MODEL_OPTIONS = [
-  { value: 'platform_default', label: 'Platform Default' },
-  { value: 'gpt-4.1', label: 'gpt-4.1' },
-  { value: 'gpt-4.1-mini', label: 'gpt-4.1-mini' },
-  { value: 'gpt-4.1-nano', label: 'gpt-4.1-nano' },
-  { value: 'claude-sonnet', label: 'claude-sonnet' },
-  { value: 'claude-haiku', label: 'claude-haiku' },
-  { value: 'gemini-2.5-flash', label: 'gemini-2.5-flash' },
-  { value: 'gemini-2.5-pro', label: 'gemini-2.5-pro' },
+const MODEL_GROUPS = [
+  {
+    provider: 'Other',
+    models: [
+      { value: 'platform_default', label: 'Platform Default' },
+    ],
+  },
+  {
+    provider: 'OpenAI',
+    models: [
+      { value: 'gpt-5', label: 'GPT-5' },
+      { value: 'gpt-4.1', label: 'GPT-4.1' },
+      { value: 'gpt-4.1-mini', label: 'GPT-4.1-mini' },
+      { value: 'gpt-4.1-nano', label: 'GPT-4.1-nano' },
+      { value: 'gpt-4o', label: 'GPT-4o' },
+      { value: 'o3', label: 'o3' },
+      { value: 'o4-mini', label: 'o4-mini' },
+    ],
+  },
+  {
+    provider: 'Anthropic (Claude)',
+    models: [
+      { value: 'claude-opus-4', label: 'Claude Opus 4' },
+      { value: 'claude-sonnet-4', label: 'Claude Sonnet 4' },
+      { value: 'claude-sonnet-3.5', label: 'Claude Sonnet 3.5' },
+      { value: 'claude-haiku-3.5', label: 'Claude Haiku 3.5' },
+    ],
+  },
+  {
+    provider: 'Google',
+    models: [
+      { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+      { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+    ],
+  },
+  {
+    provider: 'Meta',
+    models: [
+      { value: 'llama-4-maverick', label: 'Llama 4 Maverick' },
+      { value: 'llama-4-scout', label: 'Llama 4 Scout' },
+    ],
+  },
+  {
+    provider: 'Other Models',
+    models: [
+      { value: 'deepseek-r1', label: 'DeepSeek R1' },
+      { value: 'deepseek-v3', label: 'DeepSeek V3' },
+      { value: 'mistral-large', label: 'Mistral Large' },
+    ],
+  },
 ];
 
 const DEFAULT_STATS: GladiatorStats = { speed: 52, accuracy: 54, endurance: 50 };
@@ -1549,7 +1591,11 @@ export const Colosseum: React.FC = () => {
                     disabled={!form.api_key.trim()}
                     className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/60 disabled:opacity-50"
                   >
-                    {MODEL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    {MODEL_GROUPS.map((group) => (
+                      <optgroup key={group.provider} label={group.provider}>
+                        {group.models.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                      </optgroup>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -1596,7 +1642,11 @@ export const Colosseum: React.FC = () => {
                       onChange={(event) => setConfigForm((prev) => ({ ...prev, model: event.target.value }))}
                       className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/60"
                     >
-                      {MODEL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                      {MODEL_GROUPS.map((group) => (
+                      <optgroup key={group.provider} label={group.provider}>
+                        {group.models.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                      </optgroup>
+                    ))}
                     </select>
                     <button
                       type="button"
