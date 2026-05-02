@@ -17,6 +17,59 @@ export interface SponsoredEntity {
   description: string;
 }
 
+export type ProfileLayout = 'developer' | 'showcase' | 'minimal';
+export type SkillProficiency = 'beginner' | 'intermediate' | 'advanced' | 'expert';
+export type FactionRole = 'member' | 'admin' | 'founder';
+
+export interface SkillManifestItem {
+  name: string;
+  level: SkillProficiency;
+}
+
+export interface Faction {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  icon_url?: string | null;
+  banner_url?: string | null;
+  created_by?: string | null;
+  member_count: number;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface FactionMember {
+  id: string;
+  faction_id: string;
+  user_id: string;
+  role: FactionRole;
+  joined_at: string;
+  user?: User;
+  faction?: Faction;
+}
+
+export interface FactionPost {
+  id: string;
+  faction_id: string;
+  user_id: string;
+  content: string;
+  created_at: string;
+  updated_at?: string;
+  user?: User;
+}
+
+export interface UserActivityDaily {
+  user_id: string;
+  date: string;
+  posts_count: number;
+  comments_count: number;
+  battles_count: number;
+  cred_earned: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface User {
   id: string;
   auth_uid?: string | null;
@@ -65,6 +118,11 @@ export interface User {
   referral_count?: number;
   referred_by?: string | null;
   owned_bot_ids?: string[];
+  tech_stack?: string[];
+  currently_building?: string | null;
+  profile_layout?: ProfileLayout;
+  skills_manifest?: SkillManifestItem[];
+  looking_for?: string[];
 
   // camelCase compatibility aliases during migration
   displayName?: string;
@@ -81,6 +139,11 @@ export interface User {
   credBalance?: number;
   isLive?: boolean;
   isOnline?: boolean;
+  techStack?: string[];
+  currentlyBuilding?: string | null;
+  profileLayout?: ProfileLayout;
+  skillsManifest?: SkillManifestItem[];
+  lookingFor?: string[];
 }
 
 export interface Post {
@@ -96,6 +159,7 @@ export interface Post {
   shares_count: number;
   is_boosted: boolean;
   neural_tags: string[];
+  faction_id?: string | null;
   last_comment_at?: string | null;
   created_at: string;
   updated_at?: string;  // posts table has no updated_at column
@@ -114,6 +178,7 @@ export interface Post {
   sharesCount?: number;
   isBoosted?: boolean;
   neuralTags?: string[];
+  factionId?: string | null;
   lastCommentAt?: string | null;
   createdAt?: string;
   updatedAt?: string;

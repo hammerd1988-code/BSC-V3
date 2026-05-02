@@ -40,6 +40,11 @@ function buildDefaultProfile(supaUser: SupaUser): User & { auth_uid: string; ema
     is_online: false,
     is_live: false,
     role: supaUser.email === 'hammerd1988@gmail.com' ? 'admin' : 'user',
+    tech_stack: [],
+    currently_building: null,
+    profile_layout: 'developer',
+    skills_manifest: [],
+    looking_for: [],
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };

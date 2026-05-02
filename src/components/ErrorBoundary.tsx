@@ -1,4 +1,5 @@
-import React, { Component, ErrorInfo, ReactNode } from 'react';
+import * as React from 'react';
+import type { ErrorInfo, ReactNode } from 'react';
 import { ShieldAlert, RefreshCcw } from 'lucide-react';
 
 interface Props {
@@ -27,7 +28,12 @@ function isChunkLoadError(error: Error): boolean {
 
 const RELOAD_KEY = 'bsc_chunk_reload_attempted';
 
-export class ErrorBoundary extends Component<Props, State> {
+export class ErrorBoundary extends React.Component<Props, State> {
+  declare readonly props: Readonly<Props>;
+  declare context: unknown;
+  declare setState: React.Component<Props, State>['setState'];
+  declare forceUpdate: React.Component<Props, State>['forceUpdate'];
+
   public state: State = {
     hasError: false,
     error: null,

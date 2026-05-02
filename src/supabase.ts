@@ -130,6 +130,12 @@ const CAMEL_TO_SNAKE: Record<string, string> = {
   sponsoredEntity: 'sponsored_entity',
   aiSettings: 'ai_settings',
   statusMessage: 'status_message',
+  techStack: 'tech_stack',
+  currentlyBuilding: 'currently_building',
+  profileLayout: 'profile_layout',
+  skillsManifest: 'skills_manifest',
+  lookingFor: 'looking_for',
+  factionId: 'faction_id',
 };
 
 const SNAKE_TO_CAMEL: Record<string, string> = Object.fromEntries(
