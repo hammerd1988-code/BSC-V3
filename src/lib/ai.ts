@@ -42,12 +42,15 @@ const ENV_AI_MODEL =
  * Returns null if no direct API access is configured (falls back to edge function).
  */
 function resolveAiConfig(userSettings?: any): { baseUrl: string; apiKey: string; model: string } | null {
-  // 1. Per-user settings (from Edit Profile → AI Settings)
-  if (userSettings?.endpoint && userSettings?.apiKey) {
+  // 1. Per-user settings (Casper AI Core / profile AI settings)
+  const userEndpoint = userSettings?.endpoint || userSettings?.api_base_url || userSettings?.apiBaseUrl || userSettings?.baseUrl;
+  const userApiKey = userSettings?.apiKey || userSettings?.api_key;
+  const userModel = userSettings?.model === 'platform_default' ? null : userSettings?.model;
+  if (userEndpoint && userApiKey) {
     return {
-      baseUrl: userSettings.endpoint.replace(/\/$/, ""),
-      apiKey: userSettings.apiKey,
-      model: userSettings.model || ENV_AI_MODEL,
+      baseUrl: String(userEndpoint).replace(/\/$/, ""),
+      apiKey: String(userApiKey),
+      model: userModel || ENV_AI_MODEL,
     };
   }
 

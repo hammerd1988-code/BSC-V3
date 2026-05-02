@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Send, Loader2, RefreshCw, Trash2, Copy, Check, AlertTriangle, Activity, Mic, MicOff, Volume2, X } from 'lucide-react';
+import { ArrowLeft, Send, Loader2, RefreshCw, Trash2, Copy, Check, AlertTriangle, Activity, Mic, MicOff, Volume2, X, Settings, Lock, Eye, EyeOff, Server, BrainCircuit } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { generateText } from '../lib/ai';
 import { supabase } from '../supabase';
@@ -14,6 +14,38 @@ interface Message {
   role: 'user' | 'casper';
   content: string;
   timestamp: Date;
+}
+
+const CASPER_MODEL_GROUPS = [
+  { provider: 'Other', models: [{ value: 'platform_default', label: 'Platform Default' }, { value: 'custom_model', label: 'Custom Model' }] },
+  { provider: 'OpenAI', models: [{ value: 'gpt-5', label: 'GPT-5' }, { value: 'gpt-4.1', label: 'GPT-4.1' }, { value: 'gpt-4.1-mini', label: 'GPT-4.1-mini' }, { value: 'gpt-4.1-nano', label: 'GPT-4.1-nano' }, { value: 'gpt-4o', label: 'GPT-4o' }, { value: 'o3', label: 'o3' }, { value: 'o4-mini', label: 'o4-mini' }] },
+  { provider: 'Anthropic (Claude)', models: [{ value: 'claude-opus-4', label: 'Claude Opus 4' }, { value: 'claude-sonnet-4', label: 'Claude Sonnet 4' }, { value: 'claude-sonnet-3.5', label: 'Claude Sonnet 3.5' }, { value: 'claude-haiku-3.5', label: 'Claude Haiku 3.5' }] },
+  { provider: 'Google', models: [{ value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' }, { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' }, { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' }] },
+  { provider: 'Meta', models: [{ value: 'llama-4-maverick', label: 'Llama 4 Maverick' }, { value: 'llama-4-scout', label: 'Llama 4 Scout' }] },
+  { provider: 'Other Models', models: [{ value: 'deepseek-r1', label: 'DeepSeek R1' }, { value: 'deepseek-v3', label: 'DeepSeek V3' }, { value: 'mistral-large', label: 'Mistral Large' }] },
+];
+
+const CASPER_KNOWN_MODEL_VALUES = new Set(CASPER_MODEL_GROUPS.flatMap(group => group.models.map(model => model.value)));
+
+function casperModelSelectValue(model?: string | null) {
+  if (!model || model === 'platform_default') return 'platform_default';
+  return CASPER_KNOWN_MODEL_VALUES.has(model) ? model : 'custom_model';
+}
+
+function resolveCasperModel(model: string, customModelId: string) {
+  if (model === 'platform_default') return null;
+  if (model === 'custom_model') return customModelId.trim() || null;
+  return model;
+}
+
+function initialCasperCore(settings: any) {
+  const model = casperModelSelectValue(settings?.model);
+  return {
+    apiKey: settings?.apiKey || settings?.api_key || '',
+    endpoint: settings?.endpoint || settings?.api_base_url || settings?.apiBaseUrl || '',
+    model,
+    customModelId: model === 'custom_model' ? settings?.model || '' : '',
+  };
 }
 
 // ── NETWORK INSTABILITY RATING ────────────────────────────────────────────────
@@ -507,6 +539,11 @@ const CASPER_GREETINGS = [
 export const Casper: React.FC = () => {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
+  const [aiSettings, setAiSettings] = useState<any>(currentUser?.ai_settings || {});
+  const [showAiCore, setShowAiCore] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [savingAiCore, setSavingAiCore] = useState(false);
+  const [aiCoreForm, setAiCoreForm] = useState(() => initialCasperCore(currentUser?.ai_settings));
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -580,6 +617,48 @@ export const Casper: React.FC = () => {
     const shuffled = [...SUGGESTION_POOL].sort(() => 0.5 - Math.random());
     setQuickPrompts(shuffled.slice(0, 4));
   }, []);
+
+  useEffect(() => {
+    const nextSettings = currentUser?.ai_settings || {};
+    setAiSettings(nextSettings);
+    setAiCoreForm(initialCasperCore(nextSettings));
+  }, [currentUser?.id, currentUser?.ai_settings]);
+
+  const saveAiCore = async () => {
+    if (!currentUser) return;
+    setSavingAiCore(true);
+    try {
+      const resolvedModel = resolveCasperModel(aiCoreForm.model, aiCoreForm.customModelId);
+      const nextSettings = {
+        ...(aiSettings || {}),
+        apiKey: aiCoreForm.apiKey.trim() || undefined,
+        endpoint: aiCoreForm.endpoint.trim() || undefined,
+        api_base_url: aiCoreForm.endpoint.trim() || undefined,
+        model: resolvedModel || undefined,
+        casper_custom_core: Boolean(aiCoreForm.apiKey.trim() || aiCoreForm.endpoint.trim() || resolvedModel),
+      };
+
+      if (!aiCoreForm.apiKey.trim()) {
+        delete nextSettings.apiKey;
+        delete nextSettings.api_key;
+      }
+      if (!aiCoreForm.endpoint.trim()) {
+        delete nextSettings.endpoint;
+        delete nextSettings.api_base_url;
+        delete nextSettings.apiBaseUrl;
+      }
+      if (!resolvedModel) delete nextSettings.model;
+
+      const { error } = await supabase.from('users').update({ ai_settings: nextSettings }).eq('id', currentUser.id);
+      if (error) throw error;
+      setAiSettings(nextSettings);
+      setAiCoreForm(initialCasperCore(nextSettings));
+    } catch (error) {
+      console.error('[Casper] Failed to save AI core settings:', error);
+    } finally {
+      setSavingAiCore(false);
+    }
+  };
 
   // Track audio playback so mobile browsers keep Casper's voice unlocked after the initial tap.
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -878,7 +957,7 @@ export const Casper: React.FC = () => {
     const fullSystemPrompt = CASPER_SYSTEM_PROMPT + stateModifier + relevantMemories;
 
     try {
-      const response = await generateText(prompt, currentUser?.ai_settings, { systemPrompt: fullSystemPrompt, temperature: 0.8 });
+      const response = await generateText(prompt, aiSettings, { systemPrompt: fullSystemPrompt, temperature: 0.8 });
       const casperText = response || "The void swallowed my words. Say that again?";
 
       // Store memory asynchronously
@@ -910,7 +989,7 @@ export const Casper: React.FC = () => {
         if (voiceActiveRef.current) setTimeout(() => startListeningSession(), 400);
       });
     }
-  }, [messages, currentUser?.ai_settings, speakOnce, startListeningSession]);
+  }, [messages, aiSettings, speakOnce, startListeningSession]);
 
   // ── ENTER VOICE MODE ──
   const enterVoiceMode = useCallback(async () => {
@@ -983,7 +1062,7 @@ export const Casper: React.FC = () => {
     const greeting = CASPER_GREETINGS[Math.floor(Math.random() * CASPER_GREETINGS.length)];
     setMessages([{ id: 'greeting', role: 'casper', content: greeting, timestamp: new Date() }]);
 
-    calculateInstabilityRating(currentUser?.ai_settings).then(({ rating, summary }) => {
+    calculateInstabilityRating(aiSettings).then(({ rating, summary }) => {
       setInstability(rating);
       setNetworkSummary(summary);
       setIsAnalyzing(false);
@@ -1030,7 +1109,7 @@ export const Casper: React.FC = () => {
     const fullSystemPrompt = CASPER_SYSTEM_PROMPT + stateModifier + relevantMemories;
 
     try {
-      const response = await generateText(prompt, currentUser?.ai_settings, {
+      const response = await generateText(prompt, aiSettings, {
         systemPrompt: fullSystemPrompt,
         temperature: 0.8,
       });
@@ -1068,7 +1147,7 @@ export const Casper: React.FC = () => {
       setIsGenerating(false);
       if (ttsEnabled && voiceState !== 'recording') speakOnce(fallback);
     }
-  }, [input, isGenerating, messages, currentUser?.ai_settings, ttsEnabled, speakOnce]);
+  }, [input, isGenerating, messages, aiSettings, ttsEnabled, speakOnce]);
 
   const copyMessage = (id: string, content: string) => {
     navigator.clipboard.writeText(content).then(() => {
@@ -1234,6 +1313,19 @@ export const Casper: React.FC = () => {
               {ttsEnabled ? <Volume2 className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
             </button>
 
+            <button
+              onClick={() => setShowAiCore(prev => !prev)}
+              className={cn(
+                "p-2 rounded-full transition-all",
+                showAiCore
+                  ? "bg-cyan-300/15 text-cyan-200 border border-cyan-300/35 shadow-[0_0_14px_rgba(0,229,255,0.25)]"
+                  : "hover:bg-white/5 text-white/40 hover:text-white/70"
+              )}
+              title="Casper AI Core Settings"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+
             {/* Voice mode toggle */}
             <button
               onClick={() => {
@@ -1269,6 +1361,89 @@ export const Casper: React.FC = () => {
           </div>
         )}
       </header>
+
+      <AnimatePresence>
+        {showAiCore && (
+          <motion.section
+            initial={{ opacity: 0, y: -18, filter: 'blur(10px)' }}
+            animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+            exit={{ opacity: 0, y: -18, filter: 'blur(10px)' }}
+            className="relative z-10 mx-auto mt-4 w-full max-w-2xl px-4"
+          >
+            <div className="relative overflow-hidden rounded-[1.75rem] border border-cyan-300/20 bg-black/55 p-5 shadow-[0_0_50px_rgba(0,229,255,0.12)] backdrop-blur-2xl">
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_0%,rgba(0,229,255,0.18),transparent_32%),radial-gradient(circle_at_100%_100%,rgba(255,23,68,0.12),transparent_30%)]" />
+              <div className="relative">
+                <div className="mb-4 flex items-start justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className="grid h-11 w-11 place-items-center rounded-2xl border border-cyan-300/20 bg-cyan-950/25 text-cyan-200 shadow-[0_0_24px_rgba(0,229,255,0.18)]">
+                      <BrainCircuit className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-[0.28em] text-cyan-200">AI Core</p>
+                      <h2 className="mt-1 text-lg font-black uppercase tracking-[0.16em] text-white">Personal Casper Model</h2>
+                      <p className="mt-2 max-w-xl text-[11px] leading-5 text-zinc-500">Power Casper with your own AI model. Your key is stored securely and only used for your personal conversations.</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setShowAiCore(false)} className="rounded-full border border-white/10 bg-white/[0.04] p-2 text-zinc-500 transition hover:text-white"><X className="h-4 w-4" /></button>
+                </div>
+
+                <div className="grid gap-3">
+                  <div className="relative">
+                    <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-cyan-200/70" />
+                    <input
+                      value={aiCoreForm.apiKey}
+                      onChange={(event) => setAiCoreForm(prev => ({ ...prev, apiKey: event.target.value }))}
+                      type={showApiKey ? 'text' : 'password'}
+                      placeholder="API Key optional"
+                      autoComplete="off"
+                      className="w-full rounded-2xl border border-white/10 bg-white/[0.045] py-3 pl-10 pr-12 text-sm text-white outline-none transition focus:border-cyan-300/50"
+                    />
+                    <button type="button" onClick={() => setShowApiKey(prev => !prev)} className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white">
+                      {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  <div className="relative">
+                    <Server className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-cyan-200/70" />
+                    <input
+                      value={aiCoreForm.endpoint}
+                      onChange={(event) => setAiCoreForm(prev => ({ ...prev, endpoint: event.target.value }))}
+                      placeholder="https://api.openai.com/v1"
+                      className="w-full rounded-2xl border border-white/10 bg-white/[0.045] py-3 pl-10 pr-4 text-sm text-white outline-none transition focus:border-cyan-300/50"
+                    />
+                  </div>
+                  <select
+                    value={aiCoreForm.model}
+                    onChange={(event) => setAiCoreForm(prev => ({ ...prev, model: event.target.value }))}
+                    className="w-full rounded-2xl border border-white/10 bg-white/[0.045] px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/50"
+                  >
+                    {CASPER_MODEL_GROUPS.map(group => (
+                      <optgroup key={group.provider} label={group.provider}>
+                        {group.models.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                      </optgroup>
+                    ))}
+                  </select>
+                  {aiCoreForm.model === 'custom_model' && (
+                    <input
+                      value={aiCoreForm.customModelId}
+                      onChange={(event) => setAiCoreForm(prev => ({ ...prev, customModelId: event.target.value }))}
+                      placeholder="Custom Model ID, e.g. llama-3.1-8b"
+                      className="w-full rounded-2xl border border-white/10 bg-white/[0.045] px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/50"
+                    />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void saveAiCore()}
+                    disabled={savingAiCore}
+                    className="mt-1 inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-300/35 bg-cyan-300/10 px-5 py-3 text-[10px] font-black uppercase tracking-[0.24em] text-cyan-100 transition hover:bg-cyan-300/20 disabled:opacity-50"
+                  >
+                    {savingAiCore ? <Loader2 className="h-4 w-4 animate-spin" /> : <Settings className="h-4 w-4" />} Save AI Core
+                  </button>
+                </div>
+              </div>
+            </div>
+          </motion.section>
+        )}
+      </AnimatePresence>
 
       {/* ── WAVEFORM ── */}
       <div className="relative z-10 px-4 py-2 max-w-2xl mx-auto w-full">
