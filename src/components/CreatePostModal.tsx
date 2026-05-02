@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Send, Loader2, Image as ImageIcon, CheckCircle, AlertCircle, Bold, Italic, Link as LinkIcon } from 'lucide-react';
+import { X, Send, Loader2, Image as ImageIcon, CheckCircle, AlertCircle, Bold, Italic, Link as LinkIcon, Video, Clapperboard } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -45,6 +45,13 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
   // Fallback plain text content (used when TipTap isn't ready or fails)
   const [fallbackContent, setFallbackContent] = useState('');
   const [useFallback, setUseFallback] = useState(false);
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [videoTitle, setVideoTitle] = useState('');
+  const [videoThumbnailUrl, setVideoThumbnailUrl] = useState('');
+  const [videoCategory, setVideoCategory] = useState('Coding');
+  const [isShort, setIsShort] = useState(false);
 
   // TipTap editor — only used when TipTap is available
   const editor = useEditor && !useFallback ? useEditor({
@@ -88,6 +95,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
       setError(null);
       setSuccess(false);
       setFallbackContent('');
+      clearVideo();
       if (editor) editor.commands.setContent('');
     }
   }, [isOpen]);
@@ -106,6 +114,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
   };
 
   const isEmpty = (): boolean => {
+    if (videoFile) return false;
     if (useFallback || !editor) return !fallbackContent.trim();
     const text = editor.getText().trim();
     const html = editor.getHTML();
@@ -150,6 +159,38 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
     }
   };
 
+  const handleVideoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (videoPreviewUrl) URL.revokeObjectURL(videoPreviewUrl);
+    const previewUrl = URL.createObjectURL(file);
+    setVideoFile(file);
+    setVideoPreviewUrl(previewUrl);
+    setVideoTitle(file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '));
+    setError(null);
+
+    const probe = document.createElement('video');
+    probe.preload = 'metadata';
+    probe.onloadedmetadata = () => {
+      const duration = Number.isFinite(probe.duration) ? Math.round(probe.duration) : 0;
+      setVideoDuration(duration);
+      setIsShort(duration > 0 && duration <= 60);
+      URL.revokeObjectURL(probe.src);
+    };
+    probe.src = URL.createObjectURL(file);
+    if (e.target) e.target.value = '';
+  };
+
+  const clearVideo = () => {
+    if (videoPreviewUrl) URL.revokeObjectURL(videoPreviewUrl);
+    setVideoFile(null);
+    setVideoPreviewUrl(null);
+    setVideoDuration(0);
+    setVideoTitle('');
+    setVideoThumbnailUrl('');
+    setIsShort(false);
+  };
+
   const handlePost = async () => {
     console.log('[CreatePost] handlePost called', { currentUser: !!currentUser, editor: !!editor, useFallback });
 
@@ -160,8 +201,8 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
 
     const { html: htmlContent, text: textContent } = getContent();
 
-    if (!textContent && !htmlContent.includes('<img')) {
-      setError('Write something before posting.');
+    if (!textContent && !htmlContent.includes('<img') && !videoFile) {
+      setError('Write something or attach a video before posting.');
       return;
     }
 
@@ -169,18 +210,33 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
     setError(null);
 
     try {
+      let uploadedVideoUrl: string | null = null;
+      if (videoFile) {
+        const fileExt = videoFile.name.split('.').pop() || 'mp4';
+        const filePath = `post_videos/${currentUser.id}/${uuidv4()}.${fileExt}`;
+        const { error: videoUploadError } = await supabase.storage.from('media').upload(filePath, videoFile, {
+          upsert: true,
+          contentType: videoFile.type || 'video/mp4',
+        });
+        if (videoUploadError) throw videoUploadError;
+        const { data: { publicUrl } } = supabase.storage.from('media').getPublicUrl(filePath);
+        uploadedVideoUrl = publicUrl;
+      }
+
       // Only include columns that exist in the posts table:
       // id (auto), author_id, content, media_url, media_type, type, likes, boosts,
       // comments_count, is_boosted, last_comment_at, expires_at, is_echo, feed_type,
       // created_at, updated_at, view_count, poll_data
       const newPost = {
         author_id: currentUser.id,
-        content: htmlContent,
+        content: htmlContent || `<p>${videoTitle || 'New video transmission'}</p>`,
+        media_url: uploadedVideoUrl,
+        media_type: uploadedVideoUrl ? 'video' as const : null,
         likes: 0,
         boosts: 0,
         comments_count: 0,
         is_boosted: false,
-        type: 'text' as const,
+        type: uploadedVideoUrl ? (isShort ? 'short' : 'video') : 'text' as const,
         view_count: 0,
       };
 
@@ -206,11 +262,28 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
         created_at: new Date().toISOString(),
       };
 
+      if (uploadedVideoUrl) {
+        const { error: videoInsertError } = await supabase.from('videos').insert({
+          user_id: currentUser.id,
+          post_id: postResult.id,
+          title: videoTitle.trim() || textContent.slice(0, 80) || 'Untitled video',
+          description: textContent || null,
+          video_url: uploadedVideoUrl,
+          thumbnail_url: videoThumbnailUrl.trim() || null,
+          duration: videoDuration,
+          category: videoCategory,
+          is_short: isShort,
+          view_count: 0,
+        });
+        if (videoInsertError) throw videoInsertError;
+      }
+
       onPostCreated(postResult);
       socket.emit('post:create', postResult);
 
       setSuccess(true);
       setFallbackContent('');
+      clearVideo();
       if (editor) editor.commands.setContent('');
 
       setTimeout(() => {
@@ -242,6 +315,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
       setError(null);
       setSuccess(false);
       setFallbackContent('');
+      clearVideo();
       if (editor) editor.commands.setContent('');
       onClose();
     }
@@ -327,9 +401,13 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
                   <LinkIcon className="w-3.5 h-3.5" />
                 </button>
                 <div className="w-px h-4 bg-white/10 mx-1" />
-                <label className="p-2 rounded-lg hover:bg-white/10 transition-colors text-zinc-500 cursor-pointer">
+                <label className="p-2 rounded-lg hover:bg-white/10 transition-colors text-zinc-500 cursor-pointer" title="Add image">
                   <ImageIcon className="w-3.5 h-3.5" />
                   <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} disabled={isSubmitting} />
+                </label>
+                <label className="p-2 rounded-lg hover:bg-white/10 transition-colors text-cyan-400 cursor-pointer" title="Add video or short">
+                  <Video className="w-3.5 h-3.5" />
+                  <input type="file" accept="video/*" className="hidden" onChange={handleVideoSelect} disabled={isSubmitting} />
                 </label>
               </div>
             )}
@@ -352,6 +430,65 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
               />
             )}
 
+            {/* Video / Shorts composer */}
+            {videoFile && videoPreviewUrl && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mt-4 overflow-hidden rounded-2xl border border-cyan-300/20 bg-cyan-300/[0.04]"
+              >
+                <div className="relative aspect-video bg-black">
+                  <video src={videoPreviewUrl} controls className="h-full w-full object-contain" />
+                  <button
+                    type="button"
+                    onClick={clearVideo}
+                    className="absolute right-3 top-3 rounded-full bg-black/70 p-2 text-white hover:bg-red-500"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                  <div className="absolute left-3 top-3 rounded-full bg-black/70 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-cyan-100">
+                    {isShort ? 'Short' : 'Full Video'} · {videoDuration ? `${Math.round(videoDuration)}s` : 'metadata'}
+                  </div>
+                </div>
+                <div className="space-y-3 p-4">
+                  <input
+                    value={videoTitle}
+                    onChange={(e) => setVideoTitle(e.target.value)}
+                    placeholder="Video title"
+                    className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-xs font-bold text-white outline-none focus:border-cyan-300"
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <select
+                      value={videoCategory}
+                      onChange={(e) => setVideoCategory(e.target.value)}
+                      className="rounded-xl border border-white/10 bg-black/80 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-white outline-none focus:border-cyan-300"
+                    >
+                      {['Coding','Tutorials','Code Battles','Gaming','Music','Art','Reactions','Q&A','Creative','Other'].map((cat) => (
+                        <option key={cat} value={cat}>{cat}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => setIsShort((value) => !value)}
+                      className={cn(
+                        'inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2 text-[10px] font-black uppercase tracking-widest transition',
+                        isShort ? 'border-pink-400/40 bg-pink-500/15 text-pink-100' : 'border-white/10 bg-white/5 text-zinc-400'
+                      )}
+                    >
+                      <Clapperboard className="h-3.5 w-3.5" />
+                      {isShort ? 'Shorts Mode' : 'Full Video'}
+                    </button>
+                  </div>
+                  <input
+                    value={videoThumbnailUrl}
+                    onChange={(e) => setVideoThumbnailUrl(e.target.value)}
+                    placeholder="Thumbnail URL (optional)"
+                    className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-xs text-white outline-none focus:border-cyan-300"
+                  />
+                </div>
+              </motion.div>
+            )}
+
             {/* Error message */}
             {error && (
               <motion.div
@@ -372,10 +509,16 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
           <div className="px-6 py-5 border-t border-white/5 flex items-center justify-between bg-black/20">
             {/* Image upload for fallback mode */}
             {useFallback && (
-              <label className="p-2 rounded-xl hover:bg-white/10 transition-colors text-zinc-500 cursor-pointer border border-white/5">
-                <ImageIcon className="w-4 h-4" />
-                <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} disabled={isSubmitting} />
-              </label>
+              <div className="flex items-center gap-2">
+                <label className="p-2 rounded-xl hover:bg-white/10 transition-colors text-zinc-500 cursor-pointer border border-white/5" title="Add image">
+                  <ImageIcon className="w-4 h-4" />
+                  <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} disabled={isSubmitting} />
+                </label>
+                <label className="p-2 rounded-xl hover:bg-white/10 transition-colors text-cyan-400 cursor-pointer border border-cyan-300/20" title="Add video or short">
+                  <Video className="w-4 h-4" />
+                  <input type="file" accept="video/*" className="hidden" onChange={handleVideoSelect} disabled={isSubmitting} />
+                </label>
+              </div>
             )}
             {!useFallback && <div />}
 

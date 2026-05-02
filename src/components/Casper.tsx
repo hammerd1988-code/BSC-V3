@@ -328,6 +328,13 @@ export const Casper: React.FC = () => {
 
           <div className="flex items-center gap-2">
             <button
+              onClick={() => navigate('/casper/studio')}
+              className="hidden sm:inline-flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-2.5 text-[9px] font-black uppercase tracking-widest text-cyan-200 transition-all hover:bg-cyan-500/20 hover:text-white"
+            >
+              <BrainCircuit className="w-4 h-4" />
+              Studio
+            </button>
+            <button
               onClick={() => setShowAiCore(!showAiCore)}
               className={cn(
                 "p-2.5 rounded-xl border transition-all",

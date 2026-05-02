@@ -10,6 +10,7 @@ import {
   Database,
   Eye,
   Ghost,
+  GitBranch,
   Loader2,
   Moon,
   Plus,
@@ -17,6 +18,7 @@ import {
   Radio,
   Shield,
   Sparkles,
+  Square,
   Trash2,
   Zap,
 } from 'lucide-react';
@@ -74,6 +76,18 @@ interface CasperActivityRow {
   created_at: string;
 }
 
+interface CasperSubagentRow {
+  id: string;
+  parent_task_id: string;
+  user_id: string;
+  objective: string;
+  status: 'queued' | 'working' | 'completed' | 'failed';
+  result: string | null;
+  created_at: string;
+  completed_at: string | null;
+  user?: { username?: string | null; display_name?: string | null; avatar_url?: string | null } | null;
+}
+
 type ScheduleConfig = {
   posting_frequency_hours: number;
   quiet_hours: { start: string; end: string };
@@ -128,6 +142,13 @@ const statusStyles: Record<CasperTaskRow['status'], string> = {
   running: 'text-yellow-200',
   completed: 'text-green-200',
   failed: 'text-red-200',
+};
+
+const subagentStatusStyles: Record<CasperSubagentRow['status'], string> = {
+  queued: 'border-zinc-500/30 bg-zinc-500/10 text-zinc-300',
+  working: 'border-cyan-300/35 bg-cyan-300/10 text-cyan-100',
+  completed: 'border-green-300/35 bg-green-400/10 text-green-100',
+  failed: 'border-red-300/35 bg-red-500/10 text-red-100',
 };
 
 function formatTime(value?: string | null) {
@@ -199,6 +220,7 @@ export const CasperDashboard: React.FC = () => {
   const [tasks, setTasks] = useState<CasperTaskRow[]>([]);
   const [memories, setMemories] = useState<CasperMemoryRow[]>([]);
   const [activities, setActivities] = useState<CasperActivityRow[]>([]);
+  const [subagents, setSubagents] = useState<CasperSubagentRow[]>([]);
   const [config, setConfig] = useState<ScheduleConfig>(DEFAULT_CONFIG);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -210,11 +232,12 @@ export const CasperDashboard: React.FC = () => {
   const fetchDashboard = useCallback(async () => {
     try {
       setLoading(true);
-      const [stateRes, memoriesRes, tasksRes, activitiesRes, configRes] = await Promise.all([
+      const [stateRes, memoriesRes, tasksRes, activitiesRes, subagentsRes, configRes] = await Promise.all([
         supabase.from('casper_state').select('*').eq('id', 1).maybeSingle(),
         supabase.from('casper_memories').select('*').order('importance', { ascending: false }).order('created_at', { ascending: false }).limit(80),
         supabase.from('casper_tasks').select('*').order('created_at', { ascending: false }).limit(40),
         supabase.from('casper_activity_log').select('*').order('created_at', { ascending: false }).limit(40),
+        supabase.from('casper_subagents').select('*, user:users(username, display_name, avatar_url)').order('created_at', { ascending: false }).limit(80),
         supabase.from('casper_config').select('*').eq('key', 'schedule').maybeSingle(),
       ]);
 
@@ -222,6 +245,7 @@ export const CasperDashboard: React.FC = () => {
       if (memoriesRes.data) setMemories(memoriesRes.data as CasperMemoryRow[]);
       if (tasksRes.data) setTasks(tasksRes.data as CasperTaskRow[]);
       if (activitiesRes.data) setActivities(activitiesRes.data as CasperActivityRow[]);
+      if (subagentsRes.data) setSubagents(subagentsRes.data as CasperSubagentRow[]);
       if (configRes.data?.value) setConfig({ ...DEFAULT_CONFIG, ...(configRes.data.value as Partial<ScheduleConfig>) });
     } catch (error: any) {
       console.warn('[CasperDashboard] Load failed:', error);
@@ -240,6 +264,7 @@ export const CasperDashboard: React.FC = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'casper_memories' }, () => void fetchDashboard())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'casper_tasks' }, () => void fetchDashboard())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'casper_activity_log' }, () => void fetchDashboard())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'casper_subagents' }, () => void fetchDashboard())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'casper_config' }, () => void fetchDashboard())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
@@ -312,6 +337,17 @@ export const CasperDashboard: React.FC = () => {
   const deleteMemory = async (id: string) => {
     const { error } = await supabase.from('casper_memories').delete().eq('id', id);
     if (!error) setMemories(prev => prev.filter(memory => memory.id !== id));
+  };
+
+  const cancelSubagent = async (agent: CasperSubagentRow) => {
+    const { error } = await supabase.from('casper_subagents').update({
+      status: 'failed',
+      result: 'Cancelled from GhostOps admin dashboard.',
+      completed_at: new Date().toISOString(),
+    }).eq('id', agent.id);
+    if (error) setNotice(error.message || 'Failed to cancel sub-agent.');
+    else setNotice(`Cancelled sub-agent ${agent.id.slice(0, 8)}.`);
+    await fetchDashboard();
   };
 
   if (currentUser?.role !== 'admin') {
@@ -405,6 +441,48 @@ export const CasperDashboard: React.FC = () => {
                 </div>
               </GlassPanel>
             </div>
+
+            <GlassPanel>
+              <div className="mb-5 flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.3em] text-cyan-300">GhostOps Parallelism</p>
+                  <h2 className="text-2xl font-black uppercase tracking-[0.12em]">Sub-Agent Tree</h2>
+                </div>
+                <GitBranch className="h-6 w-6 text-cyan-200" />
+              </div>
+              {subagents.length === 0 ? (
+                <div className="rounded-3xl border border-dashed border-white/10 bg-black/35 p-8 text-center">
+                  <Ghost className="mx-auto mb-3 h-10 w-10 text-zinc-700" />
+                  <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">No user-facing sub-agents have reported in yet.</p>
+                </div>
+              ) : (
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {subagents.map((agent) => (
+                    <motion.div key={agent.id} layout className="rounded-3xl border border-white/10 bg-black/35 p-4">
+                      <div className="mb-3 flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="mb-2 flex flex-wrap items-center gap-2">
+                            <span className={cn('rounded-full border px-3 py-1 text-[8px] font-black uppercase tracking-widest', subagentStatusStyles[agent.status])}>{agent.status}</span>
+                            <span className="font-mono text-[8px] uppercase tracking-widest text-zinc-600">{agent.id.slice(0, 8)}</span>
+                          </div>
+                          <p className="truncate text-[10px] font-black uppercase tracking-widest text-cyan-100">@{agent.user?.username || agent.user_id.slice(0, 8)}</p>
+                        </div>
+                        {(agent.status === 'queued' || agent.status === 'working') && (
+                          <button onClick={() => void cancelSubagent(agent)} className="rounded-xl border border-red-400/30 bg-red-500/10 p-2 text-red-200 hover:bg-red-500/20" title="Cancel sub-agent">
+                            <Square className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-xs font-bold leading-5 text-zinc-200">{agent.objective}</p>
+                      <div className="mt-3 border-t border-white/5 pt-3">
+                        <p className="font-mono text-[9px] uppercase tracking-widest text-zinc-600">Parent {agent.parent_task_id.slice(0, 8)}</p>
+                        {agent.result && <p className="mt-2 line-clamp-3 rounded-xl border border-green-400/10 bg-green-400/[0.04] p-3 text-xs leading-5 text-green-100">{agent.result}</p>}
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+            </GlassPanel>
 
             <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
               <GlassPanel>

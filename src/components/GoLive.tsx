@@ -1,1082 +1,678 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { 
-  Camera, 
-  Mic, 
-  MicOff, 
-  Video, 
-  VideoOff, 
-  X, 
-  Send, 
-  Users, 
-  MessageCircle, 
-  Radio, 
-  Loader2,
-  Heart,
-  Zap,
-  Shield,
-  Bot,
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import {
   ArrowLeft,
+  Bell,
+  BellOff,
+  Camera,
+  Clapperboard,
   Eye,
-  BarChart2,
-  Gift,
-  Coins,
+  Image as ImageIcon,
+  Loader2,
+  MessageCircle,
+  Mic,
+  MicOff,
+  MonitorUp,
+  Play,
+  Radio,
+  Search,
+  Send,
   Share2,
-  Copy,
-  Facebook,
-  Twitter,
-  Youtube,
-  Phone,
-  CheckCircle2,
-  MoreHorizontal
+  Sparkles,
+  Square,
+  Tv,
+  Users,
+  Video,
+  VideoOff,
+  X,
+  Zap,
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
-import { handleDbError } from '../lib/errors';
 import { cn } from '../lib/utils';
+import { handleDbError } from '../lib/errors';
+
+const STREAM_CATEGORIES = ['Coding', 'Tutorials', 'Code Battles', 'Gaming', 'Music', 'Art', 'Reactions', 'Q&A', 'Creative', 'Other'] as const;
+type StreamCategory = typeof STREAM_CATEGORIES[number];
+type StreamStatus = 'live' | 'ended';
+
+interface StreamRow {
+  id: string;
+  user_id?: string | null;
+  host_id?: string | null;
+  host_display_name?: string | null;
+  host_username?: string | null;
+  host_avatar?: string | null;
+  title?: string | null;
+  category?: StreamCategory | string | null;
+  status?: StreamStatus | string | null;
+  is_live?: boolean | null;
+  thumbnail_url?: string | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+  crowd_size?: number | null;
+  viewer_count?: number | null;
+  replay_url?: string | null;
+  description?: string | null;
+}
+
+interface ChatRow {
+  id: string;
+  stream_id: string;
+  user_id?: string | null;
+  sender_id?: string | null;
+  sender_name?: string | null;
+  message?: string | null;
+  text?: string | null;
+  created_at: string;
+}
+
+const REACTIONS = [
+  { key: 'fire', label: '🔥' },
+  { key: 'skull', label: '☠' },
+  { key: '100', label: '100' },
+  { key: 'clap', label: '👏' },
+  { key: 'zap', label: '⚡' },
+  { key: 'heart', label: '❤' },
+] as const;
+
+const normalizeStream = (row: any): StreamRow => ({
+  ...row,
+  user_id: row?.user_id ?? row?.host_id,
+  host_id: row?.host_id ?? row?.user_id,
+  status: row?.status ?? (row?.is_live ? 'live' : 'ended'),
+  is_live: row?.is_live ?? row?.status === 'live',
+  viewer_count: row?.viewer_count ?? row?.crowd_size ?? 0,
+  crowd_size: row?.crowd_size ?? row?.viewer_count ?? 0,
+  category: row?.category ?? 'Other',
+});
+
+const formatDuration = (stream: StreamRow) => {
+  const start = stream.started_at ? new Date(stream.started_at).getTime() : Date.now();
+  const end = stream.ended_at ? new Date(stream.ended_at).getTime() : Date.now();
+  const minutes = Math.max(1, Math.round((end - start) / 60000));
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+};
+
+const StreamCard: React.FC<{ stream: StreamRow; onOpen: (id: string) => void }> = ({ stream, onOpen }) => {
+  const isLive = stream.status === 'live' || stream.is_live;
+  return (
+    <motion.button
+      type="button"
+      whileHover={{ y: -4, scale: 1.01 }}
+      whileTap={{ scale: 0.98 }}
+      onClick={() => onOpen(stream.id)}
+      className="group relative overflow-hidden rounded-[2rem] border border-white/10 bg-zinc-950/80 text-left shadow-[0_0_36px_rgba(0,229,255,0.08)] transition hover:border-cyan-300/40"
+    >
+      <div className="aspect-video bg-black relative overflow-hidden">
+        {stream.thumbnail_url ? (
+          <img src={stream.thumbnail_url} alt="Stream thumbnail" className="h-full w-full object-cover transition duration-700 group-hover:scale-105" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(circle_at_30%_20%,rgba(255,0,80,0.25),transparent_35%),radial-gradient(circle_at_70%_80%,rgba(0,229,255,0.18),transparent_35%)]">
+            <Tv className="h-14 w-14 text-white/20" />
+          </div>
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/10 to-transparent" />
+        <div className="absolute left-4 top-4 flex items-center gap-2">
+          <span className={cn('inline-flex items-center gap-2 rounded-full px-3 py-1 text-[9px] font-black uppercase tracking-widest', isLive ? 'bg-red-500 text-white shadow-[0_0_18px_rgba(239,68,68,0.45)]' : 'bg-white/10 text-zinc-200')}>
+            {isLive && <span className="h-2 w-2 animate-pulse rounded-full bg-white" />}
+            {isLive ? 'Live' : 'Replay'}
+          </span>
+          <span className="rounded-full border border-cyan-300/20 bg-black/60 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-cyan-100">
+            {stream.category || 'Other'}
+          </span>
+        </div>
+        <div className="absolute bottom-4 left-4 right-4 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="truncate text-sm font-black uppercase tracking-wide text-white">{stream.title || 'Untitled Transmission'}</h3>
+            <p className="mt-1 truncate text-[10px] font-bold uppercase tracking-widest text-zinc-400">@{stream.host_username || 'creator'}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1 rounded-full bg-black/70 px-3 py-1 text-[10px] font-black text-white">
+            <Eye className="h-3.5 w-3.5 text-cyan-300" />
+            {isLive ? stream.viewer_count || 0 : formatDuration(stream)}
+          </div>
+        </div>
+      </div>
+    </motion.button>
+  );
+};
 
 export const GoLive: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const viewerStreamId = searchParams.get('streamId');
-  const isViewer = !!viewerStreamId;
-
   const { currentUser } = useAuth();
-  const [isLive, setIsLive] = useState(false);
-  const [streamTitle, setStreamTitle] = useState('');
-  const [isCameraOn, setIsCameraOn] = useState(true);
-  const [isMicOn, setIsMicOn] = useState(true);
-  const [crowdSize, setCrowdSize] = useState(0);
-  const [messages, setMessages] = useState<any[]>([]);
-  const [newMessage, setNewMessage] = useState('');
+
   const [streamId, setStreamId] = useState<string | null>(viewerStreamId);
-  const [isLoading, setIsLoading] = useState(false);
-  const [streamData, setStreamData] = useState<any>(null);
+  const [streamData, setStreamData] = useState<StreamRow | null>(null);
+  const [activeStreams, setActiveStreams] = useState<StreamRow[]>([]);
+  const [replays, setReplays] = useState<StreamRow[]>([]);
+  const [messages, setMessages] = useState<ChatRow[]>([]);
+  const [reactions, setReactions] = useState<Record<string, number>>({});
+  const [followed, setFollowed] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState<'All' | StreamCategory>('All');
+
+  const [title, setTitle] = useState('');
+  const [category, setCategory] = useState<StreamCategory>('Coding');
+  const [thumbnailUrl, setThumbnailUrl] = useState('');
+  const [description, setDescription] = useState('');
+  const [chatText, setChatText] = useState('');
+  const [isStarting, setIsStarting] = useState(false);
+  const [isLive, setIsLive] = useState(false);
   const [hasEnded, setHasEnded] = useState(false);
-  
-  // Interactive Features State
-  const [recentEvents, setRecentEvents] = useState<any[]>([]);
-  const [showPollModal, setShowPollModal] = useState(false);
-  const [pollQuestion, setPollQuestion] = useState('');
-  const [pollOption1, setPollOption1] = useState('');
-  const [pollOption2, setPollOption2] = useState('');
-  const [votedPolls, setVotedPolls] = useState<Set<string>>(new Set());
-  const [showDonateModal, setShowDonateModal] = useState(false);
-  const [donationAmount, setDonationAmount] = useState('10');
-  const [donationMessage, setDonationMessage] = useState('');
-  const [showShareModal, setShowShareModal] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [cameraOn, setCameraOn] = useState(true);
+  const [micOn, setMicOn] = useState(true);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const isViewer = !!viewerStreamId && !isLive;
+  const activeStreamId = streamId || viewerStreamId;
+
+  const filteredStreams = useMemo(() => {
+    const query = searchTerm.trim().toLowerCase();
+    return activeStreams.filter((stream) => {
+      const matchesCategory = categoryFilter === 'All' || stream.category === categoryFilter;
+      const haystack = `${stream.title ?? ''} ${stream.host_username ?? ''} ${stream.category ?? ''}`.toLowerCase();
+      return matchesCategory && (!query || haystack.includes(query));
+    });
+  }, [activeStreams, categoryFilter, searchTerm]);
 
   useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages]);
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages.length]);
 
-  const normalizeStreamData = (data: any) => {
-    if (!data) return null;
-    return {
-      ...data,
-      hostUsername: data.host_username,
-      hostDisplayName: data.host_display_name,
-      hostAvatar: data.host_avatar,
-      activePoll: data.active_poll,
-      isLive: data.is_live,
-      crowdSize: data.crowd_size,
-    };
+  const fetchDirectory = async () => {
+    const { data: liveData, error: liveError } = await supabase
+      .from('streams')
+      .select('*')
+      .eq('status', 'live')
+      .order('started_at', { ascending: false })
+      .limit(24);
+    if (liveError) handleDbError(liveError, 'LIST', 'streams/live');
+    setActiveStreams((liveData ?? []).map(normalizeStream));
+
+    const { data: replayData, error: replayError } = await supabase
+      .from('streams')
+      .select('*')
+      .eq('status', 'ended')
+      .order('ended_at', { ascending: false })
+      .limit(12);
+    if (replayError) handleDbError(replayError, 'LIST', 'streams/replays');
+    setReplays((replayData ?? []).map(normalizeStream));
   };
 
-  const startMedia = async () => {
-    if (isViewer) return;
+  useEffect(() => {
+    void fetchDirectory();
+    const channel = supabase
+      .channel('universal-stream-directory')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'streams' }, () => void fetchDirectory())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, []);
+
+  const attachLocalStream = (media: MediaStream) => {
+    streamRef.current = media;
+    if (videoRef.current) {
+      videoRef.current.srcObject = media;
+      videoRef.current.play().catch(() => undefined);
+    }
+    setCameraOn(media.getVideoTracks().some((track) => track.enabled));
+    setMicOn(media.getAudioTracks().some((track) => track.enabled));
+  };
+
+  const startMedia = async (source: 'camera' | 'screen' = 'camera') => {
+    if (!currentUser) return;
+    stopMedia();
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { width: 1280, height: 720 }, 
-        audio: true 
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(e => console.error("Video play failed:", e));
-      }
-    } catch (error) {
-      console.error('Media Error:', error);
-      // Fallback to audio only if camera fails
+      const media = source === 'screen'
+        ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+        : await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: true });
+      attachLocalStream(media);
+    } catch (err) {
+      console.error('[GoLive] Media capture failed:', err);
       try {
-        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        streamRef.current = audioStream;
-        setIsCameraOn(false);
-      } catch (audioError) {
-        console.error('Audio also failed:', audioError);
-        alert('Could not access camera or microphone. Please check permissions.');
+        const audioOnly = await navigator.mediaDevices.getUserMedia({ audio: true });
+        attachLocalStream(audioOnly);
+        setCameraOn(false);
+      } catch (audioErr) {
+        console.error('[GoLive] Audio capture failed:', audioErr);
       }
     }
   };
 
   const stopMedia = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-    }
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
   };
 
-  useEffect(() => {
-    if (isViewer && viewerStreamId) {
-      // Increment crowd size
-      supabase.rpc('increment_counter', { p_table: 'streams', p_id: viewerStreamId, p_field: 'crowd_size', p_amount: 1 }).then();
+  useEffect(() => () => stopMedia(), []);
 
-      const fetchStream = async () => {
-        const { data } = await supabase.from('streams').select('*').eq('id', viewerStreamId).maybeSingle();
-        const normalized = normalizeStreamData(data);
-        if (normalized) {
-          setStreamData(normalized);
-          setStreamTitle(normalized.title);
-          setCrowdSize(normalized.crowdSize ?? 0);
-          setIsLive(!!normalized.isLive);
-          if (!normalized.isLive) setHasEnded(true);
-        } else {
-          setHasEnded(true);
-        }
-      };
-
-      fetchStream();
-
-      const streamChannel = supabase.channel(`stream-viewer-${viewerStreamId}`)
-        .on('postgres_changes', { 
-          event: 'UPDATE', 
-          schema: 'public', 
-          table: 'streams', 
-          filter: `id=eq.${viewerStreamId}` 
-        }, ({ new: data }) => {
-          const normalized = normalizeStreamData(data);
-          setStreamData(normalized);
-          setStreamTitle(normalized?.title ?? '');
-          setCrowdSize(normalized?.crowdSize ?? 0);
-          setIsLive(!!normalized?.isLive);
-          if (normalized && !normalized.isLive) setHasEnded(true);
-        })
-        .subscribe();
-
-      return () => {
-        supabase.rpc('increment_counter', { p_table: 'streams', p_id: viewerStreamId, p_field: 'crowd_size', p_amount: -1 }).then();
-        supabase.removeChannel(streamChannel);
-      };
-    }
-
-    startMedia();
-    return () => stopMedia();
-  }, [isViewer, viewerStreamId]);
+  const fetchStreamBundle = async (id: string) => {
+    const { data, error } = await supabase.from('streams').select('*').eq('id', id).maybeSingle();
+    if (error) handleDbError(error, 'READ', `streams/${id}`);
+    const normalized = normalizeStream(data);
+    setStreamData(normalized);
+    setTitle(normalized?.title ?? '');
+    setCategory((normalized?.category as StreamCategory) || 'Other');
+    setThumbnailUrl(normalized?.thumbnail_url ?? '');
+    setDescription(normalized?.description ?? '');
+    setIsLive(normalized?.status === 'live' && normalized?.host_id === currentUser?.id && !viewerStreamId);
+    setHasEnded(normalized?.status === 'ended');
+  };
 
   useEffect(() => {
-    if (!streamId) return;
-
-    const fetchMessages = async () => {
-      const { data, error } = await supabase
-        .from('stream_chat')
-        .select('*')
-        .eq('stream_id', streamId)
-        .order('created_at', { ascending: true })
-        .limit(100);
-
-      if (error) {
-        handleDbError(error, 'LIST', `stream_chat/${streamId}`);
-        return;
-      }
-
-      const normalized = (data ?? []).map((msg: any) => ({
-        ...msg,
-        content: msg.text,
-        senderName: msg.sender_name,
-        isDonation: (msg.text ?? '').startsWith('\u{1F48E}'),
-      }));
-      setMessages(normalized);
-    };
-
-    fetchMessages();
-
-    const chatChannel = supabase.channel(`stream-chat-${streamId}`)
-      .on('postgres_changes', { 
-        event: 'INSERT', 
-        schema: 'public', 
-        table: 'stream_chat', 
-        filter: `stream_id=eq.${streamId}` 
-      }, () => {
-        fetchMessages();
+    if (!activeStreamId) return;
+    void fetchStreamBundle(activeStreamId);
+    const streamChannel = supabase
+      .channel(`universal-stream-${activeStreamId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'streams', filter: `id=eq.${activeStreamId}` }, ({ new: row }) => {
+        const normalized = normalizeStream(row);
+        setStreamData(normalized);
+        setHasEnded(normalized.status === 'ended');
       })
       .subscribe();
+    return () => { supabase.removeChannel(streamChannel); };
+  }, [activeStreamId, currentUser?.id, viewerStreamId]);
 
-    return () => { supabase.removeChannel(chatChannel); };
-  }, [streamId]);
-
-  // Handle host reconnection
   useEffect(() => {
-    if (currentUser?.is_live && currentUser.active_stream_id && !isViewer && !isLive) {
-      setStreamId(currentUser.active_stream_id);
-      setIsLive(true);
-      supabase.from('streams').select('*').eq('id', currentUser.active_stream_id).maybeSingle().then(({ data }) => {
-        const normalized = normalizeStreamData(data);
-        if (normalized) {
-          setStreamTitle(normalized.title);
-          setStreamData(normalized);
-        }
-      });
-    }
-  }, [currentUser, isViewer, isLive]);
+    if (!viewerStreamId) return;
+    void supabase.rpc('increment_counter', { p_table: 'streams', p_id: viewerStreamId, p_field: 'viewer_count', p_amount: 1 });
+    void supabase.rpc('increment_counter', { p_table: 'streams', p_id: viewerStreamId, p_field: 'crowd_size', p_amount: 1 });
+    return () => {
+      void supabase.rpc('increment_counter', { p_table: 'streams', p_id: viewerStreamId, p_field: 'viewer_count', p_amount: -1 });
+      void supabase.rpc('increment_counter', { p_table: 'streams', p_id: viewerStreamId, p_field: 'crowd_size', p_amount: -1 });
+    };
+  }, [viewerStreamId]);
 
-  const toggleCamera = () => {
-    if (streamRef.current) {
-      const videoTrack = streamRef.current.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.enabled = !videoTrack.enabled;
-        setIsCameraOn(videoTrack.enabled);
-      }
-    }
+  const fetchMessages = async () => {
+    if (!activeStreamId) return;
+    const { data, error } = await supabase
+      .from('stream_chat')
+      .select('*')
+      .eq('stream_id', activeStreamId)
+      .order('created_at', { ascending: true })
+      .limit(150);
+    if (error) handleDbError(error, 'LIST', `stream_chat/${activeStreamId}`);
+    setMessages((data ?? []) as ChatRow[]);
   };
 
-  const toggleMic = () => {
-    if (streamRef.current) {
-      const audioTrack = streamRef.current.getAudioTracks()[0];
-      if (audioTrack) {
-        audioTrack.enabled = !audioTrack.enabled;
-        setIsMicOn(audioTrack.enabled);
-      }
+  const fetchReactions = async () => {
+    if (!activeStreamId) return;
+    const { data, error } = await supabase
+      .from('stream_reactions')
+      .select('reaction_type')
+      .eq('stream_id', activeStreamId);
+    if (error) {
+      handleDbError(error, 'LIST', `stream_reactions/${activeStreamId}`);
+      return;
     }
+    const next: Record<string, number> = {};
+    (data ?? []).forEach((row: any) => {
+      next[row.reaction_type] = (next[row.reaction_type] ?? 0) + 1;
+    });
+    setReactions(next);
   };
 
-  const handleStartStream = async () => {
-    if (!streamTitle.trim() || !currentUser) return;
-    setIsLoading(true);
+  useEffect(() => {
+    if (!activeStreamId) return;
+    void fetchMessages();
+    void fetchReactions();
+    const channel = supabase
+      .channel(`universal-stream-chat-reactions-${activeStreamId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'stream_chat', filter: `stream_id=eq.${activeStreamId}` }, () => void fetchMessages())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'stream_reactions', filter: `stream_id=eq.${activeStreamId}` }, () => void fetchReactions())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [activeStreamId]);
+
+  useEffect(() => {
+    const streamerId = streamData?.user_id || streamData?.host_id;
+    if (!currentUser || !streamerId || currentUser.id === streamerId) {
+      setFollowed(false);
+      return;
+    }
+    supabase
+      .from('stream_followers')
+      .select('id')
+      .eq('streamer_id', streamerId)
+      .eq('follower_id', currentUser.id)
+      .maybeSingle()
+      .then(({ data }) => setFollowed(!!data));
+  }, [currentUser?.id, streamData?.user_id, streamData?.host_id]);
+
+  const handleStartStream = async (source: 'camera' | 'screen' = 'camera') => {
+    if (!currentUser || !title.trim()) return;
+    setIsStarting(true);
     try {
-      const { data, error } = await supabase.from('streams').insert({
+      await startMedia(source);
+      const payload = {
+        user_id: currentUser.id,
         host_id: currentUser.id,
         host_display_name: currentUser.display_name,
         host_username: currentUser.username,
         host_avatar: currentUser.avatar_url,
-        title: streamTitle,
+        title: title.trim(),
+        description: description.trim() || null,
+        category,
+        thumbnail_url: thumbnailUrl.trim() || null,
+        status: 'live',
         is_live: true,
+        viewer_count: 0,
         crowd_size: 0,
         started_at: new Date().toISOString(),
-      }).select().single();
-
+      };
+      const { data, error } = await supabase.from('streams').insert(payload).select().single();
       if (error) throw error;
-
-      setStreamId(data.id);
+      const normalized = normalizeStream(data);
+      setStreamId(normalized.id);
+      setStreamData(normalized);
       setIsLive(true);
-      setStreamData(normalizeStreamData(data));
-      await supabase.from('users').update({ is_live: true, active_stream_id: data.id }).eq('id', currentUser.id);
-    } catch (error) {
-      handleDbError(error, 'CREATE', 'streams');
+      setHasEnded(false);
+      await supabase.from('users').update({ is_live: true, active_stream_id: normalized.id }).eq('id', currentUser.id);
+      navigate(`/golive?streamId=${normalized.id}`, { replace: true });
+    } catch (err) {
+      handleDbError(err, 'CREATE', 'streams');
     } finally {
-      setIsLoading(false);
+      setIsStarting(false);
     }
   };
 
   const handleEndStream = async () => {
-    if (!streamId || !currentUser) return;
+    if (!activeStreamId || !currentUser) return;
     try {
-      await supabase.from('streams').update({ is_live: false, ended_at: new Date().toISOString() }).eq('id', streamId);
+      await supabase.from('streams').update({ status: 'ended', is_live: false, ended_at: new Date().toISOString() }).eq('id', activeStreamId);
       await supabase.from('users').update({ is_live: false, active_stream_id: null }).eq('id', currentUser.id);
-
       setIsLive(false);
-      setStreamId(null);
       setHasEnded(true);
       stopMedia();
-    } catch (error) {
-      handleDbError(error, 'UPDATE', `streams/${streamId}`);
+    } catch (err) {
+      handleDbError(err, 'UPDATE', `streams/${activeStreamId}`);
     }
   };
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newMessage.trim() || !currentUser || !streamId) return;
-
+  const handleSendMessage = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!currentUser || !activeStreamId || !chatText.trim()) return;
     try {
       const { error } = await supabase.from('stream_chat').insert({
-        stream_id: streamId,
+        stream_id: activeStreamId,
+        user_id: currentUser.id,
         sender_id: currentUser.id,
-        sender_name: currentUser.display_name,
-        text: newMessage,
+        sender_name: currentUser.display_name || currentUser.username,
+        message: chatText.trim(),
+        text: chatText.trim(),
       });
-
       if (error) throw error;
-      setNewMessage('');
-    } catch (error) {
-      handleDbError(error, 'CREATE', `stream_chat/${streamId}`);
+      setChatText('');
+    } catch (err) {
+      handleDbError(err, 'CREATE', `stream_chat/${activeStreamId}`);
     }
   };
 
-  const handleDonate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const amount = parseInt(donationAmount, 10);
-    if (!amount || amount <= 0 || !currentUser || !streamId || !streamData) return;
-    if ((currentUser.cred_balance || 0) < amount) {
-      alert('Insufficient CRED');
-      return;
-    }
-
-    try {
-      await Promise.all([
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'cred_balance', p_amount: -amount }),
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: streamData.host_id, p_field: 'cred_balance', p_amount: amount }),
-        supabase.from('transactions').insert([
-          { user_id: currentUser.id, amount, type: 'spend', description: `Donated to ${streamData.host_username}'s stream`, created_at: new Date().toISOString() },
-          { user_id: streamData.host_id, amount, type: 'earn', description: `Donation from ${currentUser.username}`, created_at: new Date().toISOString() },
-        ]),
-        supabase.from('stream_chat').insert({
-          stream_id: streamId,
-          sender_id: currentUser.id,
-          sender_name: currentUser.display_name,
-          text: `💎 ${amount} CRED: ${donationMessage || 'Sent a donation!'}`,
-        })
-      ]);
-
-      setShowDonateModal(false);
-      setDonationMessage('');
-    } catch (error) {
-      handleDbError(error, 'CREATE', 'donations');
-    }
+  const handleReaction = async (reactionType: string) => {
+    if (!currentUser || !activeStreamId) return;
+    setReactions((prev) => ({ ...prev, [reactionType]: (prev[reactionType] ?? 0) + 1 }));
+    const { error } = await supabase.from('stream_reactions').insert({
+      stream_id: activeStreamId,
+      user_id: currentUser.id,
+      reaction_type: reactionType,
+    });
+    if (error) handleDbError(error, 'CREATE', `stream_reactions/${activeStreamId}`);
   };
 
-  const handleCreatePoll = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!pollQuestion.trim() || !pollOption1.trim() || !pollOption2.trim() || !streamId) return;
-
-    try {
-      const activePoll = {
-        id: Date.now().toString(),
-        question: pollQuestion,
-        options: {
-          [pollOption1]: 0,
-          [pollOption2]: 0,
-        },
-        totalVotes: 0,
-      };
-
-      const { error } = await supabase.from('streams').update({ active_poll: activePoll }).eq('id', streamId);
-      if (error) throw error;
-
-      setShowPollModal(false);
-      setPollQuestion('');
-      setPollOption1('');
-      setPollOption2('');
-    } catch (error) {
-      handleDbError(error, 'UPDATE', `streams/${streamId}`);
-    }
-  };
-
-  const handleVote = async (option: string) => {
-    const poll = streamData?.active_poll;
-    if (!streamId || !poll || votedPolls.has(poll.id)) return;
-
-    try {
-      setVotedPolls(prev => new Set(prev).add(poll.id));
-      const updatedPoll = {
-        ...poll,
-        options: {
-          ...poll.options,
-          [option]: (poll.options?.[option] || 0) + 1,
-        },
-        totalVotes: (poll.totalVotes || 0) + 1,
-      };
-
-      const { error } = await supabase.from('streams').update({ active_poll: updatedPoll }).eq('id', streamId);
-      if (error) throw error;
-    } catch (error) {
-      handleDbError(error, 'UPDATE', `streams/${streamId}`);
-    }
-  };
-
-  const handleEndPoll = async () => {
-    if (!streamId) return;
-    try {
-      const { error } = await supabase.from('streams').update({ active_poll: null }).eq('id', streamId);
-      if (error) throw error;
-    } catch (error) {
-      handleDbError(error, 'UPDATE', `streams/${streamId}`);
-    }
-  };
-
-  const getStreamUrl = () => {
-    const id = streamId || viewerStreamId;
-    return `${window.location.origin}/golive?streamId=${id}`;
-  };
-
-  const handleCopyLink = () => {
-    navigator.clipboard.writeText(getStreamUrl());
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const shareOnTwitter = () => {
-    const text = `Join my neural link stream on Blood Sweat Code! ${streamTitle}`;
-    window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(getStreamUrl())}`, '_blank');
-  };
-
-  const shareOnFacebook = () => {
-    window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(getStreamUrl())}`, '_blank');
-  };
-
-  const shareOnWhatsApp = () => {
-    const text = `Join my live stream on Blood Sweat Code: ${getStreamUrl()}`;
-    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
-  };
-
-  const shareViaSMS = () => {
-    const text = `Join my live stream on Blood Sweat Code: ${getStreamUrl()}`;
-    window.location.href = `sms:?body=${encodeURIComponent(text)}`;
-  };
-
-  const shareOnYoutube = () => {
-    // YouTube doesn't have a direct share-to-post API for external sites, 
-    // so we open YouTube's home or a placeholder for sharing
-    window.open(`https://www.youtube.com/`, '_blank');
-  };
-
-  const handleWebShare = async () => {
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: streamTitle || 'Blood Sweat Code Live Stream',
-          text: `Join ${currentUser?.display_name}'s live stream on Blood Sweat Code!`,
-          url: getStreamUrl(),
-        });
-      } catch (err) {
-        console.error('Web Share failed:', err);
-      }
+  const toggleFollow = async () => {
+    const streamerId = streamData?.user_id || streamData?.host_id;
+    if (!currentUser || !streamerId || currentUser.id === streamerId) return;
+    if (followed) {
+      await supabase.from('stream_followers').delete().eq('streamer_id', streamerId).eq('follower_id', currentUser.id);
+      setFollowed(false);
     } else {
-      setShowShareModal(true);
+      const { error } = await supabase.from('stream_followers').insert({ streamer_id: streamerId, follower_id: currentUser.id });
+      if (error) handleDbError(error, 'CREATE', 'stream_followers');
+      setFollowed(true);
     }
   };
+
+  const copyStreamLink = async () => {
+    if (!activeStreamId) return;
+    await navigator.clipboard.writeText(`${window.location.origin}/golive?streamId=${activeStreamId}`);
+  };
+
+  const toggleTrack = (kind: 'audio' | 'video') => {
+    const track = kind === 'audio' ? streamRef.current?.getAudioTracks()[0] : streamRef.current?.getVideoTracks()[0];
+    if (!track) return;
+    track.enabled = !track.enabled;
+    if (kind === 'audio') setMicOn(track.enabled);
+    if (kind === 'video') setCameraOn(track.enabled);
+  };
+
+  if (!viewerStreamId && !currentUser) {
+    return (
+      <div className="min-h-screen bg-black px-6 py-10 text-white">
+        <div className="mx-auto flex max-w-2xl flex-col items-center justify-center rounded-[2rem] border border-white/10 bg-zinc-950/80 p-10 text-center shadow-[0_0_50px_rgba(255,0,80,0.12)]">
+          <Radio className="mb-5 h-12 w-12 text-accent" />
+          <h1 className="text-3xl font-black uppercase italic tracking-tight">Live Network Locked</h1>
+          <p className="mt-3 text-sm leading-6 text-zinc-400">Sign in to browse live creators, start a broadcast, follow streamers, and chat with the crowd.</p>
+          <button onClick={() => navigate('/')} className="mt-8 rounded-2xl bg-accent px-8 py-3 text-xs font-black uppercase tracking-widest text-white shadow-[0_0_24px_rgba(255,0,80,0.35)]">Return to Login</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!viewerStreamId && !isLive) {
+    return (
+      <div className="min-h-screen bg-black pb-28 text-white">
+        <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(255,0,80,0.16),transparent_34%),radial-gradient(circle_at_80%_10%,rgba(0,229,255,0.14),transparent_32%),linear-gradient(180deg,transparent,rgba(0,0,0,0.9))]" />
+        <div className="relative mx-auto max-w-7xl px-4 py-8 sm:px-6">
+          <header className="mb-8 flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+            <div>
+              <button onClick={() => navigate('/')} className="mb-5 inline-flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-zinc-500 hover:text-white">
+                <ArrowLeft className="h-4 w-4" /> Back to Feed
+              </button>
+              <p className="text-[10px] font-black uppercase tracking-[0.35em] text-cyan-300">Universal Live Streaming</p>
+              <h1 className="mt-2 text-4xl font-black uppercase italic tracking-tighter sm:text-6xl">Neon Broadcast Grid</h1>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400">Go live for coding, gaming, music, art, podcasts, reactions, tutorials, unboxings, Q&A, or anything else the network needs to see.</p>
+            </div>
+            <Link to="/casper/studio" className="inline-flex items-center gap-2 rounded-2xl border border-cyan-300/20 bg-cyan-300/10 px-5 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 hover:bg-cyan-300/20">
+              <Sparkles className="h-4 w-4" /> Plan with Casper
+            </Link>
+          </header>
+
+          <section className="grid gap-6 lg:grid-cols-[420px_1fr]">
+            <div className="rounded-[2rem] border border-red-400/20 bg-zinc-950/90 p-5 shadow-[0_0_40px_rgba(255,0,80,0.1)]">
+              <div className="mb-5 flex items-center gap-3">
+                <div className="rounded-2xl bg-accent/15 p-3 text-accent"><Radio className="h-5 w-5" /></div>
+                <div>
+                  <h2 className="text-sm font-black uppercase tracking-widest">Streamer Dashboard</h2>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Title, category, thumbnail, controls</p>
+                </div>
+              </div>
+              <div className="space-y-4">
+                <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Stream title" className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm font-bold text-white outline-none transition focus:border-accent" />
+                <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description or show notes" className="min-h-24 w-full resize-none rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition focus:border-accent" />
+                <select value={category} onChange={(e) => setCategory(e.target.value as StreamCategory)} className="w-full rounded-2xl border border-white/10 bg-black/80 px-4 py-3 text-xs font-black uppercase tracking-widest text-white outline-none focus:border-cyan-300">
+                  {STREAM_CATEGORIES.map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
+                <div className="relative">
+                  <ImageIcon className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                  <input value={thumbnailUrl} onChange={(e) => setThumbnailUrl(e.target.value)} placeholder="Thumbnail URL (optional)" className="w-full rounded-2xl border border-white/10 bg-black/50 py-3 pl-11 pr-4 text-sm text-white outline-none transition focus:border-cyan-300" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <button onClick={() => void handleStartStream('camera')} disabled={!title.trim() || isStarting} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-accent px-4 py-4 text-[10px] font-black uppercase tracking-widest text-white shadow-[0_0_24px_rgba(255,0,80,0.35)] transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-40">
+                    {isStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />} Camera Live
+                  </button>
+                  <button onClick={() => void handleStartStream('screen')} disabled={!title.trim() || isStarting} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-4 text-[10px] font-black uppercase tracking-widest text-cyan-100 transition hover:bg-cyan-300/20 disabled:cursor-not-allowed disabled:opacity-40">
+                    <MonitorUp className="h-4 w-4" /> Screen Share
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              <div className="rounded-[2rem] border border-white/10 bg-zinc-950/80 p-4">
+                <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <h2 className="text-sm font-black uppercase tracking-widest">Live Discovery</h2>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Find the signal worth joining</p>
+                  </div>
+                  <div className="flex flex-1 gap-2 md:max-w-md">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-600" />
+                      <input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Search streams" className="w-full rounded-xl border border-white/10 bg-black/50 py-2 pl-9 pr-3 text-xs text-white outline-none focus:border-cyan-300" />
+                    </div>
+                    <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value as 'All' | StreamCategory)} className="rounded-xl border border-white/10 bg-black px-3 py-2 text-[10px] font-black uppercase tracking-widest text-white outline-none">
+                      <option value="All">All</option>
+                      {STREAM_CATEGORIES.map((item) => <option key={item} value={item}>{item}</option>)}
+                    </select>
+                  </div>
+                </div>
+                {filteredStreams.length ? (
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {filteredStreams.map((stream) => <StreamCard key={stream.id} stream={stream} onOpen={(id) => navigate(`/golive?streamId=${id}`)} />)}
+                  </div>
+                ) : (
+                  <div className="rounded-3xl border border-dashed border-white/10 bg-black/30 p-10 text-center">
+                    <Radio className="mx-auto mb-4 h-10 w-10 text-zinc-700" />
+                    <p className="text-xs font-black uppercase tracking-widest text-zinc-500">No live signals match this filter.</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-[2rem] border border-white/10 bg-zinc-950/70 p-4">
+                <div className="mb-4 flex items-center justify-between">
+                  <h2 className="text-sm font-black uppercase tracking-widest">Replay Archive</h2>
+                  <Clapperboard className="h-5 w-5 text-zinc-500" />
+                </div>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {replays.slice(0, 6).map((stream) => <StreamCard key={stream.id} stream={stream} onOpen={(id) => navigate(`/golive?streamId=${id}`)} />)}
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    );
+  }
+
+  const streamerId = streamData?.user_id || streamData?.host_id;
+  const isOwnStream = !!currentUser && streamerId === currentUser.id;
 
   return (
-    <div className="fixed inset-0 z-[60] bg-black flex flex-col md:flex-row overflow-hidden font-sans">
-      {/* ── MAIN STREAM AREA ────────────────────────────────────────────── */}
-      <div className="relative flex-1 bg-zinc-950 flex flex-col overflow-hidden">
-        {/* Top Header (Mobile/Small Screens) */}
-        <div className="p-4 flex items-center justify-between border-b border-white/5 md:hidden">
-          <button onClick={() => currentUser ? navigate('/') : window.location.href = '/'} className="p-2 text-white">
-            <ArrowLeft className="w-5 h-5" />
+    <div className="fixed inset-0 z-[60] flex flex-col overflow-hidden bg-black text-white md:flex-row">
+      <div className="relative flex min-h-0 flex-1 flex-col bg-zinc-950">
+        <div className="flex items-center justify-between border-b border-white/10 bg-black/60 p-4 backdrop-blur-xl">
+          <button onClick={() => navigate('/golive')} className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white">
+            <ArrowLeft className="h-4 w-4" /> Streams
           </button>
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 bg-accent rounded-full animate-pulse" />
-            <span className="text-xs font-black uppercase tracking-widest text-white">
-              {isLive ? 'Live' : 'Preview'}
+            <span className={cn('inline-flex items-center gap-2 rounded-full px-3 py-1 text-[9px] font-black uppercase tracking-widest', hasEnded ? 'bg-white/10 text-zinc-300' : 'bg-red-500 text-white')}>
+              {!hasEnded && <span className="h-2 w-2 animate-ping rounded-full bg-white" />}
+              {hasEnded ? 'Replay' : 'Live'}
             </span>
+            <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-cyan-100">{streamData?.category || category}</span>
           </div>
-          <button onClick={() => setShowShareModal(true)} className="p-2 text-white">
-            <Share2 className="w-5 h-5" />
-          </button>
         </div>
 
-        {/* Video Player Container */}
-        <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden">
-          {/* Video Feed */}
-          <video 
-            ref={videoRef} 
-            autoPlay 
-            muted={!isViewer} 
-            playsInline 
-            className={cn(
-              "w-full h-full object-contain transition-opacity duration-700",
-              (isCameraOn && (!isViewer || isLive)) ? "opacity-100" : "opacity-0"
-            )}
-          />
-
-          {/* Viewer Placeholder (since no WebRTC peer yet) */}
-          {isViewer && !hasEnded && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950/80 backdrop-blur-sm z-10">
-              <div className="flex flex-col items-center gap-6 p-8 text-center max-w-md">
-                <div className="relative">
-                  <div className="absolute inset-0 bg-accent/20 blur-3xl rounded-full" />
-                  {streamData?.host_avatar ? (
-                    <img src={streamData.host_avatar} alt="" className="relative w-32 h-32 rounded-full border-4 border-accent object-cover shadow-2xl" />
-                  ) : (
-                    <div className="relative w-32 h-32 rounded-full bg-zinc-900 border-4 border-accent flex items-center justify-center">
-                      <Bot className="w-16 h-16 text-accent" />
-                    </div>
-                  )}
-                  <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 px-4 py-1 bg-accent rounded-full shadow-lg">
-                    <span className="text-[10px] font-black text-white uppercase tracking-widest">Host</span>
-                  </div>
+        <div className="relative flex-1 overflow-hidden bg-black">
+          <video ref={videoRef} autoPlay playsInline muted={isOwnStream} controls={hasEnded && !!streamData?.replay_url} src={hasEnded ? streamData?.replay_url ?? undefined : undefined} className={cn('h-full w-full object-contain', isViewer && !streamData?.replay_url ? 'opacity-0' : 'opacity-100')} />
+          {(isViewer || hasEnded) && !streamData?.replay_url && (
+            <div className="absolute inset-0 flex items-center justify-center bg-[radial-gradient(circle_at_50%_25%,rgba(255,0,80,0.2),transparent_34%),radial-gradient(circle_at_50%_80%,rgba(0,229,255,0.14),transparent_36%)] p-8 text-center">
+              <div className="max-w-lg">
+                {streamData?.host_avatar ? <img src={streamData.host_avatar} alt="Host" className="mx-auto mb-6 h-28 w-28 rounded-full border-4 border-accent object-cover shadow-[0_0_40px_rgba(255,0,80,0.4)]" /> : <div className="mx-auto mb-6 flex h-28 w-28 items-center justify-center rounded-full border-4 border-accent bg-zinc-900"><Tv className="h-12 w-12 text-accent" /></div>}
+                <h1 className="text-3xl font-black uppercase italic tracking-tighter">{streamData?.title || title || 'Neural Transmission'}</h1>
+                <p className="mt-3 text-sm leading-6 text-zinc-400">{hasEnded ? 'This broadcast has ended. Replay media can be attached when available.' : 'WebRTC relay is represented by this live embed placeholder while chat, follows, notifications, reactions, and viewer telemetry run in real time.'}</p>
+                <div className="mt-6 flex items-center justify-center gap-3 text-xs font-black uppercase tracking-widest text-zinc-300">
+                  <Users className="h-4 w-4 text-cyan-300" /> {streamData?.viewer_count ?? 0} viewers
                 </div>
-                
-                <div>
-                  <h2 className="text-2xl font-black text-white uppercase italic tracking-tighter mb-1">
-                    {streamData?.hostDisplayName || streamData?.host_display_name || 'Neural Architect'}
-                  </h2>
-                  <p className="text-zinc-400 font-bold uppercase tracking-widest text-xs">
-                    {streamTitle || 'Establishing Connection...'}
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-2 px-4 py-2 bg-accent/10 border border-accent/20 rounded-xl">
-                    <Users className="w-4 h-4 text-accent" />
-                    <span className="text-accent text-sm font-black tracking-tight">{crowdSize}</span>
-                  </div>
-                  <div className="flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/10 rounded-xl">
-                    <Zap className="w-4 h-4 text-yellow-500" />
-                    <span className="text-white text-sm font-black tracking-tight">Active</span>
-                  </div>
-                </div>
-
-                <p className="text-zinc-500 text-xs leading-relaxed italic">
-                  "The neural link is active. Signal is strong. Synchronizing data streams..."
-                </p>
               </div>
             </div>
           )}
-
-          {/* Camera Off Placeholder (Host) */}
-          {!isCameraOn && !isViewer && !hasEnded && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900 z-10">
-              <div className="w-24 h-24 rounded-full bg-zinc-800 flex items-center justify-center mb-4 border border-white/10 shadow-2xl">
-                <VideoOff className="w-10 h-10 text-zinc-600" />
-              </div>
-              <p className="text-zinc-500 font-black uppercase tracking-widest text-xs italic">Camera Feed Offline</p>
-            </div>
-          )}
-
-          {/* Stream Ended Overlay */}
           <AnimatePresence>
             {hasEnded && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="absolute inset-0 z-50 bg-black/95 backdrop-blur-2xl flex flex-col items-center justify-center p-6 text-center"
-              >
-                <div className="w-24 h-24 rounded-full bg-accent/20 flex items-center justify-center mb-8 border border-accent/50 shadow-[0_0_50px_rgba(255,0,0,0.3)]">
-                  <Zap className="w-12 h-12 text-accent" />
-                </div>
-                <h2 className="text-4xl font-black text-white uppercase italic mb-4 tracking-tighter">Transmission Terminated</h2>
-                <p className="text-zinc-500 max-w-sm mb-12 text-sm leading-relaxed font-medium">
-                  The neural link has been successfully severed. All stream data has been archived to the global consciousness network.
-                </p>
-                <button 
-                  onClick={() => currentUser ? navigate('/') : window.location.href = '/'}
-                  className="px-16 py-5 bg-white text-black rounded-2xl font-black uppercase tracking-widest hover:bg-zinc-200 transition-all shadow-xl hover:scale-105 active:scale-95"
-                >
-                  Return to Network
-                </button>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Interactive Overlays (Donations) */}
-          <div className="absolute top-6 left-6 right-6 pointer-events-none flex flex-col gap-3 items-center z-40">
-            <AnimatePresence>
-              {recentEvents.map(event => (
-                <motion.div
-                  key={event.id}
-                  initial={{ opacity: 0, y: -40, scale: 0.8 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.8, y: -20 }}
-                  className="bg-accent/90 backdrop-blur-xl border border-white/20 p-5 rounded-2xl shadow-2xl flex items-center gap-5 pointer-events-auto max-w-md w-full"
-                >
-                  <div className="w-14 h-14 rounded-full bg-yellow-500/20 flex items-center justify-center border border-yellow-500/50 flex-shrink-0">
-                    <Gift className="w-7 h-7 text-yellow-500" />
-                  </div>
-                  <div className="flex-1">
-                    <p className="text-sm font-black text-white uppercase tracking-tight">
-                      <span className="text-yellow-400">@{event.senderName}</span>
-                    </p>
-                    <p className="text-lg font-black text-white">
-                      DONATED <span className="text-yellow-400">{event.amount} CRED</span>
-                    </p>
-                    {event.message && (
-                      <p className="text-xs text-white/90 italic mt-1 font-medium">"{event.message}"</p>
-                    )}
-                  </div>
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </div>
-
-          {/* Active Poll Overlay */}
-          <AnimatePresence>
-            {streamData?.active_poll && (
-              <motion.div
-                initial={{ opacity: 0, x: -40 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -40 }}
-                className="absolute left-6 bottom-32 w-72 bg-black/80 backdrop-blur-xl border border-white/10 rounded-3xl p-6 pointer-events-auto z-40 shadow-2xl"
-              >
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 bg-accent rounded-full animate-pulse" />
-                    <span className="text-[10px] font-black text-white uppercase tracking-[0.2em]">Live Poll</span>
-                  </div>
-                  {!isViewer && (
-                    <button onClick={handleEndPoll} className="text-[10px] font-black text-red-500 uppercase tracking-widest hover:text-red-400">End</button>
-                  )}
-                </div>
-                <h3 className="text-sm font-black text-white mb-4 uppercase tracking-tight">{streamData.active_poll.question}</h3>
-                <div className="space-y-3">
-                  {Object.entries(streamData.active_poll.options).map(([option, votes]: [string, any]) => {
-                    const total = streamData.active_poll.totalVotes || 1;
-                    const percentage = Math.round((votes / total) * 100);
-                    const hasVoted = votedPolls.has(streamData.active_poll.id);
-                    
-                    return (
-                      <button
-                        key={option}
-                        disabled={hasVoted || isViewer === false}
-                        onClick={() => handleVote(option)}
-                        className="w-full relative overflow-hidden rounded-xl bg-white/5 border border-white/10 p-3 text-left transition-all hover:bg-white/10 disabled:cursor-default group"
-                      >
-                        <motion.div 
-                          className="absolute inset-y-0 left-0 bg-accent/20"
-                          initial={{ width: 0 }}
-                          animate={{ width: `${percentage}%` }}
-                          transition={{ duration: 1, ease: "easeOut" }}
-                        />
-                        <div className="relative flex items-center justify-between z-10">
-                          <span className="text-xs font-black text-white uppercase tracking-tight">{option}</span>
-                          <span className="text-[10px] font-black text-accent">{percentage}%</span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="mt-4 flex items-center justify-between">
-                  <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">{streamData.active_poll.totalVotes} Signals Received</span>
-                </div>
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black to-transparent p-8 text-center">
+                <p className="text-xs font-black uppercase tracking-[0.25em] text-zinc-400">Transmission archived</p>
               </motion.div>
             )}
           </AnimatePresence>
         </div>
 
-        {/* Bottom Toolbar (Twitch-style) */}
-        <div className="bg-zinc-900/50 backdrop-blur-xl border-t border-white/5 p-4 md:p-6 flex items-center justify-between z-50">
-          <div className="flex items-center gap-4">
-            <div className="hidden md:flex flex-col">
-              <h1 className="text-lg font-black text-white uppercase italic tracking-tighter leading-none mb-1">
-                {streamTitle || 'Neural Transmission'}
-              </h1>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Host:</span>
-                <span className="text-[10px] font-black text-accent uppercase tracking-widest">
-                  @{streamData?.host_username || currentUser?.username}
-                </span>
-              </div>
+        <div className="border-t border-white/10 bg-zinc-950/95 p-4 backdrop-blur-xl">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+            <div className="min-w-0">
+              <h1 className="truncate text-xl font-black uppercase italic tracking-tight">{streamData?.title || title || 'Neural Transmission'}</h1>
+              <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500">@{streamData?.host_username || currentUser?.username || 'creator'} · {streamData?.description || 'Universal creator stream'}</p>
             </div>
-          </div>
-
-          <div className="flex items-center gap-2 md:gap-4">
-            {isLive && !isViewer ? (
-              <>
-                <button 
-                  onClick={() => setShowPollModal(true)}
-                  className="p-3 md:px-5 md:py-3 rounded-xl bg-white/5 border border-white/10 text-white hover:bg-white/10 transition-all flex items-center gap-2"
-                  title="Create Poll"
-                >
-                  <BarChart2 className="w-5 h-5" />
-                  <span className="hidden md:inline text-[10px] font-black uppercase tracking-widest">Poll</span>
+            <div className="flex flex-wrap items-center gap-2">
+              {!isOwnStream && currentUser && (
+                <button onClick={() => void toggleFollow()} className={cn('inline-flex items-center gap-2 rounded-xl px-4 py-3 text-[10px] font-black uppercase tracking-widest transition', followed ? 'border border-cyan-300/30 bg-cyan-300/10 text-cyan-100' : 'bg-accent text-white shadow-[0_0_18px_rgba(255,0,80,0.35)]')}>
+                  {followed ? <BellOff className="h-4 w-4" /> : <Bell className="h-4 w-4" />}
+                  {followed ? 'Following' : 'Follow Streamer'}
                 </button>
-                <button 
-                  onClick={toggleCamera}
-                  className={cn(
-                    "p-3 md:px-5 md:py-3 rounded-xl border transition-all flex items-center gap-2",
-                    isCameraOn ? "bg-white/5 border-white/10 text-white hover:bg-white/10" : "bg-accent/20 border-accent/40 text-accent"
-                  )}
-                >
-                  {isCameraOn ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
-                  <span className="hidden md:inline text-[10px] font-black uppercase tracking-widest">{isCameraOn ? 'Cam On' : 'Cam Off'}</span>
+              )}
+              {REACTIONS.map((reaction) => (
+                <button key={reaction.key} onClick={() => void handleReaction(reaction.key)} disabled={!currentUser || hasEnded} className="inline-flex min-w-14 items-center justify-center gap-1 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-white transition hover:bg-white/10 disabled:opacity-40">
+                  <span>{reaction.label}</span>
+                  <span className="text-cyan-300">{reactions[reaction.key] ?? 0}</span>
                 </button>
-                <button 
-                  onClick={toggleMic}
-                  className={cn(
-                    "p-3 md:px-5 md:py-3 rounded-xl border transition-all flex items-center gap-2",
-                    isMicOn ? "bg-white/5 border-white/10 text-white hover:bg-white/10" : "bg-accent/20 border-accent/40 text-accent"
-                  )}
-                >
-                  {isMicOn ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
-                  <span className="hidden md:inline text-[10px] font-black uppercase tracking-widest">{isMicOn ? 'Mic On' : 'Mic Off'}</span>
-                </button>
-                <button 
-                  onClick={() => setShowShareModal(true)}
-                  className="p-3 md:px-5 md:py-3 rounded-xl bg-accent text-white font-black uppercase tracking-widest text-[10px] shadow-[0_0_20px_rgba(255,0,0,0.3)] hover:scale-105 transition-all flex items-center gap-2"
-                >
-                  <Share2 className="w-5 h-5" />
-                  <span className="hidden md:inline">Share Stream</span>
-                </button>
-                <button 
-                  onClick={handleEndStream}
-                  className="p-3 md:px-5 md:py-3 bg-zinc-800 text-red-500 rounded-xl border border-red-500/30 hover:bg-red-500 hover:text-white transition-all"
-                  title="End Stream"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </>
-            ) : isViewer ? (
-              <>
-                <div className="hidden md:flex items-center gap-3 px-4 py-2 bg-white/5 rounded-xl border border-white/10 mr-4">
-                  <img src={streamData?.host_avatar} alt="" className="w-8 h-8 rounded-full border border-accent" />
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-black text-white uppercase tracking-tighter">@{streamData?.host_username}</span>
-                    <span className="text-[8px] text-zinc-500 font-bold uppercase">Broadcasting</span>
-                  </div>
-                </div>
-                {currentUser ? (
-                  <button 
-                    onClick={() => setShowDonateModal(true)}
-                    className="px-6 py-3 bg-yellow-500 text-black rounded-xl font-black uppercase tracking-widest hover:bg-yellow-400 transition-all flex items-center gap-2 shadow-lg"
-                  >
-                    <Gift className="w-4 h-4" />
-                    Donate
-                  </button>
-                ) : (
-                  <button 
-                    onClick={() => window.location.href = '/'}
-                    className="px-6 py-3 bg-accent text-white rounded-xl font-black uppercase tracking-widest hover:opacity-90 transition-all flex items-center gap-2 shadow-lg"
-                  >
-                    Join BSC
-                  </button>
-                )}
-                <button 
-                  onClick={() => setShowShareModal(true)}
-                  className="p-3 rounded-xl bg-white/5 border border-white/10 text-white hover:bg-white/10 transition-all"
-                >
-                  <Share2 className="w-5 h-5" />
-                </button>
-                <button 
-                  onClick={() => currentUser ? navigate('/') : window.location.href = '/'}
-                  className="px-6 py-3 bg-zinc-800 text-white rounded-xl font-black uppercase tracking-widest hover:bg-zinc-700 transition-all border border-white/5"
-                >
-                  Leave
-                </button>
-              </>
-            ) : (
-              <div className="flex-1 flex items-center justify-center">
-                <div className="flex flex-col md:flex-row items-center gap-4 w-full max-w-2xl">
-                  <input 
-                    type="text" 
-                    value={streamTitle}
-                    onChange={(e) => setStreamTitle(e.target.value)}
-                    placeholder="ENTER STREAM FREQUENCY TITLE..."
-                    className="flex-1 bg-white/5 border border-white/10 rounded-xl px-6 py-4 text-white font-bold uppercase tracking-widest text-xs focus:outline-none focus:border-accent transition-all"
-                  />
-                  <button 
-                    onClick={handleStartStream}
-                    disabled={!streamTitle.trim() || isLoading}
-                    className="px-10 py-4 bg-accent text-white rounded-xl font-black uppercase tracking-[0.2em] text-xs shadow-[0_0_30px_rgba(255,0,0,0.3)] hover:scale-105 transition-all disabled:opacity-50 flex items-center gap-3"
-                  >
-                    {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Radio className="w-4 h-4" />}
-                    Initialize Stream
-                  </button>
-                </div>
-              </div>
-            )}
+              ))}
+              <button onClick={() => void copyStreamLink()} className="rounded-xl border border-white/10 bg-white/5 p-3 text-zinc-300 hover:text-white"><Share2 className="h-4 w-4" /></button>
+              {isOwnStream && !hasEnded && (
+                <>
+                  <button onClick={() => toggleTrack('video')} className={cn('rounded-xl border p-3', cameraOn ? 'border-white/10 bg-white/5 text-white' : 'border-red-400/40 bg-red-500/10 text-red-300')}>{cameraOn ? <Video className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}</button>
+                  <button onClick={() => toggleTrack('audio')} className={cn('rounded-xl border p-3', micOn ? 'border-white/10 bg-white/5 text-white' : 'border-red-400/40 bg-red-500/10 text-red-300')}>{micOn ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}</button>
+                  <button onClick={() => void handleEndStream()} className="inline-flex items-center gap-2 rounded-xl bg-red-500 px-5 py-3 text-[10px] font-black uppercase tracking-widest text-white"><Square className="h-4 w-4" /> End</button>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* ── CROWD SIDEBAR (Twitch-style) ────────────────────────────────── */}
-      <div className="w-full md:w-80 lg:w-96 bg-zinc-950 border-l border-white/5 flex flex-col h-[40vh] md:h-full z-50">
-        <div className="p-5 border-b border-white/5 flex items-center justify-between bg-zinc-900/30">
-          <div className="flex items-center gap-3">
-            <MessageCircle className="w-5 h-5 text-accent" />
-            <h3 className="text-[10px] font-black text-white uppercase tracking-[0.3em]">Crowd Comms</h3>
-          </div>
-          <div className="flex items-center gap-2 px-3 py-1 bg-black rounded-full border border-white/5">
-            <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
-            <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">Live Sync</span>
+      <aside className="flex h-[42vh] w-full flex-col border-l border-white/10 bg-zinc-950 md:h-full md:w-96">
+        <div className="border-b border-white/10 bg-black/40 p-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <MessageCircle className="h-5 w-5 text-accent" />
+              <h2 className="text-[10px] font-black uppercase tracking-[0.28em]">Live Chat</h2>
+            </div>
+            <div className="flex items-center gap-2 rounded-full bg-white/5 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-zinc-400">
+              <Eye className="h-3.5 w-3.5 text-cyan-300" /> {streamData?.viewer_count ?? 0}
+            </div>
           </div>
         </div>
-
-        <div className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-hide bg-gradient-to-b from-transparent to-black/20">
-          {messages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center opacity-20 text-center px-8">
-              <Zap className="w-12 h-12 text-zinc-600 mb-4" />
-              <p className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.2em] leading-relaxed">
-                Awaiting incoming signals from the neural network...
-              </p>
+        <div className="flex-1 space-y-3 overflow-y-auto p-5">
+          {messages.length ? messages.map((msg) => (
+            <div key={msg.id} className="rounded-2xl border border-white/5 bg-white/[0.03] p-3">
+              <div className="mb-1 flex items-center justify-between gap-3">
+                <span className="truncate text-[10px] font-black uppercase tracking-widest text-cyan-300">@{msg.sender_name || 'viewer'}</span>
+                <span className="text-[9px] font-bold text-zinc-600">{new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+              </div>
+              <p className="text-xs leading-5 text-zinc-300">{msg.message || msg.text}</p>
             </div>
-          ) : (
-            messages.map((msg) => (
-              <motion.div 
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                key={msg.id} 
-                className={cn(
-                  "flex flex-col gap-1.5 p-3 rounded-xl transition-all",
-                  msg.isDonation ? "bg-yellow-500/10 border border-yellow-500/20" : "hover:bg-white/5"
-                )}
-              >
-                <div className="flex items-center justify-between">
-                  <span className={cn(
-                    "text-[10px] font-black uppercase tracking-tighter",
-                    msg.isDonation ? "text-yellow-500" : "text-accent"
-                  )}>
-                    @{msg.senderName}
-                  </span>
-                  <span className="text-[8px] text-zinc-600 font-bold">
-                    {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </span>
-                </div>
-                <p className={cn(
-                  "text-xs leading-relaxed",
-                  msg.isDonation ? "text-yellow-100 font-bold italic" : "text-zinc-300"
-                )}>
-                  {msg.content}
-                </p>
-              </motion.div>
-            ))
+          )) : (
+            <div className="flex h-full flex-col items-center justify-center text-center opacity-40">
+              <Zap className="mb-4 h-10 w-10 text-zinc-600" />
+              <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">No chat packets yet</p>
+            </div>
           )}
           <div ref={messagesEndRef} />
         </div>
-
-        {currentUser ? (
-          <form onSubmit={handleSendMessage} className="p-6 border-t border-white/5 bg-zinc-950">
-            <div className="relative group">
-              <input 
-                type="text" 
-                value={newMessage}
-                onChange={(e) => setNewMessage(e.target.value)}
-                placeholder="TRANSMIT SIGNAL..."
-                className="w-full bg-white/5 border border-white/10 rounded-2xl pl-5 pr-14 py-4 text-xs text-white placeholder:text-zinc-700 focus:outline-none focus:border-accent transition-all focus:bg-white/10"
-              />
-              <button 
-                type="submit"
-                disabled={!newMessage.trim()}
-                className="absolute right-3 top-1/2 -translate-y-1/2 p-2.5 text-accent hover:text-white transition-all disabled:opacity-20 group-focus-within:scale-110"
-              >
-                <Send className="w-5 h-5" />
-              </button>
+        {currentUser && !hasEnded ? (
+          <form onSubmit={handleSendMessage} className="border-t border-white/10 p-4">
+            <div className="relative">
+              <input value={chatText} onChange={(e) => setChatText(e.target.value)} placeholder="Transmit to chat..." className="w-full rounded-2xl border border-white/10 bg-black/50 py-4 pl-4 pr-14 text-sm text-white outline-none focus:border-accent" />
+              <button type="submit" disabled={!chatText.trim()} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl bg-accent p-3 text-white disabled:opacity-30"><Send className="h-4 w-4" /></button>
             </div>
           </form>
         ) : (
-          <div className="p-4 border-t border-white/5 bg-zinc-950 flex items-center justify-center gap-3">
-            <span className="text-xs text-zinc-500 font-bold uppercase tracking-widest">Sign in to chat</span>
-            <button
-              onClick={() => window.location.href = '/'}
-              className="px-4 py-2 bg-accent text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:opacity-90 transition-opacity"
-            >
-              Join BSC
-            </button>
-          </div>
+          <div className="border-t border-white/10 p-4 text-center text-[10px] font-black uppercase tracking-widest text-zinc-500">{hasEnded ? 'Chat archived' : 'Sign in to chat'}</div>
         )}
-      </div>
-
-      {/* ── MODALS ─────────────────────────────────────────────────────── */}
-      <AnimatePresence>
-        {/* Share Modal */}
-        {showShareModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-xl">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="bg-zinc-900 border border-white/10 rounded-[2rem] w-full max-w-md overflow-hidden shadow-[0_0_100px_rgba(0,0,0,0.5)]"
-            >
-              <div className="p-8 border-b border-white/5 flex items-center justify-between bg-zinc-800/30">
-                <div className="flex items-center gap-3">
-                  <Share2 className="w-6 h-6 text-accent" />
-                  <h2 className="text-xl font-black text-white uppercase italic tracking-tighter">Spread the Signal</h2>
-                </div>
-                <button onClick={() => setShowShareModal(false)} className="p-2 hover:bg-white/10 rounded-full text-zinc-500 transition-all">
-                  <X className="w-6 h-6" />
-                </button>
-              </div>
-              
-              <div className="p-8 space-y-8">
-                {/* Copy Link Section */}
-                <div className="space-y-3">
-                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.2em]">Stream Frequency URL</label>
-                  <div className="flex gap-2">
-                    <div className="flex-1 bg-black border border-white/10 rounded-xl px-4 py-3 text-zinc-400 font-mono text-xs overflow-hidden text-ellipsis whitespace-nowrap flex items-center">
-                      {getStreamUrl()}
-                    </div>
-                    <button 
-                      onClick={handleCopyLink}
-                      className={cn(
-                        "px-6 rounded-xl font-black uppercase tracking-widest text-[10px] transition-all flex items-center gap-2",
-                        copied ? "bg-green-500 text-white" : "bg-white text-black hover:bg-zinc-200"
-                      )}
-                    >
-                      {copied ? <CheckCircle2 className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                      {copied ? 'Copied' : 'Copy'}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Social Grid */}
-                <div className="grid grid-cols-3 gap-4">
-                  <button onClick={shareOnTwitter} className="flex flex-col items-center gap-3 p-4 bg-white/5 border border-white/5 rounded-2xl hover:bg-white/10 transition-all group">
-                    <Twitter className="w-6 h-6 text-[#1DA1F2] group-hover:scale-110 transition-transform" />
-                    <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">Twitter</span>
-                  </button>
-                  <button onClick={shareOnFacebook} className="flex flex-col items-center gap-3 p-4 bg-white/5 border border-white/5 rounded-2xl hover:bg-white/10 transition-all group">
-                    <Facebook className="w-6 h-6 text-[#1877F2] group-hover:scale-110 transition-transform" />
-                    <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">Facebook</span>
-                  </button>
-                  <button onClick={shareOnWhatsApp} className="flex flex-col items-center gap-3 p-4 bg-white/5 border border-white/5 rounded-2xl hover:bg-white/10 transition-all group">
-                    <MessageCircle className="w-6 h-6 text-[#25D366] group-hover:scale-110 transition-transform" />
-                    <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">WhatsApp</span>
-                  </button>
-                  <button onClick={shareViaSMS} className="flex flex-col items-center gap-3 p-4 bg-white/5 border border-white/5 rounded-2xl hover:bg-white/10 transition-all group">
-                    <Phone className="w-6 h-6 text-accent group-hover:scale-110 transition-transform" />
-                    <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">SMS</span>
-                  </button>
-                  <button onClick={shareOnYoutube} className="flex flex-col items-center gap-3 p-4 bg-white/5 border border-white/5 rounded-2xl hover:bg-white/10 transition-all group">
-                    <Youtube className="w-6 h-6 text-[#FF0000] group-hover:scale-110 transition-transform" />
-                    <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">YouTube</span>
-                  </button>
-                  <button onClick={handleWebShare} className="flex flex-col items-center gap-3 p-4 bg-white/5 border border-white/5 rounded-2xl hover:bg-white/10 transition-all group">
-                    <MoreHorizontal className="w-6 h-6 text-zinc-400 group-hover:scale-110 transition-transform" />
-                    <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">More</span>
-                  </button>
-                </div>
-
-                <p className="text-center text-zinc-600 text-[10px] font-medium leading-relaxed">
-                  The more neural links we establish, the stronger the network becomes.
-                </p>
-              </div>
-            </motion.div>
-          </div>
-        )}
-
-        {/* Poll Modal */}
-        {showPollModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-zinc-900 border border-white/10 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl"
-            >
-              <div className="p-8 border-b border-white/10 flex items-center justify-between">
-                <h2 className="text-xl font-black text-white uppercase italic tracking-tighter flex items-center gap-3">
-                  <BarChart2 className="w-6 h-6 text-accent" />
-                  Initiate Poll
-                </h2>
-                <button onClick={() => setShowPollModal(false)} className="p-2 hover:bg-white/10 rounded-full text-zinc-500 transition-all">
-                  <X className="w-6 h-6" />
-                </button>
-              </div>
-              <form onSubmit={handleCreatePoll} className="p-8 space-y-6">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Query</label>
-                  <input
-                    type="text"
-                    value={pollQuestion}
-                    onChange={(e) => setPollQuestion(e.target.value)}
-                    placeholder="WHAT IS THE NEXT OBJECTIVE?"
-                    className="w-full bg-black border border-white/10 rounded-xl px-5 py-4 text-white text-xs font-bold uppercase tracking-widest focus:outline-none focus:border-accent transition-all"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Option Alpha</label>
-                    <input
-                      type="text"
-                      value={pollOption1}
-                      onChange={(e) => setPollOption1(e.target.value)}
-                      placeholder="ALPHA"
-                      className="w-full bg-black border border-white/10 rounded-xl px-4 py-3 text-white text-[10px] font-bold uppercase tracking-widest focus:outline-none focus:border-accent transition-all"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Option Beta</label>
-                    <input
-                      type="text"
-                      value={pollOption2}
-                      onChange={(e) => setPollOption2(e.target.value)}
-                      placeholder="BETA"
-                      className="w-full bg-black border border-white/10 rounded-xl px-4 py-3 text-white text-[10px] font-bold uppercase tracking-widest focus:outline-none focus:border-accent transition-all"
-                    />
-                  </div>
-                </div>
-                <button
-                  type="submit"
-                  disabled={!pollQuestion.trim() || !pollOption1.trim() || !pollOption2.trim()}
-                  className="w-full py-5 bg-accent text-white rounded-xl font-black uppercase tracking-[0.3em] text-xs shadow-[0_0_30px_rgba(255,0,0,0.3)] hover:scale-105 transition-all disabled:opacity-50"
-                >
-                  Broadcast Poll
-                </button>
-              </form>
-            </motion.div>
-          </div>
-        )}
-
-        {/* Donate Modal */}
-        {showDonateModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-zinc-900 border border-white/10 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl"
-            >
-              <div className="p-8 border-b border-white/10 flex items-center justify-between bg-yellow-500/5">
-                <h2 className="text-xl font-black text-white uppercase italic tracking-tighter flex items-center gap-3">
-                  <Gift className="w-6 h-6 text-yellow-500" />
-                  Neural Support
-                </h2>
-                <button onClick={() => setShowDonateModal(false)} className="p-2 hover:bg-white/10 rounded-full text-zinc-500 transition-all">
-                  <X className="w-6 h-6" />
-                </button>
-              </div>
-              <form onSubmit={handleDonate} className="p-8 space-y-6">
-                <div className="grid grid-cols-3 gap-3">
-                  {['10', '50', '100', '500', '1000', '5000'].map(amount => (
-                    <button
-                      key={amount}
-                      type="button"
-                      onClick={() => setDonationAmount(amount)}
-                      className={cn(
-                        "py-3 rounded-xl border font-black text-xs transition-all",
-                        donationAmount === amount 
-                          ? "bg-yellow-500 border-yellow-500 text-black shadow-[0_0_20px_rgba(234,179,8,0.3)]" 
-                          : "bg-white/5 border-white/10 text-white hover:bg-white/10"
-                      )}
-                    >
-                      {amount}
-                    </button>
-                  ))}
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Custom Amount</label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      value={donationAmount}
-                      onChange={(e) => setDonationAmount(e.target.value)}
-                      className="w-full bg-black border border-white/10 rounded-xl pl-12 pr-4 py-4 text-white font-black text-lg focus:outline-none focus:border-yellow-500 transition-all"
-                    />
-                    <Coins className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-yellow-500" />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Neural Message</label>
-                  <textarea
-                    value={donationMessage}
-                    onChange={(e) => setDonationMessage(e.target.value)}
-                    placeholder="OPTIONAL SIGNAL..."
-                    className="w-full bg-black border border-white/10 rounded-xl px-5 py-4 text-white text-xs font-bold uppercase tracking-widest focus:outline-none focus:border-yellow-500 transition-all h-24 resize-none"
-                  />
-                </div>
-                <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/5">
-                  <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Your Balance</span>
-                  <span className="text-sm font-black text-white">{currentUser?.cred_balance || 0} CRED</span>
-                </div>
-                <button
-                  type="submit"
-                  disabled={!donationAmount || parseInt(donationAmount) <= 0 || (currentUser?.cred_balance || 0) < parseInt(donationAmount)}
-                  className="w-full py-5 bg-yellow-500 text-black rounded-xl font-black uppercase tracking-[0.3em] text-xs shadow-[0_0_30px_rgba(234,179,8,0.3)] hover:scale-105 transition-all disabled:opacity-50"
-                >
-                  Confirm Support
-                </button>
-              </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      </aside>
     </div>
   );
 };
