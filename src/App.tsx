@@ -5,6 +5,7 @@ import { useAuth } from './AuthContext';
 import { Login } from './components/Login';
 import { Navigation } from './components/Navigation';
 import { OnboardingWizard } from './components/OnboardingWizard';
+import { NetworkTutorial } from './components/NetworkTutorial';
 import { updateDailyStreak } from './lib/achievements';
 import { supabase } from './supabase';
 
@@ -55,6 +56,7 @@ function ReferralLandingPage() {
 export default function App() {
   const { currentUser, loading } = useAuth();
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showNetworkTutorial, setShowNetworkTutorial] = useState(false);
 
   // On login: check if onboarding needed, update streak, process referral
   useEffect(() => {
@@ -67,6 +69,12 @@ export default function App() {
       (Date.now() - new Date(currentUser.created_at).getTime()) < 10 * 60 * 1000;
     if (isNewUser) {
       setShowOnboarding(true);
+    } else {
+      const tutorialKey = `bsc_network_tutorial_seen_${currentUser.id}`;
+      const createdRecently = currentUser.created_at && (Date.now() - new Date(currentUser.created_at).getTime()) < 24 * 60 * 60 * 1000;
+      if (createdRecently && currentUser.onboarding_complete !== false && !localStorage.getItem(tutorialKey)) {
+        setShowNetworkTutorial(true);
+      }
     }
 
     // Update daily streak
@@ -151,7 +159,20 @@ export default function App() {
     <div className="min-h-screen bg-background text-foreground">
       {/* Onboarding wizard for new users */}
       {showOnboarding && (
-        <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
+        <OnboardingWizard onComplete={() => {
+          setShowOnboarding(false);
+          if (currentUser) {
+            const tutorialKey = `bsc_network_tutorial_seen_${currentUser.id}`;
+            if (!localStorage.getItem(tutorialKey)) setShowNetworkTutorial(true);
+          }
+        }} />
+      )}
+
+      {showNetworkTutorial && currentUser && (
+        <NetworkTutorial onComplete={() => {
+          localStorage.setItem(`bsc_network_tutorial_seen_${currentUser.id}`, new Date().toISOString());
+          setShowNetworkTutorial(false);
+        }} />
       )}
 
       <main className="pb-24">
