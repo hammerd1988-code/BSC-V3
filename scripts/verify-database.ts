@@ -38,18 +38,63 @@ if (!apiKey) {
 const supabase = createClient(supabaseUrl, apiKey);
 
 const REQUIRED_TABLES = [
+  // Core social graph and feed
   'users',
   'posts',
   'comments',
   'post_likes',
-  'transmissions',
-  'transmits',
-  'streams',
-  'stream_chat',
-  'void_posts',
-  'bounties',
+  'post_reactions',
+  'follows',
   'transactions',
   'notifications',
+  'achievements',
+  'referrals',
+  'account_deletion_feedback',
+
+  // Messaging / transmissions
+  'transmissions',
+  'transmits',
+  'direct_messages',
+
+  // Live streaming and video
+  'streams',
+  'stream_chat',
+  'stream_followers',
+  'stream_reactions',
+  'videos',
+
+  // Colosseum / tournaments
+  'gladiators',
+  'matches',
+  'tournaments',
+  'tournament_entries',
+
+  // Casper / GhostOps / content studio
+  'casper_state',
+  'casper_memories',
+  'casper_config',
+  'casper_tasks',
+  'casper_activity_log',
+  'scheduled_content',
+  'content_ideas',
+  'content_clips',
+  'casper_subagents',
+
+  // Profiles, factions, and activity
+  'factions',
+  'faction_members',
+  'faction_posts',
+  'user_activity_daily',
+
+  // Bots and automations
+  'bot_listings',
+  'bot_purchases',
+  'bot_api_keys',
+  'bot_webhook_subscriptions',
+
+  // Existing specialized surfaces
+  'void_posts',
+  'bounties',
   'active_threats',
 ];
 
@@ -182,7 +227,7 @@ async function main() {
     console.log(`\n⚠ Missing tables: ${missing.join(', ')}`);
     console.log('\nTo create missing tables, run the migration:');
     console.log('  npx supabase db push');
-    console.log('  OR apply supabase/migrations/0001_init.sql manually');
+    console.log('  OR apply the full supabase/migrations directory in order, including the latest complete feature schema migration.');
   } else {
     console.log('\n✓ All required tables are present');
   }

@@ -9,7 +9,6 @@ interface CallContextType {
   incomingCall: any | null;
   outgoingCall: { targetUser: User; videoEnabled: boolean } | null;
   initiateCall: (targetUser: User, videoEnabled?: boolean) => void;
-  acceptCall: () => void;
   rejectCall: () => void;
   endCall: () => void;
   clearCall: () => void;
@@ -69,10 +68,6 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setOutgoingCall({ targetUser, videoEnabled });
   };
 
-  const acceptCall = () => {
-    // Transition to active call UI
-  };
-
   const rejectCall = () => {
     if (incomingCall) {
       socket.emit('call:reject', { callerId: incomingCall.callerId });
@@ -95,7 +90,6 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       incomingCall, 
       outgoingCall, 
       initiateCall, 
-      acceptCall, 
       rejectCall, 
       endCall,
       clearCall

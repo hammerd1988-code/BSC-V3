@@ -1042,6 +1042,46 @@ export const Transmissions: React.FC = () => {
     }
   };
 
+  const reportActiveTransmission = async () => {
+    if (!activeTransmission || !currentUser) return;
+    const otherUserId = activeTransmission.participant_ids?.find(id => id !== currentUser.id);
+    const otherUser = otherUserId ? userCache.current[otherUserId] : null;
+    setError(null);
+
+    try {
+      const { data: admins, error: adminError } = await supabase
+        .from('users')
+        .select('id')
+        .eq('role', 'admin')
+        .limit(20);
+      if (adminError) throw adminError;
+
+      const payload = {
+        reporter_id: currentUser.id,
+        reporter_username: currentUser.username,
+        reported_user_id: otherUserId ?? null,
+        reported_username: otherUser?.username ?? null,
+        transmission_id: activeTransmission.id,
+        url: `/transmissions?userId=${otherUserId ?? ''}`,
+        message: `${currentUser.username} reported a transmission thread${otherUser ? ` with @${otherUser.username}` : ''}.`,
+      };
+
+      const recipients = admins?.length ? admins : [{ id: currentUser.id }];
+      const { error: reportError } = await supabase.from('notifications').insert(
+        recipients.map((admin) => ({
+          user_id: admin.id,
+          type: 'transmission_report',
+          data: payload,
+          read: false,
+        }))
+      );
+      if (reportError) throw reportError;
+      setTemporarySpeechStatus('Report sent to moderation', 2400);
+    } catch (err: any) {
+      setError(`Unable to submit report: ${err?.message || 'moderation queue unavailable'}`);
+    }
+  };
+
   if (!currentUser) return null;
 
   return (
@@ -1210,9 +1250,9 @@ export const Transmissions: React.FC = () => {
                   );
                 })()}
                 <button 
-                  onClick={() => setError('Report feature coming soon.')}
+                  onClick={() => void reportActiveTransmission()}
                   className="p-2 hover:bg-white/5 rounded-full transition-colors"
-                  title="Report user"
+                  title="Report transmission to moderation"
                 >
                   <ShieldAlert className="w-5 h-5 text-gray-600 hover:text-accent" />
                 </button>
