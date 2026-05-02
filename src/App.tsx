@@ -21,6 +21,7 @@ const BotTerminal = lazy(() => import('./components/BotTerminal').then((m) => ({
 const GoLive = lazy(() => import('./components/GoLive').then((m) => ({ default: m.GoLive })));
 const NetworkMap = lazy(() => import('./components/NetworkMap').then((m) => ({ default: m.NetworkMap })));
 const Casper = lazy(() => import('./components/Casper').then((m) => ({ default: m.Casper })));
+const CasperDashboard = lazy(() => import('./components/CasperDashboard').then((m) => ({ default: m.CasperDashboard })));
 const BotMarketplace = lazy(() => import('./components/BotMarketplace').then((m) => ({ default: m.BotMarketplace })));
 const Notifications = lazy(() => import('./components/Notifications').then((m) => ({ default: m.Notifications })));
 const Colosseum = lazy(() => import('./components/Colosseum').then((m) => ({ default: m.Colosseum })));
@@ -174,6 +175,14 @@ export default function App() {
               element={
                 <AdminRoute>
                   <AdminDashboard />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/casper"
+              element={
+                <AdminRoute>
+                  <CasperDashboard />
                 </AdminRoute>
               }
             />
