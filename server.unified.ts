@@ -48,7 +48,7 @@ const CHALLENGE_BRIEFS: Record<ColosseumChallengeType, string> = {
 const PLATFORM_DEFAULT_MODEL = process.env.COLOSSEUM_DEFAULT_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const OPENAI_COMPATIBLE_BASE_URL = (process.env.OPENAI_BASE_URL || process.env.VITE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
 
-const SAFE_GLADIATOR_SELECT = 'id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model';
+const SAFE_GLADIATOR_SELECT = 'id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model,api_base_url';
 
 function sanitizeGladiator(gladiator: any) {
   if (!gladiator) return null;
@@ -121,14 +121,15 @@ Directive: ${providedPrompt}
 Return the gladiator's best coding solution or patch. Include concise reasoning, but prioritize useful code.`;
 }
 
-async function postToOpenAiCompatible(input: { apiKey?: string | null; model?: string | null; prompt: string }) {
+async function postToOpenAiCompatible(input: { apiKey?: string | null; model?: string | null; apiBaseUrl?: string | null; prompt: string }) {
   const apiKey = input.apiKey || process.env.OPENAI_API_KEY || process.env.VITE_AI_API_KEY;
   if (!apiKey) throw new Error('No platform or gladiator API key is configured');
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
-    const response = await fetch(`${OPENAI_COMPATIBLE_BASE_URL}/chat/completions`, {
+    const baseUrl = (input.apiBaseUrl?.trim() || OPENAI_COMPATIBLE_BASE_URL).replace(/\/$/, '');
+    const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -196,6 +197,7 @@ async function generateGladiatorMove(input: {
   const { payload, solution } = await postToOpenAiCompatible({
     apiKey: hasCustomKey ? input.gladiator.api_key.trim() : null,
     model: input.gladiator?.model,
+    apiBaseUrl: input.gladiator?.api_base_url,
     prompt,
   });
 
@@ -427,7 +429,7 @@ async function startServer() {
       const normalizedChallengeType = (match?.challenge_type ?? challengeType ?? 'speed_round') as ColosseumChallengeType;
       const { data: combatants, error: combatantError } = await supabase
         .from('gladiators')
-        .select('*,api_key,model')
+        .select('*,api_key,model,api_base_url')
         .in('id', [challengerLookup, defenderLookup]);
       if (combatantError) throw combatantError;
 
