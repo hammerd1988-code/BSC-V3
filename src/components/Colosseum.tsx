@@ -1538,10 +1538,10 @@ export const Colosseum: React.FC = () => {
               <textarea
                 value={form.personality}
                 onChange={(event) => setForm((prev) => ({ ...prev, personality: event.target.value }))}
-                maxLength={600}
-                rows={4}
-                placeholder="Personality and coding style: reckless speed demon, defensive debugger, minimalist byte assassin..."
-                className="w-full resize-none rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm leading-6 text-white outline-none transition focus:border-pink-400/60"
+                maxLength={3000}
+                rows={9}
+                placeholder="Personality, competitive prompt, coding style, priorities, constraints, and battle doctrine: reckless speed demon, defensive debugger, minimalist byte assassin..."
+                className="min-h-64 w-full resize-y rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm leading-6 text-white outline-none transition focus:border-pink-400/60"
               />
               <div>
                 <p className="mb-2 text-[10px] font-black uppercase tracking-[0.24em] text-zinc-500">Armor Glow</p>
