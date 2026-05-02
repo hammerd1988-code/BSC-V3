@@ -25,7 +25,11 @@ import {
   Activity,
   Cpu,
   Globe,
-  AlertCircle
+  AlertCircle,
+  Check,
+  CheckCheck,
+  Download,
+  FileText
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { useCall } from '../CallContext';
@@ -49,6 +53,8 @@ export const Transmissions: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState('');
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [fullSizeImage, setFullSizeImage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [showOptions, setShowOptions] = useState(false);
   const [showNewChat, setShowNewChat] = useState(false);
@@ -65,9 +71,73 @@ export const Transmissions: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   
   const scrollRef = useRef<HTMLDivElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const userCache = useRef<Record<string, UserType>>({});
   const transmissionsRef = useRef<Transmission[]>([]);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const formatFileSize = (size?: number | null) => {
+    if (!size || size <= 0) return 'Unknown size';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let value = size;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit += 1;
+    }
+    return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
+  };
+
+  const transmitText = (t: Transmit) => decryptedCache[t.id] ?? t.content;
+
+  const visibleTransmitText = (t: Transmit) => {
+    const content = transmitText(t);
+    if (t.media_url || t.attachment_url) {
+      if (!content || content === '[Image]' || content === '[Attachment]' || content === t.attachment_name) return '';
+    }
+    return content;
+  };
+
+  const deliveryStatusFor = (t: Transmit): 'sent' | 'delivered' | 'seen' => {
+    if (t.seen_at || t.read_at || t.status === 'seen') return 'seen';
+    if (t.delivered_at || t.status === 'delivered') return 'delivered';
+    return 'sent';
+  };
+
+  const renderDeliveryStatus = (t: Transmit) => {
+    const status = deliveryStatusFor(t);
+    const iconClass = status === 'seen' ? 'text-accent' : 'text-gray-600';
+    return (
+      <span className={`inline-flex items-center gap-1 ${status === 'seen' ? 'text-accent' : 'text-gray-600'}`} title={status}>
+        {status === 'sent' ? <Check className="w-3 h-3" /> : <CheckCheck className={`w-3 h-3 ${iconClass}`} />}
+        <span>{status}</span>
+      </span>
+    );
+  };
+
+  const markIncomingAsSeen = async (items: Transmit[]) => {
+    if (!currentUser) return;
+    const ids = items
+      .filter(t => t.sender_id !== currentUser.id && !t.seen_at && t.status !== 'seen')
+      .map(t => t.id);
+    if (ids.length === 0) return;
+
+    const now = new Date().toISOString();
+    setTransmits(prev => prev.map(t => ids.includes(t.id) ? {
+      ...t,
+      delivered_at: t.delivered_at ?? now,
+      seen_at: now,
+      read_at: t.read_at ?? now,
+      status: 'seen',
+    } : t));
+
+    const { error: seenError } = await supabase
+      .from('transmits')
+      .update({ delivered_at: now, seen_at: now, read_at: now, status: 'seen' })
+      .in('id', ids);
+    if (seenError) console.warn('[Transmissions] Failed to mark messages seen:', seenError);
+  };
 
   useEffect(() => {
     transmissionsRef.current = transmissions;
@@ -203,13 +273,22 @@ export const Transmissions: React.FC = () => {
           supabase.from('transmits').delete().in('id', expired.map(t => t.id)).then();
         }
 
-        setTransmits(live);
+        const seenAt = new Date().toISOString();
+        const liveWithSeen = live.map(t => t.sender_id !== currentUser!.id && !t.seen_at ? {
+          ...t,
+          delivered_at: t.delivered_at ?? seenAt,
+          seen_at: seenAt,
+          read_at: t.read_at ?? seenAt,
+          status: 'seen' as const,
+        } : t);
+        setTransmits(liveWithSeen);
+        void markIncomingAsSeen(live);
 
         // Decrypt encrypted messages and initialize burn countdowns
         const key = getTransmissionKey(activeTransmission.id);
         const newDecrypted: Record<string, string> = {};
         const newCountdowns: Record<string, number> = {};
-        await Promise.all(live.map(async (t) => {
+        await Promise.all(liveWithSeen.map(async (t) => {
           if (t.encryption_key === 'aes-gcm-pbkdf2') {
             try {
               newDecrypted[t.id] = await decryptText(t.content, key);
@@ -265,6 +344,9 @@ export const Transmissions: React.FC = () => {
             }
           }
           if (t.sender_id !== currentUser.id) {
+            const now = new Date().toISOString();
+            t = { ...t, delivered_at: t.delivered_at ?? now, seen_at: now, read_at: t.read_at ?? now, status: 'seen' };
+            void supabase.from('transmits').update({ delivered_at: now, seen_at: now, read_at: now, status: 'seen' }).eq('id', t.id);
             playMessageSound();
             const senderUser = userCache.current[t.sender_id];
             notifyNewMessage(
@@ -302,6 +384,15 @@ export const Transmissions: React.FC = () => {
               : t
           ).sort((a, b) => new Date(b.updated_at ?? 0).getTime() - new Date(a.updated_at ?? 0).getTime())
         );
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'transmits',
+        filter: `transmission_id=eq.${activeTransmission.id}`
+      }, (payload) => {
+        const updatedTransmit = payload.new as Transmit;
+        setTransmits(prev => prev.map(t => t.id === updatedTransmit.id ? updatedTransmit : t));
       })
       .on('postgres_changes', {
         event: 'UPDATE',
@@ -542,10 +633,21 @@ export const Transmissions: React.FC = () => {
     }
   };
 
-  const handleSendMessage = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const trimmedMessage = message.trim();
-    if (!trimmedMessage || !activeTransmission || !currentUser) return;
+  const sendTransmit = async ({
+    text,
+    attachment,
+  }: {
+    text: string;
+    attachment?: {
+      url: string;
+      name: string;
+      size: number;
+      mime: string;
+      kind: 'image' | 'file';
+    };
+  }) => {
+    const trimmedMessage = text.trim();
+    if ((!trimmedMessage && !attachment) || !activeTransmission || !currentUser) return;
     if (sending) return;
 
     if (!supabaseUser) {
@@ -553,9 +655,8 @@ export const Transmissions: React.FC = () => {
       return;
     }
 
-    // Optimistic UI: clear input immediately so the user feels responsiveness
     const savedMessage = trimmedMessage;
-    const savedBurnDuration = burnDuration;
+    const savedBurnDuration = attachment ? null : burnDuration;
     setMessage('');
     setBurnDuration(null);
     setSending(true);
@@ -572,13 +673,12 @@ export const Transmissions: React.FC = () => {
     }
 
     try {
-      // Encrypt if enabled
-      let contentToStore = savedMessage;
+      let contentToStore = savedMessage || (attachment?.kind === 'image' ? '[Image]' : attachment?.name ?? '[Attachment]');
       let encryptionKeyStored: string | null = null;
-      if (encryptionEnabled) {
+      if (encryptionEnabled && !attachment) {
         const key = getTransmissionKey(activeTransmission.id);
         contentToStore = await encryptText(savedMessage, key);
-        encryptionKeyStored = 'aes-gcm-pbkdf2'; // marker so receiver knows to decrypt
+        encryptionKeyStored = 'aes-gcm-pbkdf2';
       }
 
       const newTransmit = {
@@ -586,7 +686,16 @@ export const Transmissions: React.FC = () => {
         sender_id: currentUser.id,
         receiver_id: otherUserId,
         content: contentToStore,
-        type: 'text' as const,
+        type: attachment ? 'media' as const : 'text' as const,
+        media_url: attachment?.kind === 'image' ? attachment.url : null,
+        media_type: attachment?.kind === 'image' ? 'image' as const : null,
+        attachment_url: attachment?.url ?? null,
+        attachment_name: attachment?.name ?? null,
+        attachment_size: attachment?.size ?? null,
+        attachment_mime: attachment?.mime ?? null,
+        status: 'sent' as const,
+        delivered_at: null,
+        seen_at: null,
         burn_duration: savedBurnDuration,
         expires_at: savedBurnDuration ? new Date(Date.now() + savedBurnDuration * 1000).toISOString() : null,
         encryption_key: encryptionKeyStored,
@@ -602,11 +711,9 @@ export const Transmissions: React.FC = () => {
       if (insertedTransmit) {
         const t = insertedTransmit as Transmit;
         setTransmits(prev => prev.some(x => x.id === t.id) ? prev : [...prev, t]);
-        // Cache decrypted version for sender (they already have plaintext)
-        if (encryptionEnabled) {
+        if (encryptionEnabled && !attachment) {
           setDecryptedCache(prev => ({ ...prev, [t.id]: savedMessage }));
         }
-        // Start burn countdown if applicable
         if (savedBurnDuration && t.id) {
           setBurnCountdowns(prev => ({ ...prev, [t.id]: savedBurnDuration }));
         }
@@ -614,17 +721,20 @@ export const Transmissions: React.FC = () => {
         console.warn('Transmit insert succeeded but no row returned; waiting for realtime sync.');
       }
 
-      // Update transmission metadata
+      const preview = attachment
+        ? attachment.kind === 'image'
+          ? savedMessage || '[Image]'
+          : savedMessage || `[File] ${attachment.name}`
+        : savedMessage;
+
       const updatedUnread = { ...(activeTransmission.unread_counts ?? {}) };
-      if (otherUserId) {
-        updatedUnread[otherUserId] = (updatedUnread[otherUserId] || 0) + 1;
-      }
+      updatedUnread[otherUserId] = (updatedUnread[otherUserId] || 0) + 1;
 
       const { error: updateError } = await supabase
         .from('transmissions')
         .update({
           last_transmit: {
-            content: savedMessage,
+            content: preview,
             sender_id: currentUser.id,
             created_at: new Date().toISOString()
           },
@@ -646,16 +756,14 @@ export const Transmissions: React.FC = () => {
         senderUsername: currentUser.username,
         senderAvatar: currentUser.avatar_url,
         type: 'dm',
-        messagePreview: savedMessage,
+        messagePreview: preview,
         url: `/transmissions?userId=${currentUser.id}`,
         transmissionId: activeTransmission.id,
         createInAppNotification: false,
       });
 
-      // ── BOT RESPONSE: if the recipient is a bot, generate an AI reply ──
       const otherUser = otherUserId ? userCache.current[otherUserId] : null;
-      if (otherUser?.type === 'bot') {
-        // Fire bot response asynchronously (don't block the send flow)
+      if (!attachment && otherUser?.type === 'bot') {
         generateBotReply({
           botUser: otherUser,
           userMessage: savedMessage,
@@ -666,14 +774,59 @@ export const Transmissions: React.FC = () => {
       }
     } catch (err: any) {
       console.error('[Transmissions] Error sending transmit:', err);
-      // Restore the message so the user can retry
-      setMessage(savedMessage);
+      if (!attachment) setMessage(savedMessage);
       setBurnDuration(savedBurnDuration);
       const msg = err?.message ?? 'Unknown error';
       setError(`Failed to send: ${msg}`);
     } finally {
       setSending(false);
     }
+  };
+
+  const handleSendMessage = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    await sendTransmit({ text: message });
+  };
+
+  const uploadAndSendAttachment = async (file: File, kind: 'image' | 'file') => {
+    if (!activeTransmission || !currentUser) return;
+    setUploadingAttachment(true);
+    setError(null);
+    try {
+      const fileExt = file.name.split('.').pop() || (kind === 'image' ? 'png' : 'bin');
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const filePath = `transmission_attachments/${activeTransmission.id}/${currentUser.id}/${crypto.randomUUID()}-${safeName}.${fileExt}`;
+      const { error: uploadError } = await supabase.storage.from('media').upload(filePath, file, { upsert: true, contentType: file.type || undefined });
+      if (uploadError) throw uploadError;
+      const { data: { publicUrl } } = supabase.storage.from('media').getPublicUrl(filePath);
+      await sendTransmit({
+        text: message,
+        attachment: {
+          url: publicUrl,
+          name: file.name,
+          size: file.size,
+          mime: file.type || 'application/octet-stream',
+          kind,
+        },
+      });
+    } catch (err: any) {
+      console.error('[Transmissions] Attachment upload failed:', err);
+      setError(`${kind === 'image' ? 'Image' : 'File'} upload failed: ${err?.message || 'Unknown error'}`);
+    } finally {
+      setUploadingAttachment(false);
+    }
+  };
+
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) await uploadAndSendAttachment(file, 'image');
+    event.target.value = '';
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) await uploadAndSendAttachment(file, file.type.startsWith('image/') ? 'image' : 'file');
+    event.target.value = '';
   };
 
   const handleTyping = () => {
@@ -984,8 +1137,28 @@ export const Transmissions: React.FC = () => {
                             ? 'bg-accent text-black font-bold rounded-br-none shadow-[0_0_20px_rgba(0,243,255,0.1)]' 
                             : 'bg-white/5 text-gray-300 border border-white/10 rounded-bl-none'
                         }`}>
-                          {/* Show decrypted content if available, otherwise raw (unencrypted) */}
-                          {decryptedCache[t.id] ?? t.content}
+                          {t.media_url && t.media_type === 'image' && (
+                            <button type="button" onClick={() => setFullSizeImage(t.media_url ?? null)} className="mb-2 block overflow-hidden rounded-xl border border-black/10">
+                              <img src={t.media_url} alt={t.attachment_name || 'Attached image'} className="max-h-72 max-w-full rounded-xl object-cover" />
+                            </button>
+                          )}
+                          {t.attachment_url && t.media_type !== 'image' && (
+                            <a
+                              href={t.attachment_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              download={t.attachment_name || undefined}
+                              className={`mb-2 flex min-w-56 items-center gap-3 rounded-xl border p-3 transition ${isOwn ? 'border-black/10 bg-black/10 hover:bg-black/20' : 'border-white/10 bg-black/30 hover:border-accent/30'}`}
+                            >
+                              <FileText className="h-5 w-5 flex-shrink-0" />
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-[10px] font-black uppercase tracking-widest">{t.attachment_name || 'Attached file'}</span>
+                                <span className="block text-[8px] uppercase tracking-widest opacity-60">{formatFileSize(t.attachment_size)}</span>
+                              </span>
+                              <Download className="h-4 w-4 flex-shrink-0" />
+                            </a>
+                          )}
+                          {visibleTransmitText(t) && <span className="whitespace-pre-wrap">{visibleTransmitText(t)}</span>}
                           {/* Encryption indicator */}
                           {t.encryption_key === 'aes-gcm-pbkdf2' && (
                             <div className="absolute -top-1 -left-1">
@@ -1005,8 +1178,9 @@ export const Transmissions: React.FC = () => {
                           )}
                         </div>
                       </div>
-                      <span className="text-[8px] text-gray-700 mt-1 uppercase tracking-widest">
-                        {format(new Date(t.created_at), 'HH:mm:ss')}
+                      <span className={`mt-1 flex items-center gap-2 text-[8px] uppercase tracking-widest ${isOwn ? 'text-gray-600' : 'text-gray-700'}`}>
+                        <span>{format(new Date(t.created_at), 'HH:mm:ss')}</span>
+                        {isOwn && renderDeliveryStatus(t)}
                       </span>
                     </div>
                   </div>
@@ -1074,12 +1248,14 @@ export const Transmissions: React.FC = () => {
                   placeholder="ENCRYPTED TRANSMISSION..."
                   className="w-full bg-transparent border-none outline-none text-white p-3 min-h-[44px] max-h-32 resize-none placeholder:text-gray-700 text-[11px] uppercase tracking-wider"
                 />
+                <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+                <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileUpload} />
                 <div className="flex items-center justify-between px-2 py-1 border-t border-white/5 mt-2">
                   <div className="flex items-center gap-1">
-                    <button type="button" onClick={() => setError('Image uploads coming soon.')} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-gray-600 hover:text-accent" title="Attach image">
+                    <button type="button" onClick={() => imageInputRef.current?.click()} disabled={sending || uploadingAttachment} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-gray-600 hover:text-accent disabled:opacity-40" title="Attach image">
                       <ImageIcon className="w-4 h-4" />
                     </button>
-                    <button type="button" onClick={() => setError('File attachments coming soon.')} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-gray-600 hover:text-accent" title="Attach file">
+                    <button type="button" onClick={() => fileInputRef.current?.click()} disabled={sending || uploadingAttachment} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-gray-600 hover:text-accent disabled:opacity-40" title="Attach file">
                       <Paperclip className="w-4 h-4" />
                     </button>
                     <div className="h-4 w-[1px] bg-white/10 mx-1" />
@@ -1101,7 +1277,7 @@ export const Transmissions: React.FC = () => {
                   </div>
                   <button 
                     type="submit"
-                    disabled={!message.trim() || sending}
+                    disabled={(!message.trim() && !uploadingAttachment) || sending || uploadingAttachment}
                     onClick={(e) => {
                       // Explicit click handler as backup for form submit
                       e.preventDefault();
@@ -1109,7 +1285,7 @@ export const Transmissions: React.FC = () => {
                     }}
                     className="bg-accent hover:bg-accent/80 disabled:bg-gray-800 disabled:text-gray-600 text-black p-2.5 rounded-xl transition-all shadow-[0_0_15px_rgba(0,243,255,0.2)] group cursor-pointer"
                   >
-                    {sending ? (
+                    {sending || uploadingAttachment ? (
                       <RefreshCw className="w-4 h-4 animate-spin" />
                     ) : (
                       <Send className="w-4 h-4 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
@@ -1154,6 +1330,23 @@ export const Transmissions: React.FC = () => {
           </div>
         )}
       </div>
+
+      <AnimatePresence>
+        {fullSizeImage && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[180] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md"
+            onClick={() => setFullSizeImage(null)}
+          >
+            <button type="button" className="absolute right-5 top-5 rounded-full border border-white/10 bg-white/5 p-2 text-white/60 hover:text-white" onClick={() => setFullSizeImage(null)}>
+              <X className="h-5 w-5" />
+            </button>
+            <img src={fullSizeImage} alt="Full-size attachment" className="max-h-[86vh] max-w-[92vw] rounded-2xl border border-white/10 object-contain shadow-2xl" />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* New Chat Modal */}
       <NewTransmissionModal 

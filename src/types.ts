@@ -164,6 +164,13 @@ export interface Transmit {
   media_url?: string | null;
   media_type?: 'image' | 'video' | null;
   read_at?: string | null;
+  status?: 'sent' | 'delivered' | 'seen';
+  delivered_at?: string | null;
+  seen_at?: string | null;
+  attachment_url?: string | null;
+  attachment_name?: string | null;
+  attachment_size?: number | null;
+  attachment_mime?: string | null;
   burn_duration?: number | null;
   expires_at?: string | null;
   encryption_key?: string | null;
