@@ -24,6 +24,7 @@ import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
 import { initWebhookListener } from "./webhookListener.js";
 import botApi from './botApi.js';
 import { registerPushRoutes } from './pushNotifications.js';
+import { registerLiveKitRoutes } from './livekitRoutes.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -392,6 +393,7 @@ async function startServer() {
   // These must be mounted in the Railway entrypoint before static SPA fallback handling.
   app.use('/api/bot', botApi);
   registerPushRoutes(app, supabase);
+  registerLiveKitRoutes(app, supabase);
 
 
   app.post('/api/colosseum/sapphire/ensure', async (_req, res) => {
@@ -1035,6 +1037,8 @@ app.post("/api/cred/exchange", async (req, res) => {
           callerName: data.callerName,
           callerAvatar: data.callerAvatar,
           offer: data.offer,
+          roomName: data.roomName,
+          videoEnabled: data.videoEnabled,
           transmissionId: data.transmissionId
         });
       }
@@ -1043,7 +1047,7 @@ app.post("/api/cred/exchange", async (req, res) => {
     socket.on('call:accept', (data) => {
       const targetSocketId = connectedUsers.get(data.callerId);
       if (targetSocketId) {
-        io.to(targetSocketId).emit('call:accepted', { answer: data.answer });
+        io.to(targetSocketId).emit('call:accepted', { answer: data.answer, roomName: data.roomName });
       }
     });
 

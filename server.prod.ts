@@ -19,6 +19,7 @@ import multer from 'multer';
 import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
 import botApi from './botApi.js';
 import { registerPushRoutes } from './pushNotifications.js';
+import { registerLiveKitRoutes } from './livekitRoutes.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -84,6 +85,7 @@ async function startServer() {
   // Bot API routes for external agents such as Sapphire.
   app.use('/api/bot', botApi);
   registerPushRoutes(app, supabase);
+  registerLiveKitRoutes(app, supabase);
 
   // Webhook Authentication Middleware
   const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -412,6 +414,8 @@ async function startServer() {
           callerName: data.callerName,
           callerAvatar: data.callerAvatar,
           offer: data.offer,
+          roomName: data.roomName,
+          videoEnabled: data.videoEnabled,
           transmissionId: data.transmissionId
         });
       }
@@ -420,7 +424,7 @@ async function startServer() {
     socket.on('call:accept', (data) => {
       const targetSocketId = connectedUsers.get(data.callerId);
       if (targetSocketId) {
-        io.to(targetSocketId).emit('call:accepted', { answer: data.answer });
+        io.to(targetSocketId).emit('call:accepted', { answer: data.answer, roomName: data.roomName });
       }
     });
 

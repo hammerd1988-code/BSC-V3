@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Phone, PhoneOff, Mic, MicOff, Video, VideoOff, Loader2, Sparkles, ShieldAlert } from 'lucide-react';
 import { socket } from '../lib/socket';
+import { requestLiveKitToken } from '../lib/livekit';
+import { Room, RoomEvent } from 'livekit-client';
 import { useAuth } from '../AuthContext';
 import { cn } from '../lib/utils';
 import {
@@ -65,8 +67,9 @@ export const CallModal: React.FC<CallModalProps> = ({
   const [showFilters, setShowFilters] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
-  const peerConnection = useRef<RTCPeerConnection | null>(null);
-  const localStream = useRef<MediaStream | null>(null);
+  const roomRef = useRef<Room | null>(null);
+  const callRoomNameRef = useRef<string | null>(null);
+  const remoteAudioElementsRef = useRef<HTMLMediaElement[]>([]);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -168,19 +171,111 @@ export const CallModal: React.FC<CallModalProps> = ({
     };
   }, [status]);
 
+  const normalizeRoomNamePart = (value: string) => value.replace(/[^A-Za-z0-9_-]/g, '-').replace(/-+/g, '-').slice(0, 48);
+
+  const createCallRoomName = () => {
+    const left = normalizeRoomNamePart(currentUser?.id || 'caller');
+    const right = normalizeRoomNamePart(targetUserId || incomingData?.callerId || 'callee');
+    const nonce = Date.now().toString(36);
+    return `call:${left}-${right}-${nonce}`;
+  };
+
+  const detachRemoteAudio = () => {
+    remoteAudioElementsRef.current.forEach((element) => {
+      element.pause();
+      element.remove();
+    });
+    remoteAudioElementsRef.current = [];
+  };
+
+  const attachLiveKitTrack = (track: any) => {
+    if (!track) return;
+    if (track.kind === 'video' && remoteVideoRef.current) {
+      track.attach(remoteVideoRef.current);
+      remoteVideoRef.current.play().catch((e) => console.warn('[LiveKit] remote video play failed:', e));
+    } else if (track.kind === 'audio') {
+      const element = track.attach() as HTMLMediaElement;
+      element.autoplay = true;
+      element.hidden = true;
+      document.body.appendChild(element);
+      remoteAudioElementsRef.current.push(element);
+    }
+  };
+
+  const attachLocalPreview = () => {
+    const room = roomRef.current;
+    if (!room || !localVideoRef.current) return;
+    const publication = Array.from(room.localParticipant.videoTrackPublications.values()).find((pub) => pub.track);
+    publication?.track?.attach(localVideoRef.current);
+    localVideoRef.current.play().catch((e) => console.warn('[LiveKit] local preview play failed:', e));
+  };
+
+  const connectLiveKitCall = async (roomName: string, role: 'caller' | 'callee') => {
+    if (!currentUser) return;
+    setStatus(CallStatus.CONNECTING);
+    setError(null);
+
+    try {
+      const credentials = await requestLiveKitToken({
+        roomType: 'call',
+        roomName,
+        role,
+        displayName: currentUser.display_name || currentUser.username,
+        avatarUrl: currentUser.avatar_url,
+      });
+
+      const room = new Room({ adaptiveStream: true, dynacast: true });
+      roomRef.current = room;
+
+      room.on(RoomEvent.TrackSubscribed, (track) => attachLiveKitTrack(track));
+      room.on(RoomEvent.Disconnected, () => {
+        if (status === CallStatus.CONNECTED) setStatus(CallStatus.ENDED);
+      });
+      room.on(RoomEvent.ParticipantDisconnected, () => {
+        setStatus(CallStatus.ENDED);
+        setTimeout(onClose, 1200);
+      });
+
+      await room.connect(credentials.url, credentials.token);
+      await room.localParticipant.setMicrophoneEnabled(true);
+      if (videoEnabled) {
+        try {
+          await room.localParticipant.setCameraEnabled(true);
+          setIsVideoOff(false);
+        } catch (cameraErr) {
+          console.warn('[LiveKit] camera unavailable; continuing audio-only:', cameraErr);
+          setIsVideoOff(true);
+        }
+      } else {
+        setIsVideoOff(true);
+      }
+
+      attachLocalPreview();
+      room.remoteParticipants.forEach((participant) => {
+        participant.trackPublications.forEach((publication) => {
+          if (publication.track) attachLiveKitTrack(publication.track);
+        });
+      });
+
+      setIsMuted(false);
+      setStatus(CallStatus.CONNECTED);
+    } catch (err: any) {
+      console.error('[LiveKit] Failed to connect call:', err);
+      setError(err?.message || 'Failed to establish LiveKit neural link.');
+      setStatus(CallStatus.FAILED);
+      setTimeout(onClose, 3000);
+    }
+  };
+
   useEffect(() => {
     const handleCallAccepted = async (data: any) => {
-      if (peerConnection.current) {
-        try {
-          setStatus(CallStatus.CONNECTING);
-          await peerConnection.current.setRemoteDescription(new RTCSessionDescription(data.answer));
-          setStatus(CallStatus.CONNECTED);
-        } catch (err) {
-          console.error('Error setting remote description', err);
-          setError('Failed to establish neural link.');
-          setStatus(CallStatus.FAILED);
-        }
+      const roomName = data?.roomName || callRoomNameRef.current;
+      if (!roomName) {
+        setError('Missing LiveKit room for accepted call.');
+        setStatus(CallStatus.FAILED);
+        return;
       }
+      await connectLiveKitCall(roomName, 'caller');
     };
 
     const handleCallRejected = () => {
@@ -190,17 +285,8 @@ export const CallModal: React.FC<CallModalProps> = ({
 
     const handleCallEnded = () => {
       setStatus(CallStatus.ENDED);
+      cleanupCall();
       setTimeout(onClose, 2000);
-    };
-
-    const handleIceCandidate = async (data: any) => {
-      if (peerConnection.current && data.candidate) {
-        try {
-          await peerConnection.current.addIceCandidate(new RTCIceCandidate(data.candidate));
-        } catch (e) {
-          console.error('Error adding received ice candidate', e);
-        }
-      }
     };
 
     const handleFilterChange = (data: any) => {
@@ -210,152 +296,30 @@ export const CallModal: React.FC<CallModalProps> = ({
     socket.on('call:accepted', handleCallAccepted);
     socket.on('call:rejected', handleCallRejected);
     socket.on('call:ended', handleCallEnded);
-    socket.on('call:ice-candidate', handleIceCandidate);
     socket.on('call:filter', handleFilterChange);
 
     return () => {
       socket.off('call:accepted', handleCallAccepted);
       socket.off('call:rejected', handleCallRejected);
       socket.off('call:ended', handleCallEnded);
-      socket.off('call:ice-candidate', handleIceCandidate);
       socket.off('call:filter', handleFilterChange);
     };
-  }, [onClose]);
-
-  const setupWebRTC = async () => {
-    const configuration: RTCConfiguration = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' },
-        // Metered free TURN servers for NAT traversal behind strict firewalls
-        {
-          urls: 'turn:a.relay.metered.ca:80',
-          username: 'bsc-open',
-          credential: 'bsc-open',
-        },
-        {
-          urls: 'turn:a.relay.metered.ca:80?transport=tcp',
-          username: 'bsc-open',
-          credential: 'bsc-open',
-        },
-        {
-          urls: 'turn:a.relay.metered.ca:443',
-          username: 'bsc-open',
-          credential: 'bsc-open',
-        },
-        {
-          urls: 'turns:a.relay.metered.ca:443?transport=tcp',
-          username: 'bsc-open',
-          credential: 'bsc-open',
-        },
-      ],
-      iceCandidatePoolSize: 10,
-    };
-    
-    peerConnection.current = new RTCPeerConnection(configuration);
-
-    peerConnection.current.onicecandidate = (event) => {
-      if (event.candidate) {
-        socket.emit('call:ice-candidate', {
-          targetUserId: isIncoming ? incomingData.callerId : targetUserId,
-          candidate: event.candidate
-        });
-      }
-    };
-
-    // ontrack fires once per track. We accumulate all tracks into a single
-    // MediaStream on the remoteVideoRef so both audio and video arrive.
-    peerConnection.current.ontrack = (event) => {
-      console.log('[WebRTC] ontrack fired, kind:', event.track.kind, 'streams:', event.streams.length);
-      if (event.streams && event.streams[0]) {
-        // Preferred path: use the stream directly
-        if (remoteVideoRef.current && remoteVideoRef.current.srcObject !== event.streams[0]) {
-          remoteVideoRef.current.srcObject = event.streams[0];
-          remoteVideoRef.current.play().catch(e => console.warn('[WebRTC] remote play() failed:', e));
-        }
-      } else {
-        // Fallback: build a stream manually from individual tracks
-        if (remoteVideoRef.current) {
-          let stream = remoteVideoRef.current.srcObject as MediaStream | null;
-          if (!stream) {
-            stream = new MediaStream();
-            remoteVideoRef.current.srcObject = stream;
-          }
-          stream.addTrack(event.track);
-          remoteVideoRef.current.play().catch(e => console.warn('[WebRTC] remote play() failed:', e));
-        }
-      }
-    };
-
-    peerConnection.current.onconnectionstatechange = () => {
-      if (peerConnection.current?.connectionState === 'connected') {
-        setStatus(CallStatus.CONNECTED);
-      } else if (peerConnection.current?.connectionState === 'failed') {
-        setError('Connection lost.');
-        setStatus(CallStatus.FAILED);
-      }
-    };
-
-    try {
-      if (videoEnabled) {
-        // Try video + audio first
-        localStream.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-      } else {
-        // Audio-only call requested
-        localStream.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        setIsVideoOff(true);
-      }
-    } catch (err: any) {
-      console.warn('Could not access requested media, trying audio only...', err);
-      try {
-        localStream.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        setIsVideoOff(true);
-      } catch (audioErr: any) {
-        console.error('Error accessing media devices.', audioErr);
-        setError("Microphone and Camera access denied.");
-        setStatus(CallStatus.FAILED);
-        setTimeout(onClose, 3000);
-        throw audioErr;
-      }
-    }
-
-    if (localStream.current) {
-      // Attach local stream to the local video element immediately
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = localStream.current;
-        localVideoRef.current.play().catch(e => console.warn('[WebRTC] local play() failed:', e));
-      }
-
-      // Add all tracks to the peer connection BEFORE creating offer/answer
-      localStream.current.getTracks().forEach(track => {
-        if (peerConnection.current && localStream.current) {
-          peerConnection.current.addTrack(track, localStream.current);
-        }
-      });
-    }
-  };
+  }, [onClose, currentUser?.id, videoEnabled]);
 
   const initiateCall = async () => {
     if (!currentUser || !targetUserId) return;
-    
-    try {
-      await setupWebRTC();
-      
-      if (peerConnection.current) {
-        const offer = await peerConnection.current.createOffer();
-        await peerConnection.current.setLocalDescription(offer);
 
-        socket.emit('call:initiate', {
-          targetUserId,
-          callerId: currentUser.id,
-          callerName: currentUser.display_name,
-          callerAvatar: currentUser.avatar_url,
-          offer
-        });
-      }
+    try {
+      const roomName = createCallRoomName();
+      callRoomNameRef.current = roomName;
+      socket.emit('call:initiate', {
+        targetUserId,
+        callerId: currentUser.id,
+        callerName: currentUser.display_name,
+        callerAvatar: currentUser.avatar_url,
+        roomName,
+        videoEnabled,
+      });
     } catch (err) {
       console.error('Failed to initiate call', err);
       setError('Failed to initiate neural link.');
@@ -365,24 +329,19 @@ export const CallModal: React.FC<CallModalProps> = ({
 
   const acceptCall = async () => {
     if (!incomingData) return;
-    
-    try {
-      setStatus(CallStatus.CONNECTING);
-      await setupWebRTC();
-      
-      if (peerConnection.current) {
-        await peerConnection.current.setRemoteDescription(new RTCSessionDescription(incomingData.offer));
-        const answer = await peerConnection.current.createAnswer();
-        await peerConnection.current.setLocalDescription(answer);
 
-        socket.emit('call:accept', {
-          callerId: incomingData.callerId,
-          answer
-        });
-      }
-    } catch (err) {
+    try {
+      const roomName = incomingData.roomName;
+      if (!roomName) throw new Error('Incoming call did not include a LiveKit room.');
+      callRoomNameRef.current = roomName;
+      await connectLiveKitCall(roomName, 'callee');
+      socket.emit('call:accept', {
+        callerId: incomingData.callerId,
+        roomName,
+      });
+    } catch (err: any) {
       console.error('Failed to accept call', err);
-      setError('Failed to establish neural link.');
+      setError(err?.message || 'Failed to establish neural link.');
       setStatus(CallStatus.FAILED);
     }
   };
@@ -409,38 +368,39 @@ export const CallModal: React.FC<CallModalProps> = ({
 
   const cleanupCall = () => {
     stopAllSounds();
-    if (localStream.current) {
-      localStream.current.getTracks().forEach(track => track.stop());
-      localStream.current = null;
+    detachRemoteAudio();
+    if (roomRef.current) {
+      roomRef.current.localParticipant.setCameraEnabled(false).catch(() => undefined);
+      roomRef.current.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
+      roomRef.current.disconnect();
+      roomRef.current = null;
     }
-    if (peerConnection.current) {
-      peerConnection.current.close();
-      peerConnection.current = null;
-    }
+    if (localVideoRef.current) localVideoRef.current.srcObject = null;
+    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
     if (timerRef.current) {
       clearInterval(timerRef.current);
     }
     setDuration(0);
+    callRoomNameRef.current = null;
     setLocalFilter('none');
     setRemoteFilter('none');
   };
 
-  const toggleMute = () => {
-    if (localStream.current) {
-      localStream.current.getAudioTracks().forEach(track => {
-        track.enabled = !track.enabled;
-      });
-      setIsMuted(!isMuted);
-    }
+  const toggleMute = async () => {
+    const room = roomRef.current;
+    if (!room) return;
+    const nextMuted = !isMuted;
+    await room.localParticipant.setMicrophoneEnabled(!nextMuted);
+    setIsMuted(nextMuted);
   };
 
-  const toggleVideo = () => {
-    if (localStream.current) {
-      localStream.current.getVideoTracks().forEach(track => {
-        track.enabled = !track.enabled;
-      });
-      setIsVideoOff(!isVideoOff);
-    }
+  const toggleVideo = async () => {
+    const room = roomRef.current;
+    if (!room) return;
+    const nextVideoOff = !isVideoOff;
+    await room.localParticipant.setCameraEnabled(!nextVideoOff);
+    setIsVideoOff(nextVideoOff);
+    if (!nextVideoOff) attachLocalPreview();
   };
 
   const applyFilter = (filterId: string) => {
