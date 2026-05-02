@@ -29,9 +29,15 @@ import {
   Eye,
   Clock,
   Plus,
-  LogOut
+  LogOut,
+  Code2,
+  Layers3,
+  Target,
+  Users,
+  Swords,
+  Shield
 } from 'lucide-react';
-import { User, Post, Bounty } from '../types';
+import { User, Post, Bounty, Faction, FactionMember, SkillManifestItem } from '../types';
 import { PostCard } from './PostCard';
 import { cn } from '../lib/utils';
 import { generateProfileDesign } from './Feed';
@@ -49,6 +55,54 @@ import { BotPerformanceMetrics } from './BotPerformanceMetrics';
 import { CreatePostModal } from './CreatePostModal';
 import { AvatarBuilderModal } from './AvatarBuilderModal';
 import { CasperState } from './CasperState';
+import { ContributionHeatmap } from './ContributionHeatmap';
+
+interface ProfileGladiator {
+  id: string;
+  user_id: string;
+  name: string;
+  avatar_url?: string | null;
+  glow_color?: string | null;
+  wins?: number | null;
+  losses?: number | null;
+  model?: string | null;
+}
+
+interface ProfileFactionMembership extends FactionMember {
+  faction?: Faction | null;
+}
+
+const TECH_COLOR_MAP: Record<string, string> = {
+  python: '#3776AB',
+  react: '#61DAFB',
+  rust: '#F74C00',
+  typescript: '#3178C6',
+  'node.js': '#5FA04E',
+  node: '#5FA04E',
+  supabase: '#3ECF8E',
+  postgres: '#4169E1',
+  tailwind: '#38BDF8',
+  solidity: '#8B5CF6',
+};
+
+const getTechBadgeStyle = (tech: string): React.CSSProperties => {
+  const palette = ['#FF1744', '#00E5FF', '#D946EF', '#FACC15', '#22C55E', '#A855F7'];
+  const key = tech.toLowerCase();
+  const color = TECH_COLOR_MAP[key] ?? palette[[...key].reduce((sum, char) => sum + char.charCodeAt(0), 0) % palette.length];
+  return {
+    color,
+    borderColor: `${color}66`,
+    backgroundColor: `${color}18`,
+    boxShadow: `0 0 16px ${color}22`,
+  };
+};
+
+const getSkillTone = (level: string) => {
+  if (level === 'expert') return 'text-yellow-300 border-yellow-300/30 bg-yellow-300/10';
+  if (level === 'advanced') return 'text-accent border-accent/30 bg-accent/10';
+  if (level === 'intermediate') return 'text-cyan-300 border-cyan-300/30 bg-cyan-300/10';
+  return 'text-gray-400 border-white/10 bg-white/[0.03]';
+};
 
 export const Profile: React.FC = () => {
   const { username } = useParams<{ username: string }>();
@@ -57,6 +111,8 @@ export const Profile: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [posts, setPosts] = useState<Post[]>([]);
   const [bounties, setBounties] = useState<Bounty[]>([]);
+  const [botRoster, setBotRoster] = useState<ProfileGladiator[]>([]);
+  const [profileFactions, setProfileFactions] = useState<ProfileFactionMembership[]>([]);
   const [activeTab, setActiveTab] = useState<'posts' | 'media' | 'likes' | 'neural_history' | 'friends' | 'performance'>('posts');
   const [isGeneratingAvatar, setIsGeneratingAvatar] = useState(false);
   const [showAvatarBuilder, setShowAvatarBuilder] = useState(false);
@@ -286,6 +342,64 @@ export const Profile: React.FC = () => {
   };
 
   useEffect(() => {
+    if (!user || user.type !== 'human') {
+      setBotRoster([]);
+      return;
+    }
+
+    const fetchBotRoster = async () => {
+      const { data, error } = await supabase
+        .from('gladiators')
+        .select('id,user_id,name,avatar_url,glow_color,wins,losses,model')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+      if (error) {
+        console.warn('[Profile] Failed to load bot roster', error.message);
+        setBotRoster([]);
+        return;
+      }
+      setBotRoster((data ?? []) as ProfileGladiator[]);
+    };
+
+    void fetchBotRoster();
+    const channel = supabase
+      .channel(`profile-gladiators-${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiators', filter: `user_id=eq.${user.id}` }, () => void fetchBotRoster())
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [user?.id, user?.type]);
+
+  useEffect(() => {
+    if (!user) {
+      setProfileFactions([]);
+      return;
+    }
+
+    const fetchProfileFactions = async () => {
+      const { data, error } = await supabase
+        .from('faction_members')
+        .select('*, faction:factions(*)')
+        .eq('user_id', user.id)
+        .order('joined_at', { ascending: false });
+      if (error) {
+        console.warn('[Profile] Failed to load faction badges', error.message);
+        setProfileFactions([]);
+        return;
+      }
+      setProfileFactions((data ?? []) as ProfileFactionMembership[]);
+    };
+
+    void fetchProfileFactions();
+    const channel = supabase
+      .channel(`profile-factions-${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'faction_members', filter: `user_id=eq.${user.id}` }, () => void fetchProfileFactions())
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [user?.id]);
+
+  useEffect(() => {
     if (!user) return;
     if (user.id === 'void-architect-bot') {
       const mockLikes = Math.floor(Math.random() * 1000);
@@ -498,6 +612,11 @@ export const Profile: React.FC = () => {
   };
 
   const standing = getNeuralStanding(user.reputation_score);
+  const profileLayout = user.profile_layout || 'developer';
+  const techStack = Array.isArray(user.tech_stack) ? user.tech_stack : [];
+  const skillsManifest: SkillManifestItem[] = Array.isArray(user.skills_manifest) ? user.skills_manifest : [];
+  const lookingFor = Array.isArray(user.looking_for) ? user.looking_for : [];
+  const layoutLabel = profileLayout === 'showcase' ? 'Showcase' : profileLayout === 'minimal' ? 'Minimal' : 'Developer Card';
 
   return (
     <div className={cn(
@@ -542,7 +661,8 @@ export const Profile: React.FC = () => {
       </header>
 
       <main className={cn(
-        "max-w-2xl mx-auto",
+        profileLayout === 'showcase' ? "max-w-4xl mx-auto" : "max-w-2xl mx-auto",
+        profileLayout === 'minimal' && "max-w-xl",
         isHighContrast && "border-x border-white/10 min-h-screen shadow-[0_0_50px_rgba(255,255,255,0.05)]"
       )}>
         {/* Cover Image */}
@@ -760,7 +880,12 @@ export const Profile: React.FC = () => {
                 {standing.title}
               </div>
             </h2>
-            <p className={cn("text-sm text-gray-500", isHighContrast && "font-mono text-white/40 uppercase")}>@{user.username}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className={cn("text-sm text-gray-500", isHighContrast && "font-mono text-white/40 uppercase")}>@{user.username}</p>
+              <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.22em] text-gray-400">
+                {layoutLabel}
+              </span>
+            </div>
             {user.reputation_score !== undefined && (
               <div className="flex items-center gap-3 mt-2">
                 <div className="flex-1 max-w-[200px]">
@@ -861,6 +986,167 @@ export const Profile: React.FC = () => {
               </div>
 
               <CasperState context="profile" profileUsername={user.username} />
+
+              <div className={cn("mb-6 space-y-4", profileLayout === 'showcase' && "space-y-5")}>
+                {(user.currently_building || isMyProfile) && (
+                  <section className="relative overflow-hidden rounded-3xl border border-accent/20 bg-accent/5 p-4 shadow-[0_0_28px_rgba(255,0,0,0.08)]">
+                    <div className="absolute right-0 top-0 h-24 w-24 rounded-full bg-accent/10 blur-3xl" />
+                    <div className="relative z-10 flex items-start gap-3">
+                      <div className="mt-1 h-3 w-3 rounded-full bg-accent animate-pulse shadow-[0_0_18px_rgba(255,0,0,0.9)]" />
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between gap-3 mb-1">
+                          <p className="text-[9px] font-black uppercase tracking-[0.28em] text-accent">Currently Building</p>
+                          {isMyProfile && (
+                            <button onClick={() => setShowEditProfileModal(true)} className="text-[9px] font-black uppercase tracking-widest text-gray-500 hover:text-accent">
+                              Edit
+                            </button>
+                          )}
+                        </div>
+                        <p className="text-sm font-bold text-white leading-relaxed">
+                          {user.currently_building || 'Declare your live build signal from profile settings.'}
+                        </p>
+                      </div>
+                    </div>
+                  </section>
+                )}
+
+                {profileFactions.length > 0 && (
+                  <section className="rounded-3xl border border-white/10 bg-black/35 p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <Shield className="w-4 h-4 text-cyan-300" />
+                        <h3 className="text-[10px] font-black uppercase tracking-[0.28em] text-white">Faction Badges</h3>
+                      </div>
+                      <Link to="/factions" className="text-[9px] font-black uppercase tracking-widest text-accent hover:text-white">Discover</Link>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {profileFactions.map((membership) => membership.faction ? (
+                        <Link
+                          key={membership.id}
+                          to={`/factions/${membership.faction.slug}`}
+                          className="group inline-flex items-center gap-2 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-cyan-100 hover:border-accent/50 hover:text-accent transition-all"
+                        >
+                          {membership.faction.icon_url ? (
+                            <img src={membership.faction.icon_url} alt="" className="h-4 w-4 rounded-full object-cover" />
+                          ) : (
+                            <Shield className="h-3.5 w-3.5" />
+                          )}
+                          {membership.faction.name}
+                          <span className="text-gray-600 group-hover:text-gray-400">{membership.role}</span>
+                        </Link>
+                      ) : null)}
+                    </div>
+                  </section>
+                )}
+
+                {techStack.length > 0 && (
+                  <section className="rounded-3xl border border-white/10 bg-black/35 p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Code2 className="w-4 h-4 text-accent" />
+                      <h3 className="text-[10px] font-black uppercase tracking-[0.28em] text-white">Tech Stack</h3>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {techStack.map((tech) => (
+                        <span key={tech} style={getTechBadgeStyle(tech)} className="rounded-full border px-3 py-1.5 text-[10px] font-black uppercase tracking-widest">
+                          {tech}
+                        </span>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {lookingFor.length > 0 && (
+                  <section className="rounded-3xl border border-white/10 bg-black/35 p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Target className="w-4 h-4 text-fuchsia-300" />
+                      <h3 className="text-[10px] font-black uppercase tracking-[0.28em] text-white">Looking For</h3>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {lookingFor.map((item) => (
+                        <span key={item} className="rounded-full border border-fuchsia-400/25 bg-fuchsia-400/10 px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-fuchsia-100">
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {skillsManifest.length > 0 && (
+                  <section className="rounded-3xl border border-white/10 bg-black/35 p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Layers3 className="w-4 h-4 text-yellow-300" />
+                      <h3 className="text-[10px] font-black uppercase tracking-[0.28em] text-white">Skills & Capabilities</h3>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {skillsManifest.map((skill) => (
+                        <div key={`${skill.name}-${skill.level}`} className={cn("rounded-2xl border px-3 py-2", getSkillTone(skill.level))}>
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-xs font-black text-white truncate">{skill.name}</span>
+                            <span className="text-[8px] font-black uppercase tracking-widest opacity-80">{skill.level}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {user.type === 'human' && (
+                  <section className="rounded-3xl border border-white/10 bg-black/35 p-4">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <Swords className="w-4 h-4 text-accent" />
+                        <h3 className="text-[10px] font-black uppercase tracking-[0.28em] text-white">Bot Roster</h3>
+                      </div>
+                      <Link to="/colosseum" className="text-[9px] font-black uppercase tracking-widest text-accent hover:text-white">Colosseum</Link>
+                    </div>
+                    {botRoster.length === 0 ? (
+                      <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-6 text-center">
+                        <Bot className="w-10 h-10 mx-auto mb-3 text-gray-700" />
+                        <p className="text-xs font-black uppercase tracking-widest text-gray-500">No custom gladiators deployed yet</p>
+                        {isMyProfile && (
+                          <Link to="/colosseum" className="mt-3 inline-flex rounded-xl border border-accent/30 bg-accent/10 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-accent hover:bg-accent/20">
+                            Build in Colosseum
+                          </Link>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {botRoster.map((bot) => (
+                        <Link
+                          key={bot.id}
+                          to={`/colosseum?gladiator=${bot.id}`}
+                          className="group relative overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] p-3 hover:border-accent/40 transition-all"
+                          style={{ boxShadow: `0 0 24px ${bot.glow_color || '#ff1744'}22` }}
+                        >
+                          <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity" style={{ background: `radial-gradient(circle at top right, ${bot.glow_color || '#ff1744'}22, transparent 45%)` }} />
+                          <div className="relative z-10 flex items-center gap-3">
+                            <img
+                              src={bot.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(bot.name)}&background=111111&color=ffffff`}
+                              alt={bot.name}
+                              className="h-12 w-12 rounded-2xl object-cover border"
+                              style={{ borderColor: bot.glow_color || '#ff1744' }}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <h4 className="truncate text-sm font-black text-white group-hover:text-accent transition-colors">{bot.name}</h4>
+                              <p className="text-[9px] font-mono uppercase tracking-widest text-gray-500 truncate">{bot.model || 'model unassigned'}</p>
+                              <div className="mt-2 flex items-center gap-2 text-[9px] font-black uppercase tracking-widest">
+                                <span className="text-green-300">{bot.wins ?? 0}W</span>
+                                <span className="text-gray-700">/</span>
+                                <span className="text-red-300">{bot.losses ?? 0}L</span>
+                              </div>
+                            </div>
+                          </div>
+                        </Link>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                )}
+
+                {profileLayout !== 'minimal' && user.type === 'human' && (
+                  <ContributionHeatmap userId={user.id} accentColor={profileColor} compact={profileLayout === 'developer'} />
+                )}
+              </div>
 
               {/* Sponsored Entity Section */}
               {user.sponsoredEntity ? (

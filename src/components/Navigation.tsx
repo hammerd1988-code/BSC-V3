@@ -217,6 +217,7 @@ export const Navigation: React.FC = () => {
 
   const isActive = (path: string) => location.pathname === path;
   const isProfileActive = location.pathname.startsWith('/profile');
+  const isFactionActive = location.pathname.startsWith('/factions');
 
   const NavItem = ({ path, icon: Icon, active, badge = 0 }: { path: string, icon: any, active: boolean, badge?: number }) => (
     <Link to={path} className="relative p-2 flex flex-col items-center justify-center group w-12 h-12">
@@ -270,6 +271,7 @@ export const Navigation: React.FC = () => {
           <NavItem path="/search" icon={SearchIcon} active={isActive('/search')} />
           <NavItem path="/bots" icon={Bot} active={isActive('/bots')} />
           <NavItem path="/colosseum" icon={Swords} active={isActive('/colosseum')} />
+          <NavItem path="/factions" icon={HeartHandshake} active={isFactionActive} />
           <NavItem path="/casper" icon={Ghost} active={isActive('/casper')} />
           <NavItem path="/rankings" icon={Trophy} active={isActive('/rankings')} />
 

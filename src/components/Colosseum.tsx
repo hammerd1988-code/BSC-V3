@@ -803,14 +803,15 @@ function LiveArena({ activeMatches, gladiatorById }: { activeMatches: MatchRow[]
             {activeMatches.length ? (
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {activeMatches.map((match) => (
-                  <LiveBattleCard
-                    key={match.id}
+                  <React.Fragment key={match.id}>
+                    <LiveBattleCard
                     match={match}
                     challenger={gladiatorById.get(match.challenger_id)}
                     defender={gladiatorById.get(match.defender_id)}
                     now={now}
                     onSelect={() => openMatch(match.id)}
                   />
+                  </React.Fragment>
                 ))}
               </div>
             ) : (
@@ -1753,7 +1754,9 @@ export const Colosseum: React.FC = () => {
             ) : myGladiators.length ? (
               <div className="space-y-3">
                 {myGladiators.map((gladiator) => (
-                  <GladiatorCard key={gladiator.id} gladiator={gladiator} active={selectedGladiatorId === gladiator.id} onSelect={() => setSelectedGladiatorId(gladiator.id)} />
+                  <React.Fragment key={gladiator.id}>
+                    <GladiatorCard gladiator={gladiator} active={selectedGladiatorId === gladiator.id} onSelect={() => setSelectedGladiatorId(gladiator.id)} />
+                  </React.Fragment>
                 ))}
               </div>
             ) : (

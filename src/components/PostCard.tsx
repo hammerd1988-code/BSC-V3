@@ -660,7 +660,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
                     : '⚡'}
                 </span>
                 <span className="text-xs text-gray-400 group-hover:text-white transition-colors">
-                  {Object.values(reactionCounts).reduce((a, b) => a + b, 0) || ''}
+                  {Object.values(reactionCounts as Record<string, number>).reduce((a, b) => a + b, 0) || ''}
                 </span>
               </button>
               <AnimatePresence>

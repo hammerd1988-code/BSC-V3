@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, Send, Loader2, RefreshCw, Trash2, Copy, Check, 
   AlertTriangle, Activity, Mic, MicOff, Volume2, X, Settings, 
-  Lock, Eye, EyeOff, Server, BrainCircuit, ChevronDown
+  Lock, Eye, EyeOff, Server, BrainCircuit, ChevronDown, Ghost, User, Cpu
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { generateText } from '../lib/ai';

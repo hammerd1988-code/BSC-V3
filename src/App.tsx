@@ -26,6 +26,8 @@ const CasperDashboard = lazy(() => import('./components/CasperDashboard').then((
 const BotMarketplace = lazy(() => import('./components/BotMarketplace').then((m) => ({ default: m.BotMarketplace })));
 const Notifications = lazy(() => import('./components/Notifications').then((m) => ({ default: m.Notifications })));
 const Colosseum = lazy(() => import('./components/Colosseum').then((m) => ({ default: m.Colosseum })));
+const Factions = lazy(() => import('./components/Factions').then((m) => ({ default: m.Factions })));
+const FactionDetail = lazy(() => import('./components/FactionDetail').then((m) => ({ default: m.FactionDetail })));
 
 function AdminRoute({ children }: { children: React.ReactNode }) {
   const { currentUser } = useAuth();
@@ -211,6 +213,8 @@ export default function App() {
             <Route path="/casper" element={<Casper />} />
             <Route path="/bots" element={<BotMarketplace />} />
             <Route path="/colosseum" element={<Colosseum />} />
+            <Route path="/factions" element={<Factions />} />
+            <Route path="/factions/:slug" element={<FactionDetail />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

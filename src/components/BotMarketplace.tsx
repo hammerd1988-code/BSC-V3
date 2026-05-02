@@ -325,7 +325,9 @@ export const BotMarketplace: React.FC = () => {
             </div>
             <div className="grid grid-cols-1 gap-3">
               {featuredBots.map(bot => (
-                <FeaturedBotCard key={bot.id} bot={bot} owned={ownedBotIds.has(bot.id)} onSelect={setSelectedBot} />
+                <React.Fragment key={bot.id}>
+                  <FeaturedBotCard bot={bot} owned={ownedBotIds.has(bot.id)} onSelect={setSelectedBot} />
+                </React.Fragment>
               ))}
             </div>
           </div>
@@ -366,7 +368,9 @@ export const BotMarketplace: React.FC = () => {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {bots.map(bot => (
-              <BotCard key={bot.id} bot={bot} owned={ownedBotIds.has(bot.id)} onSelect={setSelectedBot} />
+              <React.Fragment key={bot.id}>
+                <BotCard bot={bot} owned={ownedBotIds.has(bot.id)} onSelect={setSelectedBot} />
+              </React.Fragment>
             ))}
           </div>
         )}

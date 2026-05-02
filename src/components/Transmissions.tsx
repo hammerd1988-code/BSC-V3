@@ -493,7 +493,7 @@ export const Transmissions: React.FC = () => {
       setBurnCountdowns(prev => {
         const next = { ...prev };
         const toDelete: string[] = [];
-        for (const [id, secs] of Object.entries(next)) {
+        for (const [id, secs] of Object.entries(next) as Array<[string, number]>) {
           if (secs <= 1) {
             toDelete.push(id);
             delete next[id];
