@@ -53,6 +53,7 @@ interface Gladiator {
   cred: number;
   created_at: string;
   model: string | null;
+  api_base_url: string | null;
 }
 
 interface GladiatorAiMove {
@@ -171,6 +172,7 @@ const MODEL_GROUPS = [
     provider: 'Other',
     models: [
       { value: 'platform_default', label: 'Platform Default' },
+      { value: 'custom_model', label: 'Custom Model' },
     ],
   },
   {
@@ -220,6 +222,19 @@ const MODEL_GROUPS = [
 ];
 
 const DEFAULT_STATS: GladiatorStats = { speed: 52, accuracy: 54, endurance: 50 };
+
+const KNOWN_MODEL_VALUES = new Set(MODEL_GROUPS.flatMap((group) => group.models.map((model) => model.value)));
+
+function modelSelectValue(model: string | null | undefined) {
+  if (!model) return 'platform_default';
+  return KNOWN_MODEL_VALUES.has(model) ? model : 'custom_model';
+}
+
+function resolveModelValue(selectedModel: string, customModelId: string) {
+  if (selectedModel === 'platform_default') return null;
+  if (selectedModel === 'custom_model') return customModelId.trim() || null;
+  return selectedModel;
+}
 
 const toStats = (value: any): GladiatorStats => ({
   speed: clampStat(Number(value?.speed ?? DEFAULT_STATS.speed)),
@@ -999,13 +1014,15 @@ export const Colosseum: React.FC = () => {
     personality: '',
     glow_color: GLOW_COLORS[0],
     api_key: '',
+    api_base_url: '',
     model: 'platform_default',
+    custom_model_id: '',
   });
 
   const [showForgeApiKey, setShowForgeApiKey] = useState(false);
   const [showConfigApiKey, setShowConfigApiKey] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
-  const [configForm, setConfigForm] = useState({ api_key: '', model: 'platform_default' });
+  const [configForm, setConfigForm] = useState({ api_key: '', api_base_url: '', model: 'platform_default', custom_model_id: '' });
 
   const [tournaments, setTournaments] = useState<TournamentRow[]>([]);
   const [tournamentEntries, setTournamentEntries] = useState<TournamentEntryRow[]>([]);
@@ -1030,6 +1047,7 @@ export const Colosseum: React.FC = () => {
     cred: Number(row.cred ?? 0),
     created_at: row.created_at,
     model: row.model ?? null,
+    api_base_url: row.api_base_url ?? null,
   });
 
   const fetchArena = useCallback(async () => {
@@ -1040,7 +1058,7 @@ export const Colosseum: React.FC = () => {
         { data: activeMatchRows, error: activeMatchError },
         { data: recentMatchRows, error: recentMatchError },
       ] = await Promise.all([
-        supabase.from('gladiators').select('id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model').order('wins', { ascending: false }).order('cred', { ascending: false }),
+        supabase.from('gladiators').select('id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model,api_base_url').order('wins', { ascending: false }).order('cred', { ascending: false }),
         supabase.from('matches').select('*').is('completed_at', null).order('started_at', { ascending: false }),
         supabase.from('matches').select('*').not('completed_at', 'is', null).order('started_at', { ascending: false }).limit(30),
       ]);
@@ -1129,10 +1147,16 @@ export const Colosseum: React.FC = () => {
 
   useEffect(() => {
     if (selectedGladiator && selectedGladiator.user_id === currentUser?.id) {
-      setConfigForm({ api_key: '', model: selectedGladiator.model ?? 'platform_default' });
+      const nextModel = modelSelectValue(selectedGladiator.model);
+      setConfigForm({
+        api_key: '',
+        api_base_url: selectedGladiator.api_base_url ?? '',
+        model: nextModel,
+        custom_model_id: nextModel === 'custom_model' ? selectedGladiator.model ?? '' : '',
+      });
       setShowConfigApiKey(false);
     }
-  }, [selectedGladiator?.id, selectedGladiator?.model, selectedGladiator?.user_id, currentUser?.id]);
+  }, [selectedGladiator?.id, selectedGladiator?.model, selectedGladiator?.api_base_url, selectedGladiator?.user_id, currentUser?.id]);
 
   const createGladiator = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -1157,16 +1181,17 @@ export const Colosseum: React.FC = () => {
           glow_color: form.glow_color,
           stats,
           api_key: form.api_key.trim() || null,
-          model: form.api_key.trim() ? (form.model === 'platform_default' ? null : form.model) : null,
+          api_base_url: form.api_base_url.trim() || null,
+          model: (form.api_key.trim() || form.api_base_url.trim()) ? resolveModelValue(form.model, form.custom_model_id) : null,
         })
-        .select('id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model')
+        .select('id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model,api_base_url')
         .single();
 
       if (error) throw error;
       const created = normalizeGladiator(data);
       setGladiators((prev) => [created, ...prev]);
       setSelectedGladiatorId(created.id);
-      setForm({ name: '', avatar_url: '', personality: '', glow_color: GLOW_COLORS[0], api_key: '', model: 'platform_default' });
+      setForm({ name: '', avatar_url: '', personality: '', glow_color: GLOW_COLORS[0], api_key: '', api_base_url: '', model: 'platform_default', custom_model_id: '' });
       setNotice(`${created.name} has entered the pit. The crowd is watching.`);
     } catch (err) {
       handleDbError(err, 'CREATE', 'gladiators');
@@ -1183,7 +1208,8 @@ export const Colosseum: React.FC = () => {
     setNotice(null);
     try {
       const updatePayload: Record<string, string | null> = {
-        model: configForm.model === 'platform_default' ? null : configForm.model,
+        model: resolveModelValue(configForm.model, configForm.custom_model_id),
+        api_base_url: configForm.api_base_url.trim() || null,
       };
       if (configForm.api_key.trim()) {
         updatePayload.api_key = configForm.api_key.trim();
@@ -1585,10 +1611,19 @@ export const Colosseum: React.FC = () => {
                       {showForgeApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </button>
                   </div>
+                  <input
+                    value={form.api_base_url}
+                    onChange={(event) => setForm((prev) => ({ ...prev, api_base_url: event.target.value }))}
+                    type="url"
+                    placeholder="https://api.openai.com/v1"
+                    className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/60"
+                  />
+                  <p className="-mt-1 text-[10px] leading-5 text-zinc-500">Optional. Custom endpoint for OpenAI-compatible APIs (LM Studio, Ollama, etc.). Leave blank to use the default OpenAI endpoint.</p>
+
                   <select
                     value={form.model}
                     onChange={(event) => setForm((prev) => ({ ...prev, model: event.target.value }))}
-                    disabled={!form.api_key.trim()}
+                    disabled={!form.api_key.trim() && !form.api_base_url.trim()}
                     className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/60 disabled:opacity-50"
                   >
                     {MODEL_GROUPS.map((group) => (
@@ -1597,6 +1632,14 @@ export const Colosseum: React.FC = () => {
                       </optgroup>
                     ))}
                   </select>
+                  {form.model === 'custom_model' && (
+                    <input
+                      value={form.custom_model_id}
+                      onChange={(event) => setForm((prev) => ({ ...prev, custom_model_id: event.target.value }))}
+                      placeholder="Custom Model ID, e.g. llama-3.1-8b"
+                      className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/60"
+                    />
+                  )}
                 </div>
               </div>
 
@@ -1637,6 +1680,15 @@ export const Colosseum: React.FC = () => {
                         {showConfigApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </button>
                     </div>
+                    <input
+                      value={configForm.api_base_url}
+                      onChange={(event) => setConfigForm((prev) => ({ ...prev, api_base_url: event.target.value }))}
+                      type="url"
+                      placeholder="https://api.openai.com/v1"
+                      className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/60"
+                    />
+                    <p className="-mt-1 text-[10px] leading-5 text-zinc-500">Optional. Custom endpoint for OpenAI-compatible APIs (LM Studio, Ollama, etc.). Leave blank to use the default OpenAI endpoint.</p>
+
                     <select
                       value={configForm.model}
                       onChange={(event) => setConfigForm((prev) => ({ ...prev, model: event.target.value }))}
@@ -1648,6 +1700,14 @@ export const Colosseum: React.FC = () => {
                       </optgroup>
                     ))}
                     </select>
+                    {configForm.model === 'custom_model' && (
+                      <input
+                        value={configForm.custom_model_id}
+                        onChange={(event) => setConfigForm((prev) => ({ ...prev, custom_model_id: event.target.value }))}
+                        placeholder="Custom Model ID, e.g. llama-3.1-8b"
+                        className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/60"
+                      />
+                    )}
                     <button
                       type="button"
                       onClick={saveGladiatorAiConfig}
