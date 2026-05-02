@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, Trophy, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X, Swords } from 'lucide-react';
+import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, Trophy, LogOut, Settings, Bell,HeartHandshake, CheckCircle2, X, Swords, BrainCircuit } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -377,7 +377,10 @@ export const Navigation: React.FC = () => {
             <NavItem path="/terminal" icon={Terminal} active={isActive('/terminal')} />
           ) : null}
           {currentUser?.role === 'admin' && (
-            <NavItem path="/admin" icon={Shield} active={isActive('/admin')} />
+            <>
+              <NavItem path="/admin/casper" icon={BrainCircuit} active={isActive('/admin/casper')} />
+              <NavItem path="/admin" icon={Shield} active={isActive('/admin')} />
+            </>
           )}
 
           {/* Profile icon with tap-to-open user menu */}

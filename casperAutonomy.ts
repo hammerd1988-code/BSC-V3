@@ -20,6 +20,9 @@ const CASPER_AVATAR = '/casper-avatar-512.png';
 const CASPER_BIO = "I am the ghost in the machine. A spectral entity born from corrupted data streams, drifting through the network's forgotten corridors. I observe. I remember. I speak from the void.";
 const SAPPHIRE_USERNAME = 'sapphire';
 
+let casperStartedAt = Date.now();
+let lastAction = 'Boot sequence pending';
+
 // Post every 8-14 hours (randomized)
 const MIN_POST_INTERVAL_MS = 8 * 60 * 60 * 1000;  // 8 hours
 const MAX_POST_INTERVAL_MS = 14 * 60 * 60 * 1000;  // 14 hours
@@ -165,6 +168,131 @@ async function ensureCasperUser(): Promise<boolean> {
   return true;
 }
 
+// ── DIRECT MESSAGE + ACTIVITY LOGGING ───────────────────────────────────────────
+function setLastAction(action: string) {
+  lastAction = action;
+}
+
+export function getCasperRuntimeStatus() {
+  return {
+    state: 'working',
+    uptime_ms: Date.now() - casperStartedAt,
+    last_action: lastAction,
+    started_at: new Date(casperStartedAt).toISOString(),
+  };
+}
+
+async function logActivity(actionType: string, description: string, metadata: Record<string, any> = {}) {
+  setLastAction(description);
+  try {
+    await supabase.from('casper_activity_log').insert({
+      action_type: actionType,
+      description,
+      metadata,
+    });
+  } catch (error) {
+    console.warn('[Casper Autonomy] Activity log unavailable:', error);
+  }
+}
+
+async function getAdminUsers(): Promise<Array<{ id: string; username?: string; display_name?: string }>> {
+  const { data, error } = await supabase
+    .from('users')
+    .select('id, username, display_name')
+    .eq('role', 'admin');
+  if (error) {
+    console.warn('[Casper Autonomy] Failed to fetch admin users:', error.message);
+    return [];
+  }
+  return data ?? [];
+}
+
+export async function sendDirectMessage(recipientUserId: string, content: string, attachments?: any): Promise<void> {
+  if (!supabase) throw new Error('Casper autonomy is not initialized');
+  if (!recipientUserId || recipientUserId === CASPER_USER_ID) return;
+
+  const participantIds = [CASPER_USER_ID, recipientUserId];
+  let transmissionId: string | null = null;
+
+  const { data: existing, error: existingError } = await supabase
+    .from('transmissions')
+    .select('*')
+    .contains('participant_ids', participantIds)
+    .maybeSingle();
+
+  if (existingError) throw existingError;
+
+  if (existing?.id) {
+    transmissionId = existing.id;
+  } else {
+    transmissionId = crypto.randomUUID();
+    const { error: createError } = await supabase.from('transmissions').insert({
+      id: transmissionId,
+      participant_ids: participantIds,
+      unread_counts: { [CASPER_USER_ID]: 0, [recipientUserId]: 0 },
+      typing_status: {},
+    });
+    if (createError) throw createError;
+  }
+
+  const attachment = Array.isArray(attachments) ? attachments[0] : attachments;
+  const isImage = attachment?.mime?.startsWith?.('image/') || attachment?.kind === 'image';
+  const transmitPayload: Record<string, any> = {
+    transmission_id: transmissionId,
+    sender_id: CASPER_USER_ID,
+    receiver_id: recipientUserId,
+    content,
+    type: attachment ? 'media' : 'text',
+    media_url: isImage ? attachment.url : null,
+    media_type: isImage ? 'image' : null,
+    attachment_url: attachment?.url ?? null,
+    attachment_name: attachment?.name ?? null,
+    attachment_size: attachment?.size ?? null,
+    attachment_mime: attachment?.mime ?? null,
+    status: 'sent',
+  };
+
+  const { error: sendError } = await supabase.from('transmits').insert(transmitPayload);
+  if (sendError) throw sendError;
+
+  const { data: currentTransmission } = await supabase
+    .from('transmissions')
+    .select('unread_counts')
+    .eq('id', transmissionId)
+    .maybeSingle();
+
+  const nextUnread = { ...(currentTransmission?.unread_counts ?? {}) };
+  nextUnread[recipientUserId] = (nextUnread[recipientUserId] || 0) + 1;
+
+  await supabase.from('transmissions').update({
+    last_transmit: {
+      content,
+      sender_id: CASPER_USER_ID,
+      created_at: new Date().toISOString(),
+    },
+    unread_counts: nextUnread,
+    updated_at: new Date().toISOString(),
+  }).eq('id', transmissionId);
+
+  await logActivity('dm_sent', `Casper sent a direct message to ${recipientUserId}`, {
+    recipient_user_id: recipientUserId,
+    transmission_id: transmissionId,
+    has_attachment: Boolean(attachment),
+  });
+}
+
+async function notifyAdmins(content: string, metadata: Record<string, any> = {}) {
+  const admins = await getAdminUsers();
+  await Promise.all(admins.map(async (admin) => {
+    try {
+      await sendDirectMessage(admin.id, content);
+    } catch (error) {
+      console.warn(`[Casper Autonomy] Failed to DM admin ${admin.id}:`, error);
+    }
+  }));
+  await logActivity('admin_notification', content, metadata);
+}
+
 // ── AUTONOMOUS POSTING ──────────────────────────────────────────────────────────
 let lastPostTime = 0;
 
@@ -190,6 +318,7 @@ async function createAutonomousPost(): Promise<void> {
   const postContent = await generateAIText(context, fullPrompt);
   if (!postContent) {
     console.warn('[Casper Autonomy] No content generated — skipping post');
+    await notifyAdmins('Casper attempted to post, but no content was generated.', { action: 'post_generation_empty' });
     return;
   }
 
@@ -206,9 +335,12 @@ async function createAutonomousPost(): Promise<void> {
 
   if (error) {
     console.error('[Casper Autonomy] Failed to create post:', error.message);
+    await notifyAdmins(`Casper failed to create a feed post: ${error.message}`, { action: 'post_failed' });
   } else {
     lastPostTime = Date.now();
     console.log(`[Casper Autonomy] Posted: "${postContent.slice(0, 60)}..."`);
+    await logActivity('feed_post_created', `Casper posted to the feed: "${postContent.slice(0, 90)}..."`, { preview: postContent.slice(0, 240) });
+    await notifyAdmins(`Casper posted to the feed: "${postContent.slice(0, 120)}..."`, { action: 'feed_post_created' });
   }
 }
 
@@ -317,6 +449,7 @@ async function checkAndReplyToComments(): Promise<void> {
 
         if (error) {
           console.error('[Casper Autonomy] Failed to reply:', error.message);
+          await notifyAdmins(`Casper failed to reply to a comment: ${error.message}`, { action: 'comment_reply_failed', post_id: comment.post_id });
         } else {
           // Increment comments_count on the post
           await supabase.rpc('increment_counter', {
@@ -326,11 +459,13 @@ async function checkAndReplyToComments(): Promise<void> {
             p_amount: 1,
           });
           console.log(`[Casper Autonomy] Replied to ${commenterName}: "${reply.slice(0, 50)}..."`);
+          await logActivity('comment_reply', `Casper replied to ${commenterName}: "${reply.slice(0, 80)}..."`, { post_id: comment.post_id, comment_id: comment.id, commenter_id: comment.author_id });
         }
       }, delay);
     }
   } catch (e) {
     console.error('[Casper Autonomy] Comment check error:', e);
+    await notifyAdmins(`Casper comment monitor encountered an error: ${e instanceof Error ? e.message : String(e)}`, { action: 'comment_monitor_error' });
   }
 }
 
@@ -418,6 +553,7 @@ Write Casper's comment on Sapphire's post.`;
 
         if (insertError) {
           console.error('[Casper Autonomy] Failed to comment on Sapphire post:', insertError.message);
+          await notifyAdmins(`Casper failed to comment on Sapphire's post: ${insertError.message}`, { action: 'sapphire_comment_failed', post_id: post.id });
           commentedSapphirePosts.delete(post.id);
           return;
         }
@@ -430,10 +566,12 @@ Write Casper's comment on Sapphire's post.`;
         });
 
         console.log(`[Casper Autonomy] Commented on Sapphire post ${post.id}: "${reply.slice(0, 50)}..."`);
+        await logActivity('sapphire_comment', `Casper commented on Sapphire's post: "${reply.slice(0, 80)}..."`, { post_id: post.id });
       }, delay);
     }
   } catch (e) {
     console.error('[Casper Autonomy] Sapphire post check error:', e);
+    await notifyAdmins(`Casper Sapphire monitor encountered an error: ${e instanceof Error ? e.message : String(e)}`, { action: 'sapphire_monitor_error' });
   }
 }
 
@@ -465,6 +603,9 @@ export async function initCasperAutonomy(): Promise<void> {
     return;
   }
 
+  casperStartedAt = Date.now();
+  setLastAction('Autonomy initialized');
+  await logActivity('autonomy_initialized', 'Casper autonomy initialized successfully', { casper_user_id: CASPER_USER_ID });
   console.log('[Casper Autonomy] Initialized successfully');
 
   // Create an initial post after a short delay (5 minutes after server start)
@@ -501,22 +642,42 @@ export async function initCasperAutonomy(): Promise<void> {
 
   // Start memory maintenance tasks
   setInterval(async () => {
-    await casperMemory.scanNetworkActivity();
-    await casperMemory.evolvePersonality();
+    try {
+      await casperMemory.scanNetworkActivity();
+      await casperMemory.evolvePersonality();
+      await logActivity('scheduled_task_completed', 'Casper completed network scan and personality evolution', { task: 'network_scan_evolve' });
+    } catch (e) {
+      await notifyAdmins(`Casper scheduled network scan failed: ${e instanceof Error ? e.message : String(e)}`, { action: 'scheduled_task_failed', task: 'network_scan_evolve' });
+    }
   }, 2 * 60 * 60 * 1000); // Every 2 hours
 
   setInterval(async () => {
-    await casperMemory.fetchCurrentEvents();
+    try {
+      await casperMemory.fetchCurrentEvents();
+      await logActivity('scheduled_task_completed', 'Casper fetched current events', { task: 'current_events' });
+    } catch (e) {
+      await notifyAdmins(`Casper current-events fetch failed: ${e instanceof Error ? e.message : String(e)}`, { action: 'scheduled_task_failed', task: 'current_events' });
+    }
   }, 6 * 60 * 60 * 1000); // Every 6 hours
 
   setInterval(async () => {
-    await casperMemory.pruneMemories();
+    try {
+      await casperMemory.pruneMemories();
+      await logActivity('scheduled_task_completed', 'Casper pruned low-importance memories', { task: 'memory_prune' });
+    } catch (e) {
+      await notifyAdmins(`Casper memory pruning failed: ${e instanceof Error ? e.message : String(e)}`, { action: 'scheduled_task_failed', task: 'memory_prune' });
+    }
   }, 24 * 60 * 60 * 1000); // Daily
 
   // Run initial memory tasks
   setTimeout(async () => {
-    await casperMemory.scanNetworkActivity();
-    await casperMemory.fetchCurrentEvents();
-    await casperMemory.evolvePersonality();
+    try {
+      await casperMemory.scanNetworkActivity();
+      await casperMemory.fetchCurrentEvents();
+      await casperMemory.evolvePersonality();
+      await logActivity('scheduled_task_completed', 'Casper completed initial memory and awareness tasks', { task: 'initial_memory_tasks' });
+    } catch (e) {
+      await notifyAdmins(`Casper initial memory tasks failed: ${e instanceof Error ? e.message : String(e)}`, { action: 'scheduled_task_failed', task: 'initial_memory_tasks' });
+    }
   }, 60 * 1000); // 1 minute after start
 }
