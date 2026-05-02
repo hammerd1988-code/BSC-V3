@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   Send, 
   Search, 
+  Mic,
+  MicOff, 
   MoreVertical, 
   Phone, 
   Video, 
@@ -44,6 +46,38 @@ import { encryptText, decryptText } from '../lib/crypto';
 import { generateText } from '../lib/ai';
 import { BOT_PERSONAS } from '../lib/botPersonas';
 
+type SpeechRecognitionResultListLike = {
+  length: number;
+  [index: number]: {
+    isFinal: boolean;
+    [index: number]: {
+      transcript: string;
+    };
+  };
+};
+
+type SpeechRecognitionInstance = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onstart: (() => void) | null;
+  onresult: ((event: { results: SpeechRecognitionResultListLike }) => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
+  onend: (() => void) | null;
+};
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionInstance;
+
+declare global {
+  interface Window {
+    SpeechRecognition?: SpeechRecognitionConstructor;
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+  }
+}
+
 export const Transmissions: React.FC = () => {
   const { currentUser, supabaseUser } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -59,6 +93,9 @@ export const Transmissions: React.FC = () => {
   const [showOptions, setShowOptions] = useState(false);
   const [showNewChat, setShowNewChat] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const [speechStatus, setSpeechStatus] = useState<string | null>(null);
   const [burnDuration, setBurnDuration] = useState<number | null>(null);
   const [encryptionEnabled, setEncryptionEnabled] = useState(true);
   // Map of transmit id -> decrypted plaintext (populated after decryption)
@@ -76,6 +113,9 @@ export const Transmissions: React.FC = () => {
   const userCache = useRef<Record<string, UserType>>({});
   const transmissionsRef = useRef<Transmission[]>([]);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  const speechStatusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const manualSpeechStopRef = useRef(false);
 
   const formatFileSize = (size?: number | null) => {
     if (!size || size <= 0) return 'Unknown size';
@@ -142,6 +182,123 @@ export const Transmissions: React.FC = () => {
   useEffect(() => {
     transmissionsRef.current = transmissions;
   }, [transmissions]);
+
+  useEffect(() => {
+    setSpeechSupported(Boolean(window.SpeechRecognition || window.webkitSpeechRecognition));
+
+    return () => {
+      recognitionRef.current?.abort();
+      if (speechStatusTimeoutRef.current) clearTimeout(speechStatusTimeoutRef.current);
+    };
+  }, []);
+
+  const setTemporarySpeechStatus = (status: string | null, timeout = 2600) => {
+    if (speechStatusTimeoutRef.current) clearTimeout(speechStatusTimeoutRef.current);
+    setSpeechStatus(status);
+
+    if (status) {
+      speechStatusTimeoutRef.current = setTimeout(() => {
+        setSpeechStatus(null);
+      }, timeout);
+    }
+  };
+
+  const buildVoiceDraft = (baseMessage: string, spokenDraft: string) => {
+    if (!baseMessage) return spokenDraft;
+    if (!spokenDraft) return baseMessage;
+    return `${baseMessage.trimEnd()} ${spokenDraft}`;
+  };
+
+  const handleVoiceInput = () => {
+    if (isRecording) {
+      manualSpeechStopRef.current = true;
+      setTemporarySpeechStatus('Decoding voice packet...', 1800);
+      recognitionRef.current?.stop();
+      return;
+    }
+
+    const RecognitionConstructor = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!RecognitionConstructor) {
+      setError('Voice input is not supported in this browser. Try Chrome or Edge for Web Speech API support.');
+      return;
+    }
+
+    const baseMessage = message.trimEnd();
+    let finalTranscript = '';
+    manualSpeechStopRef.current = false;
+
+    const recognition = new RecognitionConstructor();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = navigator.language || 'en-US';
+
+    recognition.onstart = () => {
+      setError(null);
+      setIsRecording(true);
+      if (speechStatusTimeoutRef.current) clearTimeout(speechStatusTimeoutRef.current);
+      setSpeechStatus('Voice uplink live — speak your transmission');
+    };
+
+    recognition.onresult = (event) => {
+      let interimTranscript = '';
+      let confirmedTranscript = '';
+
+      for (let i = 0; i < event.results.length; i += 1) {
+        const result = event.results[i];
+        const transcript = result[0]?.transcript?.trim() ?? '';
+
+        if (!transcript) continue;
+        if (result.isFinal) confirmedTranscript += `${confirmedTranscript ? ' ' : ''}${transcript}`;
+        else interimTranscript += `${interimTranscript ? ' ' : ''}${transcript}`;
+      }
+
+      if (confirmedTranscript) {
+        finalTranscript = `${finalTranscript ? `${finalTranscript} ` : ''}${confirmedTranscript}`.trim();
+      }
+
+      const spokenDraft = `${finalTranscript}${finalTranscript && interimTranscript ? ' ' : ''}${interimTranscript}`.trim();
+      setMessage(buildVoiceDraft(baseMessage, spokenDraft));
+      handleTyping();
+    };
+
+    recognition.onerror = (event) => {
+      setIsRecording(false);
+
+      if (event.error === 'no-speech') {
+        setTemporarySpeechStatus('No voice signal detected', 2200);
+        return;
+      }
+
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        setError('Microphone access denied. Enable mic permissions to use voice transmissions.');
+        return;
+      }
+
+      setError(`Voice transcription failed${event.error ? `: ${event.error}` : '.'}`);
+    };
+
+    recognition.onend = () => {
+      setIsRecording(false);
+      recognitionRef.current = null;
+
+      if (manualSpeechStopRef.current) {
+        setTemporarySpeechStatus(finalTranscript ? 'Voice packet decoded' : null, 2200);
+      } else {
+        setTemporarySpeechStatus(finalTranscript ? 'Voice packet decoded' : null, 2200);
+      }
+    };
+
+    recognitionRef.current = recognition;
+
+    try {
+      recognition.start();
+    } catch (err: any) {
+      recognitionRef.current = null;
+      setIsRecording(false);
+      setError(`Unable to open voice uplink: ${err?.message || 'unknown browser error'}`);
+    }
+  };
 
   // Fetch all transmissions for current user
   useEffect(() => {
@@ -1250,6 +1407,22 @@ export const Transmissions: React.FC = () => {
                 />
                 <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
                 <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileUpload} />
+                <AnimatePresence>
+                  {(isRecording || speechStatus) && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 6 }}
+                      className="mx-2 mt-1 mb-2 flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2 text-[9px] font-black uppercase tracking-[0.25em] text-red-300 shadow-[0_0_20px_rgba(239,68,68,0.08)]"
+                    >
+                      <span className="relative flex h-2 w-2">
+                        {isRecording && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />}
+                        <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
+                      </span>
+                      {speechStatus || 'Voice uplink active'}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
                 <div className="flex items-center justify-between px-2 py-1 border-t border-white/5 mt-2">
                   <div className="flex items-center gap-1">
                     <button type="button" onClick={() => imageInputRef.current?.click()} disabled={sending || uploadingAttachment} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-gray-600 hover:text-accent disabled:opacity-40" title="Attach image">
@@ -1258,6 +1431,18 @@ export const Transmissions: React.FC = () => {
                     <button type="button" onClick={() => fileInputRef.current?.click()} disabled={sending || uploadingAttachment} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-gray-600 hover:text-accent disabled:opacity-40" title="Attach file">
                       <Paperclip className="w-4 h-4" />
                     </button>
+                    <motion.button
+                      type="button"
+                      onClick={handleVoiceInput}
+                      disabled={sending || uploadingAttachment || !speechSupported}
+                      animate={isRecording ? { boxShadow: ['0 0 0 rgba(239,68,68,0)', '0 0 22px rgba(239,68,68,0.55)', '0 0 0 rgba(239,68,68,0)'] } : undefined}
+                      transition={isRecording ? { duration: 1.2, repeat: Infinity, ease: 'easeInOut' } : undefined}
+                      className={`relative overflow-hidden rounded-lg p-2 transition-all disabled:cursor-not-allowed disabled:opacity-40 ${isRecording ? 'border border-red-500/40 bg-red-500/15 text-red-300' : 'text-gray-600 hover:bg-red-500/5 hover:text-red-400'}`}
+                      title={!speechSupported ? 'Speech recognition unavailable in this browser' : isRecording ? 'Stop voice capture' : 'Start voice-to-text'}
+                    >
+                      {isRecording && <span className="absolute inset-0 rounded-lg bg-red-500/20 animate-pulse" />}
+                      {isRecording ? <MicOff className="relative z-10 w-4 h-4" /> : <Mic className="relative z-10 w-4 h-4" />}
+                    </motion.button>
                     <div className="h-4 w-[1px] bg-white/10 mx-1" />
                     <button 
                       type="button" 

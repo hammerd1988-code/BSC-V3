@@ -25,6 +25,7 @@ import {
   Video,
   Wand2,
   XCircle,
+  type LucideIcon,
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { useAuth } from '../AuthContext';
@@ -364,6 +365,13 @@ export const CasperContentManager: React.FC = () => {
     void loadData();
   };
 
+  const analyticsCards: Array<{ label: string; value: number; Icon: LucideIcon }> = [
+    { label: 'Scheduled', value: analytics.scheduled, Icon: CalendarDays },
+    { label: 'Drafts', value: analytics.drafts, Icon: FileText },
+    { label: 'Video Views', value: analytics.views, Icon: BarChart3 },
+    { label: 'Agents Active', value: analytics.subagentsWorking, Icon: Bot },
+  ];
+
   if (!currentUser) {
     return (
       <div className="min-h-screen bg-black p-8 text-white">
@@ -410,16 +418,11 @@ export const CasperContentManager: React.FC = () => {
               <SubagentTree agents={subagents} onCancel={cancelSubagent} />
 
               <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                {[
-                  ['Scheduled', analytics.scheduled, CalendarDays],
-                  ['Drafts', analytics.drafts, FileText],
-                  ['Video Views', analytics.views, BarChart3],
-                  ['Agents Active', analytics.subagentsWorking, Bot],
-                ].map(([label, value, Icon]) => (
-                  <div key={String(label)} className="rounded-3xl border border-white/10 bg-zinc-950/70 p-5">
+                {analyticsCards.map(({ label, value, Icon }) => (
+                  <div key={label} className="rounded-3xl border border-white/10 bg-zinc-950/70 p-5">
                     <Icon className="mb-3 h-5 w-5 text-cyan-300" />
                     <p className="text-3xl font-black text-white">{String(value)}</p>
-                    <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-zinc-500">{String(label)}</p>
+                    <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-zinc-500">{label}</p>
                   </div>
                 ))}
               </section>
