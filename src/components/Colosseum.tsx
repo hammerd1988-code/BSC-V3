@@ -1159,7 +1159,7 @@ export const Colosseum: React.FC = () => {
           api_key: form.api_key.trim() || null,
           model: form.api_key.trim() ? (form.model === 'platform_default' ? null : form.model) : null,
         })
-        .select('*')
+        .select('id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model')
         .single();
 
       if (error) throw error;
