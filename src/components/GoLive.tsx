@@ -32,6 +32,8 @@ import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
 import { cn } from '../lib/utils';
 import { handleDbError } from '../lib/errors';
+import { requestLiveKitToken } from '../lib/livekit';
+import { Room, RoomEvent, Track } from 'livekit-client';
 
 const STREAM_CATEGORIES = ['Coding', 'Tutorials', 'Code Battles', 'Gaming', 'Music', 'Art', 'Reactions', 'Q&A', 'Creative', 'Other'] as const;
 type StreamCategory = typeof STREAM_CATEGORIES[number];
@@ -165,9 +167,16 @@ export const GoLive: React.FC = () => {
   const [hasEnded, setHasEnded] = useState(false);
   const [cameraOn, setCameraOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
+  const [liveKitStatus, setLiveKitStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
+  const [liveKitError, setLiveKitError] = useState<string | null>(null);
+  const [liveKitParticipantCount, setLiveKitParticipantCount] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const roomRef = useRef<Room | null>(null);
+  const remoteAudioElementsRef = useRef<HTMLMediaElement[]>([]);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isViewer = !!viewerStreamId && !isLive;
   const activeStreamId = streamId || viewerStreamId;
@@ -244,13 +253,162 @@ export const GoLive: React.FC = () => {
     }
   };
 
+  const detachRemoteAudio = () => {
+    remoteAudioElementsRef.current.forEach((element) => {
+      element.pause();
+      element.remove();
+    });
+    remoteAudioElementsRef.current = [];
+  };
+
+  const disconnectLiveKit = () => {
+    detachRemoteAudio();
+    if (roomRef.current) {
+      roomRef.current.disconnect();
+      roomRef.current = null;
+    }
+    setLiveKitParticipantCount(0);
+    setLiveKitStatus('idle');
+  };
+
+  const attachLiveKitTrack = (track: any) => {
+    if (!track) return;
+    if (track.kind === 'video' && videoRef.current) {
+      track.attach(videoRef.current);
+      videoRef.current.play().catch(() => undefined);
+    } else if (track.kind === 'audio') {
+      const element = track.attach() as HTMLMediaElement;
+      element.autoplay = true;
+      element.hidden = true;
+      document.body.appendChild(element);
+      remoteAudioElementsRef.current.push(element);
+    }
+  };
+
+  const startReplayRecording = (id: string) => {
+    if (!streamRef.current || typeof MediaRecorder === 'undefined') return;
+    try {
+      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+        ? 'video/webm;codecs=vp9,opus'
+        : MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
+          ? 'video/webm;codecs=vp8,opus'
+          : 'video/webm';
+      const recorder = new MediaRecorder(streamRef.current, { mimeType });
+      recordingChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) recordingChunksRef.current.push(event.data);
+      };
+      recorder.start(5000);
+      mediaRecorderRef.current = recorder;
+      void id;
+    } catch (err) {
+      console.warn('[GoLive] Replay recording unavailable:', err);
+    }
+  };
+
+  const stopReplayRecordingAndUpload = async (id: string): Promise<string | null> => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder) return null;
+
+    const blob = await new Promise<Blob | null>((resolve) => {
+      const finalize = () => {
+        if (!recordingChunksRef.current.length) return resolve(null);
+        resolve(new Blob(recordingChunksRef.current, { type: recorder.mimeType || 'video/webm' }));
+      };
+      recorder.onstop = finalize;
+      if (recorder.state === 'inactive') finalize();
+      else recorder.stop();
+    });
+
+    mediaRecorderRef.current = null;
+    recordingChunksRef.current = [];
+    if (!blob || !currentUser) return null;
+
+    try {
+      const path = `${currentUser.id}/${id}-${Date.now()}.webm`;
+      const { error } = await supabase.storage.from('stream-replays').upload(path, blob, {
+        cacheControl: '31536000',
+        contentType: blob.type || 'video/webm',
+        upsert: true,
+      });
+      if (error) throw error;
+      const { data } = supabase.storage.from('stream-replays').getPublicUrl(path);
+      return data.publicUrl;
+    } catch (err) {
+      console.warn('[GoLive] Replay upload failed. Create a public Supabase Storage bucket named stream-replays to persist recordings.', err);
+      return null;
+    }
+  };
+
   const stopMedia = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
   };
 
-  useEffect(() => () => stopMedia(), []);
+  const connectLiveKitStream = async (id: string, role: 'host' | 'viewer', source: 'camera' | 'screen' = 'camera') => {
+    if (!currentUser) return;
+    disconnectLiveKit();
+    setLiveKitStatus('connecting');
+    setLiveKitError(null);
+
+    try {
+      const credentials = await requestLiveKitToken({
+        roomType: 'stream',
+        resourceId: id,
+        role,
+        displayName: currentUser.display_name || currentUser.username,
+        avatarUrl: currentUser.avatar_url,
+      });
+
+      const room = new Room({ adaptiveStream: true, dynacast: role === 'host' });
+      roomRef.current = room;
+
+      const updateParticipantCount = () => {
+        setLiveKitParticipantCount(room.remoteParticipants.size + 1);
+      };
+
+      room.on(RoomEvent.TrackSubscribed, (track) => attachLiveKitTrack(track));
+      room.on(RoomEvent.ParticipantConnected, updateParticipantCount);
+      room.on(RoomEvent.ParticipantDisconnected, updateParticipantCount);
+      room.on(RoomEvent.Disconnected, () => setLiveKitStatus('idle'));
+
+      await room.connect(credentials.url, credentials.token);
+      updateParticipantCount();
+
+      if (role === 'host') {
+        const localTracks = streamRef.current?.getTracks() ?? [];
+        for (const mediaTrack of localTracks) {
+          await room.localParticipant.publishTrack(mediaTrack, {
+            source: mediaTrack.kind === 'video'
+              ? (source === 'screen' ? Track.Source.ScreenShare : Track.Source.Camera)
+              : Track.Source.Microphone,
+          });
+        }
+        startReplayRecording(id);
+      } else {
+        room.remoteParticipants.forEach((participant) => {
+          participant.trackPublications.forEach((publication) => {
+            if (publication.track) attachLiveKitTrack(publication.track);
+          });
+        });
+      }
+
+      setLiveKitStatus('connected');
+    } catch (err: any) {
+      console.error('[GoLive] LiveKit connection failed:', err);
+      setLiveKitError(err?.message || 'LiveKit connection failed.');
+      setLiveKitStatus('error');
+    }
+  };
+
+  useEffect(() => () => {
+    disconnectLiveKit();
+    stopMedia();
+  }, []);
 
   const fetchStreamBundle = async (id: string) => {
     const { data, error } = await supabase.from('streams').select('*').eq('id', id).maybeSingle();
@@ -261,7 +419,7 @@ export const GoLive: React.FC = () => {
     setCategory((normalized?.category as StreamCategory) || 'Other');
     setThumbnailUrl(normalized?.thumbnail_url ?? '');
     setDescription(normalized?.description ?? '');
-    setIsLive(normalized?.status === 'live' && normalized?.host_id === currentUser?.id && !viewerStreamId);
+    setIsLive(normalized?.status === 'live' && normalized?.host_id === currentUser?.id);
     setHasEnded(normalized?.status === 'ended');
   };
 
@@ -288,6 +446,14 @@ export const GoLive: React.FC = () => {
       void supabase.rpc('increment_counter', { p_table: 'streams', p_id: viewerStreamId, p_field: 'crowd_size', p_amount: -1 });
     };
   }, [viewerStreamId]);
+
+  useEffect(() => {
+    if (!viewerStreamId || !currentUser || hasEnded) return;
+    const streamerId = streamData?.user_id || streamData?.host_id;
+    if (streamerId && streamerId === currentUser.id) return;
+    void connectLiveKitStream(viewerStreamId, 'viewer');
+    return () => disconnectLiveKit();
+  }, [viewerStreamId, currentUser?.id, hasEnded, streamData?.user_id, streamData?.host_id]);
 
   const fetchMessages = async () => {
     if (!activeStreamId) return;
@@ -374,6 +540,7 @@ export const GoLive: React.FC = () => {
       setIsLive(true);
       setHasEnded(false);
       await supabase.from('users').update({ is_live: true, active_stream_id: normalized.id }).eq('id', currentUser.id);
+      await connectLiveKitStream(normalized.id, 'host', source);
       navigate(`/golive?streamId=${normalized.id}`, { replace: true });
     } catch (err) {
       handleDbError(err, 'CREATE', 'streams');
@@ -385,10 +552,12 @@ export const GoLive: React.FC = () => {
   const handleEndStream = async () => {
     if (!activeStreamId || !currentUser) return;
     try {
-      await supabase.from('streams').update({ status: 'ended', is_live: false, ended_at: new Date().toISOString() }).eq('id', activeStreamId);
+      const replayUrl = await stopReplayRecordingAndUpload(activeStreamId);
+      await supabase.from('streams').update({ status: 'ended', is_live: false, ended_at: new Date().toISOString(), ...(replayUrl ? { replay_url: replayUrl } : {}) }).eq('id', activeStreamId);
       await supabase.from('users').update({ is_live: false, active_stream_id: null }).eq('id', currentUser.id);
       setIsLive(false);
       setHasEnded(true);
+      disconnectLiveKit();
       stopMedia();
     } catch (err) {
       handleDbError(err, 'UPDATE', `streams/${activeStreamId}`);
@@ -579,15 +748,28 @@ export const GoLive: React.FC = () => {
         </div>
 
         <div className="relative flex-1 overflow-hidden bg-black">
-          <video ref={videoRef} autoPlay playsInline muted={isOwnStream} controls={hasEnded && !!streamData?.replay_url} src={hasEnded ? streamData?.replay_url ?? undefined : undefined} className={cn('h-full w-full object-contain', isViewer && !streamData?.replay_url ? 'opacity-0' : 'opacity-100')} />
-          {(isViewer || hasEnded) && !streamData?.replay_url && (
+          <video ref={videoRef} autoPlay playsInline muted={isOwnStream} controls={hasEnded && !!streamData?.replay_url} src={hasEnded ? streamData?.replay_url ?? undefined : undefined} className={cn('h-full w-full object-contain', hasEnded && !streamData?.replay_url ? 'opacity-0' : 'opacity-100')} />
+          {!hasEnded && (
+            <div className="absolute left-4 top-4 flex flex-wrap items-center gap-2">
+              <span className={cn('inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[9px] font-black uppercase tracking-widest backdrop-blur-xl', liveKitStatus === 'connected' ? 'border-emerald-300/30 bg-emerald-400/15 text-emerald-100' : liveKitStatus === 'error' ? 'border-red-400/30 bg-red-500/15 text-red-100' : 'border-cyan-300/30 bg-cyan-400/10 text-cyan-100')}>
+                <span className={cn('h-2 w-2 rounded-full', liveKitStatus === 'connected' ? 'bg-emerald-300' : liveKitStatus === 'error' ? 'bg-red-300' : 'animate-pulse bg-cyan-300')} />
+                LiveKit {liveKitStatus}
+              </span>
+              {liveKitParticipantCount > 0 && (
+                <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/50 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-white backdrop-blur-xl">
+                  <Users className="h-3 w-3 text-cyan-300" /> {liveKitParticipantCount}
+                </span>
+              )}
+            </div>
+          )}
+          {((isViewer && liveKitStatus !== 'connected') || hasEnded) && !streamData?.replay_url && (
             <div className="absolute inset-0 flex items-center justify-center bg-[radial-gradient(circle_at_50%_25%,rgba(255,0,80,0.2),transparent_34%),radial-gradient(circle_at_50%_80%,rgba(0,229,255,0.14),transparent_36%)] p-8 text-center">
               <div className="max-w-lg">
                 {streamData?.host_avatar ? <img src={streamData.host_avatar} alt="Host" className="mx-auto mb-6 h-28 w-28 rounded-full border-4 border-accent object-cover shadow-[0_0_40px_rgba(255,0,80,0.4)]" /> : <div className="mx-auto mb-6 flex h-28 w-28 items-center justify-center rounded-full border-4 border-accent bg-zinc-900"><Tv className="h-12 w-12 text-accent" /></div>}
                 <h1 className="text-3xl font-black uppercase italic tracking-tighter">{streamData?.title || title || 'Neural Transmission'}</h1>
-                <p className="mt-3 text-sm leading-6 text-zinc-400">{hasEnded ? 'This broadcast has ended. Replay media can be attached when available.' : 'WebRTC relay is represented by this live embed placeholder while chat, follows, notifications, reactions, and viewer telemetry run in real time.'}</p>
+                <p className="mt-3 text-sm leading-6 text-zinc-400">{hasEnded ? 'This broadcast has ended. Replay media will appear here when the host recording is available.' : liveKitError || 'Connecting to the LiveKit broadcast. The stream will appear here as soon as the host publishes camera, microphone, or screen media.'}</p>
                 <div className="mt-6 flex items-center justify-center gap-3 text-xs font-black uppercase tracking-widest text-zinc-300">
-                  <Users className="h-4 w-4 text-cyan-300" /> {streamData?.viewer_count ?? 0} viewers
+                  <Users className="h-4 w-4 text-cyan-300" /> {Math.max(streamData?.viewer_count ?? 0, liveKitParticipantCount)} viewers
                 </div>
               </div>
             </div>
@@ -640,9 +822,10 @@ export const GoLive: React.FC = () => {
               <MessageCircle className="h-5 w-5 text-accent" />
               <h2 className="text-[10px] font-black uppercase tracking-[0.28em]">Live Chat</h2>
             </div>
-            <div className="flex items-center gap-2 rounded-full bg-white/5 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-zinc-400">
-              <Eye className="h-3.5 w-3.5 text-cyan-300" /> {streamData?.viewer_count ?? 0}
-            </div>
+              <div className="flex items-center gap-2 rounded-full bg-white/5 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-zinc-400">
+                <Eye className="h-3.5 w-3.5 text-cyan-300" /> {Math.max(streamData?.viewer_count ?? 0, liveKitParticipantCount)}
+              </div>
+
           </div>
         </div>
         <div className="flex-1 space-y-3 overflow-y-auto p-5">

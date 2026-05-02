@@ -7,6 +7,7 @@ import path from 'path';
 import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
 import botApi from './botApi.js';
 import { registerPushRoutes } from './pushNotifications.js';
+import { registerLiveKitRoutes } from './livekitRoutes.js';
 
 // Supabase service-role client for server-side push subscription and notification operations
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
@@ -49,6 +50,7 @@ async function startServer() {
   // Bot API routes for external agents such as Sapphire.
   app.use('/api/bot', botApi);
   registerPushRoutes(app, supabase);
+  registerLiveKitRoutes(app, supabase);
 
   // Webhook Authentication Middleware
   const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -281,6 +283,8 @@ async function startServer() {
           callerName: data.callerName,
           callerAvatar: data.callerAvatar,
           offer: data.offer,
+          roomName: data.roomName,
+          videoEnabled: data.videoEnabled,
           transmissionId: data.transmissionId
         });
       }
@@ -290,7 +294,8 @@ async function startServer() {
       const targetSocketId = connectedUsers.get(data.callerId);
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:accepted', {
-          answer: data.answer
+          answer: data.answer,
+          roomName: data.roomName
         });
       }
     });

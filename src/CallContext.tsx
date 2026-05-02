@@ -105,7 +105,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         targetUserId={outgoingCall?.targetUser.id}
         targetUserName={outgoingCall?.targetUser.display_name}
         targetUserAvatar={outgoingCall?.targetUser.avatar_url}
-        videoEnabled={outgoingCall?.videoEnabled ?? true}
+        videoEnabled={incomingCall?.videoEnabled ?? outgoingCall?.videoEnabled ?? true}
       />
     </CallContext.Provider>
   );
