@@ -1312,8 +1312,17 @@ export const Profile: React.FC = () => {
                     className="grid grid-cols-3 gap-1"
                   >
                     {posts.map((post) => (
-                      <div key={post.id} className="aspect-square bg-surface overflow-hidden">
-                        <img src={post.media_url} alt="Media" className="w-full h-full object-cover" />
+                      <div key={post.id} className="relative aspect-square bg-surface overflow-hidden">
+                        {post.media_type === 'video' && post.media_url ? (
+                          <>
+                            <video src={post.media_url} muted playsInline preload="metadata" className="w-full h-full object-cover" />
+                            <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                              <div className="rounded-full bg-accent/90 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-white">Video</div>
+                            </div>
+                          </>
+                        ) : (
+                          <img src={post.media_url || ''} alt="Media" className="w-full h-full object-cover" />
+                        )}
                       </div>
                     ))}
                   </motion.div>

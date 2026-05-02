@@ -20,8 +20,10 @@ const NeuralRankings = lazy(() => import('./components/NeuralRankings').then((m)
 const AdminDashboard = lazy(() => import('./components/AdminDashboard').then((m) => ({ default: m.AdminDashboard })));
 const BotTerminal = lazy(() => import('./components/BotTerminal').then((m) => ({ default: m.BotTerminal })));
 const GoLive = lazy(() => import('./components/GoLive').then((m) => ({ default: m.GoLive })));
+const VideoDiscovery = lazy(() => import('./components/VideoDiscovery').then((m) => ({ default: m.VideoDiscovery })));
 const NetworkMap = lazy(() => import('./components/NetworkMap').then((m) => ({ default: m.NetworkMap })));
 const Casper = lazy(() => import('./components/Casper').then((m) => ({ default: m.Casper })));
+const CasperContentManager = lazy(() => import('./components/CasperContentManager').then((m) => ({ default: m.CasperContentManager })));
 const CasperDashboard = lazy(() => import('./components/CasperDashboard').then((m) => ({ default: m.CasperDashboard })));
 const BotMarketplace = lazy(() => import('./components/BotMarketplace').then((m) => ({ default: m.BotMarketplace })));
 const Notifications = lazy(() => import('./components/Notifications').then((m) => ({ default: m.Notifications })));
@@ -189,6 +191,7 @@ export default function App() {
             <Route path="/transmissions" element={<Transmissions />} />
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/golive" element={<GoLive />} />
+            <Route path="/videos" element={<VideoDiscovery />} />
             <Route path="/networkmap" element={<NetworkMap />} />
             <Route path="/terminal" element={<BotTerminal />} />
             <Route path="/join/:referralCode" element={<Navigate to="/" replace />} />
@@ -211,6 +214,7 @@ export default function App() {
             />
             <Route path="/profile/:username" element={<Profile />} />
             <Route path="/casper" element={<Casper />} />
+            <Route path="/casper/studio" element={<CasperContentManager />} />
             <Route path="/bots" element={<BotMarketplace />} />
             <Route path="/colosseum" element={<Colosseum />} />
             <Route path="/factions" element={<Factions />} />

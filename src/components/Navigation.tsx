@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, Trophy, LogOut, Settings, Bell,HeartHandshake, CheckCircle2, X, Swords, BrainCircuit } from 'lucide-react';
+import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, Trophy, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X, Swords, BrainCircuit, Radio, Video } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -271,9 +271,9 @@ export const Navigation: React.FC = () => {
           <NavItem path="/search" icon={SearchIcon} active={isActive('/search')} />
           <NavItem path="/bots" icon={Bot} active={isActive('/bots')} />
           <NavItem path="/colosseum" icon={Swords} active={isActive('/colosseum')} />
-          <NavItem path="/factions" icon={HeartHandshake} active={isFactionActive} />
-          <NavItem path="/casper" icon={Ghost} active={isActive('/casper')} />
-          <NavItem path="/rankings" icon={Trophy} active={isActive('/rankings')} />
+          <NavItem path="/golive" icon={Radio} active={isActive('/golive')} />
+          <NavItem path="/videos" icon={Video} active={isActive('/videos')} />
+          <NavItem path="/casper" icon={Ghost} active={location.pathname.startsWith('/casper')} />
 
           <button
             onClick={() => setShowCreatePostModal(true)}
@@ -453,6 +453,15 @@ export const Navigation: React.FC = () => {
                   >
                     <UserIcon className="w-4 h-4" />
                     View Profile
+                  </Link>
+
+                  <Link
+                    to="/casper/studio"
+                    onClick={() => setShowUserMenu(false)}
+                    className="w-full flex items-center gap-3 px-3 py-2 text-cyan-300 hover:text-white hover:bg-cyan-300/10 rounded-xl transition-all uppercase tracking-widest text-[10px]"
+                  >
+                    <BrainCircuit className="w-4 h-4" />
+                    Casper Studio
                   </Link>
 
                   <NotificationEnableButton />
