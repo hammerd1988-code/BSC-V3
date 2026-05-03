@@ -56,6 +56,12 @@ async function startServer() {
   // In production, PORT env var is set by the host.
   const PORT = Number(process.env.PORT) || 3001;
 
+  console.log('[LiveKit] Configuration:', {
+    url: process.env.LIVEKIT_URL ? '✓ set' : '✗ missing',
+    apiKey: process.env.LIVEKIT_API_KEY ? '✓ set' : '✗ missing',
+    apiSecret: process.env.LIVEKIT_API_SECRET ? '✓ set' : '✗ missing',
+  });
+
   // Middleware for parsing JSON bodies
   app.use(express.json());
 

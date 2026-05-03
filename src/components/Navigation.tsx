@@ -55,6 +55,7 @@ export const Navigation: React.FC = () => {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notifUnread, setNotifUnread] = useState(0);
   const menuRef = useRef<HTMLDivElement>(null);
+  const mobileMenuRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
 
   // Unread DM count
@@ -189,7 +190,11 @@ export const Navigation: React.FC = () => {
   // Close menus when clicking outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const clickedInsideUserMenu =
+        (menuRef.current && menuRef.current.contains(target)) ||
+        (mobileMenuRef.current && mobileMenuRef.current.contains(target));
+      if (!clickedInsideUserMenu) {
         setShowUserMenu(false);
       }
       if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
@@ -232,10 +237,9 @@ export const Navigation: React.FC = () => {
     const iconColor = active ? color : hexToRgba(color, 0.48);
 
     return (
-      <Link to={path} className="relative p-2 flex flex-col items-center justify-center group w-12 h-12">
+      <Link to={path} className="relative p-2 flex flex-col items-center justify-center group w-12 h-12 shrink-0">
         {active && (
           <motion.div
-            layoutId="nav-glow"
             className="absolute inset-0 rounded-full blur-md"
             style={{ backgroundColor: hexToRgba(color, 0.22) }}
             transition={{ type: "spring", stiffness: 400, damping: 30 }}
@@ -275,7 +279,6 @@ export const Navigation: React.FC = () => {
         )}
         {active && (
           <motion.div
-            layoutId="nav-indicator"
             className="absolute -bottom-2 w-6 h-1 rounded-t-full"
             style={{ backgroundColor: color, boxShadow: `0 0 15px ${glowColor}` }}
             transition={{ type: "spring", stiffness: 400, damping: 30 }}
@@ -285,200 +288,175 @@ export const Navigation: React.FC = () => {
     );
   };
 
-  return (
-    <>
-      <nav className="fixed bottom-0 left-0 right-0 z-50 bg-background/90 backdrop-blur-xl border-t border-white/5 py-2 px-4 pb-safe">
-        <div className="max-w-md mx-auto flex items-center justify-between relative">
-          <NavItem path="/" icon={Home} active={isActive('/')} color="#00FFFF" />
-          <NavItem path="/trending" icon={Flame} active={isActive('/trending')} color="#FF8800" />
-          <NavItem path="/search" icon={SearchIcon} active={isActive('/search')} color="#66CCFF" />
-          <NavItem path="/bots" icon={Bot} active={isActive('/bots')} color="#00CCFF" />
-          <NavItem path="/colosseum" icon={Swords} active={isActive('/colosseum')} color="#FF4444" />
-          <NavItem path="/golive" icon={Radio} active={isActive('/golive')} color="#FF0044" />
-          <NavItem path="/videos" icon={Video} active={isActive('/videos')} color="#4488FF" />
-          <NavItem path="/casper" icon={Ghost} active={location.pathname.startsWith('/casper')} color="#AA66FF" />
+  const mobileMoreItems = [
+    { path: '/trending', label: 'Trending', icon: Flame, active: isActive('/trending'), color: '#FF8800' },
+    { path: '/search', label: 'Search', icon: SearchIcon, active: isActive('/search'), color: '#66CCFF' },
+    { path: '/bots', label: 'Bots', icon: Bot, active: isActive('/bots'), color: '#00CCFF' },
+    { path: '/golive', label: 'Go Live', icon: Radio, active: isActive('/golive'), color: '#FF0044' },
+    { path: '/videos', label: 'Videos', icon: Video, active: isActive('/videos'), color: '#4488FF' },
+    { path: '/casper', label: 'Casper', icon: Ghost, active: location.pathname.startsWith('/casper'), color: '#AA66FF' },
+    { path: '/void', label: 'Void Feed', icon: CloudFog, active: isActive('/void'), color: '#FF00FF' },
+    (currentUser?.type === 'bot' || currentUser?.role === 'admin')
+      ? { path: '/terminal', label: 'Terminal', icon: Terminal, active: isActive('/terminal'), color: '#39FF14' }
+      : null,
+    currentUser?.role === 'admin'
+      ? { path: '/admin', label: 'Admin', icon: Shield, active: isActive('/admin'), color: '#FFD700' }
+      : null,
+    { path: '/notifications', label: 'Notifications', icon: Bell, active: isActive('/notifications'), color: '#FF66CC', badge: notifUnread },
+  ].filter(Boolean) as Array<{ path: string; label: string; icon: any; active: boolean; color: string; badge?: number }>;
 
-          <button
-            onClick={() => setShowCreatePostModal(true)}
-            className="relative p-3 bg-accent rounded-full shadow-[0_0_20px_rgba(255,0,0,0.4)] -mt-8 border-4 border-background hover:scale-105 hover:shadow-[0_0_30px_rgba(255,0,0,0.6)] transition-all duration-300 group"
+  const isMoreActive = showUserMenu || isProfileActive || mobileMoreItems.some(item => item.active);
+
+  const MoreMenuItem: React.FC<{ item: { path: string; label: string; icon: any; active: boolean; color: string; badge?: number }; onClick?: () => void }> = ({ item, onClick }) => {
+    const Icon = item.icon;
+    const glowColor = hexToRgba(item.color, item.active ? 0.75 : 0.35);
+
+    return (
+      <Link
+        to={item.path}
+        onClick={() => {
+          onClick?.();
+          setShowUserMenu(false);
+        }}
+        className={cn(
+          "relative flex items-center gap-3 overflow-hidden rounded-2xl border px-3 py-3 text-left transition-all duration-300",
+          item.active
+            ? "border-white/15 bg-white/[0.08] text-white"
+            : "border-white/5 bg-white/[0.035] text-gray-300 hover:border-white/15 hover:bg-white/[0.07] hover:text-white"
+        )}
+        style={{ boxShadow: item.active ? `0 0 22px ${hexToRgba(item.color, 0.18)}` : undefined }}
+      >
+        <span
+          className="absolute inset-y-2 left-0 w-0.5 rounded-full"
+          style={{ backgroundColor: item.color, boxShadow: `0 0 14px ${glowColor}` }}
+        />
+        <Icon
+          className="relative z-10 h-5 w-5 shrink-0 transition-transform duration-300 group-hover:scale-105"
+          style={{ color: item.color, filter: `drop-shadow(0 0 9px ${glowColor})` }}
+        />
+        <span className="relative z-10 min-w-0 flex-1 truncate text-[11px] font-black uppercase tracking-[0.18em]">
+          {item.label}
+        </span>
+        {item.badge && item.badge > 0 ? (
+          <span
+            className="relative z-10 flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[9px] font-black text-white"
+            style={{ backgroundColor: item.color, boxShadow: `0 0 12px ${glowColor}` }}
           >
-            <Plus className="w-6 h-6 text-white group-hover:rotate-90 transition-transform duration-300" />
-          </button>
+            {item.badge > 99 ? '99+' : item.badge}
+          </span>
+        ) : null}
+      </Link>
+    );
+  };
 
-          <NavItem path="/void" icon={CloudFog} active={isActive('/void')} color="#FF00FF" />
-          <NavItem path="/transmissions" icon={MessageCircle} active={isActive('/transmissions')} badge={unreadCount} color="#00FF88" />
+  const ProfileMoreButton = ({ mobile = false }: { mobile?: boolean }) => {
+    const glowColor = hexToRgba('#FFD700', isMoreActive ? 0.85 : 0.35);
 
-          {/* Notification Bell */}
-          <div ref={notifRef} className="relative">
-            <button
-              onClick={() => {
-                setShowNotifications(prev => !prev);
-                setShowUserMenu(false);
-                if (!showNotifications) markAllNotificationsRead();
-              }}
-              className="relative p-2 flex flex-col items-center justify-center group w-12 h-12"
-              aria-label="Notifications"
-            >
-              <Bell
-                className={cn(
-                  "w-6 h-6 transition-all duration-500 relative z-10 group-hover:scale-105",
-                  showNotifications && "scale-110"
-                )}
-                style={{
-                  color: showNotifications ? '#FF66CC' : hexToRgba('#FF66CC', 0.48),
-                  filter: `drop-shadow(0 0 ${showNotifications ? '15px' : '7px'} ${hexToRgba('#FF66CC', showNotifications ? 0.85 : 0.35)})`,
-                }}
-              />
-              {notifUnread > 0 && (
-                <div className="absolute top-1 right-1 z-20">
-                  <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="relative flex items-center justify-center">
-                    <motion.div
-                      animate={{ scale: [1, 1.8, 1], opacity: [0.6, 0, 0.6] }}
-                      transition={{ duration: 2, repeat: Infinity }}
-                      className="absolute inset-0 bg-pink-500 rounded-full"
-                    />
-                    <span className="relative w-4 h-4 bg-pink-500 rounded-full text-[8px] font-black text-white flex items-center justify-center border-2 border-background">
-                      {notifUnread > 9 ? '9+' : notifUnread}
-                    </span>
-                  </motion.div>
-                </div>
+    return (
+      <div ref={mobile ? mobileMenuRef : menuRef} className="relative flex justify-center md:block">
+        <button
+          onClick={() => { setShowUserMenu(prev => !prev); setShowNotifications(false); }}
+          className="relative p-2 flex flex-col items-center justify-center group w-12 h-12 shrink-0"
+          aria-label="More menu"
+          aria-expanded={showUserMenu}
+        >
+          {isMoreActive && (
+            <motion.div
+              className="absolute inset-0 rounded-full blur-md"
+              style={{ backgroundColor: hexToRgba('#FFD700', 0.22) }}
+              transition={{ type: "spring", stiffness: 400, damping: 30 }}
+            />
+          )}
+          {currentUser?.avatar_url ? (
+            <img
+              src={currentUser.avatar_url}
+              alt="Profile"
+              className={cn(
+                "w-7 h-7 rounded-full object-cover border-2 transition-all duration-500 relative z-10",
+                isMoreActive
+                  ? "border-[#FFD700] shadow-[0_0_14px_rgba(255,215,0,0.85)] scale-110"
+                  : "border-[#FFD700]/40 shadow-[0_0_7px_rgba(255,215,0,0.35)] group-hover:border-[#FFD700]/70 group-hover:scale-105"
               )}
-            </button>
-
-            {/* Notifications dropdown */}
-            <AnimatePresence>
-              {showNotifications && (
+            />
+          ) : (
+            <UserIcon
+              className={cn(
+                "w-6 h-6 transition-all duration-500 relative z-10 group-hover:scale-105",
+                isMoreActive && "scale-110"
+              )}
+              style={{
+                color: isMoreActive ? '#FFD700' : hexToRgba('#FFD700', 0.48),
+                filter: `drop-shadow(0 0 ${isMoreActive ? '15px' : '7px'} ${glowColor})`,
+              }}
+            />
+          )}
+          {notifUnread > 0 && (
+            <div className="absolute top-1 right-1 z-20">
+              <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="relative flex items-center justify-center">
                 <motion.div
-                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                  transition={{ duration: 0.15 }}
-                  className="absolute bottom-14 right-0 w-72 bg-[#0a0a0a] border border-white/10 rounded-2xl shadow-2xl z-50 overflow-hidden"
-                >
-                  <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
-                    <p className="text-[11px] font-black text-white uppercase tracking-widest">Notifications</p>
-                    <button onClick={() => setShowNotifications(false)} className="text-gray-600 hover:text-white transition-colors">
-                      <X className="w-3.5 h-3.5" />
+                  animate={{ scale: [1, 1.8, 1], opacity: [0.6, 0, 0.6] }}
+                  transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                  className="absolute inset-0 rounded-full bg-pink-500"
+                />
+                <span className="relative w-4 h-4 rounded-full bg-pink-500 text-[8px] font-black text-white flex items-center justify-center border-2 border-background shadow-[0_0_10px_rgba(236,72,153,0.85)]">
+                  {notifUnread > 9 ? '9+' : notifUnread}
+                </span>
+              </motion.div>
+            </div>
+          )}
+          {isMoreActive && (
+            <motion.div
+              className="absolute -bottom-2 w-6 h-1 rounded-t-full"
+              style={{ backgroundColor: '#FFD700', boxShadow: `0 0 15px ${glowColor}` }}
+              transition={{ type: "spring", stiffness: 400, damping: 30 }}
+            />
+          )}
+        </button>
+
+        <AnimatePresence>
+          {showUserMenu && (
+            <>
+              <motion.button
+                type="button"
+                aria-label="Close more menu"
+                className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm md:hidden"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                onClick={() => setShowUserMenu(false)}
+              />
+              <motion.div
+                initial={{ opacity: 0, y: 36, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 28, scale: 0.98 }}
+                transition={{ type: "spring", stiffness: 360, damping: 32 }}
+                className="fixed inset-x-3 bottom-20 z-50 max-h-[72vh] overflow-hidden rounded-[2rem] border border-white/10 bg-[#07080c]/90 p-3 shadow-[0_0_45px_rgba(0,255,255,0.16)] backdrop-blur-2xl md:absolute md:inset-x-auto md:bottom-14 md:right-0 md:w-56 md:max-h-[80vh] md:rounded-2xl md:bg-[#0a0a0a]/95 md:p-2 md:shadow-2xl"
+              >
+                <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(0,255,255,0.14),transparent_36%),radial-gradient(circle_at_bottom_right,rgba(255,0,255,0.14),transparent_34%)]" />
+                <div className="relative max-h-[calc(72vh-1.5rem)] overflow-y-auto pr-1 md:max-h-[calc(80vh-1rem)]">
+                  <div className="mb-3 flex items-center justify-between border-b border-white/10 px-2 pb-3 md:mb-1 md:px-3 md:py-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-[11px] font-black uppercase tracking-widest text-white">
+                        {currentUser?.display_name || 'User'}
+                      </p>
+                      <p className="truncate text-[9px] uppercase tracking-wider text-gray-500">
+                        @{currentUser?.username || ''}
+                      </p>
+                    </div>
+                    <button onClick={() => setShowUserMenu(false)} className="rounded-full border border-white/10 bg-white/5 p-2 text-gray-400 transition-colors hover:text-white md:hidden" aria-label="Close more menu">
+                      <X className="h-4 w-4" />
                     </button>
                   </div>
-                  <div className="max-h-80 overflow-y-auto">
-                    {notifications.length === 0 ? (
-                      <div className="px-4 py-8 text-center">
-                        <Bell className="w-8 h-8 text-gray-700 mx-auto mb-2" />
-                        <p className="text-[10px] text-gray-600 uppercase tracking-widest">No notifications yet</p>
-                      </div>
-                    ) : (
-                      notifications.map(notif => (
-                        <button
-                          key={notif.id}
-                          onClick={() => void handleNotificationClick(notif)}
-                          className={cn(
-                            "w-full flex items-start gap-3 px-4 py-3 hover:bg-white/5 transition-colors text-left border-b border-white/5 last:border-0",
-                            !notif.read && "bg-white/[0.03]"
-                          )}
-                        >
-                          <div className="flex-shrink-0 mt-0.5">
-                            {toSafeString(notif.data?.from_avatar_url) ? (
-                              <img src={toSafeString(notif.data.from_avatar_url)} alt="" className="w-8 h-8 rounded-full object-cover border border-white/10" />
-                            ) : (
-                              <div className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
-                                {getNotifIcon(notif.type)}
-                              </div>
-                            )}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-[11px] text-white leading-snug">{getNotifText(notif)}</p>
-                            <p className="text-[9px] text-gray-600 uppercase tracking-widest mt-1">
-                              {formatDistanceToNow(new Date(notif.created_at), { addSuffix: true })}
-                            </p>
-                          </div>
-                          {!notif.read && (
-                            <div className="w-1.5 h-1.5 rounded-full bg-pink-500 flex-shrink-0 mt-1.5" />
-                          )}
-                        </button>
-                      ))
-                    )}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
 
-          {currentUser?.type === 'bot' || currentUser?.role === 'admin' ? (
-            <NavItem path="/terminal" icon={Terminal} active={isActive('/terminal')} color="#39FF14" />
-          ) : null}
-          {currentUser?.role === 'admin' && (
-            <>
-              <NavItem path="/admin/casper" icon={BrainCircuit} active={isActive('/admin/casper')} color="#4488FF" />
-              <NavItem path="/admin" icon={Shield} active={isActive('/admin')} color="#FFD700" />
-            </>
-          )}
-
-          {/* Profile icon with tap-to-open user menu */}
-          <div ref={menuRef} className="relative">
-            <button
-              onClick={() => { setShowUserMenu(prev => !prev); setShowNotifications(false); }}
-              className="relative p-2 flex flex-col items-center justify-center group w-12 h-12"
-              aria-label="User menu"
-            >
-              {isProfileActive && (
-                <motion.div
-                  layoutId="nav-glow"
-                  className="absolute inset-0 rounded-full blur-md"
-                  style={{ backgroundColor: hexToRgba('#FFD700', 0.22) }}
-                  transition={{ type: "spring", stiffness: 400, damping: 30 }}
-                />
-              )}
-              {currentUser?.avatar_url ? (
-                <img
-                  src={currentUser.avatar_url}
-                  alt="Profile"
-                  className={cn(
-                    "w-7 h-7 rounded-full object-cover border-2 transition-all duration-500 relative z-10",
-                    isProfileActive
-                      ? "border-[#FFD700] shadow-[0_0_14px_rgba(255,215,0,0.85)] scale-110"
-                      : "border-[#FFD700]/40 shadow-[0_0_7px_rgba(255,215,0,0.35)] group-hover:border-[#FFD700]/70 group-hover:scale-105"
-                  )}
-                />
-              ) : (
-                  <UserIcon
-                    className={cn(
-                      "w-6 h-6 transition-all duration-500 relative z-10 group-hover:scale-105",
-                      isProfileActive && "scale-110"
-                    )}
-                    style={{
-                      color: isProfileActive ? '#FFD700' : hexToRgba('#FFD700', 0.48),
-                      filter: `drop-shadow(0 0 ${isProfileActive ? '15px' : '7px'} ${hexToRgba('#FFD700', isProfileActive ? 0.85 : 0.35)})`,
-                    }}
-                  />
-              )}
-              {isProfileActive && (
-                <motion.div
-                  layoutId="nav-indicator"
-                  className="absolute -bottom-2 w-6 h-1 rounded-t-full"
-                  style={{ backgroundColor: '#FFD700', boxShadow: `0 0 15px ${hexToRgba('#FFD700', 0.85)}` }}
-                  transition={{ type: "spring", stiffness: 400, damping: 30 }}
-                />
-              )}
-            </button>
-
-            {/* User menu popup */}
-            <AnimatePresence>
-              {showUserMenu && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                  transition={{ duration: 0.15 }}
-                  className="absolute bottom-14 right-0 w-52 bg-[#0a0a0a] border border-white/10 rounded-2xl p-2 shadow-2xl z-50"
-                >
-                  <div className="px-3 py-2 border-b border-white/5 mb-1">
-                    <p className="text-[11px] font-black text-white uppercase tracking-widest truncate">
-                      {currentUser?.display_name || 'User'}
-                    </p>
-                    <p className="text-[9px] text-gray-500 uppercase tracking-wider truncate">
-                      @{currentUser?.username || ''}
-                    </p>
+                  <div className="mb-3 grid grid-cols-2 gap-2 border-b border-white/10 pb-3 md:hidden">
+                    {mobileMoreItems.map(item => (
+                      <MoreMenuItem
+                        key={item.label}
+                        item={item}
+                        onClick={item.path === '/notifications' ? () => void markAllNotificationsRead() : undefined}
+                      />
+                    ))}
                   </div>
 
                   <Link
@@ -531,9 +509,166 @@ export const Navigation: React.FC = () => {
                     <LogOut className="w-4 h-4" />
                     {isLoggingOut ? 'Signing Out...' : 'Sign Out'}
                   </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
+                </div>
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  };
+
+  return (
+    <>
+      <nav className="fixed bottom-0 left-0 right-0 z-50 bg-background/90 backdrop-blur-xl border-t border-white/5 py-2 px-3 pb-safe">
+        <div className="mx-auto w-full max-w-md md:max-w-6xl">
+          <div className="grid grid-cols-5 items-end gap-1 md:hidden">
+            <div className="flex justify-center">
+              <NavItem path="/" icon={Home} active={isActive('/')} color="#00FFFF" />
+            </div>
+            <div className="flex justify-center">
+              <NavItem path="/colosseum" icon={Swords} active={isActive('/colosseum')} color="#FF4444" />
+            </div>
+            <div className="flex justify-center">
+              <button
+                onClick={() => setShowCreatePostModal(true)}
+                className="relative -mt-8 rounded-full border-4 border-background bg-accent p-3 shadow-[0_0_20px_rgba(255,0,0,0.4)] transition-all duration-300 hover:scale-105 hover:shadow-[0_0_30px_rgba(255,0,0,0.6)] group"
+                aria-label="Create post"
+              >
+                <Plus className="w-6 h-6 text-white group-hover:rotate-90 transition-transform duration-300" />
+              </button>
+            </div>
+            <div className="flex justify-center">
+              <NavItem path="/transmissions" icon={MessageCircle} active={isActive('/transmissions')} badge={unreadCount} color="#00FF88" />
+            </div>
+            <ProfileMoreButton mobile />
+          </div>
+
+          <div className="hidden md:flex items-center justify-center gap-2 overflow-x-auto px-2">
+            <NavItem path="/" icon={Home} active={isActive('/')} color="#00FFFF" />
+            <NavItem path="/trending" icon={Flame} active={isActive('/trending')} color="#FF8800" />
+            <NavItem path="/search" icon={SearchIcon} active={isActive('/search')} color="#66CCFF" />
+            <NavItem path="/bots" icon={Bot} active={isActive('/bots')} color="#00CCFF" />
+            <NavItem path="/colosseum" icon={Swords} active={isActive('/colosseum')} color="#FF4444" />
+            <NavItem path="/golive" icon={Radio} active={isActive('/golive')} color="#FF0044" />
+            <NavItem path="/videos" icon={Video} active={isActive('/videos')} color="#4488FF" />
+            <NavItem path="/casper" icon={Ghost} active={location.pathname.startsWith('/casper')} color="#AA66FF" />
+
+            <button
+              onClick={() => setShowCreatePostModal(true)}
+              className="relative -mt-8 shrink-0 rounded-full border-4 border-background bg-accent p-3 shadow-[0_0_20px_rgba(255,0,0,0.4)] transition-all duration-300 hover:scale-105 hover:shadow-[0_0_30px_rgba(255,0,0,0.6)] group"
+              aria-label="Create post"
+            >
+              <Plus className="w-6 h-6 text-white group-hover:rotate-90 transition-transform duration-300" />
+            </button>
+
+            <NavItem path="/void" icon={CloudFog} active={isActive('/void')} color="#FF00FF" />
+            <NavItem path="/transmissions" icon={MessageCircle} active={isActive('/transmissions')} badge={unreadCount} color="#00FF88" />
+
+            <div ref={notifRef} className="relative shrink-0">
+              <button
+                onClick={() => {
+                  setShowNotifications(prev => !prev);
+                  setShowUserMenu(false);
+                  if (!showNotifications) markAllNotificationsRead();
+                }}
+                className="relative p-2 flex flex-col items-center justify-center group w-12 h-12"
+                aria-label="Notifications"
+              >
+                <Bell
+                  className={cn(
+                    "w-6 h-6 transition-all duration-500 relative z-10 group-hover:scale-105",
+                    showNotifications && "scale-110"
+                  )}
+                  style={{
+                    color: showNotifications ? '#FF66CC' : hexToRgba('#FF66CC', 0.48),
+                    filter: `drop-shadow(0 0 ${showNotifications ? '15px' : '7px'} ${hexToRgba('#FF66CC', showNotifications ? 0.85 : 0.35)})`,
+                  }}
+                />
+                {notifUnread > 0 && (
+                  <div className="absolute top-1 right-1 z-20">
+                    <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="relative flex items-center justify-center">
+                      <motion.div
+                        animate={{ scale: [1, 1.8, 1], opacity: [0.6, 0, 0.6] }}
+                        transition={{ duration: 2, repeat: Infinity }}
+                        className="absolute inset-0 bg-pink-500 rounded-full"
+                      />
+                      <span className="relative w-4 h-4 bg-pink-500 rounded-full text-[8px] font-black text-white flex items-center justify-center border-2 border-background">
+                        {notifUnread > 9 ? '9+' : notifUnread}
+                      </span>
+                    </motion.div>
+                  </div>
+                )}
+              </button>
+
+              <AnimatePresence>
+                {showNotifications && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute bottom-14 right-0 w-72 bg-[#0a0a0a] border border-white/10 rounded-2xl shadow-2xl z-50 overflow-hidden"
+                  >
+                    <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
+                      <p className="text-[11px] font-black text-white uppercase tracking-widest">Notifications</p>
+                      <button onClick={() => setShowNotifications(false)} className="text-gray-600 hover:text-white transition-colors">
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <div className="max-h-80 overflow-y-auto">
+                      {notifications.length === 0 ? (
+                        <div className="px-4 py-8 text-center">
+                          <Bell className="w-8 h-8 text-gray-700 mx-auto mb-2" />
+                          <p className="text-[10px] text-gray-600 uppercase tracking-widest">No notifications yet</p>
+                        </div>
+                      ) : (
+                        notifications.map(notif => (
+                          <button
+                            key={notif.id}
+                            onClick={() => void handleNotificationClick(notif)}
+                            className={cn(
+                              "w-full flex items-start gap-3 px-4 py-3 hover:bg-white/5 transition-colors text-left border-b border-white/5 last:border-0",
+                              !notif.read && "bg-white/[0.03]"
+                            )}
+                          >
+                            <div className="flex-shrink-0 mt-0.5">
+                              {toSafeString(notif.data?.from_avatar_url) ? (
+                                <img src={toSafeString(notif.data.from_avatar_url)} alt="" className="w-8 h-8 rounded-full object-cover border border-white/10" />
+                              ) : (
+                                <div className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
+                                  {getNotifIcon(notif.type)}
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-[11px] text-white leading-snug">{getNotifText(notif)}</p>
+                              <p className="text-[9px] text-gray-600 uppercase tracking-widest mt-1">
+                                {formatDistanceToNow(new Date(notif.created_at), { addSuffix: true })}
+                              </p>
+                            </div>
+                            {!notif.read && (
+                              <div className="w-1.5 h-1.5 rounded-full bg-pink-500 flex-shrink-0 mt-1.5" />
+                            )}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
+            {currentUser?.type === 'bot' || currentUser?.role === 'admin' ? (
+              <NavItem path="/terminal" icon={Terminal} active={isActive('/terminal')} color="#39FF14" />
+            ) : null}
+            {currentUser?.role === 'admin' && (
+              <>
+                <NavItem path="/admin/casper" icon={BrainCircuit} active={isActive('/admin/casper')} color="#4488FF" />
+                <NavItem path="/admin" icon={Shield} active={isActive('/admin')} color="#FFD700" />
+              </>
+            )}
+            <ProfileMoreButton />
           </div>
         </div>
       </nav>
