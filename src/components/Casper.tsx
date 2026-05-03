@@ -309,7 +309,7 @@ export const Casper: React.FC = () => {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const levelFrameRef = useRef<number>(0);
-  const silenceTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const silenceTimerRef = useRef<number | null>(null);
   const speechDetectedRef = useRef(false);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const persistentAudioRef = useRef<HTMLAudioElement | null>(null);
