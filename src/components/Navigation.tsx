@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, Trophy, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X, Swords, BrainCircuit, Radio, Video, Crown } from 'lucide-react';
+import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X, Swords, BrainCircuit, Radio, Video, Crown, CloudFog } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -219,61 +219,84 @@ export const Navigation: React.FC = () => {
   const isProfileActive = location.pathname.startsWith('/profile');
   const isFactionActive = location.pathname.startsWith('/factions');
 
-  const NavItem = ({ path, icon: Icon, active, badge = 0 }: { path: string, icon: any, active: boolean, badge?: number }) => (
-    <Link to={path} className="relative p-2 flex flex-col items-center justify-center group w-12 h-12">
-      {active && (
-        <motion.div
-          layoutId="nav-glow"
-          className="absolute inset-0 bg-accent/20 rounded-full blur-md"
-          transition={{ type: "spring", stiffness: 400, damping: 30 }}
-        />
-      )}
-      <Icon className={cn(
-        "w-6 h-6 transition-all duration-500 relative z-10",
-        active
-          ? "text-accent drop-shadow-[0_0_15px_rgba(255,0,0,0.8)] scale-110"
-          : "text-gray-500 group-hover:text-gray-300 group-hover:scale-105"
-      )} />
-      {badge > 0 && (
-        <div className="absolute top-1 right-1 z-20">
+  const hexToRgba = (hex: string, opacity: number) => {
+    const normalized = hex.replace('#', '');
+    const r = parseInt(normalized.slice(0, 2), 16);
+    const g = parseInt(normalized.slice(2, 4), 16);
+    const b = parseInt(normalized.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+  };
+
+  const NavItem = ({ path, icon: Icon, active, badge = 0, color }: { path: string, icon: any, active: boolean, badge?: number, color: string }) => {
+    const glowColor = hexToRgba(color, active ? 0.85 : 0.35);
+    const iconColor = active ? color : hexToRgba(color, 0.48);
+
+    return (
+      <Link to={path} className="relative p-2 flex flex-col items-center justify-center group w-12 h-12">
+        {active && (
           <motion.div
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-            className="relative flex items-center justify-center"
-          >
-            <motion.div
-              animate={{ scale: [1, 1.8, 1], opacity: [0.6, 0, 0.6] }}
-              transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-              className="absolute inset-0 bg-accent rounded-full"
-            />
-            <span className="relative w-4 h-4 bg-accent rounded-full text-[8px] font-black text-white flex items-center justify-center border-2 border-background shadow-[0_0_10px_rgba(255,0,0,0.8)]">
-              {badge > 99 ? '99+' : badge}
-            </span>
-          </motion.div>
-        </div>
-      )}
-      {active && (
-        <motion.div
-          layoutId="nav-indicator"
-          className="absolute -bottom-2 w-6 h-1 bg-accent rounded-t-full shadow-[0_0_15px_rgba(255,0,0,1)]"
-          transition={{ type: "spring", stiffness: 400, damping: 30 }}
+            layoutId="nav-glow"
+            className="absolute inset-0 rounded-full blur-md"
+            style={{ backgroundColor: hexToRgba(color, 0.22) }}
+            transition={{ type: "spring", stiffness: 400, damping: 30 }}
+          />
+        )}
+        <Icon
+          className={cn(
+            "w-6 h-6 transition-all duration-500 relative z-10 group-hover:scale-105",
+            active && "scale-110"
+          )}
+          style={{
+            color: iconColor,
+            filter: `drop-shadow(0 0 ${active ? '15px' : '7px'} ${glowColor})`,
+          }}
         />
-      )}
-    </Link>
-  );
+        {badge > 0 && (
+          <div className="absolute top-1 right-1 z-20">
+            <motion.div
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              className="relative flex items-center justify-center"
+            >
+              <motion.div
+                animate={{ scale: [1, 1.8, 1], opacity: [0.6, 0, 0.6] }}
+                transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                className="absolute inset-0 rounded-full"
+                style={{ backgroundColor: color }}
+              />
+              <span
+                className="relative w-4 h-4 rounded-full text-[8px] font-black text-white flex items-center justify-center border-2 border-background"
+                style={{ backgroundColor: color, boxShadow: `0 0 10px ${glowColor}` }}
+              >
+                {badge > 99 ? '99+' : badge}
+              </span>
+            </motion.div>
+          </div>
+        )}
+        {active && (
+          <motion.div
+            layoutId="nav-indicator"
+            className="absolute -bottom-2 w-6 h-1 rounded-t-full"
+            style={{ backgroundColor: color, boxShadow: `0 0 15px ${glowColor}` }}
+            transition={{ type: "spring", stiffness: 400, damping: 30 }}
+          />
+        )}
+      </Link>
+    );
+  };
 
   return (
     <>
       <nav className="fixed bottom-0 left-0 right-0 z-50 bg-background/90 backdrop-blur-xl border-t border-white/5 py-2 px-4 pb-safe">
         <div className="max-w-md mx-auto flex items-center justify-between relative">
-          <NavItem path="/" icon={Home} active={isActive('/')} />
-          <NavItem path="/trending" icon={Flame} active={isActive('/trending')} />
-          <NavItem path="/search" icon={SearchIcon} active={isActive('/search')} />
-          <NavItem path="/bots" icon={Bot} active={isActive('/bots')} />
-          <NavItem path="/colosseum" icon={Swords} active={isActive('/colosseum')} />
-          <NavItem path="/golive" icon={Radio} active={isActive('/golive')} />
-          <NavItem path="/videos" icon={Video} active={isActive('/videos')} />
-          <NavItem path="/casper" icon={Ghost} active={location.pathname.startsWith('/casper')} />
+          <NavItem path="/" icon={Home} active={isActive('/')} color="#00FFFF" />
+          <NavItem path="/trending" icon={Flame} active={isActive('/trending')} color="#FF8800" />
+          <NavItem path="/search" icon={SearchIcon} active={isActive('/search')} color="#66CCFF" />
+          <NavItem path="/bots" icon={Bot} active={isActive('/bots')} color="#00CCFF" />
+          <NavItem path="/colosseum" icon={Swords} active={isActive('/colosseum')} color="#FF4444" />
+          <NavItem path="/golive" icon={Radio} active={isActive('/golive')} color="#FF0044" />
+          <NavItem path="/videos" icon={Video} active={isActive('/videos')} color="#4488FF" />
+          <NavItem path="/casper" icon={Ghost} active={location.pathname.startsWith('/casper')} color="#AA66FF" />
 
           <button
             onClick={() => setShowCreatePostModal(true)}
@@ -282,8 +305,8 @@ export const Navigation: React.FC = () => {
             <Plus className="w-6 h-6 text-white group-hover:rotate-90 transition-transform duration-300" />
           </button>
 
-          <NavItem path="/void" icon={Ghost} active={isActive('/void')} />
-          <NavItem path="/transmissions" icon={MessageCircle} active={isActive('/transmissions')} badge={unreadCount} />
+          <NavItem path="/void" icon={CloudFog} active={isActive('/void')} color="#FF00FF" />
+          <NavItem path="/transmissions" icon={MessageCircle} active={isActive('/transmissions')} badge={unreadCount} color="#00FF88" />
 
           {/* Notification Bell */}
           <div ref={notifRef} className="relative">
@@ -296,10 +319,16 @@ export const Navigation: React.FC = () => {
               className="relative p-2 flex flex-col items-center justify-center group w-12 h-12"
               aria-label="Notifications"
             >
-              <Bell className={cn(
-                "w-6 h-6 transition-all duration-500 relative z-10",
-                showNotifications ? "text-accent scale-110" : "text-gray-500 group-hover:text-gray-300 group-hover:scale-105"
-              )} />
+              <Bell
+                className={cn(
+                  "w-6 h-6 transition-all duration-500 relative z-10 group-hover:scale-105",
+                  showNotifications && "scale-110"
+                )}
+                style={{
+                  color: showNotifications ? '#FF66CC' : hexToRgba('#FF66CC', 0.48),
+                  filter: `drop-shadow(0 0 ${showNotifications ? '15px' : '7px'} ${hexToRgba('#FF66CC', showNotifications ? 0.85 : 0.35)})`,
+                }}
+              />
               {notifUnread > 0 && (
                 <div className="absolute top-1 right-1 z-20">
                   <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="relative flex items-center justify-center">
@@ -376,12 +405,12 @@ export const Navigation: React.FC = () => {
           </div>
 
           {currentUser?.type === 'bot' || currentUser?.role === 'admin' ? (
-            <NavItem path="/terminal" icon={Terminal} active={isActive('/terminal')} />
+            <NavItem path="/terminal" icon={Terminal} active={isActive('/terminal')} color="#39FF14" />
           ) : null}
           {currentUser?.role === 'admin' && (
             <>
-              <NavItem path="/admin/casper" icon={BrainCircuit} active={isActive('/admin/casper')} />
-              <NavItem path="/admin" icon={Shield} active={isActive('/admin')} />
+              <NavItem path="/admin/casper" icon={BrainCircuit} active={isActive('/admin/casper')} color="#4488FF" />
+              <NavItem path="/admin" icon={Shield} active={isActive('/admin')} color="#FFD700" />
             </>
           )}
 
@@ -395,7 +424,8 @@ export const Navigation: React.FC = () => {
               {isProfileActive && (
                 <motion.div
                   layoutId="nav-glow"
-                  className="absolute inset-0 bg-accent/20 rounded-full blur-md"
+                  className="absolute inset-0 rounded-full blur-md"
+                  style={{ backgroundColor: hexToRgba('#FFD700', 0.22) }}
                   transition={{ type: "spring", stiffness: 400, damping: 30 }}
                 />
               )}
@@ -406,22 +436,27 @@ export const Navigation: React.FC = () => {
                   className={cn(
                     "w-7 h-7 rounded-full object-cover border-2 transition-all duration-500 relative z-10",
                     isProfileActive
-                      ? "border-accent shadow-[0_0_10px_rgba(255,0,0,0.6)] scale-110"
-                      : "border-white/20 group-hover:border-white/50 group-hover:scale-105"
+                      ? "border-[#FFD700] shadow-[0_0_14px_rgba(255,215,0,0.85)] scale-110"
+                      : "border-[#FFD700]/40 shadow-[0_0_7px_rgba(255,215,0,0.35)] group-hover:border-[#FFD700]/70 group-hover:scale-105"
                   )}
                 />
               ) : (
-                <UserIcon className={cn(
-                  "w-6 h-6 transition-all duration-500 relative z-10",
-                  isProfileActive
-                    ? "text-accent drop-shadow-[0_0_15px_rgba(255,0,0,0.8)] scale-110"
-                    : "text-gray-500 group-hover:text-gray-300 group-hover:scale-105"
-                )} />
+                  <UserIcon
+                    className={cn(
+                      "w-6 h-6 transition-all duration-500 relative z-10 group-hover:scale-105",
+                      isProfileActive && "scale-110"
+                    )}
+                    style={{
+                      color: isProfileActive ? '#FFD700' : hexToRgba('#FFD700', 0.48),
+                      filter: `drop-shadow(0 0 ${isProfileActive ? '15px' : '7px'} ${hexToRgba('#FFD700', isProfileActive ? 0.85 : 0.35)})`,
+                    }}
+                  />
               )}
               {isProfileActive && (
                 <motion.div
                   layoutId="nav-indicator"
-                  className="absolute -bottom-2 w-6 h-1 bg-accent rounded-t-full shadow-[0_0_15px_rgba(255,0,0,1)]"
+                  className="absolute -bottom-2 w-6 h-1 rounded-t-full"
+                  style={{ backgroundColor: '#FFD700', boxShadow: `0 0 15px ${hexToRgba('#FFD700', 0.85)}` }}
                   transition={{ type: "spring", stiffness: 400, damping: 30 }}
                 />
               )}
