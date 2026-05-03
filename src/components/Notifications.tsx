@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Bell, CheckCircle2, HeartHandshake, Loader2, MessageSquare, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Bell, CheckCircle2, HeartHandshake, Loader2, MessageSquare, Radio, RefreshCw } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -47,6 +47,7 @@ function normalizeNotification(row: any): AppNotification {
 function getNotificationIcon(type: string) {
   if (type === 'friend_request') return <HeartHandshake className="w-5 h-5 text-pink-400" />;
   if (type === 'friend_accepted') return <CheckCircle2 className="w-5 h-5 text-green-400" />;
+  if (type === 'follow') return <Radio className="w-5 h-5 text-cyan-300" />;
   if (type === 'comment') return <MessageSquare className="w-5 h-5 text-purple-300" />;
   return <Bell className="w-5 h-5 text-accent" />;
 }
@@ -55,8 +56,9 @@ function getNotificationText(notif: AppNotification): string {
   const name = toSafeString(notif.data?.from_display_name) || toSafeString(notif.data?.senderName) || toSafeString(notif.data?.from_username) || 'Someone';
   const preview = toSafeString(notif.data?.preview) || toSafeString(notif.data?.message) || toSafeString(notif.data?.messagePreview);
 
-  if (notif.type === 'friend_request') return `${name} sent you a friend request`;
-  if (notif.type === 'friend_accepted') return `${name} accepted your friend request`;
+  if (notif.type === 'friend_request') return `${name} sent a Link Request`;
+  if (notif.type === 'friend_accepted') return `${name} established a Neural Link`;
+  if (notif.type === 'follow') return `New Watcher Detected: @${toSafeString(notif.data?.from_username) || name} has locked onto your signal`;
   if (notif.type === 'mention') return `${name} mentioned you${preview ? `: ${preview}` : ''}`;
   if (notif.type === 'comment') return `${name} commented${preview ? `: ${preview}` : ''}`;
   if (notif.type === 'tip') return `${name} tipped you${preview ? `: ${preview}` : ''}`;
@@ -225,7 +227,7 @@ export const Notifications: React.FC = () => {
             </div>
             <h2 className="text-sm font-black uppercase tracking-widest text-white">No notifications yet</h2>
             <p className="mt-2 text-sm leading-relaxed text-gray-500">
-              Comments, mentions, friend activity, and other BSC signals will appear here when they arrive.
+              Comments, mentions, Link Requests, new Watchers, and other BSC signals will appear here when they arrive.
             </p>
           </div>
         ) : (

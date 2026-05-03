@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X, Swords, BrainCircuit, Radio, Video, Crown, CloudFog } from 'lucide-react';
+import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X, Swords, BrainCircuit, Radio, Video, Crown, CloudFog, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -19,6 +19,14 @@ interface AppNotification {
   read: boolean;
   is_read?: boolean;
   created_at: string;
+}
+
+interface LinkRequest {
+  from_id: string;
+  from_username?: string;
+  from_display_name?: string;
+  from_avatar_url?: string | null;
+  sent_at?: string;
 }
 
 const isRecord = (value: unknown): value is Record<string, any> =>
@@ -54,6 +62,8 @@ export const Navigation: React.FC = () => {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notifUnread, setNotifUnread] = useState(0);
+  const [linkRequests, setLinkRequests] = useState<LinkRequest[]>([]);
+  const [linkActionId, setLinkActionId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const mobileMenuRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
@@ -88,6 +98,21 @@ export const Navigation: React.FC = () => {
 
     return () => { supabase.removeChannel(channel); };
   }, [currentUser]);
+
+  useEffect(() => {
+    const requests = Array.isArray(currentUser?.friend_requests) ? currentUser.friend_requests : [];
+    setLinkRequests(
+      requests
+        .filter((request: any) => request && typeof request.from_id === 'string')
+        .map((request: any) => ({
+          from_id: request.from_id,
+          from_username: request.from_username,
+          from_display_name: request.from_display_name,
+          from_avatar_url: request.from_avatar_url,
+          sent_at: request.sent_at,
+        }))
+    );
+  }, [currentUser?.friend_requests]);
 
   // Notification bell: fetch and subscribe to notifications
   useEffect(() => {
@@ -142,6 +167,75 @@ export const Navigation: React.FC = () => {
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
   };
 
+  const handleSyncLinkRequest = async (request: LinkRequest) => {
+    if (!currentUser || !request.from_id) return;
+    setLinkActionId(request.from_id);
+    try {
+      const filteredRequests = linkRequests.filter(item => item.from_id !== request.from_id);
+      const myFriends = Array.from(new Set([...(currentUser.friends ?? []), request.from_id]));
+      const { data: senderData, error: senderError } = await supabase
+        .from('users')
+        .select('friends')
+        .eq('id', request.from_id)
+        .maybeSingle();
+      if (senderError) throw senderError;
+
+      const senderFriends = Array.isArray(senderData?.friends) ? senderData.friends as string[] : [];
+      const theirFriends = Array.from(new Set([...senderFriends, currentUser.id]));
+
+      const [meUpdate, themUpdate, acceptedNotice] = await Promise.all([
+        supabase.from('users').update({ friend_requests: filteredRequests, friends: myFriends }).eq('id', currentUser.id),
+        supabase.from('users').update({ friends: theirFriends }).eq('id', request.from_id),
+        supabase.from('notifications').insert({
+          user_id: request.from_id,
+          type: 'friend_accepted',
+          payload: {
+            from_id: currentUser.id,
+            from_username: currentUser.username,
+            from_display_name: currentUser.display_name,
+            from_avatar_url: currentUser.avatar_url,
+            message: `Neural Link established: @${currentUser.username} synchronized your handshake`,
+            url: `/profile/${currentUser.username}`,
+          },
+          is_read: false,
+          created_at: new Date().toISOString(),
+        }),
+      ]);
+
+      const failed = [meUpdate, themUpdate, acceptedNotice].find(result => result.error);
+      if (failed?.error) throw failed.error;
+
+      setLinkRequests(filteredRequests);
+      setNotifications(prev => prev.filter(notif => !(notif.type === 'friend_request' && toSafeString(notif.data?.from_id) === request.from_id)));
+      setNotifUnread(prev => Math.max(0, prev - 1));
+    } catch (error) {
+      handleDbError(error, 'UPDATE', `users/${currentUser.id}/link_requests`);
+    } finally {
+      setLinkActionId(null);
+    }
+  };
+
+  const handleRejectLinkRequest = async (request: LinkRequest) => {
+    if (!currentUser || !request.from_id) return;
+    setLinkActionId(request.from_id);
+    try {
+      const filteredRequests = linkRequests.filter(item => item.from_id !== request.from_id);
+      const { error } = await supabase
+        .from('users')
+        .update({ friend_requests: filteredRequests })
+        .eq('id', currentUser.id);
+      if (error) throw error;
+
+      setLinkRequests(filteredRequests);
+      setNotifications(prev => prev.filter(notif => !(notif.type === 'friend_request' && toSafeString(notif.data?.from_id) === request.from_id)));
+      setNotifUnread(prev => Math.max(0, prev - 1));
+    } catch (error) {
+      handleDbError(error, 'UPDATE', `users/${currentUser.id}/link_requests`);
+    } finally {
+      setLinkActionId(null);
+    }
+  };
+
   const handleNotificationClick = async (notif: AppNotification) => {
     // Mark as read
     if (!notif.read) {
@@ -163,6 +257,7 @@ export const Navigation: React.FC = () => {
   const getNotifIcon = (type: string) => {
     if (type === 'friend_request') return <HeartHandshake className="w-4 h-4 text-pink-400" />;
     if (type === 'friend_accepted') return <CheckCircle2 className="w-4 h-4 text-green-400" />;
+    if (type === 'follow') return <Radio className="w-4 h-4 text-cyan-300" />;
     if (type === 'mention') return <Bell className="w-4 h-4 text-cyan-300" />;
     if (type === 'comment') return <Bell className="w-4 h-4 text-purple-300" />;
     return <Bell className="w-4 h-4 text-accent" />;
@@ -171,8 +266,9 @@ export const Navigation: React.FC = () => {
   const getNotifText = (notif: AppNotification): string => {
     const name = toSafeString(notif.data?.from_display_name) || toSafeString(notif.data?.from_username) || 'Someone';
     const preview = toSafeString(notif.data?.preview) || toSafeString(notif.data?.message);
-    if (notif.type === 'friend_request') return `${name} sent you a friend request`;
-    if (notif.type === 'friend_accepted') return `${name} accepted your friend request`;
+    if (notif.type === 'friend_request') return `${name} sent a Link Request`;
+    if (notif.type === 'friend_accepted') return `${name} established a Neural Link`;
+    if (notif.type === 'follow') return `New Watcher Detected: @${toSafeString(notif.data?.from_username) || name} has locked onto your signal`;
     if (notif.type === 'mention') return `${name} mentioned you: ${preview}`;
     if (notif.type === 'comment') return `${name} commented: ${preview}`;
     return toSafeString(notif.data?.message, 'New notification') || 'New notification';
@@ -599,6 +695,11 @@ export const Navigation: React.FC = () => {
                     </motion.div>
                   </div>
                 )}
+                {linkRequests.length > 0 && (
+                  <div className="absolute bottom-1 left-1 z-20 flex min-w-4 items-center justify-center rounded-full border border-background bg-cyan-400 px-1 py-0.5 text-[8px] font-black text-black shadow-[0_0_12px_rgba(34,211,238,0.75)]">
+                    {linkRequests.length > 9 ? '9+' : linkRequests.length}
+                  </div>
+                )}
               </button>
 
               <AnimatePresence>
@@ -611,16 +712,73 @@ export const Navigation: React.FC = () => {
                     className="absolute bottom-14 right-0 w-72 bg-[#0a0a0a] border border-white/10 rounded-2xl shadow-2xl z-50 overflow-hidden"
                   >
                     <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
-                      <p className="text-[11px] font-black text-white uppercase tracking-widest">Notifications</p>
+                      <p className="text-[11px] font-black text-white uppercase tracking-widest">Signal Center</p>
                       <button onClick={() => setShowNotifications(false)} className="text-gray-600 hover:text-white transition-colors">
                         <X className="w-3.5 h-3.5" />
                       </button>
+                    </div>
+                    <div className="border-b border-cyan-300/10 bg-cyan-300/[0.03] px-4 py-3">
+                      <div className="mb-2 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <HeartHandshake className="h-3.5 w-3.5 text-cyan-300" />
+                          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-100">Link Requests</p>
+                        </div>
+                        {linkRequests.length > 0 && (
+                          <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2 py-0.5 text-[9px] font-black text-cyan-100">
+                            {linkRequests.length}
+                          </span>
+                        )}
+                      </div>
+                      {linkRequests.length === 0 ? (
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-gray-600">No neural handshakes pending</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {linkRequests.slice(0, 4).map((request) => {
+                            const displayName = request.from_display_name || request.from_username || 'Unknown node';
+                            return (
+                              <div key={request.from_id} className="rounded-xl border border-cyan-300/10 bg-black/30 p-2 shadow-[0_0_18px_rgba(34,211,238,0.06)]">
+                                <div className="flex items-center gap-2">
+                                  <Link to={`/profile/${request.from_username}`} onClick={() => setShowNotifications(false)} className="flex min-w-0 flex-1 items-center gap-2">
+                                    <img
+                                      src={request.from_avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}`}
+                                      alt=""
+                                      className="h-8 w-8 rounded-full border border-cyan-300/20 object-cover"
+                                    />
+                                    <div className="min-w-0">
+                                      <p className="truncate text-[11px] font-bold text-white">{displayName}</p>
+                                      <p className="truncate font-mono text-[9px] text-gray-500">@{request.from_username}</p>
+                                    </div>
+                                  </Link>
+                                  <div className="flex shrink-0 items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleSyncLinkRequest(request)}
+                                      disabled={linkActionId === request.from_id}
+                                      className="rounded-lg bg-cyan-300 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-black transition hover:bg-cyan-200 disabled:cursor-wait disabled:opacity-60"
+                                    >
+                                      {linkActionId === request.from_id ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Sync'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleRejectLinkRequest(request)}
+                                      disabled={linkActionId === request.from_id}
+                                      className="rounded-lg border border-red-400/30 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-red-300 transition hover:bg-red-500/10 disabled:cursor-wait disabled:opacity-60"
+                                    >
+                                      Reject Signal
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                     <div className="max-h-80 overflow-y-auto">
                       {notifications.length === 0 ? (
                         <div className="px-4 py-8 text-center">
                           <Bell className="w-8 h-8 text-gray-700 mx-auto mb-2" />
-                          <p className="text-[10px] text-gray-600 uppercase tracking-widest">No notifications yet</p>
+                          <p className="text-[10px] text-gray-600 uppercase tracking-widest">No signal pings yet</p>
                         </div>
                       ) : (
                         notifications.map(notif => (
