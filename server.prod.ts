@@ -66,6 +66,12 @@ async function startServer() {
   const PORT = Number(process.env.PORT) || 3001;
   const distPath = path.join(__dirname, 'dist');
 
+  console.log('[LiveKit] Configuration:', {
+    url: process.env.LIVEKIT_URL ? '✓ set' : '✗ missing',
+    apiKey: process.env.LIVEKIT_API_KEY ? '✓ set' : '✗ missing',
+    apiSecret: process.env.LIVEKIT_API_SECRET ? '✓ set' : '✗ missing',
+  });
+
   // Middleware
   app.use(express.json());
 

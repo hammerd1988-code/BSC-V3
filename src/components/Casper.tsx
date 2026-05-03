@@ -76,6 +76,7 @@ interface UserCasperIntegration {
 }
 
 type UserPanel = 'missions' | 'routines' | 'memories' | 'integrations';
+type VoiceState = 'idle' | 'recording' | 'transcribing' | 'thinking' | 'speaking';
 
 const CASPER_MODEL_GROUPS = [
   { 
@@ -279,6 +280,11 @@ export const Casper: React.FC = () => {
   const [instability, setInstability] = useState(12);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [ttsEnabled, setTtsEnabled] = useState(true);
+  const [voiceMode, setVoiceMode] = useState(false);
+  const [voiceState, setVoiceState] = useState<VoiceState>('idle');
+  const [audioLevel, setAudioLevel] = useState(0);
+  const [voiceDebug, setVoiceDebug] = useState('');
+  const [lastSpokenText, setLastSpokenText] = useState('');
   const [showControlCenter, setShowControlCenter] = useState(false);
   const [activePanel, setActivePanel] = useState<UserPanel>('missions');
   const [memories, setMemories] = useState<UserCasperMemory[]>([]);
@@ -296,7 +302,29 @@ export const Casper: React.FC = () => {
   const [actionBusy, setActionBusy] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const voiceActiveRef = useRef(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const levelFrameRef = useRef<number>(0);
+  const silenceTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const speechDetectedRef = useRef(false);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const persistentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const currentAudioUrlRef = useRef<string | null>(null);
+  const startListeningSessionRef = useRef<() => Promise<void>>(async () => {});
   const userUuid = isUuid(currentUser?.id) ? currentUser!.id : null;
+
+  const isListening = voiceState === 'recording';
+  const isSpeaking = voiceState === 'speaking';
+  const SILENCE_THRESHOLD = 8;
+  const SILENCE_DURATION_MS = 3000;
+  const MIN_SPEECH_DURATION_MS = 1500;
+  const MIN_RECORDING_MS = 2000;
+  const SILENT_AUDIO_UNLOCK_SRC = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYoRBqpAAAAAAD/+1DEAAAHAAGf9AAAIgAANIAAAAQAAAGkAAAAIAAANIAAAARMQU1FMy4xMDBVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVQ==';
+  const BOO_LAUGH_SRC = '/sounds/boo-laugh-sm64-style.wav';
 
   useEffect(() => {
     const greeting = CASPER_GREETINGS[Math.floor(Math.random() * CASPER_GREETINGS.length)];
@@ -468,6 +496,338 @@ export const Casper: React.FC = () => {
   const filteredMemories = memories.filter(memory => [memory.content, memory.memory_type, ...(memory.tags ?? [])].join(' ').toLowerCase().includes(memorySearch.toLowerCase()));
   const visibleIntegrations = AVAILABLE_CASPER_INTEGRATIONS.filter(item => integrationCategory === 'All' || item.category === integrationCategory);
 
+
+  const stopAudioPlayback = useCallback(() => {
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+    }
+    if (currentAudioUrlRef.current) {
+      URL.revokeObjectURL(currentAudioUrlRef.current);
+      currentAudioUrlRef.current = null;
+    }
+    window.speechSynthesis?.cancel();
+  }, []);
+
+  const unlockPersistentAudio = useCallback(async () => {
+    if (persistentAudioRef.current) return;
+    const audio = new Audio();
+    audio.preload = 'auto';
+    audio.src = SILENT_AUDIO_UNLOCK_SRC;
+    try {
+      await audio.play();
+      audio.pause();
+      audio.currentTime = 0;
+    } catch (error) {
+      console.warn('[VOICE] Persistent audio unlock was blocked; playback may still work after user interaction:', error);
+    } finally {
+      persistentAudioRef.current = audio;
+    }
+  }, [SILENT_AUDIO_UNLOCK_SRC]);
+
+  const playBooLaugh = useCallback(async () => {
+    const audio = new Audio(BOO_LAUGH_SRC);
+    audio.preload = 'auto';
+    audio.volume = 0.72;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        audio.onended = null;
+        audio.onerror = null;
+        resolve();
+      };
+      const timeout = window.setTimeout(done, 1600);
+      audio.onended = () => { window.clearTimeout(timeout); done(); };
+      audio.onerror = () => { window.clearTimeout(timeout); done(); };
+      audio.play().catch(() => { window.clearTimeout(timeout); done(); });
+    });
+  }, [BOO_LAUGH_SRC]);
+
+  const speakOnce = useCallback(async (text: string, onDone?: () => void) => {
+    if (!ttsEnabled) { onDone?.(); return; }
+
+    window.speechSynthesis?.cancel();
+    stopAudioPlayback();
+    setLastSpokenText(text);
+    setVoiceState('speaking');
+    setVoiceDebug('Casper is speaking...');
+
+    const finishSilently = (reason: string, error?: unknown) => {
+      if (error) console.warn(`[VOICE] ${reason}; browser TTS fallback is disabled:`, error);
+      else console.warn(`[VOICE] ${reason}; browser TTS fallback is disabled`);
+      stopAudioPlayback();
+      setVoiceState('idle');
+      if (voiceActiveRef.current) setVoiceDebug('OpenAI voice unavailable. Continuing without browser TTS.');
+      onDone?.();
+    };
+
+    try {
+      const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
+      const response = await fetch(`${serverUrl}/api/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, voice: 'onyx', speed: 1.05 }),
+      });
+
+      if (!response.ok) {
+        finishSilently(`OpenAI Onyx TTS failed with status ${response.status}`);
+        return;
+      }
+
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      currentAudioUrlRef.current = audioUrl;
+
+      const audio = persistentAudioRef.current || new Audio();
+      audio.pause();
+      audio.src = audioUrl;
+      audio.currentTime = 0;
+      currentAudioRef.current = audio;
+
+      audio.onended = () => {
+        if (currentAudioUrlRef.current === audioUrl) currentAudioUrlRef.current = null;
+        if (currentAudioRef.current === audio) currentAudioRef.current = null;
+        URL.revokeObjectURL(audioUrl);
+        setVoiceState('idle');
+        setVoiceDebug(voiceActiveRef.current ? 'Listening will resume...' : '');
+        onDone?.();
+      };
+
+      audio.onerror = () => {
+        if (currentAudioUrlRef.current === audioUrl) currentAudioUrlRef.current = null;
+        if (currentAudioRef.current === audio) currentAudioRef.current = null;
+        URL.revokeObjectURL(audioUrl);
+        finishSilently('OpenAI Onyx audio playback failed');
+      };
+
+      await audio.play();
+    } catch (error) {
+      finishSilently('OpenAI Onyx TTS request/playback error', error);
+    }
+  }, [stopAudioPlayback, ttsEnabled]);
+
+  const finishListening = useCallback(async () => {
+    cancelAnimationFrame(levelFrameRef.current);
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    setAudioLevel(0);
+
+    if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
+    mediaRecorderRef.current = null;
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    audioCtxRef.current?.close().catch(() => undefined);
+    audioCtxRef.current = null;
+
+    if (!voiceActiveRef.current) { setVoiceState('idle'); return; }
+
+    setVoiceState('transcribing');
+    setVoiceDebug('Transcribing your whisper...');
+    let transcript = '';
+
+    if (audioChunksRef.current.length > 0) {
+      try {
+        const audioBlob = new Blob(audioChunksRef.current, { type: audioChunksRef.current[0]?.type || 'audio/webm' });
+        const formData = new FormData();
+        formData.append('audio', audioBlob, 'recording.webm');
+        const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
+        const response = await fetch(`${serverUrl}/api/transcribe`, { method: 'POST', body: formData });
+        if (response.ok) {
+          const data = await response.json();
+          transcript = (data.transcript || data.text || '').trim();
+        } else {
+          console.warn('[VOICE] Server transcription failed:', response.status);
+        }
+      } catch (error) {
+        console.warn('[VOICE] Server transcription error:', error);
+      }
+    }
+
+    if (!transcript) {
+      setVoiceDebug("I couldn't catch that. Try speaking again...");
+      setVoiceState('idle');
+      if (voiceActiveRef.current) window.setTimeout(() => void startListeningSessionRef.current(), 1500);
+      return;
+    }
+
+    setVoiceState('thinking');
+    setVoiceDebug('Casper is thinking...');
+    setIsGenerating(true);
+
+    const userMsg: Message = { id: Date.now().toString(), role: 'user', content: transcript, timestamp: new Date() };
+    setMessages(prev => [...prev, userMsg]);
+
+    try {
+      const history = [...messages, userMsg]
+        .filter(message => message.id !== 'greeting')
+        .slice(-10)
+        .map(message => `${message.role === 'user' ? 'User' : 'Casper'}: ${message.content}`)
+        .join('\n');
+      const prompt = history ? `${history}\nUser: ${transcript}\nCasper:` : transcript;
+      const response = await generateText(prompt, aiSettings, {
+        systemPrompt: `${CASPER_SYSTEM_PROMPT}\n\nEnabled Casper integrations for this user:\n${integrationContext}`,
+        temperature: 0.8,
+      });
+      const casperText = response || 'The void swallowed my words. Say that again?';
+
+      if (currentUser?.id && response) {
+        void fetch('/api/casper/memory', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: currentUser.id, userMessage: transcript, casperReply: response }),
+        });
+      }
+
+      setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'casper', content: casperText, timestamp: new Date() }]);
+      setIsGenerating(false);
+      void speakOnce(casperText, () => {
+        if (voiceActiveRef.current) {
+          setVoiceDebug('Listening...');
+          window.setTimeout(() => void startListeningSessionRef.current(), 400);
+        }
+      });
+    } catch (error) {
+      console.error('[VOICE] Casper voice response failed:', error);
+      const fallback = 'My connection to the void is unstable. Try again.';
+      setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'casper', content: fallback, timestamp: new Date() }]);
+      setIsGenerating(false);
+      void speakOnce(fallback, () => {
+        if (voiceActiveRef.current) window.setTimeout(() => void startListeningSessionRef.current(), 400);
+      });
+    }
+  }, [aiSettings, currentUser?.id, integrationContext, messages, speakOnce]);
+
+  const startListeningSession = useCallback(async () => {
+    if (!voiceActiveRef.current || voiceState === 'recording') return;
+    setVoiceState('recording');
+    setVoiceDebug('Listening... speak naturally');
+    setAudioLevel(0);
+    speechDetectedRef.current = false;
+    audioChunksRef.current = [];
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioContextCtor();
+      audioCtxRef.current = ctx;
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      analyserRef.current = analyser;
+
+      const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find(type => MediaRecorder.isTypeSupported(type));
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      recorder.ondataavailable = (event) => { if (event.data.size > 0) audioChunksRef.current.push(event.data); };
+      recorder.start(250);
+      mediaRecorderRef.current = recorder;
+
+      const buffer = new Uint8Array(analyser.frequencyBinCount);
+      let speechStartTime = 0;
+      const recordingStartTime = Date.now();
+
+      const monitorLevel = () => {
+        if (!voiceActiveRef.current) return;
+        analyser.getByteFrequencyData(buffer);
+        const avg = buffer.reduce((sum, value) => sum + value, 0) / buffer.length;
+        setAudioLevel(Math.min(avg / 60, 1));
+        const elapsed = Date.now() - recordingStartTime;
+
+        if (avg > SILENCE_THRESHOLD) {
+          if (!speechDetectedRef.current) {
+            speechDetectedRef.current = true;
+            speechStartTime = Date.now();
+            setVoiceDebug('Hearing you... keep talking');
+          }
+          if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = null;
+          }
+        } else if (speechDetectedRef.current && elapsed > MIN_RECORDING_MS) {
+          const speechDuration = Date.now() - speechStartTime;
+          if (speechDuration > MIN_SPEECH_DURATION_MS && !silenceTimerRef.current) {
+            setVoiceDebug('Done? Processing in 3s... or tap Send Now');
+            silenceTimerRef.current = window.setTimeout(() => { void finishListening(); }, SILENCE_DURATION_MS);
+          }
+        } else if (!speechDetectedRef.current && elapsed < MIN_RECORDING_MS) {
+          setVoiceDebug('Listening... speak naturally');
+        }
+
+        levelFrameRef.current = requestAnimationFrame(monitorLevel);
+      };
+      levelFrameRef.current = requestAnimationFrame(monitorLevel);
+    } catch (error: any) {
+      console.error('[VOICE] Mic error:', error);
+      setVoiceDebug(`Mic error: ${error?.message || 'microphone unavailable'}`);
+      setVoiceState('idle');
+    }
+  }, [finishListening, voiceState]);
+
+  useEffect(() => {
+    startListeningSessionRef.current = startListeningSession;
+  }, [startListeningSession]);
+
+  const exitVoiceMode = useCallback(() => {
+    voiceActiveRef.current = false;
+    cancelAnimationFrame(levelFrameRef.current);
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
+    mediaRecorderRef.current = null;
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    audioCtxRef.current?.close().catch(() => undefined);
+    audioCtxRef.current = null;
+    stopAudioPlayback();
+    setVoiceMode(false);
+    setVoiceState('idle');
+    setVoiceDebug('');
+    setAudioLevel(0);
+  }, [stopAudioPlayback]);
+
+  const enterVoiceMode = useCallback(async () => {
+    await unlockPersistentAudio();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(track => track.stop());
+    } catch (error: any) {
+      setVoiceDebug(`Mic denied: ${error?.message || 'permission denied'}`);
+      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'casper', content: 'Microphone access denied. Allow mic in your browser settings.', timestamp: new Date() }]);
+      return;
+    }
+
+    voiceActiveRef.current = true;
+    setVoiceMode(true);
+    const hour = new Date().getHours();
+    const tod = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
+    const greetings = [
+      `Good ${tod}. I'm listening. Just speak naturally.`,
+      `Signal detected. Talk to me — I'll know when you're done.`,
+      'The void is open. Speak whenever you are ready.',
+    ];
+    const greeting = greetings[Math.floor(Math.random() * greetings.length)];
+    setMessages(prev => [...prev, { id: Date.now().toString(), role: 'casper', content: greeting, timestamp: new Date() }]);
+    await playBooLaugh();
+    if (!voiceActiveRef.current) return;
+    void speakOnce(greeting, () => {
+      if (voiceActiveRef.current) void startListeningSessionRef.current();
+    });
+  }, [playBooLaugh, speakOnce, unlockPersistentAudio]);
+
+  useEffect(() => () => exitVoiceMode(), [exitVoiceMode]);
+
   const sendMessage = useCallback(async () => {
     const text = input.trim();
     if (!text || isGenerating) return;
@@ -478,10 +838,17 @@ export const Casper: React.FC = () => {
     setIsGenerating(true);
 
     try {
-      const response = await generateText(text, aiSettings, {
+      const history = [...messages, userMsg]
+        .filter(message => message.id !== 'greeting')
+        .slice(-10)
+        .map(message => `${message.role === 'user' ? 'User' : 'Casper'}: ${message.content}`)
+        .join('\n');
+      const prompt = history ? `${history}\nUser: ${text}\nCasper:` : text;
+      const response = await generateText(prompt, aiSettings, {
         systemPrompt: `${CASPER_SYSTEM_PROMPT}\n\nEnabled Casper integrations for this user:\n${integrationContext}`,
         temperature: 0.8,
       });
+      const casperText = response || "The void is silent. Try again?";
 
       if (currentUser?.id && response) {
         void fetch('/api/casper/memory', {
@@ -494,20 +861,24 @@ export const Casper: React.FC = () => {
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),
         role: 'casper',
-        content: response || "The void is silent. Try again?",
+        content: casperText,
         timestamp: new Date(),
       }]);
+      setIsGenerating(false);
+      if (ttsEnabled && voiceState !== 'recording') void speakOnce(casperText);
     } catch (err) {
+      console.error('[Casper] message generation failed:', err);
+      const fallback = "My connection to the grid is flickering. One moment...";
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),
         role: 'casper',
-        content: "My connection to the grid is flickering. One moment...",
+        content: fallback,
         timestamp: new Date(),
       }]);
-    } finally {
       setIsGenerating(false);
+      if (ttsEnabled && voiceState !== 'recording') void speakOnce(fallback);
     }
-  }, [input, isGenerating, aiSettings, integrationContext, currentUser?.id]);
+  }, [input, isGenerating, messages, aiSettings, integrationContext, currentUser?.id, ttsEnabled, voiceState, speakOnce]);
 
   const clearChat = () => {
     const greeting = CASPER_GREETINGS[Math.floor(Math.random() * CASPER_GREETINGS.length)];
@@ -518,7 +889,7 @@ export const Casper: React.FC = () => {
     <div className="min-h-[100dvh] flex flex-col relative overflow-hidden bg-[#030308] text-white">
       {/* Background */}
       <div className="absolute inset-0 pointer-events-none z-0">
-        <VoidCanvas instability={instability} isActive={isGenerating} />
+        <VoidCanvas instability={instability} isActive={isGenerating || isListening || isSpeaking} />
       </div>
 
       {/* Header */}
@@ -557,6 +928,39 @@ export const Casper: React.FC = () => {
             >
               <Puzzle className="w-4 h-4" />
               Control
+            </button>
+            <button
+              onClick={() => {
+                const muting = ttsEnabled;
+                setTtsEnabled(!ttsEnabled);
+                if (muting) {
+                  stopAudioPlayback();
+                  setVoiceState(prev => prev === 'speaking' ? 'idle' : prev);
+                }
+              }}
+              className={cn(
+                "p-2.5 rounded-xl border transition-all",
+                ttsEnabled
+                  ? "bg-cyan-500/10 border-cyan-500/25 text-cyan-200 hover:bg-cyan-500/20 hover:text-white"
+                  : "bg-white/5 border-white/10 text-zinc-600 hover:text-zinc-300"
+              )}
+              title={ttsEnabled ? 'Mute Casper voice' : 'Unmute Casper voice'}
+              aria-label={ttsEnabled ? 'Mute Casper voice' : 'Unmute Casper voice'}
+            >
+              {ttsEnabled ? <Volume2 className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+            </button>
+            <button
+              onClick={() => { voiceMode ? exitVoiceMode() : void enterVoiceMode(); }}
+              className={cn(
+                "p-2.5 rounded-xl border transition-all",
+                voiceMode
+                  ? "bg-fuchsia-500/20 border-fuchsia-400/40 text-fuchsia-100 shadow-[0_0_16px_rgba(217,70,239,0.25)]"
+                  : "bg-white/5 border-white/10 text-zinc-500 hover:text-white hover:border-cyan-500/30"
+              )}
+              title={voiceMode ? 'Exit voice mode' : 'Enter voice mode'}
+              aria-label={voiceMode ? 'Exit voice mode' : 'Enter voice mode'}
+            >
+              {voiceMode ? <Volume2 className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
             </button>
             <button
               onClick={() => setShowAiCore(!showAiCore)}
@@ -729,6 +1133,100 @@ export const Casper: React.FC = () => {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {voiceMode && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            transition={{ duration: 0.22 }}
+            className="fixed inset-0 z-[100] flex min-h-[100dvh] flex-col overflow-y-auto overscroll-contain bg-black/95 text-white backdrop-blur-2xl"
+            style={{ paddingTop: 'max(1.5rem, env(safe-area-inset-top))', paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))' }}
+          >
+            <div className="absolute inset-0 pointer-events-none overflow-hidden">
+              <VoidCanvas instability={instability} isActive={isGenerating || isListening || isSpeaking} />
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(0,229,255,0.12),transparent_40%),linear-gradient(to_top,rgba(0,0,0,0.9),transparent,rgba(0,0,0,0.85))]" />
+            </div>
+
+            <div className="relative z-10 flex w-full flex-shrink-0 items-center justify-between px-6">
+              <div
+                className="rounded-full border px-4 py-2 text-[10px] font-black uppercase tracking-[0.3em]"
+                style={{
+                  color: voiceState === 'recording' ? '#4ADE80' : voiceState === 'transcribing' ? '#FBBF24' : voiceState === 'thinking' ? '#00E5FF' : voiceState === 'speaking' ? '#A78BFA' : 'rgba(255,255,255,0.5)',
+                  borderColor: voiceState === 'recording' ? 'rgba(74,222,128,0.4)' : voiceState === 'transcribing' ? 'rgba(251,191,36,0.3)' : voiceState === 'speaking' ? 'rgba(167,139,250,0.3)' : 'rgba(0,229,255,0.25)',
+                  background: voiceState === 'recording' ? 'rgba(74,222,128,0.1)' : voiceState === 'transcribing' ? 'rgba(251,191,36,0.08)' : voiceState === 'speaking' ? 'rgba(167,139,250,0.08)' : 'rgba(0,229,255,0.06)',
+                }}
+              >
+                {voiceState === 'recording' ? '● Listening'
+                  : voiceState === 'transcribing' ? '◌ Transcribing...'
+                  : voiceState === 'thinking' ? '◌ Thinking...'
+                  : voiceState === 'speaking' ? '▶ Speaking'
+                  : '○ Waiting...'}
+              </div>
+              <button
+                onClick={() => exitVoiceMode()}
+                className="rounded-full border border-white/10 bg-white/5 p-3 text-zinc-300 transition-all hover:border-red-500/50 hover:bg-red-500/20 hover:text-red-300"
+                aria-label="Exit voice mode"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="relative z-10 flex min-h-[240px] w-full flex-1 items-center justify-center px-6 py-8">
+              <div className="relative flex items-center justify-center">
+                <AnimatedCasperAvatar size="hero" isActive={voiceState === 'thinking' || voiceState === 'speaking'} instability={instability} showParticles />
+                {voiceState === 'recording' && (
+                  <motion.div
+                    className="absolute rounded-full border-2 border-green-400/30 pointer-events-none"
+                    style={{ width: '220px', height: '220px' }}
+                    animate={{ scale: 1 + (audioLevel * 0.5), opacity: 0.3 + (audioLevel * 0.7) }}
+                    transition={{ duration: 0.1 }}
+                  />
+                )}
+              </div>
+            </div>
+
+            <div className="relative z-10 mx-auto flex w-full max-w-lg flex-shrink-0 flex-col items-center gap-6 px-6">
+              <div className="flex min-h-24 max-h-[32dvh] w-full items-center justify-center overflow-y-auto overscroll-contain px-1 text-center">
+                <AnimatePresence mode="wait">
+                  {voiceState === 'speaking' && lastSpokenText ? (
+                    <motion.p key="speaking" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="break-words text-base font-medium leading-relaxed text-white/90 md:text-xl">
+                      “{lastSpokenText}”
+                    </motion.p>
+                  ) : voiceState === 'thinking' ? (
+                    <motion.div key="thinking" className="flex gap-2" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                      {[0, 1, 2].map(i => <motion.div key={i} className="h-2 w-2 rounded-full bg-white/50" animate={{ y: [0, -8, 0] }} transition={{ duration: 0.6, repeat: Infinity, delay: i * 0.15 }} />)}
+                    </motion.div>
+                  ) : voiceState === 'transcribing' ? (
+                    <motion.p key="transcribing" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="italic text-white/50">Transcribing your whisper...</motion.p>
+                  ) : voiceState === 'recording' ? (
+                    <motion.div key="recording" className="flex h-8 items-center gap-1" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                      {Array.from({ length: 22 }).map((_, i) => <motion.div key={i} className="w-1 rounded-full bg-green-400/60" animate={{ height: 4 + Math.max(audioLevel, 0.08) * (8 + ((i % 5) * 5)) }} transition={{ duration: 0.1 }} />)}
+                    </motion.div>
+                  ) : (
+                    <motion.p key="idle" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="italic text-white/40">Speak naturally. I'll know when you're done.</motion.p>
+                  )}
+                </AnimatePresence>
+              </div>
+
+              <div className="flex items-center gap-4">
+                {voiceState === 'recording' ? (
+                  <button onClick={() => void finishListening()} className="flex items-center gap-2 rounded-full border border-green-400/40 bg-green-400/10 px-6 py-3 text-xs font-black uppercase tracking-widest text-green-300 transition-all hover:scale-105">
+                    <Send className="w-4 h-4" /> Send Now
+                  </button>
+                ) : (
+                  <button onClick={() => void startListeningSession()} disabled={voiceState !== 'idle'} className="flex items-center gap-2 rounded-full border border-cyan-300/35 bg-cyan-400/10 px-6 py-3 text-xs font-black uppercase tracking-widest text-cyan-100 transition-all hover:scale-105 disabled:opacity-30 disabled:hover:scale-100">
+                    <Mic className="w-4 h-4" /> Tap to Speak
+                  </button>
+                )}
+              </div>
+
+              {voiceDebug && <div className="max-w-xs truncate text-center font-mono text-[10px] text-white/30">{voiceDebug}</div>}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-6 relative z-10 scrollbar-hide">
         <div className="max-w-3xl mx-auto w-full pt-4">
@@ -783,7 +1281,7 @@ export const Casper: React.FC = () => {
       {/* Input Area */}
       <div className="relative z-20 p-4 border-t border-white/5 bg-black/40 backdrop-blur-xl">
         <div className="max-w-3xl mx-auto">
-          <CasperWaveform isActive={isGenerating} instability={instability} />
+          <CasperWaveform isActive={isGenerating || isListening || isSpeaking} instability={instability} />
           
           <div className="relative mt-2">
             <textarea
