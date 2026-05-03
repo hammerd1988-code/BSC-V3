@@ -3,8 +3,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, Send, Loader2, RefreshCw, Trash2, Copy, Check, 
-  AlertTriangle, Activity, Mic, MicOff, Volume2, X, Settings, 
-  Lock, Eye, EyeOff, Server, BrainCircuit, ChevronDown, Ghost, User, Cpu
+  AlertTriangle, Activity, Mic, MicOff, Volume2, X, Settings,
+  Lock, Eye, EyeOff, Server, BrainCircuit, ChevronDown, Ghost, User, Cpu,
+  CalendarClock, Puzzle, KeyRound, Play, Pause, Plus, Search, Save, Database, Shield
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { generateText } from '../lib/ai';
@@ -12,6 +13,13 @@ import { supabase } from '../supabase';
 import { cn } from '../lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
+import {
+  AVAILABLE_CASPER_INTEGRATIONS,
+  CASPER_INTEGRATION_CATEGORIES,
+  encodeIntegrationKey,
+  maskSecret,
+  type CasperIntegrationCategory,
+} from '../lib/casperIntegrations';
 
 interface Message {
   id: string;
@@ -19,6 +27,55 @@ interface Message {
   content: string;
   timestamp: Date;
 }
+
+interface UserCasperMemory {
+  id: string;
+  memory_type: string;
+  content: string;
+  importance: number;
+  tags: string[] | null;
+  created_at: string;
+  access_count: number | null;
+}
+
+interface UserCasperTask {
+  id: string;
+  title: string;
+  description: string | null;
+  priority: 'low' | 'medium' | 'high' | 'urgent';
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  progress?: number | null;
+  result: string | null;
+  created_at: string;
+}
+
+interface UserCasperRoutine {
+  id: string;
+  name: string;
+  directive: string;
+  frequency: 'hourly' | 'daily' | 'weekly' | 'cron' | 'custom';
+  cron_expression: string | null;
+  scheduled_time: string | null;
+  is_enabled: boolean;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  last_result: string | null;
+  run_count: number;
+}
+
+interface UserCasperIntegration {
+  id: string;
+  user_id: string;
+  integration_key: string;
+  api_key_encrypted: string | null;
+  enabled: boolean;
+  status: 'connected' | 'disconnected' | 'error';
+  connected_at: string | null;
+  error_message: string | null;
+  config: Record<string, any>;
+}
+
+type UserPanel = 'missions' | 'routines' | 'memories' | 'integrations';
 
 const CASPER_MODEL_GROUPS = [
   { 
@@ -99,6 +156,15 @@ Your personality:
 - You are honest and direct, but always supportive of the builders in the network.
 
 Current context: You are chatting with a user in the BSC terminal. Keep your responses concise and impactful unless asked for detail.`;
+
+function isUuid(value?: string | null) {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(value);
+}
+
+function formatCasperTime(value?: string | null) {
+  if (!value) return 'No signal';
+  return new Date(value).toLocaleString();
+}
 
 const CASPER_GREETINGS = [
   "Whisper into the void... I'm listening.",
@@ -213,8 +279,24 @@ export const Casper: React.FC = () => {
   const [instability, setInstability] = useState(12);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [ttsEnabled, setTtsEnabled] = useState(true);
+  const [showControlCenter, setShowControlCenter] = useState(false);
+  const [activePanel, setActivePanel] = useState<UserPanel>('missions');
+  const [memories, setMemories] = useState<UserCasperMemory[]>([]);
+  const [tasks, setTasks] = useState<UserCasperTask[]>([]);
+  const [routines, setRoutines] = useState<UserCasperRoutine[]>([]);
+  const [integrations, setIntegrations] = useState<UserCasperIntegration[]>([]);
+  const [integrationContext, setIntegrationContext] = useState('No integrations connected yet.');
+  const [memorySearch, setMemorySearch] = useState('');
+  const [expandedMemory, setExpandedMemory] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [taskForm, setTaskForm] = useState({ title: '', description: '', priority: 'medium' as UserCasperTask['priority'] });
+  const [routineForm, setRoutineForm] = useState({ name: '', directive: '', frequency: 'daily' as UserCasperRoutine['frequency'], scheduled_time: '09:00', cron_expression: '0 9 * * *' });
+  const [integrationCategory, setIntegrationCategory] = useState<CasperIntegrationCategory | 'All'>('All');
+  const [integrationKeyEntry, setIntegrationKeyEntry] = useState<Record<string, string>>({});
+  const [actionBusy, setActionBusy] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const userUuid = isUuid(currentUser?.id) ? currentUser!.id : null;
 
   useEffect(() => {
     const greeting = CASPER_GREETINGS[Math.floor(Math.random() * CASPER_GREETINGS.length)];
@@ -230,6 +312,37 @@ export const Casper: React.FC = () => {
     setAiSettings(nextSettings);
     setAiCoreForm(initialCasperCore(nextSettings));
   }, [currentUser?.id, currentUser?.ai_settings]);
+
+  const authFetch = useCallback(async (url: string, options: RequestInit = {}) => {
+    const { data } = await supabase.auth.getSession();
+    return fetch(url, { ...options, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${data.session?.access_token ?? ''}`, ...(options.headers ?? {}) } });
+  }, []);
+
+  const fetchControlCenter = useCallback(async () => {
+    if (!currentUser?.id) return;
+    try {
+      const [memoryRes, taskRes, routineRes, integrationRes] = await Promise.all([
+        supabase.from('casper_memories').select('*').eq('user_id', currentUser.id).order('created_at', { ascending: false }).limit(50),
+        supabase.from('casper_tasks').select('*').eq('created_by', currentUser.id).order('created_at', { ascending: false }).limit(40),
+        supabase.from('casper_routines').select('*').eq('created_by', currentUser.id).order('created_at', { ascending: false }).limit(40),
+        supabase.from('casper_integrations').select('*').eq('user_id', currentUser.id).order('integration_key', { ascending: true }),
+      ]);
+      if (memoryRes.data) setMemories(memoryRes.data as UserCasperMemory[]);
+      if (taskRes.data) setTasks(taskRes.data as UserCasperTask[]);
+      if (routineRes.data) setRoutines(routineRes.data as UserCasperRoutine[]);
+      if (integrationRes.data) setIntegrations(integrationRes.data as UserCasperIntegration[]);
+      const contextRes = await authFetch('/api/casper/integrations/context');
+      if (contextRes.ok) {
+        const payload = await contextRes.json();
+        setIntegrationContext(payload.capabilityContext || 'No integrations connected yet.');
+      }
+    } catch (error: any) {
+      console.warn('[Casper] control center load failed:', error);
+      setNotice(error?.message || 'Control center data unavailable.');
+    }
+  }, [authFetch, currentUser?.id]);
+
+  useEffect(() => { void fetchControlCenter(); }, [fetchControlCenter]);
 
   const saveAiCore = async () => {
     if (!currentUser) return;
@@ -262,6 +375,99 @@ export const Casper: React.FC = () => {
     }
   };
 
+  const createTask = async () => {
+    if (!taskForm.title.trim() || !userUuid) return;
+    setActionBusy(true);
+    try {
+      const { error } = await supabase.from('casper_tasks').insert({ title: taskForm.title.trim(), description: taskForm.description.trim() || null, priority: taskForm.priority, status: 'pending', task_type: 'mission', progress: 0, created_by: userUuid, metadata: { source: 'user_casper_dashboard' } });
+      if (error) throw error;
+      setTaskForm({ title: '', description: '', priority: 'medium' });
+      setNotice('Mission queued for Casper.');
+      await fetchControlCenter();
+    } catch (error: any) { setNotice(error?.message || 'Failed to create mission.'); }
+    finally { setActionBusy(false); }
+  };
+
+  const runTask = async (task: UserCasperTask) => {
+    setActionBusy(true);
+    try {
+      const res = await authFetch(`/api/casper/tasks/${task.id}/run`, { method: 'POST', body: '{}' });
+      const payload = await res.json();
+      if (!res.ok || !payload.success) throw new Error(payload.error || 'Mission failed.');
+      setNotice('Casper executed the mission.');
+      await fetchControlCenter();
+    } catch (error: any) { setNotice(error?.message || 'Failed to run mission.'); }
+    finally { setActionBusy(false); }
+  };
+
+  const deleteTask = async (task: UserCasperTask) => {
+    const { error } = await supabase.from('casper_tasks').delete().eq('id', task.id);
+    if (error) setNotice(error.message); else setTasks(prev => prev.filter(item => item.id !== task.id));
+  };
+
+  const nextRunAt = (frequency: UserCasperRoutine['frequency'], time: string) => {
+    const next = new Date();
+    const [h, m] = time.split(':').map(Number);
+    next.setHours(h || 0, m || 0, 0, 0);
+    if (frequency === 'hourly') next.setHours(new Date().getHours() + 1);
+    else if (next <= new Date()) next.setDate(next.getDate() + (frequency === 'weekly' ? 7 : 1));
+    return next.toISOString();
+  };
+
+  const createRoutine = async () => {
+    if (!routineForm.name.trim() || !routineForm.directive.trim() || !userUuid) return;
+    setActionBusy(true);
+    try {
+      const { error } = await supabase.from('casper_routines').insert({ name: routineForm.name.trim(), directive: routineForm.directive.trim(), frequency: routineForm.frequency, cron_expression: routineForm.frequency === 'cron' || routineForm.frequency === 'custom' ? routineForm.cron_expression : null, scheduled_time: routineForm.scheduled_time, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', is_enabled: true, next_run_at: nextRunAt(routineForm.frequency, routineForm.scheduled_time), created_by: userUuid, metadata: { owner_id: userUuid, source: 'user_casper_dashboard' } });
+      if (error) throw error;
+      setRoutineForm({ name: '', directive: '', frequency: 'daily', scheduled_time: '09:00', cron_expression: '0 9 * * *' });
+      setNotice('Routine scheduled. Casper can now act proactively.');
+      await fetchControlCenter();
+    } catch (error: any) { setNotice(error?.message || 'Failed to create routine.'); }
+    finally { setActionBusy(false); }
+  };
+
+  const toggleRoutine = async (routine: UserCasperRoutine) => {
+    const { error } = await supabase.from('casper_routines').update({ is_enabled: !routine.is_enabled }).eq('id', routine.id);
+    if (error) setNotice(error.message); else await fetchControlCenter();
+  };
+
+  const deleteRoutine = async (routine: UserCasperRoutine) => {
+    const { error } = await supabase.from('casper_routines').delete().eq('id', routine.id);
+    if (error) setNotice(error.message); else setRoutines(prev => prev.filter(item => item.id !== routine.id));
+  };
+
+  const openMemory = async (memory: UserCasperMemory) => {
+    setExpandedMemory(prev => prev === memory.id ? null : memory.id);
+    await supabase.rpc('increment_memory_access', { memory_ids: [memory.id] });
+  };
+
+  const deleteMemory = async (memory: UserCasperMemory) => {
+    const { error } = await supabase.from('casper_memories').delete().eq('id', memory.id);
+    if (error) setNotice(error.message); else setMemories(prev => prev.filter(item => item.id !== memory.id));
+  };
+
+  const integrationRecord = (key: string) => integrations.find(item => item.integration_key === key);
+  const connectIntegration = async (key: string) => {
+    if (!userUuid) { setNotice('A UUID-backed user profile is required to connect integrations.'); return; }
+    const definition = AVAILABLE_CASPER_INTEGRATIONS.find(item => item.key === key);
+    const existing = integrationRecord(key);
+    const secret = integrationKeyEntry[key] ?? '';
+    const { error } = await supabase.from('casper_integrations').upsert({ user_id: userUuid, integration_key: key, api_key_encrypted: encodeIntegrationKey(secret) ?? existing?.api_key_encrypted ?? null, enabled: true, status: 'connected', connected_at: new Date().toISOString(), error_message: null, config: { scopes: definition?.scopes ?? [], category: definition?.category ?? 'Automation' } }, { onConflict: 'user_id,integration_key' });
+    if (error) setNotice(error.message); else { setIntegrationKeyEntry(prev => ({ ...prev, [key]: '' })); setNotice(`${definition?.name ?? key} equipped. Casper can now see this module in context.`); await fetchControlCenter(); }
+  };
+
+  const toggleIntegration = async (key: string) => {
+    const record = integrationRecord(key);
+    if (!record) return connectIntegration(key);
+    const enabled = !record.enabled;
+    const { error } = await supabase.from('casper_integrations').update({ enabled, status: enabled ? 'connected' : 'disconnected', connected_at: enabled ? new Date().toISOString() : record.connected_at }).eq('id', record.id);
+    if (error) setNotice(error.message); else await fetchControlCenter();
+  };
+
+  const filteredMemories = memories.filter(memory => [memory.content, memory.memory_type, ...(memory.tags ?? [])].join(' ').toLowerCase().includes(memorySearch.toLowerCase()));
+  const visibleIntegrations = AVAILABLE_CASPER_INTEGRATIONS.filter(item => integrationCategory === 'All' || item.category === integrationCategory);
+
   const sendMessage = useCallback(async () => {
     const text = input.trim();
     if (!text || isGenerating) return;
@@ -273,9 +479,17 @@ export const Casper: React.FC = () => {
 
     try {
       const response = await generateText(text, aiSettings, {
-        systemPrompt: CASPER_SYSTEM_PROMPT,
+        systemPrompt: `${CASPER_SYSTEM_PROMPT}\n\nEnabled Casper integrations for this user:\n${integrationContext}`,
         temperature: 0.8,
       });
+
+      if (currentUser?.id && response) {
+        void fetch('/api/casper/memory', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: currentUser.id, userMessage: text, casperReply: response }),
+        });
+      }
 
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),
@@ -293,7 +507,7 @@ export const Casper: React.FC = () => {
     } finally {
       setIsGenerating(false);
     }
-  }, [input, isGenerating, aiSettings]);
+  }, [input, isGenerating, aiSettings, integrationContext, currentUser?.id]);
 
   const clearChat = () => {
     const greeting = CASPER_GREETINGS[Math.floor(Math.random() * CASPER_GREETINGS.length)];
@@ -333,6 +547,16 @@ export const Casper: React.FC = () => {
             >
               <BrainCircuit className="w-4 h-4" />
               Studio
+            </button>
+            <button
+              onClick={() => setShowControlCenter(!showControlCenter)}
+              className={cn(
+                "hidden sm:inline-flex items-center gap-2 rounded-xl border px-3 py-2.5 text-[9px] font-black uppercase tracking-widest transition-all",
+                showControlCenter ? "border-fuchsia-400/40 bg-fuchsia-500/15 text-fuchsia-100" : "border-white/10 bg-white/5 text-zinc-400 hover:text-white"
+              )}
+            >
+              <Puzzle className="w-4 h-4" />
+              Control
             </button>
             <button
               onClick={() => setShowAiCore(!showAiCore)}
@@ -463,6 +687,43 @@ export const Casper: React.FC = () => {
                   Save AI Core
                 </button>
               </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* User Agent Control Center */}
+      <AnimatePresence>
+        {showControlCenter && (
+          <motion.div initial={{ opacity: 0, y: -18 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -18 }} className="relative z-20 border-b border-white/10 bg-black/55 backdrop-blur-2xl">
+            <div className="mx-auto max-w-6xl p-4 sm:p-6">
+              <div className="mb-4 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.32em] text-fuchsia-200">Casper Agent Control Center</p>
+                  <h2 className="mt-2 text-2xl font-black uppercase tracking-tight text-white">Missions, Routines, Memories, Integrations</h2>
+                  <p className="mt-2 max-w-3xl text-xs leading-6 text-zinc-500">This is your user-safe Casper dashboard. Everything here is persisted to Supabase and becomes part of Casper's available context or task queue.</p>
+                </div>
+                <div className="grid grid-cols-4 gap-2 text-center text-[9px] uppercase tracking-widest text-zinc-500">
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><b className="block text-lg text-cyan-100">{tasks.length}</b>Missions</div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><b className="block text-lg text-purple-100">{routines.filter(r => r.is_enabled).length}</b>Routines</div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><b className="block text-lg text-green-100">{memories.length}</b>Memories</div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><b className="block text-lg text-fuchsia-100">{integrations.filter(i => i.enabled && i.status === 'connected').length}</b>APIs</div>
+                </div>
+              </div>
+
+              {notice && <div className="mb-4 flex items-center justify-between rounded-2xl border border-cyan-300/20 bg-cyan-950/25 p-3 text-xs font-bold text-cyan-100"><span>{notice}</span><button onClick={() => setNotice(null)}><X className="h-4 w-4" /></button></div>}
+
+              <div className="mb-4 flex gap-2 overflow-x-auto rounded-2xl border border-white/10 bg-black/35 p-2">
+                {(['missions', 'routines', 'memories', 'integrations'] as UserPanel[]).map(panel => <button key={panel} onClick={() => setActivePanel(panel)} className={cn('rounded-xl px-4 py-2 text-[9px] font-black uppercase tracking-widest transition', activePanel === panel ? 'bg-cyan-400/15 text-cyan-100' : 'text-zinc-500 hover:bg-white/5 hover:text-white')}>{panel}</button>)}
+              </div>
+
+              {activePanel === 'missions' && <div className="grid gap-4 lg:grid-cols-[0.85fr_1.15fr]"><div className="rounded-3xl border border-white/10 bg-black/35 p-4"><div className="mb-3 flex items-center gap-2 text-cyan-100"><Shield className="h-5 w-5" /><h3 className="text-sm font-black uppercase tracking-widest">Create Mission</h3></div><div className="grid gap-3"><input value={taskForm.title} onChange={e => setTaskForm(p => ({ ...p, title: e.target.value }))} placeholder="Mission title" className="rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white outline-none" /><textarea value={taskForm.description} onChange={e => setTaskForm(p => ({ ...p, description: e.target.value }))} rows={4} placeholder="Tell Casper what to do..." className="rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white outline-none" /><select value={taskForm.priority} onChange={e => setTaskForm(p => ({ ...p, priority: e.target.value as UserCasperTask['priority'] }))} className="rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white outline-none"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="urgent">Urgent</option></select><button onClick={() => void createTask()} disabled={!taskForm.title.trim() || actionBusy} className="rounded-2xl border border-cyan-300/30 bg-cyan-400/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-40"><Plus className="mr-2 inline h-4 w-4" />Queue Mission</button></div></div><div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">{tasks.map(task => <div key={task.id} className="rounded-3xl border border-white/10 bg-black/35 p-4"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-black uppercase tracking-widest text-white">{task.title}</p><p className="mt-1 text-xs leading-5 text-zinc-500">{task.description || 'No additional details.'}</p></div><span className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-[8px] font-black uppercase tracking-widest text-cyan-100">{task.status}</span></div><div className="mt-3 h-2 rounded-full bg-white/5"><div className="h-full rounded-full bg-cyan-300" style={{ width: `${task.progress ?? (task.status === 'completed' ? 100 : task.status === 'running' ? 55 : 0)}%` }} /></div>{task.result && <p className="mt-3 rounded-2xl border border-green-300/10 bg-green-400/[0.04] p-3 text-xs leading-5 text-green-100">{task.result}</p>}<div className="mt-3 flex gap-2"><button onClick={() => void runTask(task)} className="rounded-full border border-cyan-300/20 px-3 py-1 text-[8px] uppercase text-cyan-200"><Play className="inline h-3 w-3" /> Run</button><button onClick={() => void deleteTask(task)} className="rounded-full border border-red-300/20 px-3 py-1 text-[8px] uppercase text-red-200"><Trash2 className="inline h-3 w-3" /> Delete</button></div></div>)}</div></div>}
+
+              {activePanel === 'routines' && <div className="grid gap-4 lg:grid-cols-[0.85fr_1.15fr]"><div className="rounded-3xl border border-white/10 bg-black/35 p-4"><div className="mb-3 flex items-center gap-2 text-purple-100"><CalendarClock className="h-5 w-5" /><h3 className="text-sm font-black uppercase tracking-widest">Schedule Routine</h3></div><div className="grid gap-3"><input value={routineForm.name} onChange={e => setRoutineForm(p => ({ ...p, name: e.target.value }))} placeholder="Routine name" className="rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white outline-none" /><textarea value={routineForm.directive} onChange={e => setRoutineForm(p => ({ ...p, directive: e.target.value }))} rows={4} placeholder="Directive Casper should run..." className="rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white outline-none" /><div className="grid grid-cols-3 gap-2"><select value={routineForm.frequency} onChange={e => setRoutineForm(p => ({ ...p, frequency: e.target.value as UserCasperRoutine['frequency'] }))} className="rounded-2xl border border-white/10 bg-black/45 px-3 py-3 text-sm text-white"><option value="hourly">Hourly</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="cron">Cron</option><option value="custom">Custom</option></select><input type="time" value={routineForm.scheduled_time} onChange={e => setRoutineForm(p => ({ ...p, scheduled_time: e.target.value }))} className="rounded-2xl border border-white/10 bg-black/45 px-3 py-3 text-sm text-white" /><input value={routineForm.cron_expression} onChange={e => setRoutineForm(p => ({ ...p, cron_expression: e.target.value }))} className="rounded-2xl border border-white/10 bg-black/45 px-3 py-3 text-sm text-white" /></div><button onClick={() => void createRoutine()} disabled={!routineForm.name.trim() || !routineForm.directive.trim() || actionBusy} className="rounded-2xl border border-purple-300/30 bg-purple-400/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-purple-100 disabled:opacity-40"><Save className="mr-2 inline h-4 w-4" />Save Routine</button></div></div><div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">{routines.map(routine => <div key={routine.id} className="rounded-3xl border border-white/10 bg-black/35 p-4"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-black uppercase tracking-widest text-white">{routine.name}</p><p className="mt-1 text-xs leading-5 text-zinc-500">{routine.directive}</p></div><button onClick={() => void toggleRoutine(routine)} className={cn('rounded-full border px-3 py-1 text-[8px] font-black uppercase tracking-widest', routine.is_enabled ? 'border-green-300/25 bg-green-400/10 text-green-100' : 'border-zinc-300/20 bg-zinc-400/10 text-zinc-300')}>{routine.is_enabled ? <Pause className="inline h-3 w-3" /> : <Play className="inline h-3 w-3" />} {routine.is_enabled ? 'On' : 'Off'}</button></div><div className="mt-3 grid gap-2 text-[9px] uppercase tracking-widest text-zinc-500 sm:grid-cols-3"><span>{routine.frequency}</span><span>Last {formatCasperTime(routine.last_run_at)}</span><span>Next {formatCasperTime(routine.next_run_at)}</span></div>{routine.last_result && <p className="mt-3 line-clamp-3 rounded-2xl border border-green-300/10 bg-green-400/[0.04] p-3 text-xs text-green-100">{routine.last_result}</p>}<button onClick={() => void deleteRoutine(routine)} className="mt-3 rounded-full border border-red-300/20 px-3 py-1 text-[8px] uppercase text-red-200"><Trash2 className="inline h-3 w-3" /> Delete</button></div>)}</div></div>}
+
+              {activePanel === 'memories' && <div><div className="mb-4 flex items-center gap-3 rounded-2xl border border-white/10 bg-black/45 px-4 py-3"><Search className="h-4 w-4 text-cyan-200" /><input value={memorySearch} onChange={e => setMemorySearch(e.target.value)} placeholder="Search your Casper memories..." className="w-full bg-transparent text-sm text-white outline-none" /></div><div className="grid gap-3 md:grid-cols-2">{filteredMemories.map(memory => <div key={memory.id} onClick={() => void openMemory(memory)} className="cursor-pointer rounded-3xl border border-white/10 bg-black/35 p-4 hover:border-cyan-300/30"><div className="mb-2 flex items-center gap-2"><Database className="h-4 w-4 text-cyan-200" /><span className="text-[9px] font-black uppercase tracking-widest text-cyan-100">{memory.memory_type}</span><span className="text-[8px] text-zinc-600">IMP {memory.importance}</span></div><p className={cn('text-xs leading-6 text-zinc-300', expandedMemory === memory.id ? '' : 'line-clamp-4')}>{memory.content}</p><div className="mt-3 flex items-center justify-between text-[8px] uppercase tracking-widest text-zinc-600"><span>{formatCasperTime(memory.created_at)}</span><button onClick={e => { e.stopPropagation(); void deleteMemory(memory); }} className="text-red-300"><Trash2 className="h-3.5 w-3.5" /></button></div></div>)}</div></div>}
+
+              {activePanel === 'integrations' && <div><div className="mb-4 flex gap-2 overflow-x-auto">{CASPER_INTEGRATION_CATEGORIES.map(category => <button key={category} onClick={() => setIntegrationCategory(category)} className={cn('rounded-full border px-3 py-2 text-[8px] font-black uppercase tracking-widest', integrationCategory === category ? 'border-fuchsia-300/30 bg-fuchsia-400/10 text-fuchsia-100' : 'border-white/10 bg-black/35 text-zinc-500')}>{category}</button>)}</div><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{visibleIntegrations.map(def => { const record = integrationRecord(def.key); const connected = record?.enabled && record.status === 'connected'; return <div key={def.key} className="rounded-3xl border border-white/10 bg-black/35 p-4 hover:border-fuchsia-300/25"><div className="mb-3 flex items-start justify-between gap-3"><div><p className="flex items-center gap-2 text-sm font-black uppercase tracking-widest text-white"><Puzzle className="h-4 w-4 text-fuchsia-200" />{def.name}</p><p className="mt-1 text-xs leading-5 text-zinc-500">{def.description}</p></div><span className={cn('rounded-full px-2 py-1 text-[8px] font-black uppercase tracking-widest', connected ? 'bg-green-400/15 text-green-100' : 'bg-zinc-400/10 text-zinc-400')}>{record?.status ?? 'off'}</span></div><input type="password" value={integrationKeyEntry[def.key] ?? ''} onChange={e => setIntegrationKeyEntry(prev => ({ ...prev, [def.key]: e.target.value }))} placeholder={record?.api_key_encrypted ? maskSecret(record.api_key_encrypted) : def.apiKeyLabel} className="w-full rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-xs text-white outline-none" /><div className="mt-3 grid grid-cols-2 gap-2"><button onClick={() => void connectIntegration(def.key)} className="rounded-xl border border-fuchsia-300/20 bg-fuchsia-400/10 px-3 py-2 text-[8px] font-black uppercase tracking-widest text-fuchsia-100"><KeyRound className="inline h-3 w-3" /> Connect</button><button onClick={() => void toggleIntegration(def.key)} className="rounded-xl border border-cyan-300/20 bg-cyan-400/10 px-3 py-2 text-[8px] font-black uppercase tracking-widest text-cyan-100">{connected ? 'Disable' : 'Enable'}</button></div></div>; })}</div></div>}
             </div>
           </motion.div>
         )}

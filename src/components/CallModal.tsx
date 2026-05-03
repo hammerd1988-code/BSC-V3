@@ -205,7 +205,7 @@ export const CallModal: React.FC<CallModalProps> = ({
   const attachLocalPreview = () => {
     const room = roomRef.current;
     if (!room || !localVideoRef.current) return;
-    const publication = Array.from(room.localParticipant.videoTrackPublications.values()).find((pub) => pub.track);
+    const publication = Array.from(room.localParticipant.videoTrackPublications.values()).find((pub: any) => pub.track) as any;
     publication?.track?.attach(localVideoRef.current);
     localVideoRef.current.play().catch((e) => console.warn('[LiveKit] local preview play failed:', e));
   };

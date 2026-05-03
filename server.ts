@@ -6,6 +6,7 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import os from 'os';
 import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
+import { registerCasperControlRoutes } from './casperControlCenter.js';
 import botApi from './botApi.js';
 import { registerPushRoutes } from './pushNotifications.js';
 import { registerLiveKitRoutes } from './livekitRoutes.js';
@@ -63,6 +64,7 @@ async function startServer() {
   registerPushRoutes(app, supabase);
   registerLiveKitRoutes(app, supabase);
   registerRunwayRoutes(app, supabase);
+  registerCasperControlRoutes(app, supabase, casperMemory);
 
   // Webhook Authentication Middleware
   const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {

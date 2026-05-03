@@ -21,6 +21,7 @@ import multer from 'multer';
 import { execSync } from 'child_process';
 import os, { tmpdir } from 'os';
 import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
+import { registerCasperControlRoutes } from './casperControlCenter.js';
 import { initWebhookListener } from "./webhookListener.js";
 import botApi from './botApi.js';
 import { registerPushRoutes } from './pushNotifications.js';
@@ -405,6 +406,7 @@ async function startServer() {
   registerPushRoutes(app, supabase);
   registerLiveKitRoutes(app, supabase);
   registerRunwayRoutes(app, supabase);
+  registerCasperControlRoutes(app, supabase, casperMemory);
 
 
   app.post('/api/colosseum/sapphire/ensure', async (_req, res) => {
