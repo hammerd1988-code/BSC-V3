@@ -27,6 +27,8 @@ import botApi from './botApi.js';
 import { registerPushRoutes } from './pushNotifications.js';
 import { registerLiveKitRoutes } from './livekitRoutes.js';
 import { registerRunwayRoutes } from './runwayRoutes.js';
+import { BOT_PERSONAS } from './src/lib/botPersonas.js';
+import { BOT_GLADIATOR_PROFILES, botStatsToPercent } from './src/lib/botGladiatorProfiles.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -61,6 +63,7 @@ const PLATFORM_DEFAULT_MODEL = process.env.COLOSSEUM_DEFAULT_MODEL || process.en
 const OPENAI_COMPATIBLE_BASE_URL = (process.env.OPENAI_BASE_URL || process.env.VITE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
 
 const SAFE_GLADIATOR_SELECT = 'id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model,api_base_url';
+const BOT_GLADIATOR_ID_PREFIX = 'bot-gladiator-';
 
 function sanitizeGladiator(gladiator: any) {
   if (!gladiator) return null;
@@ -123,14 +126,23 @@ function buildGladiatorSolutionPrompt(input: {
     ? input.prompt.trim()
     : CHALLENGE_BRIEFS[input.challengeType];
 
+  const profile = input.gladiator?.bot_profile;
+  const profileBlock = profile ? `
+Gladiator Class: ${profile.gladiator_class}
+Difficulty: ${profile.difficulty}
+Expertise: ${(profile.expertise ?? []).join(', ')}
+Battle Style: ${profile.battle_style}
+Signature Moves: ${(profile.signature_moves ?? []).join(', ')}
+Prompt Style: ${profile.ai_prompt_style}` : '';
+
   return `[BLOOD_SWEAT_CODE_COLOSSEUM]
 Challenge Type: ${input.challengeType}
 Gladiator: ${input.gladiator?.name ?? 'Unknown'}
 Opponent: ${input.opponent?.name ?? 'Unknown'}
-Personality: ${input.gladiator?.personality ?? 'No doctrine supplied'}
+Personality: ${input.gladiator?.personality ?? 'No doctrine supplied'}${profileBlock}
 Directive: ${providedPrompt}
 
-Return the gladiator's best coding solution or patch. Include concise reasoning, but prioritize useful code.`;
+Return the gladiator's best coding solution or patch in character. Include concise reasoning, but prioritize useful code, correctness, and the stated battle style.`;
 }
 
 async function postToOpenAiCompatible(input: { apiKey?: string | null; model?: string | null; apiBaseUrl?: string | null; prompt: string }) {
@@ -251,6 +263,89 @@ async function postToSapphire(prompt: string, context: Record<string, any>) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function ensurePersonaBotGladiators() {
+  const personaByUsername = new Map(BOT_PERSONAS.map((persona) => [persona.username, persona]));
+  const ensured: any[] = [];
+
+  for (const profile of BOT_GLADIATOR_PROFILES) {
+    const persona = personaByUsername.get(profile.username);
+    if (!persona) continue;
+
+    const botUserId = `bot-${persona.username}`;
+    const gladiatorId = `${BOT_GLADIATOR_ID_PREFIX}${persona.username}`;
+    const avatarUrl = `https://picsum.photos/seed/${persona.avatar_seed}/400/400`;
+    const profileLine = `${profile.gladiator_class} specializing in ${profile.expertise.join(', ')}. Battle style: ${profile.battle_style}. ${persona.bio}`.slice(0, 3000);
+
+    const { error: userError } = await supabase
+      .from('users')
+      .upsert({
+        id: botUserId,
+        username: persona.username,
+        display_name: persona.display_name,
+        avatar_url: avatarUrl,
+        bio: persona.bio,
+        type: 'bot',
+        followers_count: 0,
+        following_count: 0,
+        reputation_score: 0,
+        cred_balance: 0,
+        is_online: false,
+        is_live: false,
+        role: 'user',
+        custom_accent: persona.accent_color,
+        status_message: persona.status_message,
+        ai_settings: { persona: persona.username, gladiator_class: profile.gladiator_class },
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'id' });
+    if (userError) throw userError;
+
+    const { data: gladiator, error: gladiatorError } = await supabase
+      .from('gladiators')
+      .upsert({
+        id: gladiatorId,
+        user_id: botUserId,
+        name: persona.display_name,
+        avatar_url: avatarUrl,
+        personality: profileLine,
+        stats: botStatsToPercent(profile),
+        glow_color: persona.accent_color,
+        cred: profile.difficulty === 'Diamond' ? 2400 : profile.difficulty === 'Gold' ? 1500 : profile.difficulty === 'Silver' ? 750 : 300,
+        model: null,
+        api_base_url: null,
+      }, { onConflict: 'id' })
+      .select(SAFE_GLADIATOR_SELECT)
+      .single();
+    if (gladiatorError) throw gladiatorError;
+
+    const { error: profileError } = await supabase
+      .from('bot_gladiator_profiles')
+      .upsert({
+        gladiator_id: gladiatorId,
+        bot_user_id: botUserId,
+        persona_username: persona.username,
+        display_name: persona.display_name,
+        gladiator_class: profile.gladiator_class,
+        expertise: profile.expertise,
+        difficulty: profile.difficulty,
+        battle_style: profile.battle_style,
+        signature_moves: profile.signature_moves,
+        pre_battle_lines: profile.pre_battle_lines,
+        victory_lines: profile.victory_lines,
+        defeat_lines: profile.defeat_lines,
+        speed_rating: profile.stats.speed,
+        accuracy_rating: profile.stats.accuracy,
+        creativity_rating: profile.stats.creativity,
+        endurance_rating: profile.stats.endurance,
+        ai_prompt_style: profile.ai_prompt_style,
+      }, { onConflict: 'gladiator_id' });
+    if (profileError) throw profileError;
+
+    ensured.push(sanitizeGladiator(gladiator));
+  }
+
+  return ensured;
 }
 
 async function ensureSapphireHouseBot() {
@@ -415,6 +510,16 @@ async function startServer() {
   registerCasperControlRoutes(app, supabase, casperMemory);
 
 
+  app.post('/api/colosseum/persona-bots/ensure', async (_req, res) => {
+    try {
+      const gladiators = await ensurePersonaBotGladiators();
+      return res.json({ success: true, gladiators });
+    } catch (error: any) {
+      console.error('[colosseum:persona-bots:ensure]', error);
+      return res.status(500).json({ success: false, error: error.message || 'Unable to ensure persona bot gladiators' });
+    }
+  });
+
   app.post('/api/colosseum/sapphire/ensure', async (_req, res) => {
     try {
       const gladiator = await ensureSapphireHouseBot();
@@ -459,6 +564,15 @@ async function startServer() {
       if (!challenger || !defender) {
         return res.status(404).json({ success: false, error: 'Combatants not found' });
       }
+
+      const { data: profileRows, error: profileError } = await supabase
+        .from('bot_gladiator_profiles')
+        .select('*')
+        .in('gladiator_id', [challengerLookup, defenderLookup]);
+      if (profileError && profileError.code !== '42P01') throw profileError;
+      const profileByGladiatorId = new Map((profileRows ?? []).map((profile: any) => [String(profile.gladiator_id), profile]));
+      challenger.bot_profile = profileByGladiatorId.get(String(challenger.id)) ?? null;
+      defender.bot_profile = profileByGladiatorId.get(String(defender.id)) ?? null;
 
       const [challengerMove, defenderMove] = await Promise.allSettled([
         generateGladiatorMove({ matchId, challengeType: normalizedChallengeType, gladiator: challenger, opponent: defender, prompt }),
