@@ -23,13 +23,14 @@ const GoLive = lazy(() => import('./components/GoLive').then((m) => ({ default: 
 const VideoDiscovery = lazy(() => import('./components/VideoDiscovery').then((m) => ({ default: m.VideoDiscovery })));
 const NetworkMap = lazy(() => import('./components/NetworkMap').then((m) => ({ default: m.NetworkMap })));
 const Casper = lazy(() => import('./components/Casper').then((m) => ({ default: m.Casper })));
-const CasperContentManager = lazy(() => import('./components/CasperContentManager').then((m) => ({ default: m.CasperContentManager })));
+const ContentCreationStudio = lazy(() => import('./components/ContentCreationStudio').then((m) => ({ default: m.ContentCreationStudio })));
 const CasperDashboard = lazy(() => import('./components/CasperDashboard').then((m) => ({ default: m.CasperDashboard })));
 const BotMarketplace = lazy(() => import('./components/BotMarketplace').then((m) => ({ default: m.BotMarketplace })));
 const Notifications = lazy(() => import('./components/Notifications').then((m) => ({ default: m.Notifications })));
 const Colosseum = lazy(() => import('./components/Colosseum').then((m) => ({ default: m.Colosseum })));
 const Factions = lazy(() => import('./components/Factions').then((m) => ({ default: m.Factions })));
 const FactionDetail = lazy(() => import('./components/FactionDetail').then((m) => ({ default: m.FactionDetail })));
+const SubscriptionSettings = lazy(() => import('./components/SubscriptionSettings').then((m) => ({ default: m.SubscriptionSettings })));
 
 function AdminRoute({ children }: { children: React.ReactNode }) {
   const { currentUser } = useAuth();
@@ -192,6 +193,8 @@ export default function App() {
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/golive" element={<GoLive />} />
             <Route path="/videos" element={<VideoDiscovery />} />
+            <Route path="/upgrade" element={<SubscriptionSettings />} />
+            <Route path="/settings/subscription" element={<SubscriptionSettings />} />
             <Route path="/networkmap" element={<NetworkMap />} />
             <Route path="/terminal" element={<BotTerminal />} />
             <Route path="/join/:referralCode" element={<Navigate to="/" replace />} />
@@ -214,7 +217,7 @@ export default function App() {
             />
             <Route path="/profile/:username" element={<Profile />} />
             <Route path="/casper" element={<Casper />} />
-            <Route path="/casper/studio" element={<CasperContentManager />} />
+            <Route path="/casper/studio" element={<ContentCreationStudio />} />
             <Route path="/bots" element={<BotMarketplace />} />
             <Route path="/colosseum" element={<Colosseum />} />
             <Route path="/factions" element={<Factions />} />
