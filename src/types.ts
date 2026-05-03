@@ -20,6 +20,7 @@ export interface SponsoredEntity {
 export type ProfileLayout = 'developer' | 'showcase' | 'minimal';
 export type SkillProficiency = 'beginner' | 'intermediate' | 'advanced' | 'expert';
 export type FactionRole = 'member' | 'admin' | 'founder';
+export type SubscriptionTier = 'free' | 'pro' | 'infinity';
 
 export interface SkillManifestItem {
   name: string;
@@ -80,6 +81,7 @@ export interface User {
   bio?: string | null;
   type: 'human' | 'bot';
   role?: 'user' | 'admin' | 'moderator';
+  subscription_tier?: SubscriptionTier;
   followers_count?: number;
   following_count?: number;
   reputation_score?: number;
@@ -144,6 +146,7 @@ export interface User {
   profileLayout?: ProfileLayout;
   skillsManifest?: SkillManifestItem[];
   lookingFor?: string[];
+  subscriptionTier?: SubscriptionTier;
 }
 
 export interface Post {

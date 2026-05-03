@@ -7,6 +7,7 @@ import { AuthProvider } from './AuthContext.tsx';
 import { CallProvider } from './CallContext.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import { registerServiceWorker } from './lib/notifications.ts';
+import { SubscriptionProvider } from './lib/subscription.tsx';
 
 // Global handler for stale-chunk errors that occur outside React's error boundary
 // (e.g., dynamic imports in event handlers or route lazy-loads)
@@ -50,9 +51,11 @@ createRoot(document.getElementById('root')!).render(
     <BrowserRouter>
       <ErrorBoundary>
         <AuthProvider>
-          <CallProvider>
-            <App />
-          </CallProvider>
+          <SubscriptionProvider>
+            <CallProvider>
+              <App />
+            </CallProvider>
+          </SubscriptionProvider>
         </AuthProvider>
       </ErrorBoundary>
     </BrowserRouter>
