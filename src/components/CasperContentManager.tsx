@@ -36,6 +36,7 @@ import { supabase } from '../supabase';
 import { cn } from '../lib/utils';
 import { handleDbError } from '../lib/errors';
 import { getRunwayTask, requestRunwayGeneration, type RunwayAspectRatio, type RunwayAssetType, type RunwayStatus } from '../lib/runway';
+import { AgenticWorkspace } from './AgenticWorkspace';
 
 type ScheduledContent = {
   id: string;
@@ -383,12 +384,13 @@ export const CasperContentManager: React.FC = () => {
     void loadData();
   };
 
-  const spawnSubagents = async () => {
-    if (!currentUser || !draftPrompt.trim()) return;
+  const spawnSubagents = async (promptOverride?: string) => {
+    const prompt = (promptOverride ?? draftPrompt).trim();
+    if (!currentUser || !prompt) return;
     setIsSpawning(true);
     const parentTaskId = uuidv4();
-    const objectives = splitObjectives(draftPrompt);
-    const objectiveList = objectives.length ? objectives : [draftPrompt.trim()];
+    const objectives = splitObjectives(prompt);
+    const objectiveList = objectives.length ? objectives : [prompt];
     const rows = objectiveList.map((objective) => ({
       parent_task_id: parentTaskId,
       user_id: currentUser.id,
@@ -417,7 +419,7 @@ export const CasperContentManager: React.FC = () => {
       }, 1800 + index * 500);
     });
 
-    const mediaAction = detectCasperMediaAction(draftPrompt);
+    const mediaAction = detectCasperMediaAction(prompt);
     if (mediaAction) {
       setGeneratedCaption(`Parent task ${parentTaskId.slice(0, 8)} detected a Casper media-generation action. Visual Forge is submitting it to Runway ML now.`);
       void generateForgeMedia(mediaAction);
@@ -622,8 +624,8 @@ export const CasperContentManager: React.FC = () => {
           <div>
             <button onClick={() => navigate('/casper')} className="mb-5 inline-flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-zinc-500 hover:text-white"><ArrowLeft className="h-4 w-4" /> Back to Casper</button>
             <p className="text-[10px] font-black uppercase tracking-[0.35em] text-cyan-300">Casper Production Editor</p>
-            <h1 className="mt-2 text-4xl font-black uppercase italic tracking-tighter sm:text-6xl">Creator Ops Studio</h1>
-            <p className="mt-3 max-w-3xl text-sm leading-6 text-zinc-400">Plan posts, streams, videos, shorts, thumbnails, clips, and captions while Casper decomposes complex requests into parallel sub-agent workstreams.</p>
+            <h1 className="mt-2 text-4xl font-black uppercase italic tracking-tighter sm:text-6xl">Casper Studio Cockpit</h1>
+            <p className="mt-3 max-w-3xl text-sm leading-6 text-zinc-400">One cohesive production workspace where social publishing, video editing, AI agents, and creator operations flow through a single premium cyberpunk cockpit.</p>
           </div>
           <div className="flex gap-3">
             <Link to="/golive" className="inline-flex items-center gap-2 rounded-2xl border border-red-400/25 bg-red-500/10 px-5 py-3 text-[10px] font-black uppercase tracking-widest text-red-100 hover:bg-red-500/20"><Radio className="h-4 w-4" /> Go Live</Link>
@@ -634,14 +636,38 @@ export const CasperContentManager: React.FC = () => {
         {loading ? (
           <div className="flex min-h-[50vh] items-center justify-center"><Loader2 className="h-10 w-10 animate-spin text-accent" /></div>
         ) : (
-          <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+          <>
+            <AgenticWorkspace
+              userId={currentUser.id}
+              draftPrompt={draftPrompt}
+              subagents={subagents}
+              clips={clips}
+              forgeAssets={forgeAssets}
+              scheduledCount={analytics.scheduled}
+              onDraftPromptChange={setDraftPrompt}
+              onRunAgentCommand={(prompt) => spawnSubagents(prompt)}
+              onInsertComposer={setComposerBody}
+              onStageClip={(title, url) => {
+                setClipTitle(title);
+                setClipUrl(url || '');
+              }}
+              onGenerateIdeas={generateIdeas}
+            />
+            <div className="mb-5 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.32em] text-fuchsia-300">Production Dock</p>
+                <h2 className="mt-1 text-2xl font-black uppercase italic tracking-tight text-white">Fine-tune the assets Casper staged above</h2>
+              </div>
+              <span className="hidden rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-[8px] font-black uppercase tracking-widest text-cyan-100 md:inline-flex">Unified Studio Tools</span>
+            </div>
+            <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
             <div className="space-y-6">
-              <section className="rounded-[2rem] border border-accent/20 bg-zinc-950/80 p-5 shadow-[0_0_36px_rgba(255,0,80,0.08)]">
-                <div className="mb-4 flex items-center gap-3"><Wand2 className="h-5 w-5 text-accent" /><h2 className="text-sm font-black uppercase tracking-widest">Parallel Casper Request</h2></div>
+              <section className="rounded-[2rem] border border-cyan-300/20 bg-zinc-950/80 p-5 shadow-[0_0_36px_rgba(0,255,255,0.08)]">
+                <div className="mb-4 flex items-center gap-3"><Wand2 className="h-5 w-5 text-cyan-300" /><h2 className="text-sm font-black uppercase tracking-widest">Manual Agent Override</h2></div>
                 <textarea value={draftPrompt} onChange={(e) => setDraftPrompt(e.target.value)} className="min-h-28 w-full resize-none rounded-2xl border border-white/10 bg-black/50 p-4 text-sm leading-6 text-white outline-none focus:border-accent" />
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Casper will split this into sub-agents. Media prompts like “generate a thumbnail” trigger the Visual Forge Runway action.</p>
-                  <button onClick={() => void spawnSubagents()} disabled={isSpawning || !draftPrompt.trim()} className="inline-flex items-center gap-2 rounded-2xl bg-accent px-6 py-3 text-[10px] font-black uppercase tracking-widest text-white shadow-[0_0_24px_rgba(255,0,80,0.35)] disabled:opacity-40">{isSpawning ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />} Spawn Sub-Agents</button>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">A focused backup control for the same live workspace flow above. Media prompts still trigger Visual Forge and timeline sync.</p>
+                  <button onClick={() => void spawnSubagents()} disabled={isSpawning || !draftPrompt.trim()} className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-300 to-fuchsia-400 px-6 py-3 text-[10px] font-black uppercase tracking-widest text-black shadow-[0_0_24px_rgba(0,255,255,0.22)] disabled:opacity-40">{isSpawning ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />} Spawn Sub-Agents</button>
                 </div>
               </section>
 
@@ -814,6 +840,7 @@ export const CasperContentManager: React.FC = () => {
               </section>
             </div>
           </div>
+          </>
         )}
       </main>
     </div>
