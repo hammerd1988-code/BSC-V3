@@ -12,11 +12,14 @@ import {
   Copy,
   FileText,
   GitBranch,
+  Download,
+  ExternalLink,
   Image as ImageIcon,
   Lightbulb,
   Loader2,
   PlayCircle,
   Radio,
+  RefreshCw,
   Scissors,
   Send,
   Sparkles,
@@ -32,6 +35,7 @@ import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
 import { cn } from '../lib/utils';
 import { handleDbError } from '../lib/errors';
+import { getRunwayTask, requestRunwayGeneration, type RunwayAspectRatio, type RunwayAssetType, type RunwayStatus } from '../lib/runway';
 
 type ScheduledContent = {
   id: string;
@@ -82,8 +86,29 @@ type CasperSubagent = {
 type VideoRow = { id: string; title: string; view_count: number; is_short: boolean; category: string; created_at: string };
 type StreamRow = { id: string; title?: string | null; status?: string | null; viewer_count?: number | null; category?: string | null; started_at?: string | null };
 
+type GeneratedMediaAsset = {
+  id: string;
+  type: RunwayAssetType;
+  prompt: string;
+  status: RunwayStatus;
+  aspectRatio: RunwayAspectRatio;
+  duration?: 4 | 5 | 10;
+  taskId?: string | null;
+  assetUrl?: string | null;
+  persistedUrl?: string | null;
+  storagePath?: string | null;
+  error?: string | null;
+  createdAt: string;
+};
+
 const categories = ['Coding', 'Tutorials', 'Code Battles', 'Gaming', 'Music', 'Art', 'Reactions', 'Q&A', 'Creative', 'Other'];
 const contentTypes = ['post', 'stream', 'video', 'short', 'clip'] as const;
+const visualForgeTemplates = [
+  { label: 'Thumbnail', prompt: 'Cyberpunk developer thumbnail, glowing laptop, cyan and magenta rim light, bold readable title space, high contrast, cinematic' },
+  { label: 'Short Clip', prompt: 'Fast 9:16 cyberpunk coding montage, terminal sparks, holographic UI overlays, energetic camera motion, neon city reflections' },
+  { label: 'Stream Overlay', prompt: 'Dark glassmorphism stream overlay background, neon cyan circuit accents, magenta energy rails, empty center frame for gameplay or coding' },
+  { label: 'Social Visual', prompt: 'Square cyberpunk social post visual for developer founders, luminous code rain, premium dark tech aesthetic, sharp focal point' },
+] as const;
 
 const statusStyles: Record<CasperSubagent['status'], string> = {
   queued: 'border-zinc-500/30 bg-zinc-500/10 text-zinc-300',
@@ -104,8 +129,32 @@ function splitObjectives(prompt: string) {
     .slice(0, 8);
 }
 
+function detectCasperMediaAction(prompt: string): { prompt: string; type: RunwayAssetType; aspectRatio: RunwayAspectRatio; duration: 4 | 10; resolution: string } | null {
+  const lower = prompt.toLowerCase();
+  const asksForMedia = /(generate|create|forge|make|render|produce).*(thumbnail|image|visual|video|clip|short|overlay)|\b(thumbnail|visual forge|ai media|runway)\b/i.test(prompt);
+  if (!asksForMedia) return null;
+
+  const type: RunwayAssetType = /video|clip|short|reel|motion|animated/.test(lower) ? 'video' : 'image';
+  const aspectRatio: RunwayAspectRatio = /short|reel|tiktok|vertical|9:16/.test(lower) ? '9:16' : /square|social|instagram|1:1/.test(lower) ? '1:1' : '16:9';
+  const duration: 4 | 10 = /10|cinematic|long|trailer/.test(lower) ? 10 : 4;
+  const resolution = aspectRatio === '9:16' ? '1080x1920' : aspectRatio === '1:1' ? '1024x1024' : '1280x720';
+  const cleaned = prompt
+    .replace(/^casper[,\s:]*/i, '')
+    .replace(/^(please\s+)?(generate|create|forge|make|render|produce)\s+/i, '')
+    .trim();
+
+  return {
+    prompt: `${cleaned || prompt}. Cyberpunk Blood Sweat Code aesthetic, dark glassmorphism, neon cyan #00FFFF and magenta #FF00FF, high contrast developer creator platform style.`,
+    type,
+    aspectRatio,
+    duration,
+    resolution,
+  };
+}
+
 function synthesizeAgentResult(objective: string) {
   const lower = objective.toLowerCase();
+  if (detectCasperMediaAction(objective)) return `Visual Forge action detected: Casper can submit this objective to Runway ML and return a generated media asset for ${objective}.`;
   if (lower.includes('thumbnail')) return `Thumbnail concept: neon-lit subject in the foreground, high-contrast cyberpunk rim light, bold title treatment, and a clear focal object for ${objective}.`;
   if (lower.includes('caption')) return `Caption draft: "${objective.replace(/^draft|^write/i, '').trim()} — signal boosted for the creators building after dark. #BloodSweatCode #CreatorOps"`;
   if (lower.includes('schedule')) return `Scheduling plan: place this objective in the next high-engagement evening slot, attach reminder notifications, and reserve a pre-promo post 24 hours ahead.`;
@@ -204,6 +253,16 @@ export const CasperContentManager: React.FC = () => {
   const [clipUrl, setClipUrl] = useState('');
   const [isSpawning, setIsSpawning] = useState(false);
 
+  const [forgePrompt, setForgePrompt] = useState<string>(visualForgeTemplates[0].prompt);
+  const [forgeType, setForgeType] = useState<RunwayAssetType>('video');
+  const [forgeDuration, setForgeDuration] = useState<4 | 10>(4);
+  const [forgeRatio, setForgeRatio] = useState<RunwayAspectRatio>('16:9');
+  const [forgeResolution, setForgeResolution] = useState('1280x720');
+  const [forgeAssets, setForgeAssets] = useState<GeneratedMediaAsset[]>([]);
+  const [forgeLoading, setForgeLoading] = useState(false);
+  const [forgeProgress, setForgeProgress] = useState('Forge idle — awaiting prompt signal.');
+  const [forgeError, setForgeError] = useState('');
+
   const loadData = async () => {
     if (!currentUser) return;
     setLoading(true);
@@ -235,6 +294,25 @@ export const CasperContentManager: React.FC = () => {
   useEffect(() => {
     void loadData();
   }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    try {
+      const stored = window.localStorage.getItem(`casper-visual-forge-${currentUser.id}`);
+      if (stored) setForgeAssets(JSON.parse(stored) as GeneratedMediaAsset[]);
+    } catch (error) {
+      console.warn('[VisualForge] Failed to restore generated media gallery:', error);
+    }
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    try {
+      window.localStorage.setItem(`casper-visual-forge-${currentUser.id}`, JSON.stringify(forgeAssets.slice(0, 24)));
+    } catch (error) {
+      console.warn('[VisualForge] Failed to persist generated media gallery:', error);
+    }
+  }, [currentUser?.id, forgeAssets]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -339,7 +417,13 @@ export const CasperContentManager: React.FC = () => {
       }, 1800 + index * 500);
     });
 
-    setGeneratedCaption(`Parent task ${parentTaskId.slice(0, 8)} will merge ${inserted.length} sub-agent outputs into the composer once completed.`);
+    const mediaAction = detectCasperMediaAction(draftPrompt);
+    if (mediaAction) {
+      setGeneratedCaption(`Parent task ${parentTaskId.slice(0, 8)} detected a Casper media-generation action. Visual Forge is submitting it to Runway ML now.`);
+      void generateForgeMedia(mediaAction);
+    } else {
+      setGeneratedCaption(`Parent task ${parentTaskId.slice(0, 8)} will merge ${inserted.length} sub-agent outputs into the composer once completed.`);
+    }
     setIsSpawning(false);
   };
 
@@ -363,6 +447,152 @@ export const CasperContentManager: React.FC = () => {
     const { error } = await supabase.from('scheduled_content').delete().eq('id', item.id);
     if (error) handleDbError(error, 'DELETE', `scheduled_content/${item.id}`);
     void loadData();
+  };
+
+  const updateForgeAsset = (assetId: string, patch: Partial<GeneratedMediaAsset>) => {
+    setForgeAssets((prev) => prev.map((asset) => asset.id === assetId ? { ...asset, ...patch } : asset));
+  };
+
+  const persistForgeAsset = async (asset: GeneratedMediaAsset) => {
+    if (!currentUser || !asset.assetUrl) return;
+    setForgeProgress('Uploading forged asset to Supabase vault...');
+    try {
+      const response = await fetch(asset.assetUrl);
+      if (!response.ok) throw new Error(`Asset download failed with ${response.status}`);
+      const blob = await response.blob();
+      const contentType = blob.type || (asset.type === 'video' ? 'video/mp4' : 'image/png');
+      const extensionFromType = contentType.includes('mp4') ? 'mp4' : contentType.includes('jpeg') ? 'jpg' : contentType.includes('webp') ? 'webp' : contentType.includes('gif') ? 'gif' : 'png';
+      const path = `casper_visual_forge/${currentUser.id}/${asset.id}.${extensionFromType}`;
+      const { error: uploadError } = await supabase.storage.from('media').upload(path, blob, { upsert: true, contentType });
+      if (uploadError) throw uploadError;
+      const { data: { publicUrl } } = supabase.storage.from('media').getPublicUrl(path);
+      updateForgeAsset(asset.id, { persistedUrl: publicUrl, storagePath: path, error: null });
+      setForgeProgress('Asset sealed into Supabase vault and ready for content workflows.');
+    } catch (error: any) {
+      console.error('[VisualForge] Supabase persistence failed:', error);
+      updateForgeAsset(asset.id, { error: error?.message || 'Supabase persistence failed.' });
+      setForgeError(error?.message || 'Could not upload the generated asset to Supabase Storage.');
+    }
+  };
+
+  const generateForgeMedia = async (action?: { prompt?: string; type?: RunwayAssetType; aspectRatio?: RunwayAspectRatio; duration?: 4 | 10; resolution?: string }) => {
+    const prompt = (action?.prompt ?? forgePrompt).trim();
+    const type = action?.type ?? forgeType;
+    const aspectRatio = action?.aspectRatio ?? forgeRatio;
+    const duration = action?.duration ?? forgeDuration;
+    const resolution = action?.resolution ?? forgeResolution;
+    if (!currentUser || !prompt) return;
+
+    setForgePrompt(prompt);
+    setForgeType(type);
+    setForgeRatio(aspectRatio);
+    setForgeDuration(duration);
+    setForgeResolution(resolution);
+    setForgeLoading(true);
+    setForgeError('');
+    setForgeProgress(action ? 'Casper action received — routing prompt into Visual Forge...' : 'Igniting Visual Forge render core...');
+
+    const assetId = uuidv4();
+    const shellAsset: GeneratedMediaAsset = {
+      id: assetId,
+      type,
+      prompt,
+      status: 'PENDING',
+      aspectRatio,
+      duration: type === 'video' ? duration : undefined,
+      createdAt: new Date().toISOString(),
+    };
+    setForgeAssets((prev) => [shellAsset, ...prev].slice(0, 24));
+
+    try {
+      const initial = await requestRunwayGeneration({
+        prompt,
+        type,
+        duration: type === 'video' ? duration : undefined,
+        aspectRatio,
+        resolution: type === 'image' ? resolution : undefined,
+      });
+
+      const taskId = initial.taskId || initial.id || null;
+      updateForgeAsset(assetId, {
+        taskId,
+        status: initial.status,
+        assetUrl: initial.assetUrl || initial.output?.[0] || null,
+      });
+
+      if (initial.status === 'SUCCEEDED' && (initial.assetUrl || initial.output?.[0])) {
+        const completed = { ...shellAsset, taskId, status: 'SUCCEEDED' as RunwayStatus, assetUrl: initial.assetUrl || initial.output?.[0] || null };
+        setForgeProgress('Render complete — cooling neon glass and preparing vault upload.');
+        await persistForgeAsset(completed);
+        return;
+      }
+
+      if (!taskId) {
+        throw new Error('Runway did not return a task id for polling.');
+      }
+
+      for (let attempt = 1; attempt <= 30; attempt += 1) {
+        setForgeProgress(`Rendering in the forge: pulse ${attempt}/30 — task ${taskId.slice(0, 8)}...`);
+        await new Promise((resolve) => window.setTimeout(resolve, attempt < 3 ? 2500 : 5000));
+        const status = await getRunwayTask(taskId);
+        const assetUrl = status.assetUrl || status.output?.[0] || null;
+        updateForgeAsset(assetId, { status: status.status, assetUrl });
+
+        if (status.status === 'SUCCEEDED' && assetUrl) {
+          const completed = { ...shellAsset, taskId, status: 'SUCCEEDED' as RunwayStatus, assetUrl };
+          setForgeProgress('Render complete — uploading the artifact to Supabase Storage.');
+          await persistForgeAsset(completed);
+          return;
+        }
+
+        if (status.status === 'FAILED') {
+          throw new Error('Runway reported that the generation task failed.');
+        }
+      }
+
+      setForgeProgress('Render still running at Runway. Leave this panel open and tap Refresh Status on the asset.');
+    } catch (error: any) {
+      console.error('[VisualForge] Generation failed:', error);
+      updateForgeAsset(assetId, { status: 'FAILED', error: error?.message || 'Generation failed.' });
+      setForgeError(error?.message || 'Visual Forge generation failed.');
+      setForgeProgress('Forge fault detected — adjust prompt or settings and retry.');
+    } finally {
+      setForgeLoading(false);
+    }
+  };
+
+  const refreshForgeAsset = async (asset: GeneratedMediaAsset) => {
+    if (!asset.taskId) return;
+    setForgeError('');
+    setForgeProgress(`Refreshing Runway task ${asset.taskId.slice(0, 8)}...`);
+    try {
+      const status = await getRunwayTask(asset.taskId);
+      const assetUrl = status.assetUrl || status.output?.[0] || null;
+      updateForgeAsset(asset.id, { status: status.status, assetUrl });
+      if (status.status === 'SUCCEEDED' && assetUrl && !asset.persistedUrl) {
+        await persistForgeAsset({ ...asset, status: 'SUCCEEDED', assetUrl });
+      } else {
+        setForgeProgress(`Runway task status: ${status.status}`);
+      }
+    } catch (error: any) {
+      updateForgeAsset(asset.id, { error: error?.message || 'Status refresh failed.' });
+      setForgeError(error?.message || 'Status refresh failed.');
+    }
+  };
+
+  const useForgeAssetInPost = (asset: GeneratedMediaAsset) => {
+    const url = asset.persistedUrl || asset.assetUrl || '';
+    setScheduleType(asset.type === 'video' ? 'video' : 'post');
+    setComposerTitle(asset.type === 'video' ? 'AI-generated clip draft' : 'AI-generated visual post');
+    setComposerBody(`Visual Forge asset:\n${url}\n\nPrompt:\n${asset.prompt}`);
+  };
+
+  const useForgeAssetAsStreamThumbnail = (asset: GeneratedMediaAsset) => {
+    const url = asset.persistedUrl || asset.assetUrl || '';
+    setScheduleType('stream');
+    setComposerTitle('Stream thumbnail forged by Casper');
+    setComposerBody(`Stream thumbnail URL:\n${url}\n\nPrompt:\n${asset.prompt}`);
+    setGeneratedThumbnail(`Stream thumbnail asset ready: ${url}`);
   };
 
   const analyticsCards: Array<{ label: string; value: number; Icon: LucideIcon }> = [
@@ -410,7 +640,7 @@ export const CasperContentManager: React.FC = () => {
                 <div className="mb-4 flex items-center gap-3"><Wand2 className="h-5 w-5 text-accent" /><h2 className="text-sm font-black uppercase tracking-widest">Parallel Casper Request</h2></div>
                 <textarea value={draftPrompt} onChange={(e) => setDraftPrompt(e.target.value)} className="min-h-28 w-full resize-none rounded-2xl border border-white/10 bg-black/50 p-4 text-sm leading-6 text-white outline-none focus:border-accent" />
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Casper will split this into sub-agents and merge their results into the parent task.</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Casper will split this into sub-agents. Media prompts like “generate a thumbnail” trigger the Visual Forge Runway action.</p>
                   <button onClick={() => void spawnSubagents()} disabled={isSpawning || !draftPrompt.trim()} className="inline-flex items-center gap-2 rounded-2xl bg-accent px-6 py-3 text-[10px] font-black uppercase tracking-widest text-white shadow-[0_0_24px_rgba(255,0,80,0.35)] disabled:opacity-40">{isSpawning ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />} Spawn Sub-Agents</button>
                 </div>
               </section>
@@ -456,6 +686,110 @@ export const CasperContentManager: React.FC = () => {
                   <button onClick={() => setGeneratedCaption(`"${captionPrompt}" — built in public, clipped for momentum, and ready for the feed. #BloodSweatCode #CreatorOps`)} className="rounded-xl border border-accent/30 bg-accent/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-accent">Write Caption</button>
                 </div>
                 {generatedCaption && <div className="mt-4 rounded-2xl border border-accent/15 bg-accent/[0.04] p-4 text-sm leading-6 text-red-100">{generatedCaption}</div>}
+              </section>
+
+              <section className="overflow-hidden rounded-[2rem] border border-fuchsia-400/20 bg-zinc-950/80 p-5 shadow-[0_0_42px_rgba(255,0,255,0.10)]">
+                <div className="pointer-events-none absolute inset-0 opacity-[0.08] [background-image:linear-gradient(rgba(0,255,255,.35)_1px,transparent_1px),linear-gradient(90deg,rgba(255,0,255,.35)_1px,transparent_1px)] [background-size:24px_24px]" />
+                <div className="relative">
+                  <div className="mb-4 flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="rounded-2xl border border-cyan-300/30 bg-cyan-300/10 p-3 text-cyan-100 shadow-[0_0_24px_rgba(0,255,255,0.18)]"><Sparkles className="h-5 w-5" /></div>
+                      <div>
+                        <h2 className="text-sm font-black uppercase tracking-widest">Visual Forge</h2>
+                        <p className="text-[9px] font-black uppercase tracking-[0.25em] text-fuchsia-300">Runway ML render bay</p>
+                      </div>
+                    </div>
+                    <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-[8px] font-black uppercase tracking-widest text-cyan-100">{forgeType}</span>
+                  </div>
+
+                  <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+                    {visualForgeTemplates.map((template) => (
+                      <button key={template.label} onClick={() => setForgePrompt(template.prompt)} className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-zinc-300 hover:border-cyan-300/40 hover:text-cyan-100">
+                        {template.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <textarea value={forgePrompt} onChange={(e) => setForgePrompt(e.target.value)} placeholder="Describe the asset Casper should forge..." className="min-h-28 w-full resize-none rounded-2xl border border-cyan-300/15 bg-black/60 p-4 text-sm leading-6 text-white outline-none shadow-inner shadow-cyan-950/40 focus:border-cyan-300" />
+
+                  <div className="mt-3 grid gap-2 md:grid-cols-2">
+                    <select value={forgeType} onChange={(e) => setForgeType(e.target.value as RunwayAssetType)} className="rounded-xl border border-white/10 bg-black px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white outline-none focus:border-fuchsia-300">
+                      <option value="image">Image</option>
+                      <option value="video">Video</option>
+                    </select>
+                    <select value={forgeRatio} onChange={(e) => setForgeRatio(e.target.value as RunwayAspectRatio)} className="rounded-xl border border-white/10 bg-black px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white outline-none focus:border-cyan-300">
+                      <option value="16:9">16:9 cinematic</option>
+                      <option value="9:16">9:16 shorts</option>
+                      <option value="1:1">1:1 social</option>
+                    </select>
+                    {forgeType === 'video' ? (
+                      <select value={forgeDuration} onChange={(e) => setForgeDuration(Number(e.target.value) as 4 | 10)} className="rounded-xl border border-white/10 bg-black px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white outline-none focus:border-cyan-300">
+                        <option value={4}>4s forge pulse</option>
+                        <option value={10}>10s cinematic clip</option>
+                      </select>
+                    ) : (
+                      <select value={forgeResolution} onChange={(e) => setForgeResolution(e.target.value)} className="rounded-xl border border-white/10 bg-black px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white outline-none focus:border-cyan-300">
+                        <option value="1280x720">1280x720 thumbnail</option>
+                        <option value="1080x1920">1080x1920 shorts</option>
+                        <option value="1024x1024">1024x1024 square</option>
+                      </select>
+                    )}
+                    <button onClick={() => void generateForgeMedia()} disabled={forgeLoading || !forgePrompt.trim()} className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-300 via-fuchsia-400 to-pink-500 px-5 py-3 text-[10px] font-black uppercase tracking-widest text-black shadow-[0_0_28px_rgba(0,255,255,0.22)] disabled:cursor-not-allowed disabled:opacity-40">
+                      {forgeLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Render in Forge
+                    </button>
+                  </div>
+
+                  <div className="mt-4 rounded-2xl border border-cyan-300/15 bg-black/45 p-4">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-cyan-100">{forgeProgress}</p>
+                      {forgeLoading && <span className="h-2 w-24 overflow-hidden rounded-full bg-white/10"><span className="block h-full w-2/3 animate-pulse rounded-full bg-cyan-300 shadow-[0_0_18px_rgba(0,255,255,0.8)]" /></span>}
+                    </div>
+                    {forgeError && <p className="rounded-xl border border-red-400/20 bg-red-500/10 p-3 text-xs leading-5 text-red-100">{forgeError}</p>}
+                  </div>
+
+                  <div className="mt-4 grid gap-3">
+                    {forgeAssets.length === 0 ? (
+                      <div className="rounded-2xl border border-dashed border-white/10 bg-black/30 p-6 text-center">
+                        <ImageIcon className="mx-auto mb-3 h-8 w-8 text-zinc-700" />
+                        <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">No forged media yet.</p>
+                      </div>
+                    ) : forgeAssets.slice(0, 6).map((asset) => {
+                      const url = asset.persistedUrl || asset.assetUrl || '';
+                      return (
+                        <div key={asset.id} className="rounded-2xl border border-white/10 bg-black/45 p-3">
+                          <div className="mb-3 overflow-hidden rounded-xl border border-white/10 bg-zinc-950">
+                            {url ? (
+                              asset.type === 'video' ? <video src={url} controls className="aspect-video w-full bg-black object-cover" /> : <img src={url} alt={asset.prompt} className="aspect-video w-full bg-black object-cover" />
+                            ) : (
+                              <div className="flex aspect-video items-center justify-center text-zinc-600"><Loader2 className="h-6 w-6 animate-spin" /></div>
+                            )}
+                          </div>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="mb-1 flex flex-wrap items-center gap-2">
+                                <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-1 text-[8px] font-black uppercase tracking-widest text-cyan-100">{asset.status}</span>
+                                <span className="font-mono text-[8px] uppercase tracking-widest text-zinc-600">{asset.aspectRatio}{asset.duration ? ` · ${asset.duration}s` : ''}</span>
+                                {asset.persistedUrl && <span className="rounded-full border border-green-400/20 bg-green-400/10 px-2 py-1 text-[8px] font-black uppercase tracking-widest text-green-100">Vaulted</span>}
+                              </div>
+                              <p className="line-clamp-2 text-xs leading-5 text-zinc-300">{asset.prompt}</p>
+                              {asset.error && <p className="mt-2 text-[10px] text-red-300">{asset.error}</p>}
+                            </div>
+                            {asset.status !== 'SUCCEEDED' && asset.taskId && <button onClick={() => void refreshForgeAsset(asset)} className="rounded-xl border border-cyan-300/20 bg-cyan-300/10 p-2 text-cyan-100"><RefreshCw className="h-4 w-4" /></button>}
+                          </div>
+                          {url && (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {!asset.persistedUrl && <button onClick={() => void persistForgeAsset(asset)} className="rounded-xl border border-green-400/25 bg-green-400/10 px-3 py-2 text-[8px] font-black uppercase tracking-widest text-green-100">Upload to Supabase</button>}
+                              <button onClick={() => useForgeAssetInPost(asset)} className="rounded-xl border border-cyan-300/25 bg-cyan-300/10 px-3 py-2 text-[8px] font-black uppercase tracking-widest text-cyan-100">Use in Post</button>
+                              <button onClick={() => useForgeAssetAsStreamThumbnail(asset)} className="rounded-xl border border-fuchsia-300/25 bg-fuchsia-300/10 px-3 py-2 text-[8px] font-black uppercase tracking-widest text-fuchsia-100">Stream Thumb</button>
+                              <a href={url} download target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[8px] font-black uppercase tracking-widest text-zinc-200"><Download className="h-3 w-3" /> Download</a>
+                              <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[8px] font-black uppercase tracking-widest text-zinc-200"><ExternalLink className="h-3 w-3" /> Open</a>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </section>
 
               <section className="rounded-[2rem] border border-white/10 bg-zinc-950/80 p-5">
