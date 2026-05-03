@@ -12,7 +12,8 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { SquareClient, SquareEnvironment } from 'square';
 import { createClient } from '@supabase/supabase-js';
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
+const BOT_UUID_NAMESPACE = '00000000-0000-4000-8000-000000000b5c';
 
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -63,7 +64,9 @@ const PLATFORM_DEFAULT_MODEL = process.env.COLOSSEUM_DEFAULT_MODEL || process.en
 const OPENAI_COMPATIBLE_BASE_URL = (process.env.OPENAI_BASE_URL || process.env.VITE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
 
 const SAFE_GLADIATOR_SELECT = 'id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model,api_base_url';
-const BOT_GLADIATOR_ID_PREFIX = 'bot-gladiator-';
+// Deterministic UUID generation for bot personas
+function botUserId(username: string): string { return uuidv5(`bot-user-${username}`, BOT_UUID_NAMESPACE); }
+function botGladiatorId(username: string): string { return uuidv5(`bot-gladiator-${username}`, BOT_UUID_NAMESPACE); }
 
 function sanitizeGladiator(gladiator: any) {
   if (!gladiator) return null;
@@ -273,15 +276,15 @@ async function ensurePersonaBotGladiators() {
     const persona = personaByUsername.get(profile.username);
     if (!persona) continue;
 
-    const botUserId = `bot-${persona.username}`;
-    const gladiatorId = `${BOT_GLADIATOR_ID_PREFIX}${persona.username}`;
+    const bUserId = botUserId(persona.username);
+    const gladiatorId = botGladiatorId(persona.username);
     const avatarUrl = `https://picsum.photos/seed/${persona.avatar_seed}/400/400`;
     const profileLine = `${profile.gladiator_class} specializing in ${profile.expertise.join(', ')}. Battle style: ${profile.battle_style}. ${persona.bio}`.slice(0, 3000);
 
     const { error: userError } = await supabase
       .from('users')
       .upsert({
-        id: botUserId,
+        id: bUserId,
         username: persona.username,
         display_name: persona.display_name,
         avatar_url: avatarUrl,
@@ -305,7 +308,7 @@ async function ensurePersonaBotGladiators() {
       .from('gladiators')
       .upsert({
         id: gladiatorId,
-        user_id: botUserId,
+        user_id: bUserId,
         name: persona.display_name,
         avatar_url: avatarUrl,
         personality: profileLine,
@@ -323,7 +326,7 @@ async function ensurePersonaBotGladiators() {
       .from('bot_gladiator_profiles')
       .upsert({
         gladiator_id: gladiatorId,
-        bot_user_id: botUserId,
+        bot_user_id: bUserId,
         persona_username: persona.username,
         display_name: persona.display_name,
         gladiator_class: profile.gladiator_class,
