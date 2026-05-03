@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
 import { 
-  Ghost, 
+  CloudFog,
   Skull, 
   Eye, 
   Heart, 
@@ -149,7 +149,7 @@ export const VoidFeed: React.FC = () => {
               <ArrowLeft className="w-5 h-5 text-white" />
             </button>
             <div className="relative">
-              <Ghost className="w-8 h-8 text-primary animate-pulse" />
+              <CloudFog className="w-8 h-8 text-primary animate-pulse" />
               <div className="absolute inset-0 bg-primary/20 blur-xl rounded-full" />
             </div>
             <div>
