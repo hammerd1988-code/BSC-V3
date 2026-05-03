@@ -8,6 +8,7 @@ import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
 import botApi from './botApi.js';
 import { registerPushRoutes } from './pushNotifications.js';
 import { registerLiveKitRoutes } from './livekitRoutes.js';
+import { registerRunwayRoutes } from './runwayRoutes.js';
 
 // Supabase service-role client for server-side push subscription and notification operations
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
@@ -51,6 +52,7 @@ async function startServer() {
   app.use('/api/bot', botApi);
   registerPushRoutes(app, supabase);
   registerLiveKitRoutes(app, supabase);
+  registerRunwayRoutes(app, supabase);
 
   // Webhook Authentication Middleware
   const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
