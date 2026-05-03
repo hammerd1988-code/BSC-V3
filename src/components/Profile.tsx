@@ -72,6 +72,12 @@ interface ProfileFactionMembership extends FactionMember {
   faction?: Faction | null;
 }
 
+interface ProximityNode extends User {
+  mutual_count: number;
+  match_reasons: string[];
+  handshake_sent?: boolean;
+}
+
 const TECH_COLOR_MAP: Record<string, string> = {
   python: '#3776AB',
   react: '#61DAFB',
@@ -134,6 +140,13 @@ export const Profile: React.FC = () => {
   const [friendsList, setFriendsList] = useState<User[]>([]);
   const [pendingRequests, setPendingRequests] = useState<any[]>([]); // incoming requests for my profile
   const [loadingFriends, setLoadingFriends] = useState(false);
+  const [socialListType, setSocialListType] = useState<'watchers' | 'tracking' | null>(null);
+  const [socialList, setSocialList] = useState<User[]>([]);
+  const [loadingSocialList, setLoadingSocialList] = useState(false);
+  const [socialActionId, setSocialActionId] = useState<string | null>(null);
+  const [proximityNodes, setProximityNodes] = useState<ProximityNode[]>([]);
+  const [loadingProximityNodes, setLoadingProximityNodes] = useState(false);
+  const [proximityActionId, setProximityActionId] = useState<string | null>(null);
   const hasIncrementedView = useRef(false);
 
   // Derive friend/request state from DB data
@@ -471,11 +484,261 @@ export const Profile: React.FC = () => {
           supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: 1 }),
           supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'followers_count', p_amount: 1 }),
         ]);
+        const { error: followNotificationError } = await supabase.from('notifications').insert({
+          user_id: user.id,
+          type: 'follow',
+          payload: {
+            from_id: currentUser.id,
+            from_username: currentUser.username,
+            from_display_name: currentUser.display_name,
+            from_avatar_url: currentUser.avatar_url,
+            message: `New Watcher Detected: @${currentUser.username} has locked onto your signal`,
+            url: `/profile/${currentUser.username}`,
+          },
+          is_read: false,
+          created_at: new Date().toISOString(),
+        });
+        if (followNotificationError) {
+          console.warn('[Profile] Failed to create follow notification:', followNotificationError.message);
+        }
         setIsFollowing(true);
         socket.emit('user:follow', { follower: currentUser, following: user });
       }
     } catch (error) {
       handleDbError(error, 'WRITE', 'follows/users');
+    }
+  };
+
+
+  const fetchSocialList = async (type: 'watchers' | 'tracking') => {
+    if (!user) return;
+    setLoadingSocialList(true);
+    try {
+      const edgeColumn = type === 'watchers' ? 'follower_id' : 'following_id';
+      const filterColumn = type === 'watchers' ? 'following_id' : 'follower_id';
+      const { data: edges, error: edgeError } = await supabase
+        .from('follows')
+        .select(edgeColumn)
+        .eq(filterColumn, user.id)
+        .order('created_at', { ascending: false })
+        .limit(100);
+      if (edgeError) throw edgeError;
+
+      const ids = ((edges ?? []) as Record<string, string>[])
+        .map(edge => edge[edgeColumn])
+        .filter(Boolean);
+
+      if (ids.length === 0) {
+        setSocialList([]);
+        return;
+      }
+
+      const { data: usersData, error: usersError } = await supabase
+        .from('users')
+        .select('*')
+        .in('id', ids);
+      if (usersError) throw usersError;
+
+      let lockedSignals = new Set<string>();
+      if (currentUser) {
+        const { data: myFollows, error: myFollowError } = await supabase
+          .from('follows')
+          .select('following_id')
+          .eq('follower_id', currentUser.id)
+          .in('following_id', ids);
+        if (myFollowError) throw myFollowError;
+        lockedSignals = new Set(((myFollows ?? []) as { following_id: string }[]).map(edge => edge.following_id));
+      }
+
+      const order = new Map(ids.map((id, index) => [id, index]));
+      const sortedUsers = ((usersData ?? []) as User[])
+        .map(target => ({ ...target, is_following: lockedSignals.has(target.id) }))
+        .sort((a, b) => (order.get(a.id) ?? 9999) - (order.get(b.id) ?? 9999));
+      setSocialList(sortedUsers);
+    } catch (error) {
+      handleDbError(error, 'LIST', `follows/${type}`);
+      setSocialList([]);
+    } finally {
+      setLoadingSocialList(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!socialListType) return;
+    void fetchSocialList(socialListType);
+  }, [socialListType, user?.id, currentUser?.id]);
+
+  const handleSocialListFollowToggle = async (target: User) => {
+    if (!currentUser || !target || target.id === currentUser.id) return;
+    setSocialActionId(target.id);
+    try {
+      if (target.is_following) {
+        const { error } = await supabase
+          .from('follows')
+          .delete()
+          .eq('follower_id', currentUser.id)
+          .eq('following_id', target.id);
+        if (error) throw error;
+        await Promise.all([
+          supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: -1 }),
+          supabase.rpc('increment_counter', { p_table: 'users', p_id: target.id, p_field: 'followers_count', p_amount: -1 }),
+        ]);
+      } else {
+        const { error } = await supabase
+          .from('follows')
+          .insert({ follower_id: currentUser.id, following_id: target.id, created_at: new Date().toISOString() });
+        if (error) throw error;
+        await Promise.all([
+          supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: 1 }),
+          supabase.rpc('increment_counter', { p_table: 'users', p_id: target.id, p_field: 'followers_count', p_amount: 1 }),
+        ]);
+        const { error: followNotificationError } = await supabase.from('notifications').insert({
+          user_id: target.id,
+          type: 'follow',
+          payload: {
+            from_id: currentUser.id,
+            from_username: currentUser.username,
+            from_display_name: currentUser.display_name,
+            from_avatar_url: currentUser.avatar_url,
+            message: `New Watcher Detected: @${currentUser.username} has locked onto your signal`,
+            url: `/profile/${currentUser.username}`,
+          },
+          is_read: false,
+          created_at: new Date().toISOString(),
+        });
+        if (followNotificationError) {
+          console.warn('[Profile] Failed to create social list follow notification:', followNotificationError.message);
+        }
+      }
+
+      setSocialList(prev => prev.map(item => item.id === target.id ? { ...item, is_following: !target.is_following } : item));
+    } catch (error) {
+      handleDbError(error, 'WRITE', 'follows/users');
+    } finally {
+      setSocialActionId(null);
+    }
+  };
+
+
+  const fetchProximityNodes = async () => {
+    if (!currentUser || !user || currentUser.id !== user.id) {
+      setProximityNodes([]);
+      return;
+    }
+
+    setLoadingProximityNodes(true);
+    try {
+      const currentFriendIds = Array.isArray(currentUser.friends) ? currentUser.friends : [];
+      const incomingRequestIds = new Set((Array.isArray(currentUser.friend_requests) ? currentUser.friend_requests : []).map((request: any) => request?.from_id));
+      const currentTech = new Set((Array.isArray(currentUser.tech_stack) ? currentUser.tech_stack : []).map(tech => tech.toLowerCase()));
+
+      const { data: myFactionRows } = await supabase
+        .from('faction_members')
+        .select('faction_id')
+        .eq('user_id', currentUser.id);
+      const myFactionIds = ((myFactionRows ?? []) as { faction_id: string }[]).map(row => row.faction_id).filter(Boolean);
+
+      let sameFactionUserIds = new Set<string>();
+      if (myFactionIds.length > 0) {
+        const { data: factionRows, error: factionError } = await supabase
+          .from('faction_members')
+          .select('user_id')
+          .in('faction_id', myFactionIds)
+          .neq('user_id', currentUser.id);
+        if (factionError) throw factionError;
+        sameFactionUserIds = new Set(((factionRows ?? []) as { user_id: string }[]).map(row => row.user_id));
+      }
+
+      const { data: usersData, error: usersError } = await supabase
+        .from('users')
+        .select('*')
+        .neq('id', currentUser.id)
+        .limit(100);
+      if (usersError) throw usersError;
+
+      const candidates = ((usersData ?? []) as User[])
+        .filter(candidate => !currentFriendIds.includes(candidate.id))
+        .filter(candidate => !incomingRequestIds.has(candidate.id))
+        .filter(candidate => !((currentUser.blocked_users ?? []).includes(candidate.id)))
+        .map(candidate => {
+          const candidateFriends = Array.isArray(candidate.friends) ? candidate.friends : [];
+          const outgoingPending = Array.isArray(candidate.friend_requests)
+            ? candidate.friend_requests.some((request: any) => request?.from_id === currentUser.id)
+            : false;
+          const mutualCount = candidateFriends.filter(friendId => currentFriendIds.includes(friendId)).length;
+          const sharedTech = (Array.isArray(candidate.tech_stack) ? candidate.tech_stack : []).filter(tech => currentTech.has(tech.toLowerCase()));
+          const sameFaction = sameFactionUserIds.has(candidate.id);
+          const matchReasons = [
+            mutualCount > 0 ? `${mutualCount} mutual Neural Link${mutualCount === 1 ? '' : 's'}` : '',
+            sharedTech.length > 0 ? `${sharedTech.slice(0, 2).join(' / ')} stack overlap` : '',
+            sameFaction ? 'Same faction frequency' : '',
+          ].filter(Boolean);
+          const score = mutualCount * 4 + sharedTech.length * 2 + (sameFaction ? 3 : 0) + Math.min(candidate.reputation_score ?? 0, 100) / 100;
+          return { ...candidate, mutual_count: mutualCount, match_reasons: matchReasons, handshake_sent: outgoingPending, score };
+        })
+        .filter(candidate => candidate.match_reasons.length > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 8)
+        .map(({ score, ...candidate }) => candidate as ProximityNode);
+
+      setProximityNodes(candidates);
+    } catch (error) {
+      handleDbError(error, 'LIST', 'proximity_nodes');
+      setProximityNodes([]);
+    } finally {
+      setLoadingProximityNodes(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!currentUser || !user || currentUser.id !== user.id) {
+      setProximityNodes([]);
+      return;
+    }
+    void fetchProximityNodes();
+  }, [currentUser?.id, currentUser?.friends, currentUser?.friend_requests, currentUser?.tech_stack, user?.id]);
+
+  const handleSendHandshakeToNode = async (target: ProximityNode) => {
+    if (!currentUser || !target || target.id === currentUser.id || target.handshake_sent) return;
+    setProximityActionId(target.id);
+    try {
+      const existingRequests: any[] = Array.isArray(target.friend_requests) ? [...target.friend_requests] : [];
+      if (!existingRequests.some(request => request?.from_id === currentUser.id)) {
+        existingRequests.push({
+          from_id: currentUser.id,
+          from_username: currentUser.username,
+          from_display_name: currentUser.display_name,
+          from_avatar_url: currentUser.avatar_url,
+          sent_at: new Date().toISOString(),
+        });
+      }
+
+      const [requestUpdate, notificationInsert] = await Promise.all([
+        supabase.from('users').update({ friend_requests: existingRequests }).eq('id', target.id),
+        supabase.from('notifications').insert({
+          user_id: target.id,
+          type: 'friend_request',
+          payload: {
+            from_id: currentUser.id,
+            from_username: currentUser.username,
+            from_display_name: currentUser.display_name,
+            from_avatar_url: currentUser.avatar_url,
+            message: `Neural Handshake incoming from @${currentUser.username}`,
+            url: `/profile/${currentUser.username}`,
+          },
+          is_read: false,
+          created_at: new Date().toISOString(),
+        }),
+      ]);
+
+      const failed = [requestUpdate, notificationInsert].find(result => result.error);
+      if (failed?.error) throw failed.error;
+
+      setProximityNodes(prev => prev.map(node => node.id === target.id ? { ...node, handshake_sent: true } : node));
+    } catch (error) {
+      handleDbError(error, 'UPDATE', `users/${target.id}/friend_requests`);
+    } finally {
+      setProximityActionId(null);
     }
   };
 
@@ -777,7 +1040,7 @@ export const Profile: React.FC = () => {
                         : "bg-accent text-white shadow-[0_0_15px_rgba(255,0,0,0.3)] hover:shadow-[0_0_20px_rgba(255,0,0,0.5)]"
                     )}
                   >
-                    {isFollowing ? 'Unfollow' : 'Follow'}
+                    {isFollowing ? 'Release Signal' : 'Signal Lock'}
                   </button>
                   {/* Friend button: shows different state based on relationship */}
                   {isFriend ? (
@@ -785,9 +1048,9 @@ export const Profile: React.FC = () => {
                       onClick={() => handleRemoveFriend(user.id)}
                       disabled={isAddingFriend}
                       className="px-4 py-1.5 rounded-full font-bold text-sm transition-all border border-green-500/50 text-green-500 bg-green-500/10 hover:bg-red-500/10 hover:border-red-500/50 hover:text-red-400 flex items-center gap-2"
-                      title="Remove friend"
+                      title="Sever neural link"
                     >
-                      {isAddingFriend ? <Loader2 className="w-4 h-4 animate-spin" /> : <><HeartHandshake className="w-4 h-4" />{user.type === 'bot' ? 'Linked' : 'Friends'}</>}
+                      {isAddingFriend ? <Loader2 className="w-4 h-4 animate-spin" /> : <><HeartHandshake className="w-4 h-4" />{user.type === 'bot' ? 'Linked' : 'Neural Links'}</>}
                     </button>
                   ) : incomingRequest ? (
                     // They sent me a request — show Accept/Reject
@@ -797,13 +1060,13 @@ export const Profile: React.FC = () => {
                         disabled={isAddingFriend}
                         className="px-3 py-1.5 rounded-full font-bold text-xs transition-all bg-green-500 text-white hover:bg-green-600 flex items-center gap-1"
                       >
-                        {isAddingFriend ? <Loader2 className="w-3 h-3 animate-spin" /> : <><Check className="w-3 h-3" />Accept</>}
+                        {isAddingFriend ? <Loader2 className="w-3 h-3 animate-spin" /> : <><Check className="w-3 h-3" />Sync</>}
                       </button>
                       <button
                         onClick={() => handleRejectFriendRequest(user.id)}
                         className="px-3 py-1.5 rounded-full font-bold text-xs transition-all border border-white/20 text-gray-400 hover:text-red-400 hover:border-red-500/50"
                       >
-                        Decline
+                        Reject Signal
                       </button>
                     </div>
                   ) : friendRequestPending ? (
@@ -811,7 +1074,7 @@ export const Profile: React.FC = () => {
                       disabled
                       className="px-4 py-1.5 rounded-full font-bold text-sm border border-yellow-500/30 text-yellow-500/70 bg-yellow-500/5 flex items-center gap-2 cursor-default"
                     >
-                      <Clock className="w-4 h-4" /> Request Sent
+                      <Clock className="w-4 h-4" /> Handshake Sent
                     </button>
                   ) : (
                     <button
@@ -819,7 +1082,7 @@ export const Profile: React.FC = () => {
                       disabled={isAddingFriend}
                       className="px-4 py-1.5 rounded-full font-bold text-sm transition-all border border-white/20 text-white hover:bg-white/5 flex items-center gap-2"
                     >
-                      {isAddingFriend ? <Loader2 className="w-4 h-4 animate-spin" /> : <><HeartHandshake className="w-4 h-4" />{user.type === 'bot' ? 'Link Entity' : 'Add Friend'}</>}
+                      {isAddingFriend ? <Loader2 className="w-4 h-4 animate-spin" /> : <><HeartHandshake className="w-4 h-4" />{user.type === 'bot' ? 'Link Entity' : 'Send Handshake'}</>}
                     </button>
                   )}
                   <button
@@ -1211,21 +1474,29 @@ export const Profile: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex space-x-4 text-sm mb-6">
-            <div className="flex items-center gap-1">
-              <span className="font-bold text-white">{user.following_count}</span>
-              <span className="text-gray-500">Following</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <span className="font-bold text-white">{user.followers_count}</span>
-              <span className="text-gray-500">Followers</span>
-            </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm mb-6">
+            <button
+              type="button"
+              onClick={() => setSocialListType('tracking')}
+              className="flex items-center gap-1 rounded-full transition hover:text-cyan-300 hover:drop-shadow-[0_0_8px_rgba(34,211,238,0.65)]"
+            >
+              <span className="font-bold text-white">{user.following_count || 0}</span>
+              <span className="text-gray-500">Tracking</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSocialListType('watchers')}
+              className="flex items-center gap-1 rounded-full transition hover:text-pink-300 hover:drop-shadow-[0_0_8px_rgba(244,114,182,0.65)]"
+            >
+              <span className="font-bold text-white">{user.followers_count || 0}</span>
+              <span className="text-gray-500">Watchers</span>
+            </button>
             <button 
               onClick={() => setActiveTab('friends')}
               className="flex items-center gap-1 hover:opacity-80 transition-opacity"
             >
               <span className="font-bold text-white">{user.friends?.length || 0}</span>
-              <span className="text-gray-500">{user.type === 'bot' ? 'Linked Entities' : 'Friends'}</span>
+              <span className="text-gray-500">{user.type === 'bot' ? 'Linked Entities' : 'Neural Links'}</span>
             </button>
             <div className="flex items-center gap-1">
               <Eye className="w-4 h-4 text-gray-500" />
@@ -1248,6 +1519,97 @@ export const Profile: React.FC = () => {
               {isMyProfile && <Plus className="w-3 h-3 text-yellow-500 ml-1" />}
             </button>
           </div>
+
+          {isMyProfile && !isBlocked && (
+            <div className="mb-6 rounded-3xl border border-cyan-300/10 bg-white/[0.03] p-4 shadow-[0_0_35px_rgba(0,229,255,0.07)] backdrop-blur-xl">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-2xl border border-cyan-300/20 bg-cyan-300/10 text-cyan-200 shadow-[0_0_18px_rgba(0,229,255,0.12)]">
+                    <Target className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.28em] text-cyan-300">Detected Signals</p>
+                    <h3 className="text-sm font-black uppercase italic text-white">Proximity Nodes</h3>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void fetchProximityNodes()}
+                  className="rounded-full border border-white/10 px-3 py-1.5 text-[9px] font-black uppercase tracking-widest text-gray-400 transition hover:border-cyan-300/30 hover:text-cyan-200"
+                >
+                  Rescan
+                </button>
+              </div>
+
+              {loadingProximityNodes ? (
+                <div className="flex items-center justify-center gap-3 rounded-2xl border border-white/5 bg-black/20 py-8 text-gray-500">
+                  <Loader2 className="h-5 w-5 animate-spin text-cyan-300" />
+                  <span className="text-[10px] font-black uppercase tracking-[0.24em]">Scanning nearby frequencies</span>
+                </div>
+              ) : proximityNodes.length === 0 ? (
+                <div className="rounded-2xl border border-white/5 bg-black/20 px-4 py-7 text-center">
+                  <Radio className="mx-auto mb-3 h-8 w-8 text-gray-700" />
+                  <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">No proximity nodes detected yet</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {proximityNodes.map((node) => (
+                    <div key={node.id} className="relative overflow-hidden rounded-2xl border border-white/10 bg-black/30 p-3 transition hover:border-cyan-300/30 hover:shadow-[0_0_24px_rgba(0,229,255,0.10)]">
+                      <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-cyan-300/[0.06] via-transparent to-fuchsia-400/[0.06]" />
+                      <div className="relative flex items-start gap-3">
+                        <Link to={`/profile/${node.username}`} className="flex min-w-0 flex-1 items-start gap-3">
+                          <img
+                            src={node.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(node.display_name || node.username)}`}
+                            alt=""
+                            className="h-11 w-11 shrink-0 rounded-full border border-cyan-300/20 object-cover shadow-[0_0_18px_rgba(0,229,255,0.12)]"
+                          />
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-bold text-white">{node.display_name}</p>
+                            <p className="truncate font-mono text-[10px] text-gray-500">@{node.username}</p>
+                            <p className="mt-1 text-[9px] font-black uppercase tracking-widest text-cyan-200">
+                              {node.mutual_count} mutual link{node.mutual_count === 1 ? '' : 's'}
+                            </p>
+                          </div>
+                        </Link>
+                      </div>
+
+                      <div className="relative mt-3 flex flex-wrap gap-1.5">
+                        {node.match_reasons.slice(0, 3).map((reason) => (
+                          <span key={reason} className="rounded-full border border-cyan-300/15 bg-cyan-300/10 px-2 py-1 text-[8px] font-black uppercase tracking-widest text-cyan-100">
+                            {reason}
+                          </span>
+                        ))}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => void handleSendHandshakeToNode(node)}
+                        disabled={node.handshake_sent || proximityActionId === node.id}
+                        className={cn(
+                          "relative mt-3 flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2 text-[10px] font-black uppercase tracking-widest transition disabled:cursor-default",
+                          node.handshake_sent
+                            ? "border border-yellow-300/25 bg-yellow-300/10 text-yellow-200"
+                            : "border border-accent/30 bg-accent/10 text-accent hover:bg-accent/20 hover:shadow-[0_0_18px_rgba(255,0,80,0.18)]"
+                        )}
+                      >
+                        {proximityActionId === node.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : node.handshake_sent ? (
+                          <>
+                            <Clock className="h-3.5 w-3.5" /> Handshake Sent
+                          </>
+                        ) : (
+                          <>
+                            <HeartHandshake className="h-3.5 w-3.5" /> Send Handshake
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Tabs */}
@@ -1271,7 +1633,7 @@ export const Profile: React.FC = () => {
                       : "text-gray-500 hover:text-gray-300"
                   )}
                 >
-                  {tab === 'friends' ? (user.type === 'bot' ? 'Linked Entities' : 'Friends') : tab.replace('_', ' ')}
+                  {tab === 'friends' ? (user.type === 'bot' ? 'Linked Entities' : 'Neural Links') : tab.replace('_', ' ')}
                   {activeTab === tab && (
                     <motion.div
                       layoutId="activeTab"
@@ -1353,7 +1715,7 @@ export const Profile: React.FC = () => {
                         <div className="flex items-center gap-2 mb-3">
                           <div className="w-2 h-2 rounded-full bg-pink-500 animate-pulse" />
                           <h3 className="text-[10px] font-black text-pink-400 uppercase tracking-[0.3em]">
-                            Pending Requests ({pendingRequests.length})
+                            Link Requests ({pendingRequests.length})
                           </h3>
                         </div>
                         <div className="space-y-2">
@@ -1376,13 +1738,13 @@ export const Profile: React.FC = () => {
                                   disabled={isAddingFriend}
                                   className="px-3 py-1.5 bg-green-500 text-white rounded-lg text-xs font-bold hover:bg-green-600 transition-colors flex items-center gap-1"
                                 >
-                                  <Check className="w-3 h-3" /> Accept
+                                  <Check className="w-3 h-3" /> Sync
                                 </button>
                                 <button
                                   onClick={() => handleRejectFriendRequest(req.from_id)}
                                   className="px-3 py-1.5 border border-white/20 text-gray-400 rounded-lg text-xs font-bold hover:text-red-400 hover:border-red-500/50 transition-colors"
                                 >
-                                  Decline
+                                  Reject Signal
                                 </button>
                               </div>
                             </div>
@@ -1396,7 +1758,7 @@ export const Profile: React.FC = () => {
                       <div className="flex items-center gap-2 mb-4">
                         <HeartHandshake className="w-4 h-4 text-accent" />
                         <h3 className="text-[10px] font-black text-white uppercase tracking-[0.3em]">
-                          {user.type === 'bot' ? 'Linked Entities' : 'Friends'} ({friendsList.length})
+                          {user.type === 'bot' ? 'Linked Entities' : 'Neural Links'} ({friendsList.length})
                         </h3>
                       </div>
 
@@ -1408,7 +1770,7 @@ export const Profile: React.FC = () => {
                         <div className="py-16 text-center border border-white/5 rounded-2xl bg-surface/20">
                           <HeartHandshake className="w-12 h-12 text-gray-700 mx-auto mb-4 opacity-20" />
                           <p className="text-xs font-bold text-gray-500 uppercase tracking-widest italic">
-                            No {user.type === 'bot' ? 'linked entities' : 'friends'} yet
+                            No {user.type === 'bot' ? 'linked entities' : 'neural links'} yet
                           </p>
                           {currentUser?.id !== user.id && !isFriend && !friendRequestPending && (
                             <button
@@ -1416,7 +1778,7 @@ export const Profile: React.FC = () => {
                               disabled={isAddingFriend}
                               className="mt-4 px-4 py-2 bg-accent/10 border border-accent/30 text-accent rounded-xl text-xs font-bold hover:bg-accent/20 transition-colors flex items-center gap-2 mx-auto"
                             >
-                              <HeartHandshake className="w-3 h-3" /> Send Friend Request
+                              <HeartHandshake className="w-3 h-3" /> Send Handshake
                             </button>
                           )}
                         </div>
@@ -1435,12 +1797,12 @@ export const Profile: React.FC = () => {
                                   <p className="text-[10px] text-gray-500 font-mono truncate">@{friend.username}</p>
                                 </div>
                               </Link>
-                              {/* Remove friend button — only on own profile */}
+                              {/* Sever link button — only on own profile */}
                               {currentUser?.id === user.id && (
                                 <button
                                   onClick={() => handleRemoveFriend(friend.id)}
                                   className="ml-2 p-1.5 rounded-lg text-gray-600 hover:text-red-400 hover:bg-red-500/10 transition-colors flex-shrink-0"
-                                  title="Remove friend"
+                                  title="Sever neural link"
                                 >
                                   <X className="w-3.5 h-3.5" />
                                 </button>
@@ -1535,6 +1897,105 @@ export const Profile: React.FC = () => {
           </>
         )}
       </main>
+
+      <AnimatePresence>
+        {socialListType && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-end justify-center bg-black/80 px-4 pb-4 pt-16 backdrop-blur-xl sm:items-center sm:pb-0"
+            onClick={() => setSocialListType(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 28, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 28, scale: 0.96 }}
+              transition={{ type: 'spring', damping: 24, stiffness: 280 }}
+              onClick={(event) => event.stopPropagation()}
+              className="relative max-h-[82vh] w-full max-w-lg overflow-hidden rounded-3xl border border-cyan-300/15 bg-[#080a12]/95 shadow-[0_0_50px_rgba(0,229,255,0.16)]"
+            >
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(0,229,255,0.16),transparent_35%),radial-gradient(circle_at_bottom_right,rgba(217,70,239,0.14),transparent_38%)]" />
+              <div className="relative flex items-center justify-between border-b border-white/10 px-5 py-4">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.28em] text-cyan-300">
+                    {socialListType === 'watchers' ? 'Watcher Matrix' : 'Tracking Matrix'}
+                  </p>
+                  <h3 className="mt-1 text-lg font-black uppercase italic text-white">
+                    {socialListType === 'watchers' ? 'Watchers' : 'Tracking'}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSocialListType(null)}
+                  className="rounded-full border border-white/10 p-2 text-gray-500 transition hover:border-white/20 hover:text-white"
+                  aria-label="Close social signal panel"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="relative max-h-[62vh] overflow-y-auto p-4">
+                {loadingSocialList ? (
+                  <div className="flex min-h-44 flex-col items-center justify-center gap-3 text-gray-500">
+                    <Loader2 className="h-7 w-7 animate-spin text-cyan-300" />
+                    <p className="text-[10px] font-black uppercase tracking-[0.24em]">Scanning signal graph</p>
+                  </div>
+                ) : socialList.length === 0 ? (
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-10 text-center">
+                    <Users className="mx-auto mb-3 h-10 w-10 text-gray-700" />
+                    <p className="text-xs font-black uppercase tracking-widest text-gray-500">
+                      {socialListType === 'watchers' ? 'No Watchers detected' : 'No tracked signals yet'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {socialList.map((target) => {
+                      const isSelf = currentUser?.id === target.id;
+                      return (
+                        <div key={target.id} className="group flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] p-3 shadow-[0_0_22px_rgba(0,229,255,0.05)] transition hover:border-cyan-300/30 hover:bg-cyan-300/[0.05]">
+                          <Link to={`/profile/${target.username}`} onClick={() => setSocialListType(null)} className="flex min-w-0 flex-1 items-center gap-3">
+                            <img
+                              src={target.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(target.display_name || target.username)}`}
+                              alt=""
+                              className="h-11 w-11 shrink-0 rounded-full border border-cyan-300/20 object-cover shadow-[0_0_18px_rgba(0,229,255,0.12)]"
+                            />
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-bold text-white group-hover:text-cyan-100">{target.display_name}</p>
+                              <p className="truncate font-mono text-[10px] text-gray-500">@{target.username}</p>
+                            </div>
+                          </Link>
+                          {!isSelf && currentUser && (
+                            <button
+                              type="button"
+                              onClick={() => void handleSocialListFollowToggle(target)}
+                              disabled={socialActionId === target.id}
+                              className={cn(
+                                "shrink-0 rounded-full px-3 py-1.5 text-[9px] font-black uppercase tracking-widest transition disabled:cursor-wait disabled:opacity-60",
+                                target.is_following
+                                  ? "border border-white/15 text-gray-300 hover:border-red-400/40 hover:bg-red-500/10 hover:text-red-300"
+                                  : "border border-cyan-300/40 bg-cyan-300/10 text-cyan-100 hover:bg-cyan-300/20"
+                              )}
+                            >
+                              {socialActionId === target.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : target.is_following ? (
+                                socialListType === 'tracking' ? 'Release Signal' : 'Signal Locked'
+                              ) : (
+                                socialListType === 'watchers' ? 'Follow Back' : 'Signal Lock'
+                              )}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* AI Avatar Builder Modal */}
       <AvatarBuilderModal

@@ -826,7 +826,7 @@ export const GoLive: React.FC = () => {
               {!isOwnStream && currentUser && (
                 <button onClick={() => void toggleFollow()} className={cn('inline-flex items-center gap-2 rounded-xl px-4 py-3 text-[10px] font-black uppercase tracking-widest transition', followed ? 'border border-cyan-300/30 bg-cyan-300/10 text-cyan-100' : 'bg-accent text-white shadow-[0_0_18px_rgba(255,0,80,0.35)]')}>
                   {followed ? <BellOff className="h-4 w-4" /> : <Bell className="h-4 w-4" />}
-                  {followed ? 'Following' : 'Follow Streamer'}
+                  {followed ? 'Signal Locked' : 'Lock Stream Signal'}
                 </button>
               )}
               {REACTIONS.map((reaction) => (
