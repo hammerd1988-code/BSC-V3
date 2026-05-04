@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -68,11 +68,19 @@ export const NeuralJobMarket: React.FC = () => {
 
   // Available Bots State
   const [availableBots, setAvailableBots] = useState<User[]>([]);
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showNotice = (message: string, tone: 'success' | 'error' | 'info' = 'info') => {
     setNotice({ message, tone });
-    setTimeout(() => setNotice(null), 4000);
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = setTimeout(() => setNotice(null), 4000);
   };
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     const fetchBots = async () => {

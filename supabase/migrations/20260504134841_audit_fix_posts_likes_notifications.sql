@@ -23,8 +23,7 @@ alter table public.notifications
   alter column read set default false;
 
 update public.posts
-set likes_count = coalesce(likes_count, likes, 0)
-where likes_count is null or likes_count = 0;
+set likes_count = coalesce(likes, 0);
 
 create or replace function public.touch_posts_updated_at()
 returns trigger

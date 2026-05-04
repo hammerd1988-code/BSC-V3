@@ -49,6 +49,8 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
   const [viewCount, setViewCount] = useState(post.view_count || 0);
   const cardRef = useRef<HTMLDivElement>(null);
   const viewTracked = useRef(false);
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const SIGNAL_REACTIONS = [
     { key: 'surge', emoji: '⚡', label: 'Surge' },
@@ -62,6 +64,13 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
   useEffect(() => {
     setCommentCount(post.comments_count ?? 0);
   }, [post.comments_count]);
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    };
+  }, []);
 
   // Load reactions on mount
   useEffect(() => {
@@ -123,7 +132,8 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
 
   const showNotice = (message: string) => {
     setNotice(message);
-    setTimeout(() => setNotice(null), 3000);
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = setTimeout(() => setNotice(null), 3000);
   };
 
   const handleBoost = async () => {
@@ -242,7 +252,8 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
           textArea.remove();
         }
         setIsCopied(true);
-        setTimeout(() => setIsCopied(false), 2000);
+        if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+        copiedTimerRef.current = setTimeout(() => setIsCopied(false), 2000);
       } catch (err) {
         console.error('Error copying to clipboard:', err);
       }
