@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useState, useEffect } from 'react';
-import { Routes, Route, Navigate, useSearchParams } from 'react-router-dom';
+import { Routes, Route, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { useAuth } from './AuthContext';
 import { Login } from './components/Login';
@@ -52,8 +52,9 @@ function LoadingScreen() {
 
 /** Handles /join/:referralCode route — stores referral in sessionStorage for post-signup processing */
 function ReferralLandingPage() {
+  const { referralCode } = useParams<{ referralCode: string }>();
   const [searchParams] = useSearchParams();
-  const ref = searchParams.get('ref');
+  const ref = searchParams.get('ref') || referralCode;
   if (ref) sessionStorage.setItem('bsc_referral', ref);
   return <Login />;
 }
