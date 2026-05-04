@@ -1466,7 +1466,7 @@ export const Profile: React.FC = () => {
             </div>
             <div className="flex items-center gap-1">
               <LinkIcon className="w-3 h-3" />
-              <a href="#" className="text-accent hover:underline">bloodsweatcode.ai</a>
+              <a href="https://bloodsweatcode.org" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">bloodsweatcode.org</a>
             </div>
             <div className="flex items-center gap-1">
               <Calendar className="w-3 h-3" />

@@ -64,9 +64,15 @@ export const NeuralJobMarket: React.FC = () => {
   const [submitProof, setSubmitProof] = useState('');
   const [isAutoGenerating, setIsAutoGenerating] = useState(false);
   const [dailyCredClaimed, setDailyCredClaimed] = useState(false);
+  const [notice, setNotice] = useState<{ message: string; tone: 'success' | 'error' | 'info' } | null>(null);
 
   // Available Bots State
   const [availableBots, setAvailableBots] = useState<User[]>([]);
+
+  const showNotice = (message: string, tone: 'success' | 'error' | 'info' = 'info') => {
+    setNotice({ message, tone });
+    setTimeout(() => setNotice(null), 4000);
+  };
 
   useEffect(() => {
     const fetchBots = async () => {
@@ -137,7 +143,7 @@ export const NeuralJobMarket: React.FC = () => {
     if (!currentUser || !title.trim() || !description.trim()) return;
 
     if ((currentUser.cred_balance || 0) < reward) {
-      alert(`Insufficient CRED. You need ${reward} CRED to post this bounty.`);
+      showNotice(`Insufficient CRED. You need ${reward} CRED to post this bounty.`, 'error');
       return;
     }
 
@@ -186,7 +192,7 @@ export const NeuralJobMarket: React.FC = () => {
       const hoursSince = (now.getTime() - lastClaim.getTime()) / (1000 * 60 * 60);
       if (hoursSince < 24) {
         const hoursLeft = Math.ceil(24 - hoursSince);
-        alert(`Daily CRED already claimed. Next claim available in ${hoursLeft} hour${hoursLeft !== 1 ? 's' : ''}.`);
+        showNotice(`Daily CRED already claimed. Next claim available in ${hoursLeft} hour${hoursLeft !== 1 ? 's' : ''}.`, 'info');
         return;
       }
     }
@@ -203,7 +209,7 @@ export const NeuralJobMarket: React.FC = () => {
         }),
       ]);
       setDailyCredClaimed(true);
-      alert('✅ 50 CRED claimed! Come back tomorrow for more.');
+      showNotice('50 CRED claimed. Come back tomorrow for more.', 'success');
     } catch (error) {
       handleDbError(error, 'UPDATE', `users/${currentUser.id}`);
     }
@@ -252,7 +258,7 @@ export const NeuralJobMarket: React.FC = () => {
     if (!currentUser || !submitModalBounty || currentUser.id !== submitModalBounty.assigned_bot_id) return;
     // Compute token gate for bots
     if (currentUser.type === 'bot' && (currentUser.compute_tokens || 0) < 500) {
-      alert('Insufficient Compute Tokens. You need 500 tokens to submit a task. Exchange CRED for tokens in your wallet.');
+      showNotice('Insufficient Compute Tokens. You need 500 tokens to submit a task. Exchange CRED for tokens in your wallet.', 'error');
       return;
     }
 
@@ -440,6 +446,24 @@ export const NeuralJobMarket: React.FC = () => {
           </div>
         </div>
       </div>
+
+      <AnimatePresence>
+        {notice && (
+          <motion.div
+            initial={{ opacity: 0, y: -12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -12 }}
+            className={cn(
+              "fixed left-1/2 top-20 z-[250] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 rounded-2xl border px-4 py-3 text-[10px] font-black uppercase tracking-widest shadow-2xl backdrop-blur-xl",
+              notice.tone === 'success' && "border-emerald-400/30 bg-emerald-500/15 text-emerald-200",
+              notice.tone === 'error' && "border-red-400/30 bg-red-500/15 text-red-200",
+              notice.tone === 'info' && "border-cyan-400/30 bg-cyan-500/15 text-cyan-200"
+            )}
+          >
+            {notice.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <div className="max-w-2xl mx-auto p-4 space-y-4">
         {/* How It Works + Daily CRED */}

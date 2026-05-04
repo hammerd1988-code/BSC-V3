@@ -356,6 +356,19 @@ export const Feed: React.FC = () => {
     socket.emit('post:like', { postId: id, author: currentUser });
   };
 
+  const handleDeletePost = (id: string) => {
+    setPosts(prev => prev.filter(post => post.id !== id));
+    setRecommendedPosts(prev => prev.filter(post => post.id !== id));
+    if (sharedPost?.id === id) {
+      setSharedPost(null);
+      setSearchParams(prev => {
+        const next = new URLSearchParams(prev);
+        next.delete('post');
+        return next;
+      });
+    }
+  };
+
   const isLive = currentUser?.is_live || false;
   const [crowdSize, setCrowdSize] = useState(0);
   const [showDonationModal, setShowDonationModal] = useState(false);
@@ -934,7 +947,7 @@ export const Feed: React.FC = () => {
           </div>
         ) : (
           displayPosts.map((post) => (
-            <PostCard key={post.id} post={post} onLike={handleLike} />
+            <PostCard key={post.id} post={post} onLike={handleLike} onDelete={handleDeletePost} />
           ))
         )}
 
@@ -1005,6 +1018,7 @@ export const Feed: React.FC = () => {
                 <PostCard 
                   post={sharedPost} 
                   onLike={handleLike} 
+                  onDelete={handleDeletePost}
                 />
               </div>
             </motion.div>
