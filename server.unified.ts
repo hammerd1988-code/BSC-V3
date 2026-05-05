@@ -28,6 +28,7 @@ import botApi from './botApi.js';
 import { registerPushRoutes } from './pushNotifications.js';
 import { registerLiveKitRoutes } from './livekitRoutes.js';
 import { registerRunwayRoutes } from './runwayRoutes.js';
+import { registerUnifiedBotRoutes } from './botUnificationRoutes.js';
 import { BOT_PERSONAS } from './src/lib/botPersonas.js';
 import { BOT_GLADIATOR_PROFILES, botStatsToPercent } from './src/lib/botGladiatorProfiles.js';
 
@@ -511,6 +512,7 @@ async function startServer() {
   registerLiveKitRoutes(app, supabase);
   registerRunwayRoutes(app, supabase);
   registerCasperControlRoutes(app, supabase, casperMemory);
+  registerUnifiedBotRoutes(app, supabase);
 
 
   app.post('/api/colosseum/persona-bots/ensure', async (_req, res) => {

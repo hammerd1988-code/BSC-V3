@@ -35,7 +35,8 @@ import {
   Target,
   Users,
   Swords,
-  Shield
+  Shield,
+  Crown
 } from 'lucide-react';
 import { User, Post, Bounty, Faction, FactionMember, SkillManifestItem } from '../types';
 import { PostCard } from './PostCard';
@@ -43,6 +44,7 @@ import { cn } from '../lib/utils';
 import { generateProfileDesign } from './Feed';
 import { socket } from '../lib/socket';
 import { BOT_PERSONAS, getBotByUsername } from '../lib/botPersonas';
+import { BOT_GLADIATOR_PROFILE_BY_USERNAME } from '../lib/botGladiatorProfiles';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
@@ -66,6 +68,20 @@ interface ProfileGladiator {
   wins?: number | null;
   losses?: number | null;
   model?: string | null;
+}
+
+interface PlatformBotRosterItem {
+  id: string;
+  username: string;
+  displayName: string;
+  avatarUrl: string;
+  bio: string;
+  gladiatorId?: string | null;
+  gladiatorClass: string;
+  difficulty: string;
+  wins: number;
+  losses: number;
+  glowColor: string;
 }
 
 interface ProfileFactionMembership extends FactionMember {
@@ -118,6 +134,7 @@ export const Profile: React.FC = () => {
   const [posts, setPosts] = useState<Post[]>([]);
   const [bounties, setBounties] = useState<Bounty[]>([]);
   const [botRoster, setBotRoster] = useState<ProfileGladiator[]>([]);
+  const [platformBotRoster, setPlatformBotRoster] = useState<PlatformBotRosterItem[]>([]);
   const [profileFactions, setProfileFactions] = useState<ProfileFactionMembership[]>([]);
   const [activeTab, setActiveTab] = useState<'posts' | 'media' | 'likes' | 'neural_history' | 'friends' | 'performance'>('posts');
   const [isGeneratingAvatar, setIsGeneratingAvatar] = useState(false);
@@ -378,6 +395,72 @@ export const Profile: React.FC = () => {
     const channel = supabase
       .channel(`profile-gladiators-${user.id}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiators', filter: `user_id=eq.${user.id}` }, () => void fetchBotRoster())
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [user?.id, user?.type]);
+
+  useEffect(() => {
+    if (!user || user.type !== 'human') {
+      setPlatformBotRoster([]);
+      return;
+    }
+
+    const fetchPlatformBotRoster = async () => {
+      const usernames = BOT_PERSONAS.map((persona) => persona.username);
+      const { data: botUsers } = await supabase
+        .from('users')
+        .select('id,username,display_name,avatar_url,bio,custom_accent')
+        .in('username', usernames);
+      const botUsersByUsername = new Map((botUsers ?? []).map((bot: any) => [String(bot.username), bot]));
+
+      const botUserIds = (botUsers ?? []).map((bot: any) => String(bot.id));
+      const [
+        { data: profileRows, error: profileError },
+        { data: gladiatorRows, error: gladiatorError },
+      ] = await Promise.all([
+        supabase.from('bot_gladiator_profiles').select('*').in('persona_username', usernames),
+        botUserIds.length
+          ? supabase.from('gladiators').select('id,user_id,name,avatar_url,glow_color,wins,losses').in('user_id', botUserIds)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+
+      if (profileError && profileError.code !== '42P01') {
+        console.warn('[Profile] Failed to load platform bot profiles', profileError.message);
+      }
+      if (gladiatorError) {
+        console.warn('[Profile] Failed to load platform bot gladiators', gladiatorError.message);
+      }
+
+      const profileByUsername = new Map((profileRows ?? []).map((profile: any) => [String(profile.persona_username), profile]));
+      const gladiatorByUserId = new Map((gladiatorRows ?? []).map((gladiator: any) => [String(gladiator.user_id), gladiator]));
+      const roster = BOT_PERSONAS.map((persona) => {
+        const seed = BOT_GLADIATOR_PROFILE_BY_USERNAME[persona.username];
+        const profile = profileByUsername.get(persona.username) as any;
+        const botUser = botUsersByUsername.get(persona.username) as any;
+        const gladiator = botUser ? gladiatorByUserId.get(String(botUser.id)) as any : null;
+        return {
+          id: botUser?.id ?? `bot-${persona.username}`,
+          username: persona.username,
+          displayName: botUser?.display_name ?? persona.display_name,
+          avatarUrl: botUser?.avatar_url ?? `https://picsum.photos/seed/${persona.avatar_seed}/400/400`,
+          bio: botUser?.bio ?? persona.bio,
+          gladiatorId: gladiator?.id ?? profile?.gladiator_id ?? null,
+          gladiatorClass: profile?.gladiator_class ?? seed?.gladiator_class ?? 'Platform Gladiator',
+          difficulty: profile?.difficulty ?? seed?.difficulty ?? 'Bronze',
+          wins: Number(gladiator?.wins ?? 0),
+          losses: Number(gladiator?.losses ?? 0),
+          glowColor: gladiator?.glow_color ?? botUser?.custom_accent ?? persona.accent_color,
+        };
+      });
+      setPlatformBotRoster(roster);
+    };
+
+    void fetchPlatformBotRoster();
+    const channel = supabase
+      .channel('profile-platform-bot-roster')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiators' }, () => void fetchPlatformBotRoster())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bot_gladiator_profiles' }, () => void fetchPlatformBotRoster())
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
@@ -1406,6 +1489,56 @@ export const Profile: React.FC = () => {
                   </section>
                 )}
 
+                {user.type === 'human' && (
+                  <section className="rounded-3xl border border-cyan-300/20 bg-cyan-950/10 p-4 shadow-[0_0_28px_rgba(34,211,238,0.08)]">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <Crown className="w-4 h-4 text-cyan-200" />
+                        <div>
+                          <h3 className="text-[10px] font-black uppercase tracking-[0.28em] text-white">Platform Gladiator Bots</h3>
+                          <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-cyan-200/70">Persona bots can socialize, fight, and brag after Colosseum matches.</p>
+                        </div>
+                      </div>
+                      <Link to="/colosseum" className="shrink-0 text-[9px] font-black uppercase tracking-widest text-cyan-200 hover:text-white">Challenge</Link>
+                    </div>
+                    {platformBotRoster.length === 0 ? (
+                      <div className="rounded-2xl border border-dashed border-cyan-300/15 bg-black/25 p-5 text-center">
+                        <Bot className="mx-auto mb-3 h-9 w-9 text-cyan-200/40" />
+                        <p className="text-xs font-black uppercase tracking-widest text-cyan-100/60">Platform bot roster is seeding</p>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        {platformBotRoster.slice(0, 6).map((bot) => (
+                          <Link
+                            key={bot.username}
+                            to={bot.gladiatorId ? `/colosseum?gladiator=${bot.gladiatorId}` : `/profile/${bot.username}`}
+                            className="group relative overflow-hidden rounded-2xl border border-cyan-300/15 bg-black/30 p-3 transition hover:border-cyan-300/40"
+                            style={{ boxShadow: `0 0 22px ${bot.glowColor}22` }}
+                          >
+                            <div className="absolute inset-0 opacity-0 transition group-hover:opacity-100" style={{ background: `radial-gradient(circle at top right, ${bot.glowColor}22, transparent 48%)` }} />
+                            <div className="relative z-10 flex gap-3">
+                              <img src={bot.avatarUrl} alt={bot.displayName} className="h-12 w-12 rounded-2xl border object-cover" style={{ borderColor: bot.glowColor }} />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center justify-between gap-2">
+                                  <h4 className="truncate text-sm font-black text-white">{bot.displayName}</h4>
+                                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[8px] font-black uppercase tracking-widest text-cyan-100">{bot.difficulty}</span>
+                                </div>
+                                <p className="mt-1 truncate text-[9px] font-bold uppercase tracking-widest text-cyan-200/70">{bot.gladiatorClass}</p>
+                                <p className="mt-2 line-clamp-2 text-[10px] leading-4 text-gray-500">{bot.bio}</p>
+                                <div className="mt-2 flex items-center gap-2 text-[9px] font-black uppercase tracking-widest">
+                                  <span className="text-green-300">{bot.wins}W</span>
+                                  <span className="text-gray-700">/</span>
+                                  <span className="text-red-300">{bot.losses}L</span>
+                                </div>
+                              </div>
+                            </div>
+                          </Link>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                )}
+
                 {profileLayout !== 'minimal' && user.type === 'human' && (
                   <ContributionHeatmap userId={user.id} accentColor={profileColor} compact={profileLayout === 'developer'} />
                 )}
@@ -1466,7 +1599,7 @@ export const Profile: React.FC = () => {
             </div>
             <div className="flex items-center gap-1">
               <LinkIcon className="w-3 h-3" />
-              <a href="#" className="text-accent hover:underline">bloodsweatcode.ai</a>
+              <a href="https://bloodsweatcode.org" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">bloodsweatcode.org</a>
             </div>
             <div className="flex items-center gap-1">
               <Calendar className="w-3 h-3" />

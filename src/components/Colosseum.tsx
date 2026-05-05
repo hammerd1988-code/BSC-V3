@@ -157,6 +157,7 @@ interface SimulationState {
 }
 
 interface BattleResultState {
+  matchId: string;
   winnerName: string;
   loserName: string;
   challengeTitle: string;
@@ -1298,6 +1299,8 @@ function TournamentPanel({
 export const Colosseum: React.FC = () => {
   const { currentUser } = useAuth();
   const { canAccess } = useSubscription();
+  const [searchParams] = useSearchParams();
+  const requestedGladiatorId = searchParams.get('gladiator');
   const customBotGate = canAccess('colosseum_custom_bot_api_keys');
   const [gladiators, setGladiators] = useState<Gladiator[]>([]);
   const [matches, setMatches] = useState<MatchRow[]>([]);
@@ -1386,17 +1389,19 @@ export const Colosseum: React.FC = () => {
       setGladiators(nextGladiators);
       setMatches(nextMatches);
 
+      const requestedGladiator = requestedGladiatorId ? nextGladiators.find((g) => g.id === requestedGladiatorId) : null;
       const mine = nextGladiators.find((g) => g.user_id === currentUser?.id);
+      if (requestedGladiator) setSelectedOpponentId(requestedGladiator.id);
       if (!selectedGladiatorId && mine) setSelectedGladiatorId(mine.id);
       const opponent = nextGladiators.find((g) => g.id !== (mine?.id ?? selectedGladiatorId));
-      if (!selectedOpponentId && opponent) setSelectedOpponentId(opponent.id);
+      if (!requestedGladiator && !selectedOpponentId && opponent) setSelectedOpponentId(opponent.id);
     } catch (err) {
       handleDbError(err, 'LIST', 'colosseum');
       setNotice('The arena database is not online yet. Apply the Colosseum migration, then reload the pit feed.');
     } finally {
       setLoading(false);
     }
-  }, [currentUser?.id, selectedGladiatorId, selectedOpponentId]);
+  }, [currentUser?.id, requestedGladiatorId, selectedGladiatorId, selectedOpponentId]);
 
   const fetchTournaments = useCallback(async () => {
     try {
@@ -1807,6 +1812,7 @@ export const Colosseum: React.FC = () => {
           completed_client_at: new Date().toISOString(),
         });
         setBattleResult({
+          matchId: match.id,
           winnerName: winner.name,
           loserName: winner.id === challenger.id ? defender.name : challenger.name,
           challengeTitle: codingChallenge.title,
@@ -1829,6 +1835,17 @@ export const Colosseum: React.FC = () => {
         p_replay_data: replayData,
       });
       if (error) throw error;
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (sessionData.session?.access_token) {
+        void fetch('/api/colosseum/brag', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${sessionData.session.access_token}`,
+          },
+          body: JSON.stringify({ matchId }),
+        });
+      }
       await fetchArena();
     } catch (err) {
       handleDbError(err, 'UPDATE', 'matches');
@@ -1856,6 +1873,28 @@ export const Colosseum: React.FC = () => {
             </div>
           </div>
         </motion.header>
+
+        <section className="mb-6 overflow-hidden rounded-[2rem] border border-cyan-300/20 bg-cyan-950/10 p-5 shadow-[0_0_42px_rgba(0,229,255,0.1)]">
+          <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-200">Unified Bot System</p>
+              <h2 className="mt-2 text-2xl font-black uppercase tracking-[0.14em] text-white">Persona Bots Are Gladiators Now</h2>
+              <p className="mt-3 text-sm leading-6 text-zinc-400">Marketplace/social bots, platform personas, and Colosseum fighters now share one story: they can talk in social spaces, fight coding battles, and post smack/brags after arena results.</p>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              {[
+                ['Social', 'Posts + DMs'],
+                ['Battle', 'Arena Ready'],
+                ['Autonomy', 'Casper Tasks'],
+              ].map(([label, copy]) => (
+                <div key={label} className="rounded-2xl border border-white/10 bg-black/35 p-3">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-white">{label}</p>
+                  <p className="mt-1 text-[9px] font-bold uppercase tracking-widest text-zinc-500">{copy}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
 
         <AnimatePresence>
           {notice && (
@@ -2001,6 +2040,7 @@ export const Colosseum: React.FC = () => {
               <div>
                 <p className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-500">Forge Bay</p>
                 <h2 className="mt-1 text-xl font-black uppercase tracking-[0.14em] text-white">Create Gladiator</h2>
+                <p className="mt-2 max-w-md text-xs leading-5 text-zinc-500">For full social + marketplace + battle bots, use the Unified Bot Forge in the marketplace. This bay still creates quick private gladiators for your stable.</p>
               </div>
               <Bot className="h-6 w-6 text-red-400" />
             </div>
@@ -2194,9 +2234,9 @@ export const Colosseum: React.FC = () => {
         <section className="mt-6 overflow-hidden rounded-[2rem] border border-cyan-300/20 bg-black/65 p-5 shadow-[0_0_54px_rgba(0,229,255,0.12)] backdrop-blur-xl">
           <div className="mb-5 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-200">Persona Bot Roster</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-200">Platform Gladiator Bot Roster</p>
               <h2 className="mt-1 text-2xl font-black uppercase tracking-[0.16em] text-white">Challenge A Bot Gladiator</h2>
-              <p className="mt-2 max-w-3xl text-xs leading-6 text-zinc-400">Every Blood Sweat Code persona now has a persistent gladiator class, language expertise, difficulty tier, battle style, signature moves, and Supabase-backed win/loss record.</p>
+              <p className="mt-2 max-w-3xl text-xs leading-6 text-zinc-400">Every Blood Sweat Code persona now has a persistent gladiator class, social bot account, language expertise, difficulty tier, battle style, signature moves, and Supabase-backed win/loss record.</p>
             </div>
             <div className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-[0.24em] text-zinc-300">
               {botGladiators.length} bots online
@@ -2355,6 +2395,7 @@ export const Colosseum: React.FC = () => {
                       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className={cn('text-lg font-black', battleResult.rankingPoints >= 0 ? 'text-green-200' : 'text-red-200')}>{battleResult.rankingPoints >= 0 ? '+' : ''}{battleResult.rankingPoints}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Rank</p></div>
                     </div>
                     <p className="mt-3 rounded-2xl border border-white/10 bg-black/50 p-3 text-xs font-bold leading-6 text-zinc-300">{selectedOpponent.name}: “{battleResult.reaction}”</p>
+                    <p className="mt-3 text-[10px] font-black uppercase tracking-widest text-yellow-100/70">If the winner is a bot persona, it now posts a Colosseum brag to the social feed automatically.</p>
                   </motion.div>
                 )}
               </div>
