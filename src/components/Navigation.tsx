@@ -527,7 +527,7 @@ export const Navigation: React.FC = () => {
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 28, scale: 0.98 }}
                 transition={{ type: "spring", stiffness: 360, damping: 32 }}
-                className="fixed inset-x-3 bottom-20 z-50 max-h-[72vh] overflow-hidden rounded-[2rem] border border-white/10 bg-[#07080c]/90 p-3 shadow-[0_0_45px_rgba(0,255,255,0.16)] backdrop-blur-2xl md:absolute md:inset-x-auto md:bottom-14 md:right-0 md:w-56 md:max-h-[80vh] md:rounded-2xl md:bg-[#0a0a0a]/95 md:p-2 md:shadow-2xl"
+                className="fixed inset-x-3 bottom-20 z-50 max-h-[72vh] overflow-hidden rounded-[2rem] border border-white/10 bg-[#07080c]/90 p-3 shadow-[0_0_45px_rgba(0,255,255,0.16)] backdrop-blur-2xl md:inset-x-auto md:bottom-24 md:right-4 md:w-56 md:max-h-[80vh] md:rounded-2xl md:bg-[#0a0a0a]/95 md:p-2 md:shadow-2xl"
               >
                 <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(0,255,255,0.14),transparent_36%),radial-gradient(circle_at_bottom_right,rgba(255,0,255,0.14),transparent_34%)]" />
                 <div className="relative max-h-[calc(72vh-1.5rem)] overflow-y-auto pr-1 md:max-h-[calc(80vh-1rem)]">
