@@ -385,7 +385,7 @@ async function runDueRoutines(supabase: SupabaseClient, casperMemory: any, trigg
     const { data: routines, error } = await supabase
       .from('casper_routines')
       .select('*')
-      .eq('is_enabled', true)
+      .eq('enabled', true)
       .or(`next_run_at.is.null,next_run_at.lte.${now}`)
       .order('next_run_at', { ascending: true, nullsFirst: true })
       .limit(8);
@@ -425,7 +425,7 @@ async function runtimeStatus(supabase: SupabaseClient) {
   const [tasks, recentActions, routines, skills, integrations] = await Promise.all([
     supabase.from('casper_tasks').select('status', { count: 'exact', head: false }).in('status', ['pending', 'running', 'completed', 'failed']),
     supabase.from('casper_activity_log').select('id', { count: 'exact', head: true }).gte('created_at', since),
-    supabase.from('casper_routines').select('id', { count: 'exact', head: true }).eq('is_enabled', true),
+    supabase.from('casper_routines').select('id', { count: 'exact', head: true }).eq('enabled', true),
     supabase.from('casper_skills').select('id', { count: 'exact', head: true }).eq('is_enabled', true),
     supabase.from('casper_integrations').select('id', { count: 'exact', head: true }).eq('enabled', true).eq('status', 'connected'),
   ]);
@@ -444,9 +444,9 @@ async function runtimeStatus(supabase: SupabaseClient) {
       completed: taskRows.filter((task) => task.status === 'completed').length,
       failed,
     },
-    active_routines: routines.count ?? 0,
-    active_skills: skills.count ?? 0,
-    active_integrations: integrations.count ?? 0,
+    active_routines: routines.error ? 0 : routines.count ?? 0,
+    active_skills: skills.error ? 0 : skills.count ?? 0,
+    active_integrations: integrations.error ? 0 : integrations.count ?? 0,
     scheduler: routineRunnerStarted ? 'online' : 'standby',
     updated_at: new Date().toISOString(),
   };

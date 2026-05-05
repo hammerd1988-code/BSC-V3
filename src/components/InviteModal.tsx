@@ -20,7 +20,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({ userId, username, onCl
   const [stats, setStats] = useState<ReferralStats>({ total: 0, credEarned: 0 });
   const [phoneNumber, setPhoneNumber] = useState('');
 
-  const inviteUrl = `${window.location.origin}/join?ref=${username}`;
+  const inviteUrl = `${window.location.origin}/join/${encodeURIComponent(username)}`;
   const inviteText = `Join me on Blood, Sweat, or Code — the cyberpunk social network for builders and creators. Use my invite link and we both get bonus CRED: ${inviteUrl}`;
 
   useEffect(() => {

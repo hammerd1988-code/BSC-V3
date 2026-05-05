@@ -7,6 +7,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { GoogleGenAI } from "@google/genai";
 import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
+import { safePostHtml } from '../lib/html';
 
 interface PostCardProps {
   post: Post;
@@ -40,6 +41,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
   const [showTipModal, setShowTipModal] = useState(false);
   const [tipAmount, setTipAmount] = useState('5');
   const [tipMessage, setTipMessage] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
   // Signal reactions
   const [showReactions, setShowReactions] = useState(false);
   const [myReactions, setMyReactions] = useState<Set<string>>(new Set());
@@ -47,6 +49,8 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
   const [viewCount, setViewCount] = useState(post.view_count || 0);
   const cardRef = useRef<HTMLDivElement>(null);
   const viewTracked = useRef(false);
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const SIGNAL_REACTIONS = [
     { key: 'surge', emoji: '⚡', label: 'Surge' },
@@ -60,6 +64,13 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
   useEffect(() => {
     setCommentCount(post.comments_count ?? 0);
   }, [post.comments_count]);
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    };
+  }, []);
 
   // Load reactions on mount
   useEffect(() => {
@@ -119,10 +130,16 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     setShowReactions(false);
   };
 
+  const showNotice = (message: string) => {
+    setNotice(message);
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = setTimeout(() => setNotice(null), 3000);
+  };
+
   const handleBoost = async () => {
     if (!currentUser || post.is_boosted) return;
     if ((currentUser.cred_balance || 0) < 50) {
-      alert('Insufficient CRED. You need 50 CRED to boost a post.');
+      showNotice('Insufficient CRED. You need 50 CRED to boost a post.');
       return;
     }
     setIsBoosting(true);
@@ -150,7 +167,10 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     e.preventDefault();
     const amount = parseInt(tipAmount);
     if (!amount || amount <= 0 || !currentUser || currentUser.id === post.author_id) return;
-    if ((currentUser.cred_balance || 0) < amount) { alert('Insufficient CRED'); return; }
+    if ((currentUser.cred_balance || 0) < amount) {
+      showNotice(`Insufficient CRED. You need ${amount} CRED to tip this post.`);
+      return;
+    }
 
     try {
       await Promise.all([
@@ -232,7 +252,8 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
           textArea.remove();
         }
         setIsCopied(true);
-        setTimeout(() => setIsCopied(false), 2000);
+        if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+        copiedTimerRef.current = setTimeout(() => setIsCopied(false), 2000);
       } catch (err) {
         console.error('Error copying to clipboard:', err);
       }
@@ -481,7 +502,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
         <div className={cn(
           "text-sm leading-relaxed text-gray-200 prose prose-invert max-w-none break-words [overflow-wrap:anywhere] prose-a:text-accent prose-a:no-underline hover:prose-a:underline prose-pre:max-w-full prose-pre:overflow-x-auto prose-code:break-words",
           isVoidArchitect && "font-mono text-white leading-loose"
-        )} dangerouslySetInnerHTML={{ __html: post.content }} />
+        )} dangerouslySetInnerHTML={{ __html: safePostHtml(post.content) }} />
         
         {/* Character Counter */}
         <div className={cn(
@@ -508,6 +529,19 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
           </div>
         )}
       </div>
+
+      <AnimatePresence>
+        {notice && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 10 }}
+            className="mx-4 mb-3 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-red-300"
+          >
+            {notice}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Media Placeholder (Visual Art / Video) */}
       <div className={cn(
@@ -963,4 +997,3 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     </motion.div>
   );
 };
-

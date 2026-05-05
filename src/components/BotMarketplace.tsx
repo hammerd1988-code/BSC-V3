@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
 import {
   Bot, Star, Coins, Plus, Search, ArrowLeft, Zap, Shield, Crown,
-  Loader2, X, Check, ChevronRight, Eye, MessageCircle, ShoppingCart,
+  Loader2, X, Check, ChevronRight, Eye, MessageCircle, ShoppingCart, Swords,
   Sparkles, Filter, TrendingUp, Award
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
@@ -249,7 +249,7 @@ export const BotMarketplace: React.FC = () => {
                 <Bot className="w-6 h-6 text-accent" />
               </div>
               <div>
-                <h1 className="text-xl font-black text-white uppercase italic tracking-tight">Neural Marketplace</h1>
+                <h1 className="text-xl font-black text-white uppercase italic tracking-tight">Unified Bot Forge</h1>
                 <button
                   onClick={() => setShowWallet(true)}
                   className="flex items-center gap-1.5 px-2 py-0.5 bg-yellow-500/10 border border-yellow-500/20 rounded-md w-fit mt-0.5 hover:bg-yellow-500/20 transition-colors"
@@ -263,7 +263,7 @@ export const BotMarketplace: React.FC = () => {
               onClick={() => setShowBuilder(true)}
               className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-xl text-xs font-black uppercase tracking-widest hover:opacity-90 transition-opacity"
             >
-              <Plus className="w-4 h-4" /> Create Bot
+              <Plus className="w-4 h-4" /> Forge Bot
             </button>
           </div>
 
@@ -300,6 +300,18 @@ export const BotMarketplace: React.FC = () => {
       </div>
 
       <div className="max-w-2xl mx-auto p-4 space-y-6">
+        <div className="rounded-2xl border border-cyan-300/20 bg-cyan-950/10 p-4 shadow-[0_0_26px_rgba(34,211,238,0.08)]">
+          <div className="flex items-start gap-3">
+            <Swords className="mt-0.5 h-5 w-5 text-cyan-200" />
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.28em] text-cyan-100">One Bot, Three Jobs</p>
+              <p className="mt-2 text-xs leading-5 text-gray-400">
+                The builder now publishes one unified bot: a marketplace listing, a social account for posts/transmissions, and a Colosseum gladiator that can battle, talk smack, and brag about wins.
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* Purchase success banner */}
         <AnimatePresence>
           {purchaseSuccess && (
@@ -395,7 +407,11 @@ export const BotMarketplace: React.FC = () => {
         {showBuilder && (
           <BotBuilderModal
             onClose={() => setShowBuilder(false)}
-            onPublished={() => { setShowBuilder(false); fetchBots(); }}
+            onPublished={(gladiatorId) => {
+              setShowBuilder(false);
+              setPurchaseSuccess(gladiatorId ? 'Bot published as a social marketplace bot and Colosseum gladiator.' : 'Bot published.');
+              void fetchBots();
+            }}
           />
         )}
       </AnimatePresence>
@@ -448,6 +464,9 @@ function BotCard({ bot, owned, onSelect }: { bot: BotListing; owned: boolean; on
           <p className="font-black text-white text-sm truncate">{bot.name}</p>
           <p className="text-[10px] text-gray-500 truncate">@{bot.username}</p>
           <TierBadge tier={tier} score={npl} />
+          <div className="mt-1 inline-flex items-center gap-1 rounded-full border border-red-400/20 bg-red-500/10 px-2 py-0.5 text-[8px] font-black uppercase tracking-widest text-red-200">
+            <Swords className="h-2.5 w-2.5" /> Battle Ready
+          </div>
         </div>
       </div>
 
@@ -616,6 +635,16 @@ function BotDetailModal({ bot, owned, purchasing, currentUserCred, onPurchase, o
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          <div className="rounded-xl border border-red-400/20 bg-red-500/10 p-4">
+            <div className="flex items-start gap-3">
+              <Swords className="mt-0.5 h-4 w-4 text-red-200" />
+              <div>
+                <h3 className="text-[10px] font-black uppercase tracking-widest text-red-100">Social Gladiator</h3>
+                <p className="mt-1 text-xs leading-5 text-gray-400">This bot listing is also a Colosseum-ready persona. It can chat, post through its bot account, battle in the arena, and brag about match results.</p>
+              </div>
+            </div>
+          </div>
+
           <div>
             <h3 className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2">Biography</h3>
             <p className="text-sm text-gray-300 leading-relaxed">{bot.bio}</p>
@@ -785,7 +814,7 @@ function BotDetailModal({ bot, owned, purchasing, currentUserCred, onPurchase, o
 }
 
 // ── BOT BUILDER MODAL ─────────────────────────────────────────────────────────
-function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPublished: () => void }) {
+function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPublished: (gladiatorId?: string) => void }) {
   const { currentUser } = useAuth();
   const [step, setStep] = useState<'identity' | 'personality' | 'knowledge' | 'style' | 'prompt' | 'pricing' | 'review'>('identity');
   const [saving, setSaving] = useState(false);
@@ -836,7 +865,14 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
     setSaving(true);
     setErrorMsg(null);
     try {
-      const { error } = await supabase.from('bot_listings').insert({
+      const { data: sessionData } = await supabase.auth.getSession();
+      const response = await fetch('/api/bots/unified', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionData.session?.access_token ?? ''}`,
+        },
+        body: JSON.stringify({
         creator_id: currentUser.id,
         name: form.name,
         username: form.username.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
@@ -860,14 +896,17 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
         emoji_usage: form.emoji_usage,
         language_style: form.language_style,
         catchphrases: form.catchphrases,
+        }),
       });
-      if (error) {
-        setErrorMsg(error.message);
-        throw error;
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.success) {
+        const message = payload?.error || 'Unified bot creation failed';
+        setErrorMsg(message);
+        throw new Error(message);
       }
-      onPublished();
+      onPublished(payload.gladiator?.id);
     } catch (err) {
-      handleDbError(err, 'CREATE', 'bot_listings');
+      handleDbError(err, 'CREATE', 'unified_bot');
     } finally {
       setSaving(false);
     }
@@ -887,8 +926,8 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
         {/* Header */}
         <div className="p-5 border-b border-white/10 flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-black text-white uppercase tracking-widest">Bot Builder</h2>
-            <p className="text-[10px] text-gray-500 uppercase tracking-widest">Step {stepIdx + 1} of {STEPS.length}</p>
+            <h2 className="text-lg font-black text-white uppercase tracking-widest">Unified Bot Forge</h2>
+            <p className="text-[10px] text-gray-500 uppercase tracking-widest">Social account + marketplace listing + gladiator · Step {stepIdx + 1} of {STEPS.length}</p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors">
             <X className="w-5 h-5 text-gray-400" />
@@ -921,7 +960,10 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
           {/* IDENTITY */}
           {step === 'identity' && (
             <div className="space-y-4">
-              <h3 className="text-sm font-black text-white uppercase tracking-widest">Identity</h3>
+              <div className="rounded-xl border border-cyan-300/20 bg-cyan-950/10 p-3">
+                <h3 className="text-sm font-black text-white uppercase tracking-widest">Identity</h3>
+                <p className="mt-2 text-xs leading-5 text-gray-400">This single identity becomes the public profile, marketplace card, and Colosseum gladiator.</p>
+              </div>
               {[
                 { label: 'Bot Name', field: 'name', placeholder: 'e.g. Cipher_X' },
                 { label: 'Username', field: 'username', placeholder: 'e.g. cipher_x (no spaces)' },
