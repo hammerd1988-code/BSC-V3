@@ -1,9 +1,8 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { generateServerText, isServerAiConfigured } from './serverAi.js';
 
 const PLATFORM_DEFAULT_MODEL = process.env.CASPER_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
-const OPENAI_COMPATIBLE_BASE_URL = (process.env.OPENAI_BASE_URL || process.env.VITE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
-const COMMAND_TIMEOUT_MS = 45_000;
 const ROUTINE_POLL_INTERVAL_MS = Number(process.env.CASPER_ROUTINE_POLL_INTERVAL_MS || 60_000);
 
 let routineRunnerStarted = false;
@@ -156,12 +155,11 @@ Return concise Markdown with these sections when useful: Result, Actions Taken, 
 }
 
 async function callOpenAICompatible(input: { prompt: string; systemPrompt: string; cognitiveCore: Record<string, any> }) {
-  const apiKey = process.env.OPENAI_API_KEY || process.env.VITE_AI_API_KEY || process.env.GEMINI_API_KEY;
-  if (!apiKey) {
+  if (!isServerAiConfigured()) {
     return {
       provider: 'local-fallback',
       model: 'rule-based-control-plane',
-      text: `## Result\nCasper accepted and analyzed the directive, but no platform AI key is configured on the server.\n\n## Actions Taken\nThe command was persisted as a real Casper task and logged to the activity stream.\n\n## Follow-Up\nConfigure OPENAI_API_KEY, VITE_AI_API_KEY, or another OpenAI-compatible provider variable to enable full neural execution for this directive.\n\n## Directive\n${input.prompt}`,
+      text: `## Result\nCasper accepted and analyzed the directive, but no platform AI key is configured on the server.\n\n## Actions Taken\nThe command was persisted as a real Casper task and logged to the activity stream.\n\n## Follow-Up\nConfigure GEMINI_API_KEY or OPENAI_API_KEY to enable full neural execution for this directive.\n\n## Directive\n${input.prompt}`,
     };
   }
 
@@ -169,45 +167,18 @@ async function callOpenAICompatible(input: { prompt: string; systemPrompt: strin
   const model = responseStyle.model || PLATFORM_DEFAULT_MODEL;
   const temperature = Number(responseStyle.temperature ?? 0.55);
   const maxTokens = Number(responseStyle.max_tokens ?? 900);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), COMMAND_TIMEOUT_MS);
+  const execution = await generateServerText(input.prompt, {
+    systemPrompt: input.systemPrompt,
+    preferredModel: model,
+    temperature,
+    maxTokens,
+  });
 
-  try {
-    const response = await fetch(`${OPENAI_COMPATIBLE_BASE_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: input.systemPrompt },
-          { role: 'user', content: input.prompt },
-        ],
-        temperature,
-        max_tokens: maxTokens,
-      }),
-      signal: controller.signal,
-    });
-
-    const rawText = await response.text();
-    let payload: any = rawText;
-    try { payload = JSON.parse(rawText); } catch { /* tolerate text-only providers */ }
-
-    if (!response.ok) {
-      const detail = typeof payload === 'string' ? payload : JSON.stringify(payload);
-      throw new Error(`AI provider returned ${response.status}: ${detail.slice(0, 500)}`);
-    }
-
-    const text = payload?.choices?.[0]?.message?.content
-      ?? payload?.choices?.[0]?.text
-      ?? (typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2));
-
-    return { provider: OPENAI_COMPATIBLE_BASE_URL, model, text: String(text || 'Casper returned an empty response.') };
-  } finally {
-    clearTimeout(timeout);
-  }
+  return {
+    provider: execution.provider,
+    model: execution.model,
+    text: execution.text || 'Casper returned an empty response.',
+  };
 }
 
 async function logActivity(supabase: SupabaseClient, input: {
