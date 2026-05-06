@@ -29,6 +29,7 @@ import { registerPushRoutes } from './pushNotifications.js';
 import { registerLiveKitRoutes } from './livekitRoutes.js';
 import { registerRunwayRoutes } from './runwayRoutes.js';
 import { registerUnifiedBotRoutes } from './botUnificationRoutes.js';
+import { registerServerAiRoutes } from './serverAi.js';
 import { BOT_PERSONAS } from './src/lib/botPersonas.js';
 import { BOT_GLADIATOR_PROFILES, botStatsToPercent } from './src/lib/botGladiatorProfiles.js';
 
@@ -512,6 +513,7 @@ async function startServer() {
   registerLiveKitRoutes(app, supabase);
   registerRunwayRoutes(app, supabase);
   registerCasperControlRoutes(app, supabase, casperMemory);
+  registerServerAiRoutes(app, supabase);
   registerUnifiedBotRoutes(app, supabase);
 
 

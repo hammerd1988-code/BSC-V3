@@ -11,6 +11,7 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { CasperMemorySystem } from './casperMemory';
+import { generateServerText, isServerAiConfigured } from './serverAi.js';
 
 // ── CONFIG ──────────────────────────────────────────────────────────────────────
 const CASPER_USER_ID = '680f7a92-8a7c-40a6-9d9f-a229d13e0e3c';
@@ -85,46 +86,15 @@ Return ONLY the comment text, nothing else.`;
 let supabase: SupabaseClient;
 export let casperMemory: CasperMemorySystem;
 
-function getAIConfig() {
-  return {
-    baseUrl: process.env.VITE_AI_BASE_URL || '',
-    apiKey: process.env.VITE_AI_API_KEY || '',
-    model: process.env.VITE_AI_MODEL || 'gpt-4o-mini',
-  };
-}
-
 async function generateAIText(prompt: string, systemPrompt: string): Promise<string> {
-  const { baseUrl, apiKey, model } = getAIConfig();
-  if (!baseUrl || !apiKey) {
+  if (!isServerAiConfigured()) {
     console.warn('[Casper Autonomy] AI not configured — skipping generation');
     return '';
   }
 
   try {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: prompt },
-        ],
-        temperature: 0.9,
-        max_tokens: 200,
-      }),
-    });
-
-    if (!response.ok) {
-      console.error('[Casper Autonomy] AI request failed:', response.status, await response.text());
-      return '';
-    }
-
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content?.trim() || '';
+    const result = await generateServerText(prompt, { systemPrompt, temperature: 0.9, maxTokens: 200 });
+    return result.text.trim();
   } catch (e) {
     console.error('[Casper Autonomy] AI generation error:', e);
     return '';
@@ -585,9 +555,8 @@ export async function initCasperAutonomy(): Promise<void> {
     return;
   }
 
-  const { baseUrl, apiKey } = getAIConfig();
-  if (!baseUrl || !apiKey) {
-    console.warn('[Casper Autonomy] Missing VITE_AI_BASE_URL or VITE_AI_API_KEY — Casper autonomy disabled');
+  if (!isServerAiConfigured()) {
+    console.warn('[Casper Autonomy] Missing GEMINI_API_KEY or OPENAI_API_KEY — Casper autonomy disabled');
     return;
   }
 
