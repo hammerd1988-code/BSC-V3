@@ -4,9 +4,16 @@ import { generateServerText, isServerAiConfigured } from './serverAi.js';
 
 const PLATFORM_DEFAULT_MODEL = process.env.CASPER_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const ROUTINE_POLL_INTERVAL_MS = Number(process.env.CASPER_ROUTINE_POLL_INTERVAL_MS || 60_000);
+const TASK_QUEUE_POLL_INTERVAL_MS = Number(process.env.CASPER_TASK_QUEUE_POLL_INTERVAL_MS || 30_000);
+const TASK_QUEUE_BATCH_SIZE = Math.max(1, Math.min(12, Number(process.env.CASPER_TASK_QUEUE_BATCH_SIZE || 4)));
+const TASK_QUEUE_STALE_RUNNING_MS = Math.max(60_000, Number(process.env.CASPER_TASK_QUEUE_STALE_RUNNING_MS || 15 * 60_000));
 
 let routineRunnerStarted = false;
 let routineRunnerBusy = false;
+let taskQueueRunnerStarted = false;
+let taskQueueBusy = false;
+let taskQueueLastRunAt: string | null = null;
+let taskQueueLastExecuted = 0;
 
 type CasperProfile = {
   id: string;
@@ -292,6 +299,78 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
   }
 }
 
+async function claimPendingTask(supabase: SupabaseClient, trigger: 'manual' | 'interval') {
+  const staleBefore = new Date(Date.now() - TASK_QUEUE_STALE_RUNNING_MS).toISOString();
+  const { data: candidates, error } = await supabase
+    .from('casper_tasks')
+    .select('*')
+    .in('status', ['pending', 'running'])
+    .or(`status.eq.pending,and(status.eq.running,started_at.lt.${staleBefore})`)
+    .order('created_at', { ascending: true })
+    .limit(24);
+
+  if (error) throw error;
+  const priorityRank: Record<string, number> = { urgent: 4, high: 3, medium: 2, low: 1 };
+  const task = (candidates ?? []).sort((a, b) => (priorityRank[b.priority] ?? 0) - (priorityRank[a.priority] ?? 0))[0];
+  if (!task) return null;
+
+  const startedAt = new Date().toISOString();
+  let claimQuery = supabase
+    .from('casper_tasks')
+    .update({
+      status: 'running',
+      progress: 15,
+      started_at: startedAt,
+      metadata: { ...(task.metadata ?? {}), queue_claimed_at: startedAt, queue_trigger: trigger },
+    })
+    .eq('id', task.id);
+
+  if (task.status === 'running') {
+    claimQuery = claimQuery.eq('status', 'running').lt('started_at', staleBefore);
+  } else {
+    claimQuery = claimQuery.eq('status', 'pending');
+  }
+
+  const { data: claimed, error: claimError } = await claimQuery.select('*').maybeSingle();
+
+  if (claimError) throw claimError;
+  return claimed ?? null;
+}
+
+async function runTaskQueue(supabase: SupabaseClient, casperMemory: any, trigger: 'manual' | 'interval' = 'manual') {
+  if (taskQueueBusy) return { executed: 0, skipped: true, results: [] as any[] };
+  taskQueueBusy = true;
+  taskQueueLastRunAt = new Date().toISOString();
+
+  try {
+    const results: any[] = [];
+    for (let i = 0; i < TASK_QUEUE_BATCH_SIZE; i += 1) {
+      const task = await claimPendingTask(supabase, trigger);
+      if (!task) break;
+
+      const command = [task.title, task.description].filter(Boolean).join('\n\n');
+      const execution = await executeCasperCommand(supabase, casperMemory, {
+        command,
+        source: 'task',
+        userId: task.created_by,
+        taskId: task.id,
+        metadata: {
+          ...(task.metadata ?? {}),
+          queue_trigger: trigger,
+          queue_batch_index: i,
+          queued_task_type: task.task_type ?? 'mission',
+        },
+      });
+      results.push({ taskId: execution.taskId, provider: execution.provider, model: execution.model });
+    }
+
+    taskQueueLastExecuted = results.length;
+    return { executed: results.length, skipped: false, results };
+  } finally {
+    taskQueueBusy = false;
+  }
+}
+
 function parseTimeParts(value?: string | null) {
   const [hourRaw, minuteRaw] = String(value || '09:00').split(':');
   return { hour: Math.max(0, Math.min(23, Number(hourRaw) || 0)), minute: Math.max(0, Math.min(59, Number(minuteRaw) || 0)) };
@@ -421,6 +500,11 @@ async function runtimeStatus(supabase: SupabaseClient) {
     active_skills: skills.error ? 0 : skills.count ?? 0,
     active_integrations: integrations.error ? 0 : integrations.count ?? 0,
     scheduler: routineRunnerStarted ? 'online' : 'standby',
+    queue_worker: taskQueueRunnerStarted ? 'online' : 'standby',
+    queue_busy: taskQueueBusy,
+    queue_last_run_at: taskQueueLastRunAt,
+    queue_last_executed: taskQueueLastExecuted,
+    queue_batch_size: TASK_QUEUE_BATCH_SIZE,
     updated_at: new Date().toISOString(),
   };
 }
@@ -508,6 +592,18 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
     }
   });
 
+  app.post('/api/casper/tasks/run-queue', async (req, res) => {
+    try {
+      const profile = await resolveProfileFromRequest(req, supabase);
+      if (!requireAdmin(profile, res)) return;
+      const result = await runTaskQueue(supabase, casperMemory, 'manual');
+      res.json({ success: true, ...result });
+    } catch (error: any) {
+      console.error('[casper-control:task-queue-run]', error);
+      res.status(500).json({ success: false, error: error.message || 'Unable to run Casper task queue.' });
+    }
+  });
+
   if (!routineRunnerStarted && ROUTINE_POLL_INTERVAL_MS > 0) {
     routineRunnerStarted = true;
     setInterval(() => {
@@ -515,5 +611,14 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
         console.error('[casper-control:routine-runner]', error);
       });
     }, ROUTINE_POLL_INTERVAL_MS).unref?.();
+  }
+
+  if (!taskQueueRunnerStarted && TASK_QUEUE_POLL_INTERVAL_MS > 0) {
+    taskQueueRunnerStarted = true;
+    setInterval(() => {
+      runTaskQueue(supabase, casperMemory, 'interval').catch((error) => {
+        console.error('[casper-control:task-queue-runner]', error);
+      });
+    }, TASK_QUEUE_POLL_INTERVAL_MS).unref?.();
   }
 }
