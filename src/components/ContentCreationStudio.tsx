@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Film, Image as ImageIcon, Loader2, Play, Send, Sparkles, Wand2, CalendarClock, Layers, Upload, RefreshCw, Scissors, PanelTop, Zap } from 'lucide-react';
 import { getRunwayTask, requestRunwayGeneration, type RunwayTaskResponse } from '../lib/runway';
-import { supabase } from '../supabase';
+import { supabase, toDb } from '../supabase';
 import { useAuth } from '../AuthContext';
 import { cn } from '../lib/utils';
 import { useSubscription, type PremiumFeature } from '../lib/subscription';
@@ -68,7 +68,7 @@ function getAssetUrl(result: RunwayTaskResponse): string | null {
 
 export function ContentCreationStudio() {
   const { currentUser } = useAuth();
-  const { canAccess, recordUsage, usageMeters } = useSubscription();
+  const { canAccess, recordUsage, refresh, usageMeters } = useSubscription();
   const [mode, setMode] = useState<StudioMode>('image');
   const [assets, setAssets] = useState<StudioAsset[]>(() => loadAssets());
   const [selectedAssetId, setSelectedAssetId] = useState<string>('');
@@ -120,7 +120,14 @@ export function ContentCreationStudio() {
     setStatus(null);
     try {
       const fullPrompt = `${prompt}\nStyle preset: ${imagePreset}. Guidance strength: ${guidance}/100. Aspect ratio target: ${ratio}.`;
-      const initial = await requestRunwayGeneration({ prompt: fullPrompt, type: 'image', aspectRatio: safeRunwayRatio(ratio), ratio: safeRunwayRatio(ratio), resolution: '1080p' });
+      const initial = await requestRunwayGeneration({
+        prompt: fullPrompt,
+        type: 'image',
+        feature: asThumbnailBg ? 'thumbnail_generation' : 'ai_image_generation',
+        aspectRatio: safeRunwayRatio(ratio),
+        ratio: safeRunwayRatio(ratio),
+        resolution: '1080p',
+      });
       const result = await pollRunwayTask(initial, setProgress);
       if (result.status === 'FAILED') throw new Error('Runway image generation failed.');
       const url = getAssetUrl(result);
@@ -128,7 +135,7 @@ export function ContentCreationStudio() {
       if (asThumbnailBg) setThumbnailBg(url);
       const asset: StudioAsset = { id: crypto.randomUUID(), type: asThumbnailBg ? 'thumbnail' : 'image', url, prompt: fullPrompt, ratio, createdAt: new Date().toISOString() };
       addAsset(asset);
-      await recordUsage(asThumbnailBg ? 'thumbnail_generation' : 'ai_image_generation');
+      await refresh();
       setStatus(asThumbnailBg ? 'AI background added to thumbnail creator.' : 'Image generated and saved to studio history.');
     } catch (err: any) {
       setStatus(err?.message || 'Image generation failed.');
@@ -145,13 +152,13 @@ export function ContentCreationStudio() {
     setStatus(null);
     try {
       const fullPrompt = `${prompt}\nVideo preset: ${videoPreset}. Duration: ${duration}s. Format: ${videoRatio}. Cinematic movement, crisp contrast, premium creator-platform polish.`;
-      const initial = await requestRunwayGeneration({ prompt: fullPrompt, type: 'video', duration, aspectRatio: videoRatio, ratio: videoRatio, resolution: '720p' });
+      const initial = await requestRunwayGeneration({ prompt: fullPrompt, type: 'video', feature: 'ai_video_generation', duration, aspectRatio: videoRatio, ratio: videoRatio, resolution: '720p' });
       const result = await pollRunwayTask(initial, setProgress);
       if (result.status === 'FAILED') throw new Error('Runway video generation failed.');
       const url = getAssetUrl(result);
       if (!url) throw new Error('Runway returned no video URL.');
       addAsset({ id: crypto.randomUUID(), type: 'video', url, prompt: fullPrompt, ratio: videoRatio, createdAt: new Date().toISOString() });
-      await recordUsage('ai_video_generation');
+      await refresh();
       setStatus('Video generated and ready for short, project, or download actions.');
     } catch (err: any) {
       setStatus(err?.message || 'Video generation failed.');
@@ -220,16 +227,17 @@ export function ContentCreationStudio() {
   const scheduleAsset = async () => {
     if (!currentUser || !selectedAsset || !scheduleAt) return;
     try {
-      await supabase.from('scheduled_content').insert({
-        user_id: currentUser.id,
+      const { error } = await supabase.from('scheduled_content').insert(toDb({
+        userId: currentUser.id,
         title: thumbnailTitle || 'Scheduled Visual Forge Asset',
         body: composer.trim() || selectedAsset.prompt,
-        content_type: selectedAsset.type === 'video' ? 'short' : 'post',
+        contentType: selectedAsset.type === 'video' ? 'short' : 'post',
         status: 'scheduled',
-        scheduled_at: new Date(scheduleAt).toISOString(),
-        thumbnail_url: selectedAsset.type === 'image' || selectedAsset.type === 'thumbnail' ? selectedAsset.url : thumbnailBg || null,
+        scheduledFor: new Date(scheduleAt).toISOString(),
+        thumbnailUrl: selectedAsset.type === 'image' || selectedAsset.type === 'thumbnail' ? selectedAsset.url : thumbnailBg || null,
         metadata: { asset_url: selectedAsset.url, asset_type: selectedAsset.type, source: 'content_creation_studio' },
-      });
+      }));
+      if (error) throw error;
       setStatus('Scheduled content added to Casper operations queue.');
     } catch (err: any) {
       setStatus(err?.message || 'Scheduling failed.');
