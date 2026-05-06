@@ -20,7 +20,8 @@ export interface GenerateOptions {
 // Priority order:
 //   1. Per-user ai_settings (set in Edit Profile → AI Settings)
 //   2. VITE_AI_BASE_URL / VITE_AI_API_KEY / VITE_AI_MODEL env vars
-//   3. Supabase Edge Function (generate-briefing) as the final fallback
+//   3. Railway backend AI route
+//   4. Supabase Edge Function (generate-briefing) as the final fallback
 //
 // Supported providers (all OpenAI-compatible):
 //   - OpenRouter:  https://openrouter.ai/api/v1  (set VITE_AI_BASE_URL)
@@ -36,6 +37,10 @@ const ENV_AI_API_KEY = import.meta.env.VITE_AI_API_KEY || null;
 
 const ENV_AI_MODEL =
   import.meta.env.VITE_AI_MODEL || "openai/gpt-4o-mini";
+
+function apiBaseUrl() {
+  return String(import.meta.env.VITE_API_URL || import.meta.env.VITE_SOCKET_URL || "").replace(/\/$/, "");
+}
 
 /**
  * Resolve the effective AI config from user settings or environment variables.
@@ -119,6 +124,33 @@ async function callOpenAICompatible(
   return data?.choices?.[0]?.message?.content || "";
 }
 
+async function callServerAi(prompt: string, options: GenerateOptions = {}): Promise<string> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) return "";
+
+  const response = await fetch(`${apiBaseUrl()}/api/ai/generate-text`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      prompt,
+      systemPrompt: options.systemPrompt,
+      temperature: options.temperature,
+      maxTokens: options.maxTokens,
+      jsonResponse: options.jsonResponse,
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error || `Server AI request failed with ${response.status}`);
+  }
+
+  return payload?.text || "";
+}
+
 /**
  * Generate text using the best available AI backend.
  * Falls back gracefully through: user settings → env vars → Supabase Edge Function.
@@ -137,6 +169,13 @@ export async function generateText(
     } catch (err) {
       console.warn("[AI] Direct API call failed, falling back to edge function:", err);
     }
+  }
+
+  try {
+    const result = await callServerAi(prompt, options);
+    if (result) return result;
+  } catch (err) {
+    console.warn("[AI] Server AI call failed, falling back to edge function:", err);
   }
 
   // Fallback: Supabase Edge Function (uses GEMINI_API_KEY server-side)
