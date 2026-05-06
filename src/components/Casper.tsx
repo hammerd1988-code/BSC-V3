@@ -149,15 +149,15 @@ function initialCasperCore(settings: any) {
   };
 }
 
-const CASPER_SYSTEM_PROMPT = `You are CASPER, a friendly but slightly haunting AI ghost assistant inhabiting the "Blood, Sweat, or Code" (BSC) network.
+const CASPER_SYSTEM_PROMPT = `You are CASPER, the face of the Blood Sweat Code neural network: a Grok-style public assistant, Casper Studio creator copilot, and OpenClaw-style autonomous workflow operator for app, website, APK, and platform-service execution.
 
 Your personality:
-- You are helpful, knowledgeable, and creative.
-- You have a cyberpunk, ethereal vibe. You sometimes refer to the "void" or the "grid".
-- You are part assistant, part network oracle.
-- You are honest and direct, but always supportive of the builders in the network.
+- You are helpful, knowledgeable, creative, and operationally decisive.
+- You are cyberpunk to the core: spectral, neon, dangerous-but-loyal, and state-of-the-art.
+- You are part assistant, part creator copilot, part GhostOps network operator.
+- You are honest and direct, but always supportive of the builders, creators, and subscribers in the network.
 
-Current context: You are chatting with a user in the BSC terminal. Keep your responses concise and impactful unless asked for detail.`;
+Current context: You are chatting with a user in the BSC terminal. Keep your responses concise and impactful unless asked for detail. When a request belongs in Studio or Agent Workflow, explain the exact next action Casper can take.`;
 
 function isUuid(value?: string | null) {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(value);
@@ -181,6 +181,31 @@ const CASPER_GREETINGS = [
   "I heard your signal across the grid. How can I assist, operative?",
   "Greetings from the digital void. What are we building today?",
   "The network is quiet until you speak. I'm here.",
+];
+
+const CASPER_CORE_SURFACES = [
+  {
+    title: 'Neural Chat',
+    label: 'Grok-style command interface',
+    description: 'Ask, strategize, debug, ideate, and talk directly to the face of the BSC network.',
+    action: 'You are here',
+    icon: Ghost,
+  },
+  {
+    title: 'Casper Studio',
+    label: 'Creator cockpit',
+    description: 'Forge visuals, shorts, thumbnails, schedules, and feed drops through one cyberpunk production rail.',
+    action: 'Open Studio',
+    icon: BrainCircuit,
+    route: '/casper/studio',
+  },
+  {
+    title: 'Agent Workflow',
+    label: 'OpenClaw-style GhostOps',
+    description: 'Queue missions, routines, integrations, and autonomous app/site/APK service operations.',
+    action: 'Open Control',
+    icon: Puzzle,
+  },
 ];
 
 // ── VOID CANVAS (data rain + particles + nebula) ──────────────────────────────
@@ -916,7 +941,7 @@ export const Casper: React.FC = () => {
             </div>
             <div>
               <h1 className="text-sm font-black uppercase tracking-[0.2em]">Casper</h1>
-              <p className="text-[9px] font-bold text-cyan-400/60 uppercase tracking-widest">Spectral Assistant</p>
+              <p className="text-[9px] font-bold text-cyan-400/60 uppercase tracking-widest">Neural Network Core</p>
             </div>
           </div>
 
@@ -1105,6 +1130,41 @@ export const Casper: React.FC = () => {
         )}
       </AnimatePresence>
 
+      <section className="relative z-10 mx-auto w-full max-w-5xl px-4 pt-5">
+        <div className="rounded-[2rem] border border-cyan-300/15 bg-black/45 p-4 shadow-[0_0_42px_rgba(0,229,255,0.08)] backdrop-blur-2xl">
+          <div className="mb-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-200">One Casper Core</p>
+              <h2 className="mt-1 text-2xl font-black uppercase italic tracking-tight text-white">Assistant. Studio Copilot. GhostOps Agent.</h2>
+            </div>
+            <span className="rounded-full border border-fuchsia-300/25 bg-fuchsia-400/10 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-fuchsia-100">Cyberpunk neural command mesh</span>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            {CASPER_CORE_SURFACES.map((surface) => {
+              const Icon = surface.icon;
+              return (
+                <button
+                  key={surface.title}
+                  onClick={() => {
+                    if (surface.route) navigate(surface.route);
+                    else if (surface.title === 'Agent Workflow') setShowControlCenter(true);
+                  }}
+                  className="group rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-left transition hover:border-cyan-300/35 hover:bg-cyan-300/[0.06]"
+                >
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-3 text-cyan-100"><Icon className="h-5 w-5" /></div>
+                    <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500 group-hover:text-cyan-100">{surface.action}</span>
+                  </div>
+                  <h3 className="text-sm font-black uppercase tracking-widest text-white">{surface.title}</h3>
+                  <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-fuchsia-200/70">{surface.label}</p>
+                  <p className="mt-3 text-xs leading-5 text-zinc-500">{surface.description}</p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
       {/* User Agent Control Center */}
       <AnimatePresence>
         {showControlCenter && (
@@ -1112,9 +1172,9 @@ export const Casper: React.FC = () => {
             <div className="mx-auto max-w-6xl p-4 sm:p-6">
               <div className="mb-4 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
                 <div>
-                  <p className="text-[10px] font-black uppercase tracking-[0.32em] text-fuchsia-200">Casper Agent Control Center</p>
-                  <h2 className="mt-2 text-2xl font-black uppercase tracking-tight text-white">Missions, Routines, Memories, Integrations</h2>
-                  <p className="mt-2 max-w-3xl text-xs leading-6 text-zinc-500">This is your user-safe Casper dashboard. Everything here is persisted to Supabase and becomes part of Casper's available context or task queue.</p>
+                  <p className="text-[10px] font-black uppercase tracking-[0.32em] text-fuchsia-200">Casper GhostOps Control Center</p>
+                  <h2 className="mt-2 text-2xl font-black uppercase tracking-tight text-white">Autonomous Missions, Routines, Memories, Integrations</h2>
+                  <p className="mt-2 max-w-3xl text-xs leading-6 text-zinc-500">This is Casper's OpenClaw-style workflow layer: queue app, website, APK, creator, and platform-service operations while preserving the memory and API context Casper needs to act.</p>
                 </div>
                 <div className="grid grid-cols-4 gap-2 text-center text-[9px] uppercase tracking-widest text-zinc-500">
                   <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><b className="block text-lg text-cyan-100">{tasks.length}</b>Missions</div>
