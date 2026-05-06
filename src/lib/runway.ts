@@ -7,6 +7,7 @@ export type RunwayAspectRatio = '16:9' | '9:16' | '1:1';
 export interface RunwayGenerateRequest {
   prompt: string;
   type: RunwayAssetType;
+  feature?: 'ai_image_generation' | 'ai_video_generation' | 'thumbnail_generation';
   duration?: 4 | 5 | 10;
   aspectRatio?: RunwayAspectRatio;
   ratio?: RunwayAspectRatio;
@@ -24,6 +25,11 @@ export interface RunwayTaskResponse {
   ratio?: RunwayAspectRatio;
   duration?: number;
   model?: string;
+  usage?: {
+    used: number;
+    limit: number | null;
+    tier: string;
+  };
   raw?: unknown;
 }
 

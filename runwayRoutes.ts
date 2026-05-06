@@ -4,12 +4,15 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 type RunwayGenerationType = 'image' | 'video';
 type RunwayVideoDuration = 4 | 5 | 10;
 type RunwayAspectRatio = '16:9' | '9:16' | '1:1';
+type SubscriptionTier = 'free' | 'pro' | 'infinity';
+type PremiumRunwayFeature = 'ai_image_generation' | 'ai_video_generation' | 'thumbnail_generation';
 
 type RunwayGenerateRequest = {
   prompt?: string;
   promptText?: string;
   promptImage?: string;
   type?: RunwayGenerationType;
+  feature?: PremiumRunwayFeature;
   duration?: RunwayVideoDuration | number | string;
   aspectRatio?: RunwayAspectRatio;
   ratio?: RunwayAspectRatio;
@@ -17,12 +20,33 @@ type RunwayGenerateRequest = {
   model?: string;
 };
 
+type FeatureAccess = {
+  userId: string;
+  feature: PremiumRunwayFeature;
+  tier: SubscriptionTier;
+  used: number;
+  limit: number | null;
+  periodStart: string;
+  periodEnd: string;
+  usageId: string | null;
+  allowed: boolean;
+  reason: 'tier' | 'limit' | null;
+};
+
 const RUNWAY_API_BASE_URL = 'https://api.dev.runwayml.com/v1';
 const RUNWAY_VERSION = '2024-11-06';
-const VIDEO_MODEL = 'gen3a_turbo';
+const VIDEO_MODEL = process.env.RUNWAY_VIDEO_MODEL || 'gen4.5';
 const IMAGE_MODEL = process.env.RUNWAY_IMAGE_MODEL || 'gen4_image';
 const VALID_RATIOS = new Set<RunwayAspectRatio>(['16:9', '9:16', '1:1']);
-const VALID_VIDEO_DURATIONS = new Set([4, 5, 10]);
+const TIER_RANK: Record<SubscriptionTier, number> = { free: 0, pro: 1, infinity: 2 };
+const RUNWAY_FEATURES: Record<PremiumRunwayFeature, {
+  requiredTier: SubscriptionTier;
+  limits: Partial<Record<SubscriptionTier, number | null>>;
+}> = {
+  ai_image_generation: { requiredTier: 'pro', limits: { free: 0, pro: 12, infinity: null } },
+  ai_video_generation: { requiredTier: 'pro', limits: { free: 0, pro: 4, infinity: null } },
+  thumbnail_generation: { requiredTier: 'pro', limits: { free: 0, pro: 20, infinity: null } },
+};
 
 function getBearerToken(req: Request): string | null {
   const header = req.headers.authorization;
@@ -35,6 +59,12 @@ function normalizeRatio(value: unknown): RunwayAspectRatio {
   return typeof value === 'string' && VALID_RATIOS.has(value as RunwayAspectRatio) ? value as RunwayAspectRatio : '16:9';
 }
 
+function normalizeVideoRatio(value: RunwayAspectRatio): '1280:720' | '720:1280' | '960:960' {
+  if (value === '9:16') return '720:1280';
+  if (value === '1:1') return '960:960';
+  return '1280:720';
+}
+
 function normalizeDuration(value: unknown): 5 | 10 {
   const numeric = typeof value === 'string' ? Number.parseInt(value, 10) : Number(value);
   if (numeric === 10) return 10;
@@ -45,6 +75,20 @@ function normalizeDuration(value: unknown): 5 | 10 {
 
 function normalizePrompt(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeFeature(type: RunwayGenerationType, value: unknown): PremiumRunwayFeature {
+  if (value === 'thumbnail_generation') return type === 'image' ? 'thumbnail_generation' : 'ai_video_generation';
+  if (value === 'ai_image_generation') return type === 'image' ? 'ai_image_generation' : 'ai_video_generation';
+  if (value === 'ai_video_generation') return type === 'video' ? 'ai_video_generation' : 'ai_image_generation';
+  return type === 'video' ? 'ai_video_generation' : 'ai_image_generation';
+}
+
+function currentUsagePeriod() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  return { start: start.toISOString(), end: end.toISOString() };
 }
 
 async function requireSupabaseUser(req: Request, res: Response, supabase: SupabaseClient) {
@@ -61,6 +105,91 @@ async function requireSupabaseUser(req: Request, res: Response, supabase: Supaba
   }
 
   return data.user;
+}
+
+async function resolveProfile(supabase: SupabaseClient, authUser: any) {
+  const select = 'id,subscription_tier,email,auth_uid';
+
+  const byAuthUid = await supabase.from('users').select(select).eq('auth_uid', authUser.id).maybeSingle();
+  if (byAuthUid.data) return byAuthUid.data;
+
+  const byId = await supabase.from('users').select(select).eq('id', authUser.id).maybeSingle();
+  if (byId.data) return byId.data;
+
+  if (authUser.email) {
+    const byEmail = await supabase.from('users').select(select).eq('email', authUser.email).maybeSingle();
+    if (byEmail.data) return byEmail.data;
+  }
+
+  return { id: authUser.id, subscription_tier: 'free' };
+}
+
+async function checkFeatureAccess(supabase: SupabaseClient, authUser: any, feature: PremiumRunwayFeature): Promise<FeatureAccess> {
+  const profile = await resolveProfile(supabase, authUser);
+  const userId = String(profile.id ?? authUser.id);
+  const fallbackTier = (profile.subscription_tier === 'pro' || profile.subscription_tier === 'infinity') ? profile.subscription_tier : 'free';
+  const { start, end } = currentUsagePeriod();
+  const [subscriptionRes, usageRes] = await Promise.all([
+    supabase
+      .from('subscriptions')
+      .select('tier')
+      .eq('user_id', userId)
+      .eq('status', 'active')
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from('feature_usage')
+      .select('id,usage_count')
+      .eq('user_id', userId)
+      .eq('feature', feature)
+      .eq('period_start', start)
+      .eq('period_end', end)
+      .maybeSingle(),
+  ]);
+
+  const tierValue = subscriptionRes.data?.tier ?? fallbackTier;
+  const tier: SubscriptionTier = tierValue === 'pro' || tierValue === 'infinity' ? tierValue : 'free';
+  const config = RUNWAY_FEATURES[feature];
+  const used = Number(usageRes.data?.usage_count ?? 0);
+  const limit = config.limits[tier];
+  const tierAllowed = TIER_RANK[tier] >= TIER_RANK[config.requiredTier];
+  const withinLimit = limit === null || limit === undefined || used < limit;
+
+  return {
+    userId,
+    feature,
+    tier,
+    used,
+    limit: limit ?? null,
+    periodStart: start,
+    periodEnd: end,
+    usageId: usageRes.data?.id ? String(usageRes.data.id) : null,
+    allowed: tierAllowed && withinLimit,
+    reason: !tierAllowed ? 'tier' : !withinLimit ? 'limit' : null,
+  };
+}
+
+async function recordFeatureUsage(supabase: SupabaseClient, access: FeatureAccess) {
+  if (access.usageId) {
+    await supabase.from('feature_usage').update({ usage_count: access.used + 1 }).eq('id', access.usageId);
+    return access.used + 1;
+  }
+
+  const { data, error } = await supabase
+    .from('feature_usage')
+    .insert({
+      user_id: access.userId,
+      feature: access.feature,
+      usage_count: 1,
+      period_start: access.periodStart,
+      period_end: access.periodEnd,
+    })
+    .select('usage_count')
+    .maybeSingle();
+
+  if (error) console.error('[Runway] feature usage record failed:', error);
+  return Number(data?.usage_count ?? access.used + 1);
 }
 
 async function callRunway(path: string, init: RequestInit) {
@@ -101,6 +230,8 @@ async function callRunway(path: string, init: RequestInit) {
 function extractOutputUrl(payload: any): string | null {
   const output = payload?.output;
   if (Array.isArray(output) && typeof output[0] === 'string') return output[0];
+  if (Array.isArray(output) && typeof output[0]?.url === 'string') return output[0].url;
+  if (Array.isArray(output) && typeof output[0]?.uri === 'string') return output[0].uri;
   if (typeof payload?.url === 'string') return payload.url;
   if (typeof payload?.assetUrl === 'string') return payload.assetUrl;
   return null;
@@ -117,14 +248,29 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
       const promptText = normalizePrompt(body.promptText ?? body.prompt);
       const promptImage = normalizePrompt(body.promptImage);
       const ratio = normalizeRatio(body.ratio ?? body.aspectRatio);
+      const videoRatio = normalizeVideoRatio(ratio);
       const duration = normalizeDuration(body.duration ?? 5);
+      const feature = normalizeFeature(type, body.feature);
 
       if (!promptText) {
         return res.status(400).json({ error: 'A prompt or promptText value is required.' });
       }
 
+      const access = await checkFeatureAccess(supabase, authUser, feature);
+      if (!access.allowed) {
+        return res.status(access.reason === 'tier' ? 402 : 429).json({
+          error: access.reason === 'tier'
+            ? 'This Visual Forge feature requires a Pro or Infinity subscription.'
+            : 'Monthly Visual Forge usage limit reached.',
+          feature,
+          tier: access.tier,
+          used: access.used,
+          limit: access.limit,
+        });
+      }
+
       const runwayPath = type === 'video'
-        ? (promptImage ? '/image_to_video' : '/text_to_video')
+        ? '/image_to_video'
         : '/text_to_image';
 
       const payload: Record<string, any> = type === 'video'
@@ -132,8 +278,7 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
             promptText,
             model: body.model || VIDEO_MODEL,
             duration,
-            ratio,
-            ...(promptImage ? { promptImage } : {}),
+            ratio: videoRatio,
           }
         : {
             promptText,
@@ -155,6 +300,8 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
         });
       }
 
+      const used = await recordFeatureUsage(supabase, access);
+
       return res.json({
         id: runway.payload?.id ?? runway.payload?.taskId ?? null,
         taskId: runway.payload?.id ?? runway.payload?.taskId ?? null,
@@ -163,9 +310,11 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
         assetUrl: extractOutputUrl(runway.payload),
         type,
         ratio,
+        feature,
+        usage: { used, limit: access.limit, tier: access.tier },
         duration: type === 'video' ? duration : undefined,
         model: payload.model,
-        userId: authUser.id,
+        userId: access.userId,
         raw: runway.payload,
       });
     } catch (error: any) {
