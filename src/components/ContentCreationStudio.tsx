@@ -277,9 +277,9 @@ export function ContentCreationStudio() {
         <header className="mb-6 rounded-[2rem] border border-white/10 bg-white/[0.04] p-6 shadow-2xl backdrop-blur-xl">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.36em] text-cyan-200">Casper Studio // Visual Forge</p>
-              <h1 className="mt-2 text-4xl font-black uppercase tracking-tight md:text-6xl">Create. Refine. Post.</h1>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-zinc-300">A unified production cockpit for AI images, AI videos, thumbnails, project staging, scheduling, and direct BSC publishing without leaving the studio.</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.36em] text-cyan-200">Casper Studio // Creator Copilot</p>
+              <h1 className="mt-2 text-4xl font-black uppercase italic tracking-tight md:text-6xl">Forge. Schedule. Drop.</h1>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-zinc-300">Casper's state-of-the-art creator cockpit: forge visuals and shorts, build thumbnails, stage campaigns, schedule drops, and publish to the BSC neural feed from one cyberpunk command deck.</p>
             </div>
             <div className="grid grid-cols-3 gap-2 rounded-3xl border border-white/10 bg-black/35 p-2">
               {(['image', 'video', 'thumbnail'] as StudioMode[]).map((item) => (
@@ -295,8 +295,8 @@ export function ContentCreationStudio() {
               <div className="mb-4 flex items-center gap-3">
                 <div className="rounded-2xl bg-cyan-300/10 p-3 text-cyan-200"><Wand2 className="h-5 w-5" /></div>
                 <div>
-                  <h2 className="text-sm font-black uppercase tracking-widest">Creation Core</h2>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Prompt, preset, ratio, guidance</p>
+                  <h2 className="text-sm font-black uppercase tracking-widest">Casper Creation Core</h2>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Prompt, preset, ratio, guidance, deployment</p>
                 </div>
               </div>
 
@@ -383,7 +383,7 @@ export function ContentCreationStudio() {
 
             <section className="grid gap-6 xl:grid-cols-[1fr_360px]">
               <div className="rounded-[2rem] border border-white/10 bg-zinc-950/70 p-5">
-                <div className="mb-4 flex items-center gap-3"><Zap className="h-5 w-5 text-cyan-200" /><h2 className="text-sm font-black uppercase tracking-widest">Unified Composer</h2></div>
+                <div className="mb-4 flex items-center gap-3"><Zap className="h-5 w-5 text-cyan-200" /><h2 className="text-sm font-black uppercase tracking-widest">Casper Unified Composer</h2></div>
                 <textarea value={composer} onChange={(e) => setComposer(e.target.value)} placeholder="Caption, post copy, project notes, or scheduled content body..." className="min-h-36 w-full resize-y rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm leading-6 text-white outline-none focus:border-cyan-300" />
                 <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto_auto]">
                   <input value={scheduleAt} onChange={(e) => setScheduleAt(e.target.value)} type="datetime-local" className="rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-xs text-white outline-none focus:border-fuchsia-300" />
