@@ -4,9 +4,9 @@ import { generateServerText, isServerAiConfigured } from './serverAi.js';
 
 const PLATFORM_DEFAULT_MODEL = process.env.CASPER_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const ROUTINE_POLL_INTERVAL_MS = Number(process.env.CASPER_ROUTINE_POLL_INTERVAL_MS || 60_000);
-const TASK_QUEUE_POLL_INTERVAL_MS = Number(process.env.CASPER_TASK_QUEUE_POLL_INTERVAL_MS || 30_000);
-const TASK_QUEUE_BATCH_SIZE = Math.max(1, Math.min(12, Number(process.env.CASPER_TASK_QUEUE_BATCH_SIZE || 4)));
-const TASK_QUEUE_STALE_RUNNING_MS = Math.max(60_000, Number(process.env.CASPER_TASK_QUEUE_STALE_RUNNING_MS || 15 * 60_000));
+const TASK_QUEUE_POLL_INTERVAL_MS = Number(process.env.CASPER_TASK_QUEUE_POLL_INTERVAL_MS) || 30_000;
+const TASK_QUEUE_BATCH_SIZE = Math.max(1, Math.min(12, Number(process.env.CASPER_TASK_QUEUE_BATCH_SIZE) || 4));
+const TASK_QUEUE_STALE_RUNNING_MS = Math.max(60_000, Number(process.env.CASPER_TASK_QUEUE_STALE_RUNNING_MS) || 15 * 60_000);
 
 let routineRunnerStarted = false;
 let routineRunnerBusy = false;
@@ -344,28 +344,34 @@ async function runTaskQueue(supabase: SupabaseClient, casperMemory: any, trigger
 
   try {
     const results: any[] = [];
+    const failures: any[] = [];
     for (let i = 0; i < TASK_QUEUE_BATCH_SIZE; i += 1) {
       const task = await claimPendingTask(supabase, trigger);
       if (!task) break;
 
       const command = [task.title, task.description].filter(Boolean).join('\n\n');
-      const execution = await executeCasperCommand(supabase, casperMemory, {
-        command,
-        source: 'task',
-        userId: task.created_by,
-        taskId: task.id,
-        metadata: {
-          ...(task.metadata ?? {}),
-          queue_trigger: trigger,
-          queue_batch_index: i,
-          queued_task_type: task.task_type ?? 'mission',
-        },
-      });
-      results.push({ taskId: execution.taskId, provider: execution.provider, model: execution.model });
+      try {
+        const execution = await executeCasperCommand(supabase, casperMemory, {
+          command,
+          source: 'task',
+          userId: task.created_by,
+          taskId: task.id,
+          metadata: {
+            ...(task.metadata ?? {}),
+            queue_trigger: trigger,
+            queue_batch_index: i,
+            queued_task_type: task.task_type ?? 'mission',
+          },
+        });
+        results.push({ taskId: execution.taskId, provider: execution.provider, model: execution.model });
+      } catch (error: any) {
+        console.error('[casper-control:task-queue-item]', error);
+        failures.push({ taskId: task.id, error: error?.message || 'Casper task execution failed.' });
+      }
     }
 
     taskQueueLastExecuted = results.length;
-    return { executed: results.length, skipped: false, results };
+    return { executed: results.length, skipped: false, results, failures };
   } finally {
     taskQueueBusy = false;
   }
@@ -564,6 +570,24 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       if (!task) return res.status(404).json({ success: false, error: 'Task not found.' });
       if (profile.role !== 'admin' && String(task.created_by) !== profile.id) {
         return res.status(403).json({ success: false, error: 'You can only run your own Casper tasks.' });
+      }
+      const staleBefore = new Date(Date.now() - TASK_QUEUE_STALE_RUNNING_MS).toISOString();
+      const isStaleRunning = task.status === 'running' && task.started_at && task.started_at < staleBefore;
+      if (task.status === 'running' && !isStaleRunning) {
+        return res.status(409).json({ success: false, error: 'Task is already executing. Wait for completion or stale-recovery.' });
+      }
+      const claimGuard = supabase
+        .from('casper_tasks')
+        .update({ status: 'running', progress: 15, started_at: new Date().toISOString(), metadata: { ...(task.metadata ?? {}), manual_run_claimed_at: new Date().toISOString() } })
+        .eq('id', taskId);
+      const { data: claimed, error: claimError } = await (
+        isStaleRunning
+          ? claimGuard.eq('status', 'running').lt('started_at', staleBefore)
+          : claimGuard.in('status', ['pending', 'failed', 'completed'])
+      ).select('*').maybeSingle();
+      if (claimError) throw claimError;
+      if (!claimed) {
+        return res.status(409).json({ success: false, error: 'Task is already being executed by another worker.' });
       }
       const command = [task.title, task.description].filter(Boolean).join('\n\n');
       const execution = await executeCasperCommand(supabase, casperMemory, {
