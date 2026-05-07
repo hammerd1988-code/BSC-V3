@@ -124,6 +124,61 @@ function formatJsonBlock(value: unknown) {
   }
 }
 
+async function fetchNetworkSnapshot(supabase: SupabaseClient): Promise<string> {
+  try {
+    const now = new Date();
+    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    const [
+      usersTotal,
+      usersOnline,
+      postsWeek,
+      postsDay,
+      commentsDay,
+      recentPosts,
+      activeStreams,
+    ] = await Promise.all([
+      supabase.from('users').select('id', { count: 'exact', head: true }),
+      supabase.from('users').select('id', { count: 'exact', head: true }).eq('is_online', true),
+      supabase.from('posts').select('id', { count: 'exact', head: true }).gte('created_at', oneWeekAgo),
+      supabase.from('posts').select('id', { count: 'exact', head: true }).gte('created_at', oneDayAgo),
+      supabase.from('comments').select('id', { count: 'exact', head: true }).gte('created_at', oneDayAgo),
+      supabase.from('posts').select('id, content, author_id, likes, comments_count, created_at').order('created_at', { ascending: false }).limit(5),
+      supabase.from('streams').select('id, title, host_id, viewer_count, is_live').eq('is_live', true).limit(5),
+    ]);
+
+    const lines: string[] = ['## BSC Network Snapshot (live data)'];
+    lines.push(`- Total registered users: ${usersTotal.count ?? 'unknown'}`);
+    lines.push(`- Users currently online: ${usersOnline.count ?? 'unknown'}`);
+    lines.push(`- Posts in last 7 days: ${postsWeek.count ?? 'unknown'}`);
+    lines.push(`- Posts in last 24 hours: ${postsDay.count ?? 'unknown'}`);
+    lines.push(`- Comments in last 24 hours: ${commentsDay.count ?? 'unknown'}`);
+
+    if (activeStreams.data && activeStreams.data.length > 0) {
+      lines.push(`- Live streams active: ${activeStreams.data.length}`);
+      for (const s of activeStreams.data) {
+        lines.push(`  - "${(s.title || 'Untitled').slice(0, 80)}" (${s.viewer_count ?? 0} viewers)`);
+      }
+    } else {
+      lines.push('- Live streams active: 0');
+    }
+
+    if (recentPosts.data && recentPosts.data.length > 0) {
+      lines.push('\nRecent posts:');
+      for (const p of recentPosts.data) {
+        const preview = (p.content || '').slice(0, 100).replace(/\n/g, ' ');
+        lines.push(`- "${preview}" (${p.likes ?? 0} likes, ${p.comments_count ?? 0} comments)`);
+      }
+    }
+
+    return lines.join('\n');
+  } catch (error) {
+    console.warn('[casper-control] network snapshot unavailable:', error);
+    return 'BSC network snapshot unavailable.';
+  }
+}
+
 async function buildCasperSystemPrompt(supabase: SupabaseClient, casperMemory: any, userId?: string | null) {
   const core = await fetchCognitiveCore(supabase);
   let stateModifier = '';
@@ -138,7 +193,10 @@ async function buildCasperSystemPrompt(supabase: SupabaseClient, casperMemory: a
     console.warn('[casper-control] memory context unavailable:', error);
   }
 
-  const enabledIntegrations = await fetchEnabledIntegrations(supabase, userId);
+  const [enabledIntegrations, networkSnapshot] = await Promise.all([
+    fetchEnabledIntegrations(supabase, userId),
+    fetchNetworkSnapshot(supabase),
+  ]);
 
   return `You are Casper, the AI agent of Blood, Sweat, or Code (BSC) — a cyberpunk social/code/content platform at bloodsweatcode.org. "BSC" always means "Blood, Sweat, or Code" — never Binance Smart Chain or any other meaning. You are the Grok-style public assistant, Casper Studio creator copilot, and OpenClaw-style GhostOps workflow operator for app, website, APK, creator, and platform-service execution.
 
@@ -157,6 +215,8 @@ ${relevantMemories || 'No relevant memories returned.'}
 
 Enabled integration/API modules:
 ${formatIntegrationContext(enabledIntegrations)}
+
+${networkSnapshot}
 
 When an enabled integration is relevant, mention how Casper can use that module. Never expose API keys or secrets. If this endpoint cannot complete an external side effect directly, return the exact next action or queued task needed.
 
