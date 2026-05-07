@@ -199,7 +199,7 @@ export const BotMarketplace: React.FC = () => {
   const handlePurchase = async (bot: BotListing) => {
     if (!currentUser) return;
     if (ownedBotIds.has(bot.id)) { setPurchaseSuccess('You already own this bot!'); return; }
-    if ((currentUser.cred_balance || 0) < bot.price) {
+    if (currentUser.role !== 'admin' && (currentUser.cred_balance || 0) < bot.price) {
       setShowWallet(true);
       return;
     }
@@ -587,7 +587,8 @@ function BotDetailModal({ bot, owned, purchasing, currentUserCred, onPurchase, o
   const tier = bot.tier || 'basic';
   const npl = bot.npl_score || 0;
   const tierDef = TIER_DEFINITIONS[tier];
-  const canAfford = currentUserCred >= bot.price;
+  const { currentUser } = useAuth();
+  const canAfford = currentUser?.role === 'admin' || currentUserCred >= bot.price;
 
   const score = scoreBotPersona({
     name: bot.name, bio: bot.bio, system_prompt: bot.system_prompt,
