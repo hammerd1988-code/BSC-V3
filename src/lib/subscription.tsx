@@ -334,6 +334,8 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     return usage.find((row) => row.feature === feature)?.usage_count ?? 0;
   }, [usage]);
 
+  const isAdmin = currentUser?.role === 'admin';
+
   const canAccess = useCallback((feature: PremiumFeature): FeatureGateResult => {
     const config = FEATURE_CONFIG[feature];
     const used = getUsageForFeature(feature);
@@ -342,17 +344,17 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     const withinLimit = limit === null || limit === undefined ? true : used < limit;
 
     return {
-      allowed: tierAllowed && withinLimit,
+      allowed: isAdmin || (tierAllowed && withinLimit),
       feature,
       requiredTier: config.requiredTier,
-      reason: !tierAllowed ? 'tier' : !withinLimit ? 'limit' : undefined,
+      reason: isAdmin ? undefined : !tierAllowed ? 'tier' : !withinLimit ? 'limit' : undefined,
       limit: limit ?? null,
       used,
       remaining: limit === null || limit === undefined ? null : Math.max(0, limit - used),
       label: config.label,
       upgradeMessage: config.upgradeMessage,
     };
-  }, [getUsageForFeature, tier]);
+  }, [getUsageForFeature, tier, isAdmin]);
 
   const recordUsage = useCallback(async (feature: PremiumFeature, amount = 1) => {
     if (!currentUser?.id || amount <= 0) return;
