@@ -114,7 +114,7 @@ async function requireSupabaseUser(req: Request, res: Response, supabase: Supaba
 }
 
 async function resolveProfile(supabase: SupabaseClient, authUser: any) {
-  const select = 'id,subscription_tier,email,auth_uid';
+  const select = 'id,subscription_tier,email,auth_uid,role';
 
   const byAuthUid = await supabase.from('users').select(select).eq('auth_uid', authUser.id).maybeSingle();
   if (byAuthUid.data) return byAuthUid.data;
@@ -127,12 +127,13 @@ async function resolveProfile(supabase: SupabaseClient, authUser: any) {
     if (byEmail.data) return byEmail.data;
   }
 
-  return { id: authUser.id, subscription_tier: 'free' };
+  return { id: authUser.id, subscription_tier: 'free', role: 'user' };
 }
 
 async function checkFeatureAccess(supabase: SupabaseClient, authUser: any, feature: PremiumRunwayFeature): Promise<FeatureAccess> {
   const profile = await resolveProfile(supabase, authUser);
   const userId = String(profile.id ?? authUser.id);
+  const isAdmin = profile.role === 'admin';
   const fallbackTier = (profile.subscription_tier === 'pro' || profile.subscription_tier === 'infinity') ? profile.subscription_tier : 'free';
   const { start, end } = currentUsagePeriod();
   const [subscriptionRes, usageRes] = await Promise.all([
@@ -171,8 +172,8 @@ async function checkFeatureAccess(supabase: SupabaseClient, authUser: any, featu
     periodStart: start,
     periodEnd: end,
     usageId: usageRes.data?.id ? String(usageRes.data.id) : null,
-    allowed: tierAllowed && withinLimit,
-    reason: !tierAllowed ? 'tier' : !withinLimit ? 'limit' : null,
+    allowed: isAdmin || (tierAllowed && withinLimit),
+    reason: isAdmin ? null : !tierAllowed ? 'tier' : !withinLimit ? 'limit' : null,
   };
 }
 
