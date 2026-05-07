@@ -138,7 +138,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
 
   const handleBoost = async () => {
     if (!currentUser || post.is_boosted) return;
-    if ((currentUser.cred_balance || 0) < 50) {
+    if (currentUser.role !== 'admin' && (currentUser.cred_balance || 0) < 50) {
       showNotice('Insufficient CRED. You need 50 CRED to boost a post.');
       return;
     }
@@ -167,7 +167,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     e.preventDefault();
     const amount = parseInt(tipAmount);
     if (!amount || amount <= 0 || !currentUser || currentUser.id === post.author_id) return;
-    if ((currentUser.cred_balance || 0) < amount) {
+    if (currentUser.role !== 'admin' && (currentUser.cred_balance || 0) < amount) {
       showNotice(`Insufficient CRED. You need ${amount} CRED to tip this post.`);
       return;
     }
@@ -984,7 +984,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
                 </div>
                 <button
                   type="submit"
-                  disabled={!tipAmount || parseInt(tipAmount) <= 0 || (currentUser?.cred_balance || 0) < parseInt(tipAmount)}
+                  disabled={!tipAmount || parseInt(tipAmount) <= 0 || (currentUser?.role !== 'admin' && (currentUser?.cred_balance || 0) < parseInt(tipAmount))}
                   className="w-full py-4 bg-yellow-500 text-black rounded-xl font-black uppercase tracking-widest hover:bg-yellow-400 transition-opacity disabled:opacity-50"
                 >
                   Send Tip
