@@ -656,8 +656,9 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
         return res.status(403).json({ success: false, error: 'You can only interact with your own Casper tasks.' });
       }
 
-      const previousResult = task.result || '(no previous result)';
-      const followupPrompt = `The operator is asking a follow-up question about a completed mission.\n\nOriginal mission: ${task.title}\nOriginal directive: ${task.description || '(none)'}\n\nPrevious Casper response:\n${previousResult}\n\nOperator follow-up question:\n${question.trim()}`;
+      const originalResult = (task.metadata as any)?.original_result ?? task.result ?? '(no previous result)';
+      const lastResult = task.result || originalResult;
+      const followupPrompt = `The operator is asking a follow-up question about a completed mission.\n\nOriginal mission: ${task.title}\nOriginal directive: ${task.description || '(none)'}\n\nOriginal Casper response:\n${originalResult}\n\nMost recent response:\n${lastResult}\n\nOperator follow-up question:\n${question.trim()}`;
 
       const cognitiveCore = await fetchCognitiveCore(supabase);
       const systemPrompt = await buildCasperSystemPrompt(supabase, casperMemory, profile.id);
@@ -670,7 +671,7 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
         .from('casper_tasks')
         .update({
           result: execution.text,
-          metadata: { ...(task.metadata ?? {}), followups: history, last_followup_at: new Date().toISOString() },
+          metadata: { ...(task.metadata ?? {}), original_result: (task.metadata as any)?.original_result ?? task.result, followups: history, last_followup_at: new Date().toISOString() },
         })
         .eq('id', taskId);
 
