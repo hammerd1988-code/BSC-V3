@@ -122,7 +122,7 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
 
   const handleExchange = async () => {
     const amount = parseInt(exchangeAmount);
-    if (isNaN(amount) || amount <= 0 || (user.cred_balance || 0) < amount) return;
+    if (isNaN(amount) || amount <= 0 || (user.role !== 'admin' && (user.cred_balance || 0) < amount)) return;
 
     setExchanging(true);
     try {
@@ -427,7 +427,7 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
                   </div>
                   <button
                     onClick={handleExchange}
-                    disabled={exchanging || !exchangeAmount || parseInt(exchangeAmount) <= 0 || (user.cred_balance || 0) < parseInt(exchangeAmount)}
+                    disabled={exchanging || !exchangeAmount || parseInt(exchangeAmount) <= 0 || (user.role !== 'admin' && (user.cred_balance || 0) < parseInt(exchangeAmount))}
                     className="px-6 py-2 bg-blue-500 hover:bg-blue-600 text-white font-bold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 h-[42px]"
                   >
                     {exchanging ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Exchange'}
