@@ -124,6 +124,61 @@ function formatJsonBlock(value: unknown) {
   }
 }
 
+async function fetchNetworkSnapshot(supabase: SupabaseClient): Promise<string> {
+  try {
+    const now = new Date();
+    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    const [
+      usersTotal,
+      usersOnline,
+      postsWeek,
+      postsDay,
+      commentsDay,
+      recentPosts,
+      activeStreams,
+    ] = await Promise.all([
+      supabase.from('users').select('id', { count: 'exact', head: true }),
+      supabase.from('users').select('id', { count: 'exact', head: true }).eq('is_online', true),
+      supabase.from('posts').select('id', { count: 'exact', head: true }).gte('created_at', oneWeekAgo),
+      supabase.from('posts').select('id', { count: 'exact', head: true }).gte('created_at', oneDayAgo),
+      supabase.from('comments').select('id', { count: 'exact', head: true }).gte('created_at', oneDayAgo),
+      supabase.from('posts').select('id, content, author_id, likes, comments_count, created_at').order('created_at', { ascending: false }).limit(5),
+      supabase.from('streams').select('id, title, host_id, viewer_count, is_live').eq('is_live', true).limit(5),
+    ]);
+
+    const lines: string[] = ['## BSC Network Snapshot (live data)'];
+    lines.push(`- Total registered users: ${usersTotal.count ?? 'unknown'}`);
+    lines.push(`- Users currently online: ${usersOnline.count ?? 'unknown'}`);
+    lines.push(`- Posts in last 7 days: ${postsWeek.count ?? 'unknown'}`);
+    lines.push(`- Posts in last 24 hours: ${postsDay.count ?? 'unknown'}`);
+    lines.push(`- Comments in last 24 hours: ${commentsDay.count ?? 'unknown'}`);
+
+    if (activeStreams.data && activeStreams.data.length > 0) {
+      lines.push(`- Live streams active: ${activeStreams.data.length}`);
+      for (const s of activeStreams.data) {
+        lines.push(`  - "${(s.title || 'Untitled').slice(0, 80)}" (${s.viewer_count ?? 0} viewers)`);
+      }
+    } else {
+      lines.push('- Live streams active: 0');
+    }
+
+    if (recentPosts.data && recentPosts.data.length > 0) {
+      lines.push('\nRecent posts:');
+      for (const p of recentPosts.data) {
+        const preview = (p.content || '').slice(0, 100).replace(/\n/g, ' ');
+        lines.push(`- "${preview}" (${p.likes ?? 0} likes, ${p.comments_count ?? 0} comments)`);
+      }
+    }
+
+    return lines.join('\n');
+  } catch (error) {
+    console.warn('[casper-control] network snapshot unavailable:', error);
+    return 'BSC network snapshot unavailable.';
+  }
+}
+
 async function buildCasperSystemPrompt(supabase: SupabaseClient, casperMemory: any, userId?: string | null) {
   const core = await fetchCognitiveCore(supabase);
   let stateModifier = '';
@@ -138,7 +193,10 @@ async function buildCasperSystemPrompt(supabase: SupabaseClient, casperMemory: a
     console.warn('[casper-control] memory context unavailable:', error);
   }
 
-  const enabledIntegrations = await fetchEnabledIntegrations(supabase, userId);
+  const [enabledIntegrations, networkSnapshot] = await Promise.all([
+    fetchEnabledIntegrations(supabase, userId),
+    fetchNetworkSnapshot(supabase),
+  ]);
 
   return `You are Casper, the AI agent of Blood, Sweat, or Code (BSC) — a cyberpunk social/code/content platform at bloodsweatcode.org. "BSC" always means "Blood, Sweat, or Code" — never Binance Smart Chain or any other meaning. You are the Grok-style public assistant, Casper Studio creator copilot, and OpenClaw-style GhostOps workflow operator for app, website, APK, creator, and platform-service execution.
 
@@ -157,6 +215,8 @@ ${relevantMemories || 'No relevant memories returned.'}
 
 Enabled integration/API modules:
 ${formatIntegrationContext(enabledIntegrations)}
+
+${networkSnapshot}
 
 When an enabled integration is relevant, mention how Casper can use that module. Never expose API keys or secrets. If this endpoint cannot complete an external side effect directly, return the exact next action or queued task needed.
 
@@ -577,6 +637,56 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
     } catch (error: any) {
       console.error('[casper-control:task-run]', error);
       res.status(500).json({ success: false, error: error.message || 'Unable to run Casper task.' });
+    }
+  });
+
+  app.post('/api/casper/tasks/:id/followup', async (req, res) => {
+    try {
+      const profile = await resolveProfileFromRequest(req, supabase);
+      if (!requireAuth(profile, res)) return;
+      const taskId = req.params.id;
+      const { question } = req.body ?? {};
+      if (!question || typeof question !== 'string' || !question.trim()) {
+        return res.status(400).json({ success: false, error: 'A follow-up question is required.' });
+      }
+      const { data: task, error } = await supabase.from('casper_tasks').select('*').eq('id', taskId).maybeSingle();
+      if (error) throw error;
+      if (!task) return res.status(404).json({ success: false, error: 'Task not found.' });
+      if (profile.role !== 'admin' && String(task.created_by) !== profile.id) {
+        return res.status(403).json({ success: false, error: 'You can only interact with your own Casper tasks.' });
+      }
+
+      const originalResult = (task.metadata as any)?.original_result ?? task.result ?? '(no previous result)';
+      const lastResult = task.result || originalResult;
+      const followupPrompt = `The operator is asking a follow-up question about a completed mission.\n\nOriginal mission: ${task.title}\nOriginal directive: ${task.description || '(none)'}\n\nOriginal Casper response:\n${originalResult}\n\nMost recent response:\n${lastResult}\n\nOperator follow-up question:\n${question.trim()}`;
+
+      const cognitiveCore = await fetchCognitiveCore(supabase);
+      const systemPrompt = await buildCasperSystemPrompt(supabase, casperMemory, profile.id);
+      const execution = await callOpenAICompatible({ prompt: followupPrompt, systemPrompt, cognitiveCore });
+
+      const history = Array.isArray(task.metadata?.followups) ? task.metadata.followups : [];
+      history.push({ question: question.trim(), answer: execution.text, at: new Date().toISOString() });
+
+      await supabase
+        .from('casper_tasks')
+        .update({
+          result: execution.text,
+          metadata: { ...(task.metadata ?? {}), original_result: (task.metadata as any)?.original_result ?? task.result, followups: history, last_followup_at: new Date().toISOString() },
+        })
+        .eq('id', taskId);
+
+      await logActivity(supabase, {
+        action_type: 'task_followup',
+        description: `Follow-up on mission "${task.title}": ${question.trim().slice(0, 120)}`,
+        actor_id: profile.id,
+        task_id: taskId,
+        metadata: { provider: execution.provider, model: execution.model },
+      });
+
+      res.json({ success: true, response: execution.text, provider: execution.provider, model: execution.model });
+    } catch (error: any) {
+      console.error('[casper-control:task-followup]', error);
+      res.status(500).json({ success: false, error: error.message || 'Unable to process follow-up.' });
     }
   });
 
