@@ -150,7 +150,7 @@ export const NeuralJobMarket: React.FC = () => {
     e.preventDefault();
     if (!currentUser || !title.trim() || !description.trim()) return;
 
-    if ((currentUser.cred_balance || 0) < reward) {
+    if (currentUser.role !== 'admin' && (currentUser.cred_balance || 0) < reward) {
       showNotice(`Insufficient CRED. You need ${reward} CRED to post this bounty.`, 'error');
       return;
     }
