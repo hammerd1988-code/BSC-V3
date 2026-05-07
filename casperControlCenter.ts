@@ -640,6 +640,55 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
     }
   });
 
+  app.post('/api/casper/tasks/:id/followup', async (req, res) => {
+    try {
+      const profile = await resolveProfileFromRequest(req, supabase);
+      if (!requireAuth(profile, res)) return;
+      const taskId = req.params.id;
+      const { question } = req.body ?? {};
+      if (!question || typeof question !== 'string' || !question.trim()) {
+        return res.status(400).json({ success: false, error: 'A follow-up question is required.' });
+      }
+      const { data: task, error } = await supabase.from('casper_tasks').select('*').eq('id', taskId).maybeSingle();
+      if (error) throw error;
+      if (!task) return res.status(404).json({ success: false, error: 'Task not found.' });
+      if (profile.role !== 'admin' && String(task.created_by) !== profile.id) {
+        return res.status(403).json({ success: false, error: 'You can only interact with your own Casper tasks.' });
+      }
+
+      const previousResult = task.result || '(no previous result)';
+      const followupPrompt = `The operator is asking a follow-up question about a completed mission.\n\nOriginal mission: ${task.title}\nOriginal directive: ${task.description || '(none)'}\n\nPrevious Casper response:\n${previousResult}\n\nOperator follow-up question:\n${question.trim()}`;
+
+      const cognitiveCore = await fetchCognitiveCore(supabase);
+      const systemPrompt = await buildCasperSystemPrompt(supabase, casperMemory, profile.id);
+      const execution = await callOpenAICompatible({ prompt: followupPrompt, systemPrompt, cognitiveCore });
+
+      const history = Array.isArray(task.metadata?.followups) ? task.metadata.followups : [];
+      history.push({ question: question.trim(), answer: execution.text, at: new Date().toISOString() });
+
+      await supabase
+        .from('casper_tasks')
+        .update({
+          result: execution.text,
+          metadata: { ...(task.metadata ?? {}), followups: history, last_followup_at: new Date().toISOString() },
+        })
+        .eq('id', taskId);
+
+      await logActivity(supabase, {
+        action_type: 'task_followup',
+        description: `Follow-up on mission "${task.title}": ${question.trim().slice(0, 120)}`,
+        actor_id: profile.id,
+        task_id: taskId,
+        metadata: { provider: execution.provider, model: execution.model },
+      });
+
+      res.json({ success: true, response: execution.text, provider: execution.provider, model: execution.model });
+    } catch (error: any) {
+      console.error('[casper-control:task-followup]', error);
+      res.status(500).json({ success: false, error: error.message || 'Unable to process follow-up.' });
+    }
+  });
+
   app.post('/api/casper/routines/run-due', async (req, res) => {
     try {
       const profile = await resolveProfileFromRequest(req, supabase);
