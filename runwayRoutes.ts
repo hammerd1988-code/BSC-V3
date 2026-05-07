@@ -65,6 +65,12 @@ function normalizeVideoRatio(value: RunwayAspectRatio): '1280:720' | '720:1280' 
   return '1280:720';
 }
 
+function normalizeImageRatio(value: RunwayAspectRatio): '1920:1080' | '1080:1920' | '1024:1024' {
+  if (value === '9:16') return '1080:1920';
+  if (value === '1:1') return '1024:1024';
+  return '1920:1080';
+}
+
 function normalizeDuration(value: unknown): 5 | 10 {
   const numeric = typeof value === 'string' ? Number.parseInt(value, 10) : Number(value);
   if (numeric === 10) return 10;
@@ -283,8 +289,7 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
         : {
             promptText,
             model: body.model || IMAGE_MODEL,
-            ratio,
-            ...(body.resolution ? { resolution: body.resolution } : {}),
+            ratio: normalizeImageRatio(ratio),
             ...(promptImage ? { promptImage } : {}),
           };
 
