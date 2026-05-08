@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -14,6 +14,10 @@ import { cn } from '../lib/utils';
 import { casperAuthFetch } from '../lib/casperApi';
 import { formatDistanceToNow } from 'date-fns';
 import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
+// State-of-the-art realtime conversation orb. Lazy-loaded so its three.js bundle
+// (~150kb gz) only ships when a user actually opens voice mode, keeping the
+// main feed/app bundle lean.
+const CasperOrbVisualization = React.lazy(() => import('./CasperOrbVisualization'));
 import {
   AVAILABLE_CASPER_INTEGRATIONS,
   CASPER_INTEGRATION_CATEGORIES,
@@ -350,6 +354,17 @@ export const Casper: React.FC = () => {
   const persistentAudioRef = useRef<HTMLAudioElement | null>(null);
   const currentAudioUrlRef = useRef<string | null>(null);
   const startListeningSessionRef = useRef<() => Promise<void>>(async () => {});
+  // Sequence number bumped on every speakOnce / interrupt so that stale audio.onended
+  // / safety-timeout callbacks from a previous utterance can't fire onDone for a
+  // newer one and re-trigger listening at the wrong moment.
+  const speakTokenRef = useRef(0);
+  // Safety timer that force-resolves a TTS playback if the audio element never
+  // fires onended/onerror (rare but happens on iOS Safari when the page is
+  // backgrounded mid-utterance).
+  const speakSafetyTimerRef = useRef<number | null>(null);
+  // Counter so we don't infinite-loop into "couldn't catch that" when the user
+  // is silent or the mic is muted at the OS level.
+  const emptyTranscriptCountRef = useRef(0);
   const userUuid = isUuid(currentUser?.id) ? currentUser!.id : null;
 
   const isListening = voiceState === 'recording';
@@ -530,7 +545,16 @@ export const Casper: React.FC = () => {
 
 
   const stopAudioPlayback = useCallback(() => {
+    if (speakSafetyTimerRef.current) {
+      window.clearTimeout(speakSafetyTimerRef.current);
+      speakSafetyTimerRef.current = null;
+    }
     if (currentAudioRef.current) {
+      // Clear handlers BEFORE pausing so a stale onended/onerror from this
+      // utterance can't fire after we've moved on.
+      currentAudioRef.current.onended = null;
+      currentAudioRef.current.onerror = null;
+      currentAudioRef.current.onplay = null;
       currentAudioRef.current.pause();
       currentAudioRef.current = null;
     }
@@ -580,13 +604,36 @@ export const Casper: React.FC = () => {
   const speakOnce = useCallback(async (text: string, onDone?: () => void) => {
     if (!ttsEnabled) { onDone?.(); return; }
 
+    // Each utterance gets a fresh token. Stale callbacks for older utterances
+    // bail out if the token has moved on.
+    const token = ++speakTokenRef.current;
+    const isCurrent = () => speakTokenRef.current === token;
+
     window.speechSynthesis?.cancel();
     stopAudioPlayback();
     setLastSpokenText(text);
     setVoiceState('speaking');
     setVoiceDebug('Casper is speaking...');
 
+    const cleanupAudio = (audio: HTMLAudioElement | null, audioUrl: string | null) => {
+      if (audio) {
+        audio.onended = null;
+        audio.onerror = null;
+        audio.onplay = null;
+        if (currentAudioRef.current === audio) currentAudioRef.current = null;
+      }
+      if (audioUrl) {
+        if (currentAudioUrlRef.current === audioUrl) currentAudioUrlRef.current = null;
+        URL.revokeObjectURL(audioUrl);
+      }
+      if (speakSafetyTimerRef.current) {
+        window.clearTimeout(speakSafetyTimerRef.current);
+        speakSafetyTimerRef.current = null;
+      }
+    };
+
     const finishSilently = (reason: string, error?: unknown) => {
+      if (!isCurrent()) return;
       if (error) console.warn(`[VOICE] ${reason}; browser TTS fallback is disabled:`, error);
       else console.warn(`[VOICE] ${reason}; browser TTS fallback is disabled`);
       stopAudioPlayback();
@@ -603,12 +650,15 @@ export const Casper: React.FC = () => {
         body: JSON.stringify({ text, voice: 'onyx', speed: 1.05 }),
       });
 
+      if (!isCurrent()) return; // user moved on (interrupt / exit)
+
       if (!response.ok) {
         finishSilently(`OpenAI Onyx TTS failed with status ${response.status}`);
         return;
       }
 
       const audioBlob = await response.blob();
+      if (!isCurrent()) return;
       const audioUrl = URL.createObjectURL(audioBlob);
       currentAudioUrlRef.current = audioUrl;
 
@@ -618,27 +668,57 @@ export const Casper: React.FC = () => {
       audio.currentTime = 0;
       currentAudioRef.current = audio;
 
-      audio.onended = () => {
-        if (currentAudioUrlRef.current === audioUrl) currentAudioUrlRef.current = null;
-        if (currentAudioRef.current === audio) currentAudioRef.current = null;
-        URL.revokeObjectURL(audioUrl);
+      const handleEnded = () => {
+        if (!isCurrent()) return;
+        cleanupAudio(audio, audioUrl);
         setVoiceState('idle');
         setVoiceDebug(voiceActiveRef.current ? 'Listening will resume...' : '');
         onDone?.();
       };
 
+      audio.onended = handleEnded;
       audio.onerror = () => {
-        if (currentAudioUrlRef.current === audioUrl) currentAudioUrlRef.current = null;
-        if (currentAudioRef.current === audio) currentAudioRef.current = null;
-        URL.revokeObjectURL(audioUrl);
+        if (!isCurrent()) return;
+        cleanupAudio(audio, audioUrl);
         finishSilently('OpenAI Onyx audio playback failed');
       };
 
+      // Keep the orb's text/state in lockstep with actual playback (rather than
+      // the moment we kicked off the TTS request).
+      audio.onplay = () => {
+        if (!isCurrent()) return;
+        if (voiceActiveRef.current) setVoiceDebug('Casper is speaking...');
+      };
+
       await audio.play();
+
+      // Safety timeout. audio.duration is reliable once metadata loads; until
+      // then we cap at 30s. Words-per-second heuristic gives a sensible upper
+      // bound for any Casper response.
+      const expected = (Number.isFinite(audio.duration) && audio.duration > 0)
+        ? audio.duration * 1000 + 3000
+        : Math.max(8000, text.length * 80 + 4000);
+      speakSafetyTimerRef.current = window.setTimeout(() => {
+        if (!isCurrent()) return;
+        console.warn('[VOICE] TTS safety timeout reached — ending utterance');
+        handleEnded();
+      }, expected);
     } catch (error) {
       finishSilently('OpenAI Onyx TTS request/playback error', error);
     }
   }, [stopAudioPlayback, ttsEnabled]);
+
+  // Cancel an in-flight Casper utterance and immediately start listening so
+  // the user can interrupt without waiting for him to finish ("barge-in").
+  const interruptSpeak = useCallback(() => {
+    speakTokenRef.current += 1; // any in-flight onended/onerror/safety bail
+    stopAudioPlayback();
+    setVoiceState('idle');
+    setVoiceDebug('Listening...');
+    if (voiceActiveRef.current) {
+      window.setTimeout(() => void startListeningSessionRef.current(), 50);
+    }
+  }, [stopAudioPlayback]);
 
   const finishListening = useCallback(async () => {
     cancelAnimationFrame(levelFrameRef.current);
@@ -648,8 +728,21 @@ export const Casper: React.FC = () => {
     }
     setAudioLevel(0);
 
-    if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
+    // Wait for the recorder to flush its final chunk before reading
+    // audioChunksRef. Otherwise the last ~250ms of speech is lost.
+    const recorder = mediaRecorderRef.current;
     mediaRecorderRef.current = null;
+    if (recorder && recorder.state === 'recording') {
+      await new Promise<void>((resolve) => {
+        const safety = window.setTimeout(resolve, 1200);
+        recorder.onstop = () => {
+          window.clearTimeout(safety);
+          resolve();
+        };
+        try { recorder.stop(); }
+        catch { window.clearTimeout(safety); resolve(); }
+      });
+    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
@@ -682,11 +775,20 @@ export const Casper: React.FC = () => {
     }
 
     if (!transcript) {
-      setVoiceDebug("I couldn't catch that. Try speaking again...");
+      emptyTranscriptCountRef.current += 1;
       setVoiceState('idle');
+      // Stop the auto-restart loop after 3 empties so the user can re-engage
+      // intentionally instead of a frustrated infinite "couldn't catch that".
+      if (emptyTranscriptCountRef.current >= 3) {
+        setVoiceDebug("Mic seems quiet. Tap to speak when you're ready.");
+        return;
+      }
+      setVoiceDebug("I couldn't catch that. Try speaking again...");
       if (voiceActiveRef.current) window.setTimeout(() => void startListeningSessionRef.current(), 1500);
       return;
     }
+
+    emptyTranscriptCountRef.current = 0;
 
     setVoiceState('thinking');
     setVoiceDebug('Casper is thinking...');
@@ -1237,17 +1339,24 @@ export const Casper: React.FC = () => {
               </button>
             </div>
 
-            <div className="relative z-10 flex min-h-[240px] w-full flex-1 items-center justify-center px-6 py-8">
-              <div className="relative flex items-center justify-center">
-                <AnimatedCasperAvatar size="hero" isActive={voiceState === 'thinking' || voiceState === 'speaking'} instability={instability} showParticles />
-                {voiceState === 'recording' && (
-                  <motion.div
-                    className="absolute rounded-full border-2 border-green-400/30 pointer-events-none"
-                    style={{ width: '220px', height: '220px' }}
-                    animate={{ scale: 1 + (audioLevel * 0.5), opacity: 0.3 + (audioLevel * 0.7) }}
-                    transition={{ duration: 0.1 }}
+            <div className="relative z-10 flex min-h-[360px] w-full flex-1 items-center justify-center px-6 py-8">
+              <div className="relative flex aspect-square w-full max-w-[min(80vw,520px)] items-center justify-center">
+                <Suspense
+                  fallback={
+                    <AnimatedCasperAvatar
+                      size="hero"
+                      isActive={voiceState === 'thinking' || voiceState === 'speaking'}
+                      instability={instability}
+                      showParticles
+                    />
+                  }
+                >
+                  <CasperOrbVisualization
+                    state={voiceState}
+                    audioLevel={audioLevel}
+                    instability={instability}
                   />
-                )}
+                </Suspense>
               </div>
             </div>
 
@@ -1278,6 +1387,10 @@ export const Casper: React.FC = () => {
                 {voiceState === 'recording' ? (
                   <button onClick={() => void finishListening()} className="flex items-center gap-2 rounded-full border border-green-400/40 bg-green-400/10 px-6 py-3 text-xs font-black uppercase tracking-widest text-green-300 transition-all hover:scale-105">
                     <Send className="w-4 h-4" /> Send Now
+                  </button>
+                ) : voiceState === 'speaking' ? (
+                  <button onClick={() => interruptSpeak()} className="flex items-center gap-2 rounded-full border border-fuchsia-300/40 bg-fuchsia-400/10 px-6 py-3 text-xs font-black uppercase tracking-widest text-fuchsia-100 transition-all hover:scale-105">
+                    <Mic className="w-4 h-4" /> Interrupt
                   </button>
                 ) : (
                   <button onClick={() => void startListeningSession()} disabled={voiceState !== 'idle'} className="flex items-center gap-2 rounded-full border border-cyan-300/35 bg-cyan-400/10 px-6 py-3 text-xs font-black uppercase tracking-widest text-cyan-100 transition-all hover:scale-105 disabled:opacity-30 disabled:hover:scale-100">
