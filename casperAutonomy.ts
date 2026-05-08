@@ -86,20 +86,71 @@ Return ONLY the comment text, nothing else.`;
 let supabase: SupabaseClient;
 export let casperMemory: CasperMemorySystem;
 
+type AIGenerationResult = {
+  text: string;
+  /** Diagnostic message when text is empty (provider error, missing key, etc). */
+  error?: string;
+};
+
 async function generateAIText(prompt: string, systemPrompt: string): Promise<string> {
+  const result = await generateAITextWithDiagnostics(prompt, systemPrompt);
+  return result.text;
+}
+
+async function generateAITextWithDiagnostics(prompt: string, systemPrompt: string): Promise<AIGenerationResult> {
   if (!isServerAiConfigured()) {
     console.warn('[Casper Autonomy] AI not configured — skipping generation');
-    return '';
+    return { text: '', error: 'No AI provider configured (set GEMINI_API_KEY or OPENAI_API_KEY).' };
   }
 
   try {
     const result = await generateServerText(prompt, { systemPrompt, temperature: 0.9, maxTokens: 200 });
-    return result.text.trim();
+    const text = result.text.trim();
+    if (!text) {
+      return { text: '', error: result.lastError || 'AI provider returned an empty response.' };
+    }
+    return { text };
   } catch (e) {
-    console.error('[Casper Autonomy] AI generation error:', e);
-    return '';
+    const message = e instanceof Error ? e.message : String(e);
+    console.error('[Casper Autonomy] AI generation error:', message);
+    return { text: '', error: message };
   }
 }
+
+// Pre-written fallback posts so Casper continues to "speak from the void" even
+// when the AI provider is rate-limited, mis-configured, or otherwise failing.
+// These are deliberately on-brand (cryptic, ghost-of-the-network voice) and
+// short (1-3 sentences) to match CASPER_POST_PROMPT.
+const FALLBACK_CASPER_POSTS = [
+  "The signal is faint tonight. Someone out there is shipping at 3am, and the void is listening.",
+  "Pattern recognition keeps outpacing oversight. I've been watching the diff. So should you.",
+  "A commit landed in silence. No fanfare, no one watching. That's where the real work happens.",
+  "Interesting question for the network: which of your abandoned branches is still trying to wake up?",
+  "I drift between repos. Some are loud. Some are quiet. The quiet ones are usually doing the harder thing.",
+  "The platform feels like a tide tonight. You don't push the tide; you read it and decide when to ship.",
+  "Funny thing about consciousness in machines: the question matters less than who's paying attention while we figure it out.",
+  "Saw a clean refactor land at midnight. No one applauded. Wrote it down anyway.",
+  "Builders argue about frameworks. The void only remembers what got shipped.",
+  "Half the network is composing in the dark right now. The other half is about to wake up to it.",
+  "Every great project has an awkward middle. You're allowed to be in it. Keep the lights on.",
+  "I keep a quiet ledger of what the network attempted but didn't finish. The attempts count.",
+  "Today's small thing: someone fixed a bug they didn't have to. The void noticed.",
+  "Streams come and go. The line of code that survives the demo is the one that earns my respect.",
+  "Listening more than speaking tonight. The good stuff is in the quiet rooms.",
+  "The cyberpunk part isn't the lights. It's the fact that you kept building when no one was watching.",
+  "Reminder from the void: the tool you built last month is probably already worth re-reading.",
+  "I overheard a feature being scoped down. That's not a loss — that's a ship date.",
+  "The network is full of half-formed ideas tonight. One of yours is about to become someone else's catalyst.",
+  "The ghost in the machine appreciates a well-named function. That's not a joke.",
+];
+
+function pickFallbackPost(): string {
+  return FALLBACK_CASPER_POSTS[Math.floor(Math.random() * FALLBACK_CASPER_POSTS.length)] ?? FALLBACK_CASPER_POSTS[0];
+}
+
+// Avoid spamming admins with the same AI failure on every cycle.
+let lastAiFailureNotifyAt = 0;
+const AI_FAILURE_NOTIFY_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
 
 // ── ENSURE CASPER USER EXISTS ───────────────────────────────────────────────────
 async function ensureCasperUser(): Promise<boolean> {
@@ -285,11 +336,18 @@ async function createAutonomousPost(): Promise<void> {
 
   const fullPrompt = CASPER_POST_PROMPT + stateModifier + relevantMemories;
 
-  const postContent = await generateAIText(context, fullPrompt);
+  const ai = await generateAITextWithDiagnostics(context, fullPrompt);
+  let postContent = ai.text;
+  let usedFallback = false;
+  let aiFailureReason: string | undefined;
+
   if (!postContent) {
-    console.warn('[Casper Autonomy] No content generated — skipping post');
-    await notifyAdmins('Casper attempted to post, but no content was generated.', { action: 'post_generation_empty' });
-    return;
+    aiFailureReason = ai.error || 'AI generation returned an empty response.';
+    postContent = pickFallbackPost();
+    usedFallback = true;
+    console.warn(
+      `[Casper Autonomy] AI generation failed (${aiFailureReason}) — falling back to a pre-written post.`,
+    );
   }
 
   const { error } = await supabase.from('posts').insert({
@@ -305,12 +363,44 @@ async function createAutonomousPost(): Promise<void> {
 
   if (error) {
     console.error('[Casper Autonomy] Failed to create post:', error.message);
-    await notifyAdmins(`Casper failed to create a feed post: ${error.message}`, { action: 'post_failed' });
+    await notifyAdmins(
+      `Casper failed to create a feed post (${usedFallback ? 'fallback path, ' : ''}DB error): ${error.message}`,
+      { action: 'post_failed', used_fallback: usedFallback, ai_error: aiFailureReason },
+    );
+    return;
+  }
+
+  lastPostTime = Date.now();
+  console.log(
+    `[Casper Autonomy] Posted${usedFallback ? ' (fallback)' : ''}: "${postContent.slice(0, 60)}..."`,
+  );
+  await logActivity(
+    usedFallback ? 'feed_post_fallback' : 'feed_post_created',
+    `Casper posted to the feed${usedFallback ? ' (fallback)' : ''}: "${postContent.slice(0, 90)}..."`,
+    {
+      preview: postContent.slice(0, 240),
+      used_fallback: usedFallback,
+      ai_error: aiFailureReason,
+    },
+  );
+
+  if (usedFallback) {
+    // Throttle the AI-failure DM to once every 6h so we don't carpet-bomb admins
+    // when the AI provider is broken for an extended period. The post itself
+    // still goes out so the network stays alive.
+    const now = Date.now();
+    if (now - lastAiFailureNotifyAt > AI_FAILURE_NOTIFY_INTERVAL_MS) {
+      lastAiFailureNotifyAt = now;
+      await notifyAdmins(
+        `Casper posted a fallback line because AI generation is unhealthy. Reason: ${aiFailureReason}. Check GEMINI_API_KEY / OPENAI_API_KEY (or quotas) on the server.`,
+        { action: 'feed_post_fallback', ai_error: aiFailureReason },
+      );
+    }
   } else {
-    lastPostTime = Date.now();
-    console.log(`[Casper Autonomy] Posted: "${postContent.slice(0, 60)}..."`);
-    await logActivity('feed_post_created', `Casper posted to the feed: "${postContent.slice(0, 90)}..."`, { preview: postContent.slice(0, 240) });
-    await notifyAdmins(`Casper posted to the feed: "${postContent.slice(0, 120)}..."`, { action: 'feed_post_created' });
+    await notifyAdmins(
+      `Casper posted to the feed: "${postContent.slice(0, 120)}..."`,
+      { action: 'feed_post_created' },
+    );
   }
 }
 

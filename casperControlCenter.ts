@@ -57,31 +57,74 @@ function isUuid(value?: string | null) {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-async function resolveProfileFromRequest(req: Request, supabase: SupabaseClient): Promise<CasperProfile | null> {
+export type CasperAuthFailureReason = 'no_token' | 'invalid_token' | 'lookup_failed';
+
+export type CasperAuthResolution = {
+  ok: boolean;
+  profile?: CasperProfile;
+  reason?: CasperAuthFailureReason;
+  message?: string;
+};
+
+export async function resolveCasperAuth(req: Request, supabase: SupabaseClient): Promise<CasperAuthResolution> {
   const token = bearerToken(req);
-  if (!token) return null;
+  if (!token) {
+    return { ok: false, reason: 'no_token', message: 'No bearer token sent. Please sign in again.' };
+  }
 
   const { data: authData, error: authError } = await supabase.auth.getUser(token);
-  if (authError || !authData.user) return null;
+  if (authError || !authData.user) {
+    return {
+      ok: false,
+      reason: 'invalid_token',
+      message: 'Your session has expired or is invalid. Please sign in again.',
+    };
+  }
 
-  const { data: profile } = await supabase
+  const { data: profile, error: profileError } = await supabase
     .from('users')
     .select('id, auth_uid, username, display_name, role')
     .eq('auth_uid', authData.user.id)
     .maybeSingle();
 
-  return (profile as CasperProfile | null) ?? {
-    id: authData.user.id,
-    auth_uid: authData.user.id,
-    username: authData.user.email?.split('@')[0] ?? 'operator',
-    role: 'user',
+  if (profileError) {
+    console.error('[casper-control:auth] users lookup failed for auth_uid', authData.user.id, profileError);
+    return {
+      ok: false,
+      reason: 'lookup_failed',
+      message: 'Unable to load your operator profile. Try again in a moment.',
+    };
+  }
+
+  if (profile) {
+    return { ok: true, profile: profile as CasperProfile };
+  }
+
+  // No row in public.users yet — fall back to a synthetic user-level profile so
+  // a freshly-signed-in account can still issue non-admin commands. Admin role
+  // requires a real users row with role='admin'.
+  return {
+    ok: true,
+    profile: {
+      id: authData.user.id,
+      auth_uid: authData.user.id,
+      username: authData.user.email?.split('@')[0] ?? 'operator',
+      role: 'user',
+    },
   };
 }
 
-function requireAuth(profile: CasperProfile | null, res: Response): profile is CasperProfile {
-  if (profile) return true;
-  res.status(401).json({ success: false, error: 'Authentication required.' });
-  return false;
+async function requireAuth(req: Request, res: Response, supabase: SupabaseClient): Promise<CasperProfile | null> {
+  const result = await resolveCasperAuth(req, supabase);
+  if (!result.ok || !result.profile) {
+    res.status(401).json({
+      success: false,
+      error: result.message || 'Authentication required.',
+      reason: result.reason || 'invalid_token',
+    });
+    return null;
+  }
+  return result.profile;
 }
 
 function requireAdmin(profile: CasperProfile | null, res: Response): profile is CasperProfile {
@@ -575,8 +618,8 @@ async function runtimeStatus(supabase: SupabaseClient) {
 export function registerCasperControlRoutes(app: Express, supabase: SupabaseClient, casperMemory: any) {
   app.get('/api/casper/status', async (req, res) => {
     try {
-      const profile = await resolveProfileFromRequest(req, supabase);
-      if (!requireAuth(profile, res)) return;
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
       const status = await runtimeStatus(supabase);
       res.json({ success: true, status });
     } catch (error: any) {
@@ -587,8 +630,8 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
 
   app.get('/api/casper/integrations/context', async (req, res) => {
     try {
-      const profile = await resolveProfileFromRequest(req, supabase);
-      if (!requireAuth(profile, res)) return;
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
       const integrations = await fetchEnabledIntegrations(supabase, profile.id);
       res.json({ success: true, integrations, capabilityContext: formatIntegrationContext(integrations) });
     } catch (error: any) {
@@ -599,8 +642,8 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
 
   app.post('/api/casper/command', async (req, res) => {
     try {
-      const profile = await resolveProfileFromRequest(req, supabase);
-      if (!requireAuth(profile, res)) return;
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
       const { command, source, taskId, routineId, metadata } = req.body ?? {};
       const execution = await executeCasperCommand(supabase, casperMemory, {
         command: String(command || ''),
@@ -619,8 +662,8 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
 
   app.post('/api/casper/tasks/:id/run', async (req, res) => {
     try {
-      const profile = await resolveProfileFromRequest(req, supabase);
-      if (!requireAuth(profile, res)) return;
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
       const taskId = req.params.id;
       const { data: task, error } = await supabase.from('casper_tasks').select('*').eq('id', taskId).maybeSingle();
       if (error) throw error;
@@ -645,8 +688,8 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
 
   app.post('/api/casper/tasks/:id/followup', async (req, res) => {
     try {
-      const profile = await resolveProfileFromRequest(req, supabase);
-      if (!requireAuth(profile, res)) return;
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
       const taskId = req.params.id;
       const { question } = req.body ?? {};
       if (!question || typeof question !== 'string' || !question.trim()) {
@@ -695,8 +738,8 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
 
   app.post('/api/casper/routines/run-due', async (req, res) => {
     try {
-      const profile = await resolveProfileFromRequest(req, supabase);
-      if (!requireAdmin(profile, res)) return;
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile || !requireAdmin(profile, res)) return;
       const result = await runDueRoutines(supabase, casperMemory, 'manual');
       res.json({ success: true, ...result });
     } catch (error: any) {
@@ -707,8 +750,8 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
 
   app.post('/api/casper/tasks/run-queue', async (req, res) => {
     try {
-      const profile = await resolveProfileFromRequest(req, supabase);
-      if (!requireAdmin(profile, res)) return;
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile || !requireAdmin(profile, res)) return;
       const result = await runTaskQueue(supabase, casperMemory, 'manual');
       res.json({ success: true, ...result });
     } catch (error: any) {
