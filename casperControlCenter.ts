@@ -14,6 +14,9 @@ let taskQueueRunnerStarted = false;
 let taskQueueBusy = false;
 let taskQueueLastRunAt: string | null = null;
 let taskQueueLastExecuted = 0;
+let routineRunnerConsecutiveErrors = 0;
+let taskQueueConsecutiveErrors = 0;
+const MAX_SILENT_ERRORS = 3;
 
 type CasperProfile = {
   id: string;
@@ -497,7 +500,7 @@ async function runDueRoutines(supabase: SupabaseClient, casperMemory: any, trigg
     const { data: routines, error } = await supabase
       .from('casper_routines')
       .select('*')
-      .eq('enabled', true)
+      .eq('is_enabled', true)
       .or(`next_run_at.is.null,next_run_at.lte.${now}`)
       .order('next_run_at', { ascending: true, nullsFirst: true })
       .limit(8);
@@ -537,7 +540,7 @@ async function runtimeStatus(supabase: SupabaseClient) {
   const [tasks, recentActions, routines, skills, integrations] = await Promise.all([
     supabase.from('casper_tasks').select('status', { count: 'exact', head: false }).in('status', ['pending', 'running', 'completed', 'failed']),
     supabase.from('casper_activity_log').select('id', { count: 'exact', head: true }).gte('created_at', since),
-    supabase.from('casper_routines').select('id', { count: 'exact', head: true }).eq('enabled', true),
+    supabase.from('casper_routines').select('id', { count: 'exact', head: true }).eq('is_enabled', true),
     supabase.from('casper_skills').select('id', { count: 'exact', head: true }).eq('is_enabled', true),
     supabase.from('casper_integrations').select('id', { count: 'exact', head: true }).eq('enabled', true).eq('status', 'connected'),
   ]);
@@ -717,8 +720,15 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
   if (!routineRunnerStarted && ROUTINE_POLL_INTERVAL_MS > 0) {
     routineRunnerStarted = true;
     setInterval(() => {
-      runDueRoutines(supabase, casperMemory, 'interval').catch((error) => {
-        console.error('[casper-control:routine-runner]', error);
+      runDueRoutines(supabase, casperMemory, 'interval').then(() => {
+        routineRunnerConsecutiveErrors = 0;
+      }).catch((error: any) => {
+        routineRunnerConsecutiveErrors += 1;
+        if (routineRunnerConsecutiveErrors <= MAX_SILENT_ERRORS) {
+          console.error('[casper-control:routine-runner]', error);
+        } else if (routineRunnerConsecutiveErrors === MAX_SILENT_ERRORS + 1) {
+          console.warn('[casper-control:routine-runner] Suppressing repeated errors (same issue logged %d times)', MAX_SILENT_ERRORS);
+        }
       });
     }, ROUTINE_POLL_INTERVAL_MS).unref?.();
   }
@@ -726,8 +736,15 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
   if (!taskQueueRunnerStarted && TASK_QUEUE_POLL_INTERVAL_MS > 0) {
     taskQueueRunnerStarted = true;
     setInterval(() => {
-      runTaskQueue(supabase, casperMemory, 'interval').catch((error) => {
-        console.error('[casper-control:task-queue-runner]', error);
+      runTaskQueue(supabase, casperMemory, 'interval').then(() => {
+        taskQueueConsecutiveErrors = 0;
+      }).catch((error: any) => {
+        taskQueueConsecutiveErrors += 1;
+        if (taskQueueConsecutiveErrors <= MAX_SILENT_ERRORS) {
+          console.error('[casper-control:task-queue-runner]', error);
+        } else if (taskQueueConsecutiveErrors === MAX_SILENT_ERRORS + 1) {
+          console.warn('[casper-control:task-queue-runner] Suppressing repeated errors (same issue logged %d times)', MAX_SILENT_ERRORS);
+        }
       });
     }, TASK_QUEUE_POLL_INTERVAL_MS).unref?.();
   }
