@@ -417,6 +417,13 @@ export const GoLive: React.FC = () => {
     stopMedia();
   }, []);
 
+  useEffect(() => {
+    if (isLive && streamRef.current && videoRef.current && !videoRef.current.srcObject) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch(() => undefined);
+    }
+  });
+
   const fetchStreamBundle = async (id: string) => {
     const { data, error } = await supabase.from('streams').select('*').eq('id', id).maybeSingle();
     if (error) handleDbError(error, 'READ', `streams/${id}`);
@@ -455,12 +462,12 @@ export const GoLive: React.FC = () => {
   }, [viewerStreamId]);
 
   useEffect(() => {
-    if (!viewerStreamId || !currentUser || hasEnded) return;
+    if (!viewerStreamId || !currentUser || hasEnded || isLive) return;
     const streamerId = streamData?.user_id || streamData?.host_id;
     if (streamerId && streamerId === currentUser.id) return;
     void connectLiveKitStream(viewerStreamId, 'viewer');
     return () => disconnectLiveKit();
-  }, [viewerStreamId, currentUser?.id, hasEnded, streamData?.user_id, streamData?.host_id]);
+  }, [viewerStreamId, currentUser?.id, hasEnded, isLive, streamData?.user_id, streamData?.host_id]);
 
   const fetchMessages = async () => {
     if (!activeStreamId) return;
