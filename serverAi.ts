@@ -4,6 +4,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 const GEMINI_API_KEY = () => process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-2.0-flash';
 
+let geminiCooldownUntil = 0;
+
 const OPENAI_API_KEY = () =>
   process.env.OPENAI_API_KEY || process.env.VITE_AI_API_KEY || '';
 const OPENAI_BASE_URL = () =>
@@ -49,13 +51,19 @@ export async function generateServerText(
   const maxTokens = options.maxTokens ?? 512;
   const geminiKey = GEMINI_API_KEY();
 
-  if (geminiKey) {
+  if (geminiKey && Date.now() > geminiCooldownUntil) {
     const model = geminiModel(options.preferredModel);
     try {
       const text = await callGemini(geminiKey, model, prompt, systemPrompt, temperature, maxTokens, Boolean(options.jsonResponse));
       if (text) return { provider: 'gemini', model, text };
-    } catch (err) {
-      console.warn('[serverAi] Gemini call failed, trying OpenAI-compatible fallback:', err);
+    } catch (err: any) {
+      const msg = String(err?.message ?? '');
+      if (msg.includes('429')) {
+        geminiCooldownUntil = Date.now() + 5 * 60_000;
+        console.warn('[serverAi] Gemini 429 rate-limited — cooling down for 5 min');
+      } else {
+        console.warn('[serverAi] Gemini call failed, trying OpenAI-compatible fallback:', msg.slice(0, 200));
+      }
     }
   }
 
@@ -152,7 +160,8 @@ function geminiModel(preferredModel?: string | null) {
 
 function openAiModel(preferredModel?: string | null) {
   const model = preferredModel?.trim();
-  return model && model !== 'platform_default' ? model : OPENAI_MODEL();
+  if (!model || model === 'platform_default' || model.startsWith('gemini-')) return OPENAI_MODEL();
+  return model;
 }
 
 async function callGemini(
