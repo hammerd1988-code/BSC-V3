@@ -709,11 +709,10 @@ export const Casper: React.FC = () => {
       const casperText = response || 'The void swallowed my words. Say that again?';
 
       if (currentUser?.id && response) {
-        void fetch('/api/casper/memory', {
+        authFetch('/api/casper/memory', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId: currentUser.id, userMessage: transcript, casperReply: response }),
-        });
+        }).catch((err: unknown) => console.warn('[Casper] memory persist failed:', err));
       }
 
       setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'casper', content: casperText, timestamp: new Date() }]);
@@ -883,11 +882,10 @@ export const Casper: React.FC = () => {
       const casperText = response || "The void is silent. Try again?";
 
       if (currentUser?.id && response) {
-        void fetch('/api/casper/memory', {
+        authFetch('/api/casper/memory', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId: currentUser.id, userMessage: text, casperReply: response }),
-        });
+        }).catch((err: unknown) => console.warn('[Casper] memory persist failed:', err));
       }
 
       setMessages(prev => [...prev, {
