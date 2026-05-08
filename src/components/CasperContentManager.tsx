@@ -328,7 +328,7 @@ export const CasperContentManager: React.FC = () => {
   const [composerTitle, setComposerTitle] = useState('');
   const [composerBody, setComposerBody] = useState('');
   const [scheduleType, setScheduleType] = useState<typeof contentTypes[number]>('post');
-  const [scheduleFor, setScheduleFor] = useState(() => new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
+  const [scheduleFor, setScheduleFor] = useState(() => toLocalDateTimeInputValue(new Date(Date.now() + 24 * 60 * 60 * 1000)));
   const [thumbnailPrompt, setThumbnailPrompt] = useState('Cyberpunk coding tutorial thumbnail with red neon, laptop glow, and bold readable title');
   const [captionPrompt, setCaptionPrompt] = useState('New long-form coding tutorial about shipping production features');
   const [generatedThumbnail, setGeneratedThumbnail] = useState('');
