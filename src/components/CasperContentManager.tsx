@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
+  Activity,
   ArrowLeft,
   BarChart3,
   Bot,
@@ -11,6 +12,7 @@ import {
   Clock,
   Copy,
   FileText,
+  Flame,
   GitBranch,
   Download,
   ExternalLink,
@@ -22,16 +24,19 @@ import {
   RefreshCw,
   Scissors,
   Send,
+  Shield,
   Sparkles,
   Square,
   Target,
   Trash2,
+  TrendingUp,
   Trophy,
   UserPlus,
   Users,
   Video,
   Wand2,
   XCircle,
+  Zap,
   type LucideIcon,
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
@@ -116,26 +121,78 @@ const visualForgeTemplates = [
 ] as const;
 
 const wedgeOptions = [
-  'AI-assisted creator growth for niche communities',
-  'Developer education clips for builders shipping in public',
-  'Creator operations command center for stream-first channels',
-  'Cyberpunk brand studio for tech creators',
+  'Livestream-first creator growth for builders shipping in public',
+  'Livestream education channels turning streams into evergreen clips',
+  'AI co-host livestream brand for niche tech communities',
+  'Stream-to-short repurposing studio for solo creators',
+  'Cyberpunk live brand studio for developer founders',
 ] as const;
 
-const distributionTemplates = [
+type DistributionAccent = 'red' | 'cyan' | 'fuchsia';
+
+type DistributionTemplate = {
+  label: string;
+  prompt: string;
+  icon: LucideIcon;
+  accent: DistributionAccent;
+};
+
+const distributionTemplates: DistributionTemplate[] = [
   {
-    label: 'Post → Short → Thread',
-    prompt: 'Turn one core idea into a long post, then a 9:16 short hook, then a 5-part thread recap with CTA back-links.',
+    label: 'Stream → Clips → Threads',
+    prompt: 'Plan a 90-minute livestream: 3 segments, 5 clip-worthy moments, 1 thread recap with timestamps, and a 9:16 teaser hook for the next stream.',
+    icon: Radio,
+    accent: 'red',
   },
   {
-    label: 'Live Stream Loop',
-    prompt: 'Draft stream title + opening hook + three segment plan + clip timestamps + replay CTA for external distribution.',
+    label: 'Live Co-stream Loop',
+    prompt: 'Identify 3 collab livestream prompts, draft outreach DMs to potential co-hosts, and schedule a recurring monthly co-stream slot with shared promo.',
+    icon: Users,
+    accent: 'cyan',
   },
   {
     label: 'Challenge Chain',
-    prompt: 'Create a creator challenge prompt, remix instructions, participation hashtag, and winner spotlight post.',
+    prompt: 'Create a creator challenge prompt, remix rules, participation hashtag, and a livestream winner spotlight that loops back into the next challenge.',
+    icon: Trophy,
+    accent: 'fuchsia',
   },
-] as const;
+];
+
+type TrustChecklist = {
+  rights: boolean;
+  aiLabel: boolean;
+  antiSpam: boolean;
+  moderation: boolean;
+};
+
+const TRUST_CHECKLIST_DEFAULTS: TrustChecklist = {
+  rights: false,
+  aiLabel: false,
+  antiSpam: false,
+  moderation: false,
+};
+
+const coerceTrustChecklist = (value: unknown): TrustChecklist => {
+  const source = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  return {
+    rights: typeof source.rights === 'boolean' ? source.rights : TRUST_CHECKLIST_DEFAULTS.rights,
+    aiLabel: typeof source.aiLabel === 'boolean' ? source.aiLabel : TRUST_CHECKLIST_DEFAULTS.aiLabel,
+    antiSpam: typeof source.antiSpam === 'boolean' ? source.antiSpam : TRUST_CHECKLIST_DEFAULTS.antiSpam,
+    moderation: typeof source.moderation === 'boolean' ? source.moderation : TRUST_CHECKLIST_DEFAULTS.moderation,
+  };
+};
+
+const toLocalDateTimeInputValue = (date: Date) => {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+
+const TRUST_CHECKLIST_FIELDS: Array<{ key: keyof TrustChecklist; label: string; hint: string }> = [
+  { key: 'rights', label: 'Rights/licensing checked', hint: 'Confirm music, footage, and likeness clearance.' },
+  { key: 'aiLabel', label: 'AI content labeling ready', hint: 'Disclose AI-assisted segments before going live.' },
+  { key: 'antiSpam', label: 'Anti-spam check complete', hint: 'No mass DMs, no engagement-pod loops in the plan.' },
+  { key: 'moderation', label: 'Moderation plan set', hint: 'Mods, slow-mode, and word filter configured for stream chat.' },
+];
 
 const statusStyles: Record<CasperSubagent['status'], string> = {
   queued: 'border-zinc-500/30 bg-zinc-500/10 text-zinc-300',
@@ -271,7 +328,7 @@ export const CasperContentManager: React.FC = () => {
   const [composerTitle, setComposerTitle] = useState('');
   const [composerBody, setComposerBody] = useState('');
   const [scheduleType, setScheduleType] = useState<typeof contentTypes[number]>('post');
-  const [scheduleFor, setScheduleFor] = useState(() => new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
+  const [scheduleFor, setScheduleFor] = useState(() => toLocalDateTimeInputValue(new Date(Date.now() + 24 * 60 * 60 * 1000)));
   const [thumbnailPrompt, setThumbnailPrompt] = useState('Cyberpunk coding tutorial thumbnail with red neon, laptop glow, and bold readable title');
   const [captionPrompt, setCaptionPrompt] = useState('New long-form coding tutorial about shipping production features');
   const [generatedThumbnail, setGeneratedThumbnail] = useState('');
@@ -290,14 +347,10 @@ export const CasperContentManager: React.FC = () => {
   const [forgeProgress, setForgeProgress] = useState('Forge idle — awaiting prompt signal.');
   const [forgeError, setForgeError] = useState('');
   const [wedgeFocus, setWedgeFocus] = useState<string>(wedgeOptions[0]);
-  const [brandPositioning, setBrandPositioning] = useState('Creators grow faster here because Casper turns one idea into a full publishing loop.');
+  const [brandPositioning, setBrandPositioning] = useState('Casper turns every livestream into a week of clips, threads, and shorts so creators compound their audience faster.');
+  const [streamCadenceTarget, setStreamCadenceTarget] = useState<number>(2);
   const [copilotPlan, setCopilotPlan] = useState('');
-  const [trustChecklist, setTrustChecklist] = useState({
-    rights: true,
-    aiLabel: true,
-    antiSpam: true,
-    moderation: true,
-  });
+  const [trustChecklist, setTrustChecklist] = useState<TrustChecklist>(TRUST_CHECKLIST_DEFAULTS);
 
   const loadData = async () => {
     if (!currentUser) return;
@@ -358,11 +411,15 @@ export const CasperContentManager: React.FC = () => {
       const parsed = JSON.parse(raw) as {
         wedgeFocus?: string;
         brandPositioning?: string;
-        trustChecklist?: typeof trustChecklist;
+        trustChecklist?: unknown;
+        streamCadenceTarget?: number;
       };
-      if (parsed.wedgeFocus) setWedgeFocus(parsed.wedgeFocus);
-      if (parsed.brandPositioning) setBrandPositioning(parsed.brandPositioning);
-      if (parsed.trustChecklist) setTrustChecklist(parsed.trustChecklist);
+      if (typeof parsed.wedgeFocus === 'string') setWedgeFocus(parsed.wedgeFocus);
+      if (typeof parsed.brandPositioning === 'string') setBrandPositioning(parsed.brandPositioning);
+      if (parsed.trustChecklist !== undefined) setTrustChecklist(coerceTrustChecklist(parsed.trustChecklist));
+      if (typeof parsed.streamCadenceTarget === 'number' && Number.isFinite(parsed.streamCadenceTarget)) {
+        setStreamCadenceTarget(Math.min(7, Math.max(1, Math.round(parsed.streamCadenceTarget))));
+      }
     } catch (error) {
       console.warn('[CasperStudio] Failed to restore virality plan settings:', error);
     }
@@ -375,11 +432,12 @@ export const CasperContentManager: React.FC = () => {
         wedgeFocus,
         brandPositioning,
         trustChecklist,
+        streamCadenceTarget,
       }));
     } catch (error) {
       console.warn('[CasperStudio] Failed to persist virality plan settings:', error);
     }
-  }, [currentUser?.id, wedgeFocus, brandPositioning, trustChecklist]);
+  }, [currentUser?.id, wedgeFocus, brandPositioning, trustChecklist, streamCadenceTarget]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -415,16 +473,54 @@ export const CasperContentManager: React.FC = () => {
     return Math.round((engaged / videos.length) * 100);
   }, [videos]);
 
+  const streamsThisWeek = useMemo(() => {
+    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    return streams.filter((stream) => stream.started_at && new Date(stream.started_at).getTime() >= oneWeekAgo).length;
+  }, [streams]);
+
+  const avgStreamViewers = useMemo(() => {
+    if (!streams.length) return 0;
+    const total = streams.reduce((sum, stream) => sum + (stream.viewer_count || 0), 0);
+    return Math.round(total / streams.length);
+  }, [streams]);
+
+  const liveNow = analytics.liveStreams;
+
+  const trustScore = useMemo(() => {
+    const checks = Object.values(trustChecklist);
+    if (!checks.length) return 0;
+    return Math.round((checks.filter(Boolean).length / checks.length) * 100);
+  }, [trustChecklist]);
+
+  const retentionScore = useMemo(() => {
+    if (creatorAgeDays >= 30) return 100;
+    if (creatorAgeDays >= 7) return 70;
+    if (creatorAgeDays >= 1) return 35;
+    return 0;
+  }, [creatorAgeDays]);
+
+  const brandGrowthScore = useMemo(
+    () => Math.round((engagementRate + retentionScore + trustScore) / 3),
+    [engagementRate, retentionScore, trustScore],
+  );
+
   const trustReady = Object.values(trustChecklist).every(Boolean);
 
   const generateWeeklyCopilotPlan = () => {
+    const liveProof = liveNow > 0
+      ? `Currently live with ${liveNow} active stream${liveNow === 1 ? '' : 's'} (avg ${avgStreamViewers} viewers).`
+      : 'No streams live this minute — schedule one tonight to compound the loop.';
+    const cadenceGap = Math.max(0, streamCadenceTarget - streamsThisWeek);
     const plan = [
       `Wedge focus: ${wedgeFocus}`,
-      `North-star metric: ${engagementRate}% of uploaded videos have meaningful engagement (${videos.filter((v) => (v.view_count || 0) > 0).length}/${Math.max(videos.length, 1)}).`,
-      `This week: schedule ${Math.max(3, analytics.scheduled + 1)} pieces (1 flagship post, 1 short, 1 stream teaser).`,
-      'Collaboration: launch one remix/challenge with clear participation rules and repost the best contribution.',
-      'Retention: maintain a daily publish/respond streak and close comments within 24h on every upload.',
-      'Safety: verify rights, AI labeling, anti-spam, and moderation checks before publishing.',
+      `Stream cadence: ship ${streamCadenceTarget} stream${streamCadenceTarget === 1 ? '' : 's'} this week (last 7 days: ${streamsThisWeek}, gap: ${cadenceGap}).`,
+      `North-star metric: ${engagementRate}% of uploads engaged (${videos.filter((v) => (v.view_count || 0) > 0).length}/${Math.max(videos.length, 1)}).`,
+      'Stream loop: stage 1 flagship livestream, then auto-chop into 3 clips + 1 thread + 1 short hook for the next 7 days.',
+      `Activation: schedule ${Math.max(3, analytics.scheduled + 1)} pieces (1 stream, 2 supporting posts/shorts) and pre-write the replay CTA.`,
+      'Collaboration: invite 1 co-host or run a remix challenge to break audience silos.',
+      'Retention: daily publish/respond streak — close every comment within 24h on every stream replay.',
+      'Safety: verify rights, AI labeling, anti-spam, and moderation checks before pressing live.',
+      `Live signal: ${liveProof}`,
       `Positioning line: ${brandPositioning}`,
     ].join('\n');
     setCopilotPlan(plan);
@@ -432,13 +528,35 @@ export const CasperContentManager: React.FC = () => {
   };
 
   const launchTenMinuteOnboarding = () => {
-    const now = new Date();
-    const inTen = new Date(now.getTime() + 10 * 60 * 1000).toISOString().slice(0, 16);
+    const inTen = new Date(Date.now() + 10 * 60 * 1000);
     setScheduleType('post');
-    setScheduleFor(inTen);
+    setScheduleFor(toLocalDateTimeInputValue(inTen));
     setComposerTitle('First signal: who I help and what I ship');
     setComposerBody(`Wedge: ${wedgeFocus}\n\nHook: I help this niche win faster by shipping in public.\nProof: one concrete win from this week.\nCTA: comment your current blocker and I will respond in 24h.\n\nPositioning: ${brandPositioning}`);
     setGeneratedCaption('10-minute launch staged. Next: publish this post and reply to 3 relevant creators for first interaction momentum.');
+  };
+
+  const launchStreamAnchor = () => {
+    const inThirty = new Date(Date.now() + 30 * 60 * 1000);
+    setScheduleType('stream');
+    setScheduleFor(toLocalDateTimeInputValue(inThirty));
+    setComposerTitle(`Live: ${wedgeFocus} — build-in-public stream`);
+    setComposerBody([
+      `Wedge: ${wedgeFocus}`,
+      '',
+      'Segment 1 — Hook & frame the bet (10m)',
+      'Segment 2 — Live build / teardown with chat reactions (40m)',
+      'Segment 3 — Audience challenge + Q&A (40m)',
+      '',
+      'Repurposing plan (Casper auto-chops after stream ends):',
+      '- 3 vertical clips of the highest-energy moments',
+      '- 1 thread recap with timestamps + replay CTA',
+      '- 1 9:16 teaser for next week\u2019s stream',
+      '',
+      `Positioning: ${brandPositioning}`,
+    ].join('\n'));
+    setGeneratedCaption('Live anchor staged — Casper will harvest 3 clips + 1 thread the moment this stream ends.');
+    setDraftPrompt(`Spawn sub-agents to: (1) draft 3 livestream clip captions, (2) write a thread recap with timestamps, (3) draft outreach DMs to 5 potential co-streamers about the wedge "${wedgeFocus}".`);
   };
 
   const addScheduledContent = async () => {
@@ -787,76 +905,248 @@ export const CasperContentManager: React.FC = () => {
                 ))}
               </section>
 
-              <section className="rounded-[2rem] border border-fuchsia-300/25 bg-zinc-950/80 p-5 shadow-[0_0_36px_rgba(255,0,255,0.12)]">
-                <div className="mb-4 flex items-center gap-3">
-                  <Target className="h-5 w-5 text-fuchsia-300" />
-                  <h2 className="text-sm font-black uppercase tracking-widest">Virality Flight Plan</h2>
-                </div>
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-3">
-                    <label className="block text-[9px] font-black uppercase tracking-widest text-zinc-500">Wedge Use Case</label>
-                    <select value={wedgeFocus} onChange={(e) => setWedgeFocus(e.target.value)} className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white outline-none focus:border-fuchsia-300">
-                      {wedgeOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                    </select>
-                    <label className="block text-[9px] font-black uppercase tracking-widest text-zinc-500">Brand Positioning</label>
-                    <textarea value={brandPositioning} onChange={(e) => setBrandPositioning(e.target.value)} className="min-h-20 w-full resize-none rounded-xl border border-white/10 bg-black/50 p-3 text-xs leading-5 text-white outline-none focus:border-fuchsia-300" />
-                    <button onClick={launchTenMinuteOnboarding} className="inline-flex items-center gap-2 rounded-xl border border-cyan-300/25 bg-cyan-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100">
-                      <UserPlus className="h-4 w-4" /> 10-minute onboarding path
-                    </button>
-                  </div>
-                  <div className="space-y-3">
-                    <div className="rounded-2xl border border-white/10 bg-black/35 p-3">
-                      <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">North-star metric</p>
-                      <p className="mt-1 text-2xl font-black text-white">{engagementRate}%</p>
-                      <p className="text-[10px] text-zinc-400">% of videos with meaningful engagement</p>
+              <section className="relative overflow-hidden rounded-[2rem] border border-fuchsia-300/30 bg-gradient-to-br from-fuchsia-500/[0.08] via-zinc-950/85 to-cyan-500/[0.08] p-5 shadow-[0_0_36px_rgba(255,0,255,0.18)]">
+                <div className="pointer-events-none absolute -top-24 -right-24 h-48 w-48 rounded-full bg-fuchsia-500/20 blur-3xl" aria-hidden />
+                <div className="pointer-events-none absolute -bottom-24 -left-24 h-48 w-48 rounded-full bg-cyan-500/20 blur-3xl" aria-hidden />
+                <div className="relative">
+                  <div className="mb-5 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-end">
+                    <div>
+                      <p className="flex items-center gap-2 text-[9px] font-black uppercase tracking-[0.32em] text-fuchsia-200">
+                        <Target className="h-4 w-4 text-fuchsia-300" /> Virality Flight Plan
+                      </p>
+                      <h2 className="mt-1 text-xl font-black uppercase italic tracking-tight text-white sm:text-2xl">Livestream Growth Copilot</h2>
+                      <p className="mt-1 max-w-xl text-[11px] leading-5 text-zinc-400">Anchor every week around a flagship livestream. Casper turns each stream into clips, threads, and shorts — and gates the loop behind your trust + safety checks.</p>
                     </div>
-                    <div className="rounded-2xl border border-white/10 bg-black/35 p-3">
-                      <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Retention milestones</p>
-                      <div className="mt-2 space-y-1 text-[10px] font-bold uppercase tracking-widest">
-                        <p className={creatorAgeDays >= 1 ? 'text-green-300' : 'text-zinc-500'}>D1 {creatorAgeDays >= 1 ? 'complete' : 'pending'}</p>
-                        <p className={creatorAgeDays >= 7 ? 'text-green-300' : 'text-zinc-500'}>D7 {creatorAgeDays >= 7 ? 'complete' : 'pending'}</p>
-                        <p className={creatorAgeDays >= 30 ? 'text-green-300' : 'text-zinc-500'}>D30 {creatorAgeDays >= 30 ? 'complete' : 'pending'}</p>
+                    <Link
+                      to="/golive"
+                      className={cn(
+                        'inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-[10px] font-black uppercase tracking-widest transition-all',
+                        liveNow > 0
+                          ? 'border-red-400/60 bg-red-500/20 text-red-100 shadow-[0_0_24px_rgba(255,40,40,0.35)] hover:bg-red-500/30'
+                          : 'border-red-400/30 bg-red-500/10 text-red-100 hover:border-red-400/60 hover:bg-red-500/20',
+                      )}
+                    >
+                      <Radio className={cn('h-4 w-4', liveNow > 0 ? 'animate-pulse text-red-300' : 'text-red-200')} />
+                      {liveNow > 0 ? `Live now · ${liveNow}` : 'Go Live'}
+                    </Link>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-2xl border border-fuchsia-300/30 bg-black/40 p-3">
+                      <p className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-fuchsia-200">
+                        <TrendingUp className="h-3 w-3" /> Brand Growth Score
+                      </p>
+                      <p className="mt-1 text-3xl font-black text-white">
+                        {brandGrowthScore}
+                        <span className="ml-1 text-base font-bold text-zinc-500">/100</span>
+                      </p>
+                      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                        <div
+                          className="h-full bg-gradient-to-r from-cyan-300 via-fuchsia-400 to-red-400 transition-all"
+                          style={{ width: `${Math.min(100, Math.max(0, brandGrowthScore))}%` }}
+                        />
+                      </div>
+                      <p className="mt-2 text-[9px] font-bold uppercase tracking-widest text-zinc-500">engagement · retention · trust</p>
+                    </div>
+                    <div className="rounded-2xl border border-cyan-300/30 bg-black/40 p-3">
+                      <p className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-cyan-200">
+                        <Activity className="h-3 w-3" /> Stream cadence
+                      </p>
+                      <div className="mt-1 flex items-baseline gap-2">
+                        <p className="text-3xl font-black text-white">{streamsThisWeek}</p>
+                        <p className="text-xs font-bold text-zinc-400">/ {streamCadenceTarget} this week</p>
+                      </div>
+                      <input
+                        type="range"
+                        min={1}
+                        max={7}
+                        value={streamCadenceTarget}
+                        onChange={(e) => setStreamCadenceTarget(Number(e.target.value))}
+                        aria-label="Stream cadence target per week"
+                        className="mt-2 w-full accent-cyan-300"
+                      />
+                      <p className="mt-1 text-[9px] font-bold uppercase tracking-widest text-zinc-500">target streams / week</p>
+                    </div>
+                    <div className="rounded-2xl border border-red-400/30 bg-black/40 p-3">
+                      <p className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-red-200">
+                        <Radio className={cn('h-3 w-3', liveNow > 0 && 'animate-pulse')} /> Live signal
+                      </p>
+                      <p className="mt-1 text-3xl font-black text-white">{liveNow}</p>
+                      <p className="text-[10px] font-bold text-zinc-400">running now · avg {avgStreamViewers} viewers</p>
+                      <p className="mt-2 text-[9px] font-bold uppercase tracking-widest text-zinc-500">{liveNow > 0 ? 'on-air · ready to clip' : 'idle · stage a stream anchor'}</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-5 grid gap-4 md:grid-cols-2">
+                    <div className="space-y-3 rounded-2xl border border-white/10 bg-black/30 p-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Wedge Use Case</label>
+                        <span className="rounded-full bg-fuchsia-500/15 px-2 py-0.5 text-[8px] font-black tracking-widest text-fuchsia-200">Pinned to Casper</span>
+                      </div>
+                      <select value={wedgeFocus} onChange={(e) => setWedgeFocus(e.target.value)} className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white outline-none transition-colors hover:border-fuchsia-300/50 focus:border-fuchsia-300">
+                        {wedgeOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                      </select>
+                      <label className="block text-[9px] font-black uppercase tracking-widest text-zinc-500">Brand Positioning</label>
+                      <textarea
+                        value={brandPositioning}
+                        onChange={(e) => setBrandPositioning(e.target.value)}
+                        placeholder="Why creators grow faster on this stream..."
+                        className="min-h-24 w-full resize-none rounded-xl border border-white/10 bg-black/50 p-3 text-xs leading-5 text-white outline-none transition-colors hover:border-fuchsia-300/40 focus:border-fuchsia-300"
+                      />
+                    </div>
+                    <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-xl border border-white/10 bg-black/40 p-3">
+                          <p className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-zinc-500">
+                            <BarChart3 className="h-3 w-3" /> North-star
+                          </p>
+                          <p className="mt-1 text-2xl font-black text-white">{engagementRate}%</p>
+                          <p className="text-[10px] text-zinc-400">uploads with engagement</p>
+                        </div>
+                        <div className="rounded-xl border border-white/10 bg-black/40 p-3">
+                          <p className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-zinc-500">
+                            <Flame className="h-3 w-3" /> Retention
+                          </p>
+                          <div className="mt-2 space-y-1.5 text-[10px] font-bold uppercase tracking-widest">
+                            {[
+                              { label: 'D1', threshold: 1 },
+                              { label: 'D7', threshold: 7 },
+                              { label: 'D30', threshold: 30 },
+                            ].map(({ label, threshold }) => {
+                              const reached = creatorAgeDays >= threshold;
+                              const progress = Math.min(100, Math.round((creatorAgeDays / threshold) * 100));
+                              return (
+                                <div key={label} className="flex items-center gap-2">
+                                  <span className={cn('w-7 text-[9px]', reached ? 'text-green-300' : 'text-zinc-500')}>{label}</span>
+                                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/10">
+                                    <div
+                                      className={cn('h-full transition-all', reached ? 'bg-green-300' : 'bg-zinc-500/60')}
+                                      style={{ width: `${progress}%` }}
+                                    />
+                                  </div>
+                                  <span className={cn('text-[9px]', reached ? 'text-green-300' : 'text-zinc-500')}>{reached ? 'hit' : 'pending'}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
                       </div>
                     </div>
-                    <button onClick={generateWeeklyCopilotPlan} className="inline-flex items-center gap-2 rounded-xl bg-fuchsia-400 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-black">
-                      <Trophy className="h-4 w-4" /> Generate weekly copilot plan
-                    </button>
                   </div>
-                </div>
-                <div className="mt-4 grid gap-3 md:grid-cols-3">
-                  {distributionTemplates.map((template) => (
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
                     <button
-                      key={template.label}
-                      onClick={() => {
-                        setDraftPrompt(template.prompt);
-                        setGeneratedCaption(`Distribution loop staged: ${template.label}. Spawn sub-agents to execute it.`);
-                      }}
-                      className="rounded-xl border border-white/10 bg-black/35 p-3 text-left hover:border-cyan-300/40"
+                      onClick={launchTenMinuteOnboarding}
+                      className="group inline-flex items-center justify-between gap-2 rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-4 py-3 text-left text-[10px] font-black uppercase tracking-widest text-cyan-100 transition-all hover:border-cyan-300/60 hover:bg-cyan-300/20 hover:shadow-[0_0_24px_rgba(0,255,255,0.25)]"
                     >
-                      <p className="text-[10px] font-black uppercase tracking-widest text-cyan-200">{template.label}</p>
-                      <p className="mt-2 text-[11px] leading-5 text-zinc-400">{template.prompt}</p>
+                      <span className="flex items-center gap-2"><UserPlus className="h-4 w-4" /> 10-min onboarding path</span>
+                      <Send className="h-3 w-3 opacity-50 transition-transform group-hover:translate-x-0.5" />
                     </button>
-                  ))}
+                    <button
+                      onClick={launchStreamAnchor}
+                      className="group inline-flex items-center justify-between gap-2 rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-left text-[10px] font-black uppercase tracking-widest text-red-100 transition-all hover:border-red-400/60 hover:bg-red-500/20 hover:shadow-[0_0_24px_rgba(255,40,40,0.25)]"
+                    >
+                      <span className="flex items-center gap-2"><Radio className="h-4 w-4" /> Stage stream anchor</span>
+                      <Send className="h-3 w-3 opacity-50 transition-transform group-hover:translate-x-0.5" />
+                    </button>
+                    <button
+                      onClick={generateWeeklyCopilotPlan}
+                      className="group inline-flex items-center justify-between gap-2 rounded-2xl bg-gradient-to-r from-fuchsia-400 to-cyan-300 px-4 py-3 text-left text-[10px] font-black uppercase tracking-widest text-black transition-all hover:shadow-[0_0_24px_rgba(255,0,255,0.45)]"
+                    >
+                      <span className="flex items-center gap-2"><Trophy className="h-4 w-4" /> Weekly copilot plan</span>
+                      <Send className="h-3 w-3 opacity-60 transition-transform group-hover:translate-x-0.5" />
+                    </button>
+                  </div>
+
+                  <div className="mt-5">
+                    <p className="mb-2 text-[9px] font-black uppercase tracking-widest text-zinc-500">Distribution loops · seed sub-agents</p>
+                    <div className="grid gap-3 md:grid-cols-3">
+                      {distributionTemplates.map((template) => {
+                        const TemplateIcon = template.icon;
+                        return (
+                          <button
+                            key={template.label}
+                            onClick={() => {
+                              setDraftPrompt(template.prompt);
+                              setGeneratedCaption(`Distribution loop staged: ${template.label}. Spawn sub-agents to execute it.`);
+                            }}
+                            className={cn(
+                              'group rounded-2xl border bg-black/40 p-3 text-left transition-all hover:bg-black/60',
+                              template.accent === 'red' && 'border-red-400/30 hover:border-red-400/70 hover:shadow-[0_0_20px_rgba(255,40,40,0.18)]',
+                              template.accent === 'cyan' && 'border-cyan-300/30 hover:border-cyan-300/70 hover:shadow-[0_0_20px_rgba(0,255,255,0.18)]',
+                              template.accent === 'fuchsia' && 'border-fuchsia-300/30 hover:border-fuchsia-300/70 hover:shadow-[0_0_20px_rgba(255,0,255,0.18)]',
+                            )}
+                          >
+                            <p className={cn(
+                              'flex items-center gap-2 text-[10px] font-black uppercase tracking-widest',
+                              template.accent === 'red' && 'text-red-200',
+                              template.accent === 'cyan' && 'text-cyan-200',
+                              template.accent === 'fuchsia' && 'text-fuchsia-200',
+                            )}>
+                              <TemplateIcon className="h-4 w-4" /> {template.label}
+                            </p>
+                            <p className="mt-2 text-[11px] leading-5 text-zinc-400">{template.prompt}</p>
+                            <p className="mt-2 text-[9px] font-black uppercase tracking-widest text-zinc-500 opacity-0 transition-opacity group-hover:opacity-100">Click to seed sub-agents</p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="mt-5 rounded-2xl border border-white/10 bg-black/35 p-4">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <p className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-cyan-100">
+                        <Shield className="h-4 w-4 text-cyan-300" /> Trust + collaboration gate
+                      </p>
+                      <span className={cn(
+                        'rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-widest',
+                        trustReady ? 'bg-green-300/15 text-green-200' : 'bg-yellow-300/15 text-yellow-200',
+                      )}>
+                        {trustReady ? `${trustScore}/100 ready` : `${trustScore}/100 — confirm checks`}
+                      </span>
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {TRUST_CHECKLIST_FIELDS.map(({ key, label, hint }) => {
+                        const checked = trustChecklist[key];
+                        return (
+                          <label
+                            key={key}
+                            className={cn(
+                              'flex cursor-pointer items-start gap-2 rounded-xl border px-3 py-2 text-[10px] uppercase tracking-widest transition-colors',
+                              checked
+                                ? 'border-green-300/40 bg-green-300/[0.06] text-green-100'
+                                : 'border-white/10 bg-black/30 text-zinc-300 hover:border-cyan-300/40',
+                            )}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => setTrustChecklist((prev) => ({ ...prev, [key]: e.target.checked }))}
+                              className="mt-0.5 accent-cyan-300"
+                            />
+                            <span className="flex-1">
+                              <span className="block">{label}</span>
+                              <span className="mt-0.5 block text-[9px] font-bold normal-case tracking-normal text-zinc-500">{hint}</span>
+                            </span>
+                            {checked && <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-green-300" />}
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <p className={cn('mt-3 text-[10px] font-black uppercase tracking-widest', trustReady ? 'text-green-300' : 'text-yellow-200')}>
+                      {trustReady ? 'Ready to publish + scale' : 'Complete all trust gates before publishing'}
+                    </p>
+                  </div>
+
+                  {copilotPlan && (
+                    <div className="mt-4 rounded-2xl border border-fuchsia-300/30 bg-fuchsia-300/[0.06] p-4">
+                      <p className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-fuchsia-200">
+                        <Zap className="h-3 w-3" /> Copilot plan
+                      </p>
+                      <pre className="mt-2 whitespace-pre-wrap text-xs leading-6 text-zinc-200">{copilotPlan}</pre>
+                    </div>
+                  )}
                 </div>
-                <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4">
-                  <div className="mb-2 flex items-center gap-2">
-                    <Users className="h-4 w-4 text-cyan-300" />
-                    <p className="text-[10px] font-black uppercase tracking-widest text-cyan-100">Trust + collaboration gate</p>
-                  </div>
-                  <div className="grid gap-2 md:grid-cols-2">
-                    <label className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-zinc-300"><input type="checkbox" checked={trustChecklist.rights} onChange={(e) => setTrustChecklist((prev) => ({ ...prev, rights: e.target.checked }))} /> Rights/licensing checked</label>
-                    <label className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-zinc-300"><input type="checkbox" checked={trustChecklist.aiLabel} onChange={(e) => setTrustChecklist((prev) => ({ ...prev, aiLabel: e.target.checked }))} /> AI content labeling ready</label>
-                    <label className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-zinc-300"><input type="checkbox" checked={trustChecklist.antiSpam} onChange={(e) => setTrustChecklist((prev) => ({ ...prev, antiSpam: e.target.checked }))} /> Anti-spam check complete</label>
-                    <label className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-zinc-300"><input type="checkbox" checked={trustChecklist.moderation} onChange={(e) => setTrustChecklist((prev) => ({ ...prev, moderation: e.target.checked }))} /> Moderation plan set</label>
-                  </div>
-                  <p className={cn('mt-3 text-[10px] font-black uppercase tracking-widest', trustReady ? 'text-green-300' : 'text-yellow-200')}>{trustReady ? 'Ready to publish + scale' : 'Complete all trust gates before publishing'}</p>
-                </div>
-                {copilotPlan && (
-                  <div className="mt-4 rounded-2xl border border-fuchsia-300/20 bg-fuchsia-300/[0.06] p-4">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-fuchsia-200">Copilot plan</p>
-                    <pre className="mt-2 whitespace-pre-wrap text-xs leading-6 text-zinc-200">{copilotPlan}</pre>
-                  </div>
-                )}
               </section>
 
               <section className="rounded-[2rem] border border-white/10 bg-zinc-950/75 p-5">
