@@ -25,6 +25,12 @@ export interface ServerAIResult {
   provider: 'gemini' | 'openai-compatible';
   model: string;
   text: string;
+  /**
+   * Diagnostic field populated when the call could not produce text
+   * (e.g. provider returned empty, was rate-limited, or threw an error).
+   * Callers should fall back to alternative content when this is set.
+   */
+  lastError?: string;
 }
 
 export function isServerAIConfigured(): boolean {
@@ -50,21 +56,28 @@ export async function generateServerText(
   const temperature = options.temperature ?? 0.8;
   const maxTokens = options.maxTokens ?? 512;
   const geminiKey = GEMINI_API_KEY();
+  const errors: string[] = [];
 
   if (geminiKey && Date.now() > geminiCooldownUntil) {
     const model = geminiModel(options.preferredModel);
     try {
       const text = await callGemini(geminiKey, model, prompt, systemPrompt, temperature, maxTokens, Boolean(options.jsonResponse));
       if (text) return { provider: 'gemini', model, text };
+      errors.push(`gemini(${model}): empty response`);
     } catch (err: any) {
-      const msg = String(err?.message ?? '');
+      const msg = String(err?.message ?? err ?? 'unknown gemini error').slice(0, 240);
+      errors.push(`gemini(${model}): ${msg}`);
       if (msg.includes('429')) {
         geminiCooldownUntil = Date.now() + 5 * 60_000;
         console.warn('[serverAi] Gemini 429 rate-limited — cooling down for 5 min');
       } else {
-        console.warn('[serverAi] Gemini call failed, trying OpenAI-compatible fallback:', msg.slice(0, 200));
+        console.warn('[serverAi] Gemini call failed, trying OpenAI-compatible fallback:', msg);
       }
     }
+  } else if (geminiKey) {
+    errors.push('gemini: cooling down after recent 429');
+  } else {
+    errors.push('gemini: GEMINI_API_KEY not set');
   }
 
   const openaiKey = OPENAI_API_KEY();
@@ -73,16 +86,23 @@ export async function generateServerText(
     try {
       const text = await callOpenAICompatible(openaiKey, model, prompt, systemPrompt, temperature, maxTokens, Boolean(options.jsonResponse));
       if (text) return { provider: 'openai-compatible', model, text };
-    } catch (err) {
-      console.warn('[serverAi] OpenAI-compatible call failed:', err);
+      errors.push(`openai(${model}): empty response`);
+    } catch (err: any) {
+      const msg = String(err?.message ?? err ?? 'unknown openai error').slice(0, 240);
+      errors.push(`openai(${model}): ${msg}`);
+      console.warn('[serverAi] OpenAI-compatible call failed:', msg);
     }
+  } else {
+    errors.push('openai: OPENAI_API_KEY/VITE_AI_API_KEY not set');
   }
 
-  console.warn('[serverAi] No AI provider available — returning empty string');
+  const lastError = errors.join(' | ');
+  console.warn('[serverAi] All providers failed, returning empty text. Errors:', lastError);
   return {
     provider: geminiKey ? 'gemini' : 'openai-compatible',
     model: geminiKey ? geminiModel(options.preferredModel) : openAiModel(options.preferredModel),
     text: '',
+    lastError,
   };
 }
 

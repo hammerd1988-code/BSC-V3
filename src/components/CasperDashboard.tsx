@@ -40,6 +40,7 @@ import {
 import { useAuth } from '../AuthContext';
 import { fromDb, supabase, toDb } from '../supabase';
 import { cn } from '../lib/utils';
+import { casperAuthFetch } from '../lib/casperApi';
 import {
   AVAILABLE_CASPER_INTEGRATIONS,
   CASPER_INTEGRATION_CATEGORIES,
@@ -353,10 +354,7 @@ export const CasperDashboard: React.FC = () => {
 
   const userUuid = isUuid(currentUser?.id) ? currentUser!.id : null;
 
-  const authFetch = useCallback(async (url: string, options: RequestInit = {}) => {
-    const { data } = await supabase.auth.getSession();
-    return fetch(url, { ...options, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${data.session?.access_token ?? ''}`, ...(options.headers ?? {}) } });
-  }, []);
+  const authFetch = useCallback((url: string, options: RequestInit = {}) => casperAuthFetch(url, options), []);
 
   const fetchDashboard = useCallback(async () => {
     try {
