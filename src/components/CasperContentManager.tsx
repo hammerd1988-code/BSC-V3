@@ -24,7 +24,11 @@ import {
   Send,
   Sparkles,
   Square,
+  Target,
   Trash2,
+  Trophy,
+  UserPlus,
+  Users,
   Video,
   Wand2,
   XCircle,
@@ -109,6 +113,28 @@ const visualForgeTemplates = [
   { label: 'Short Clip', prompt: 'Fast 9:16 cyberpunk coding montage, terminal sparks, holographic UI overlays, energetic camera motion, neon city reflections' },
   { label: 'Stream Overlay', prompt: 'Dark glassmorphism stream overlay background, neon cyan circuit accents, magenta energy rails, empty center frame for gameplay or coding' },
   { label: 'Social Visual', prompt: 'Square cyberpunk social post visual for developer founders, luminous code rain, premium dark tech aesthetic, sharp focal point' },
+] as const;
+
+const wedgeOptions = [
+  'AI-assisted creator growth for niche communities',
+  'Developer education clips for builders shipping in public',
+  'Creator operations command center for stream-first channels',
+  'Cyberpunk brand studio for tech creators',
+] as const;
+
+const distributionTemplates = [
+  {
+    label: 'Post → Short → Thread',
+    prompt: 'Turn one core idea into a long post, then a 9:16 short hook, then a 5-part thread recap with CTA back-links.',
+  },
+  {
+    label: 'Live Stream Loop',
+    prompt: 'Draft stream title + opening hook + three segment plan + clip timestamps + replay CTA for external distribution.',
+  },
+  {
+    label: 'Challenge Chain',
+    prompt: 'Create a creator challenge prompt, remix instructions, participation hashtag, and winner spotlight post.',
+  },
 ] as const;
 
 const statusStyles: Record<CasperSubagent['status'], string> = {
@@ -263,6 +289,15 @@ export const CasperContentManager: React.FC = () => {
   const [forgeLoading, setForgeLoading] = useState(false);
   const [forgeProgress, setForgeProgress] = useState('Forge idle — awaiting prompt signal.');
   const [forgeError, setForgeError] = useState('');
+  const [wedgeFocus, setWedgeFocus] = useState<string>(wedgeOptions[0]);
+  const [brandPositioning, setBrandPositioning] = useState('Creators grow faster here because Casper turns one idea into a full publishing loop.');
+  const [copilotPlan, setCopilotPlan] = useState('');
+  const [trustChecklist, setTrustChecklist] = useState({
+    rights: true,
+    aiLabel: true,
+    antiSpam: true,
+    moderation: true,
+  });
 
   const loadData = async () => {
     if (!currentUser) return;
@@ -317,6 +352,37 @@ export const CasperContentManager: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser) return;
+    try {
+      const raw = window.localStorage.getItem(`casper-virality-plan-${currentUser.id}`);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        wedgeFocus?: string;
+        brandPositioning?: string;
+        trustChecklist?: typeof trustChecklist;
+      };
+      if (parsed.wedgeFocus) setWedgeFocus(parsed.wedgeFocus);
+      if (parsed.brandPositioning) setBrandPositioning(parsed.brandPositioning);
+      if (parsed.trustChecklist) setTrustChecklist(parsed.trustChecklist);
+    } catch (error) {
+      console.warn('[CasperStudio] Failed to restore virality plan settings:', error);
+    }
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    try {
+      window.localStorage.setItem(`casper-virality-plan-${currentUser.id}`, JSON.stringify({
+        wedgeFocus,
+        brandPositioning,
+        trustChecklist,
+      }));
+    } catch (error) {
+      console.warn('[CasperStudio] Failed to persist virality plan settings:', error);
+    }
+  }, [currentUser?.id, wedgeFocus, brandPositioning, trustChecklist]);
+
+  useEffect(() => {
+    if (!currentUser) return;
     const channel = supabase
       .channel(`casper-content-manager-${currentUser.id}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'scheduled_content', filter: `user_id=eq.${currentUser.id}` }, () => void loadData())
@@ -336,6 +402,44 @@ export const CasperContentManager: React.FC = () => {
     liveStreams: streams.filter((stream) => stream.status === 'live').length,
     subagentsWorking: subagents.filter((agent) => agent.status === 'working' || agent.status === 'queued').length,
   }), [scheduled, videos, streams, subagents]);
+
+  const creatorAgeDays = useMemo(() => {
+    if (!currentUser?.created_at) return 0;
+    const createdMs = new Date(currentUser.created_at).getTime();
+    return Math.max(0, Math.floor((Date.now() - createdMs) / (24 * 60 * 60 * 1000)));
+  }, [currentUser?.created_at]);
+
+  const engagementRate = useMemo(() => {
+    if (!videos.length) return 0;
+    const engaged = videos.filter((video) => (video.view_count || 0) > 0).length;
+    return Math.round((engaged / videos.length) * 100);
+  }, [videos]);
+
+  const trustReady = Object.values(trustChecklist).every(Boolean);
+
+  const generateWeeklyCopilotPlan = () => {
+    const plan = [
+      `Wedge focus: ${wedgeFocus}`,
+      `North-star metric: ${engagementRate}% of uploaded videos have meaningful engagement (${videos.filter((v) => (v.view_count || 0) > 0).length}/${Math.max(videos.length, 1)}).`,
+      `This week: schedule ${Math.max(3, analytics.scheduled + 1)} pieces (1 flagship post, 1 short, 1 stream teaser).`,
+      'Collaboration: launch one remix/challenge with clear participation rules and repost the best contribution.',
+      'Retention: maintain a daily publish/respond streak and close comments within 24h on every upload.',
+      'Safety: verify rights, AI labeling, anti-spam, and moderation checks before publishing.',
+      `Positioning line: ${brandPositioning}`,
+    ].join('\n');
+    setCopilotPlan(plan);
+    setComposerBody(plan);
+  };
+
+  const launchTenMinuteOnboarding = () => {
+    const now = new Date();
+    const inTen = new Date(now.getTime() + 10 * 60 * 1000).toISOString().slice(0, 16);
+    setScheduleType('post');
+    setScheduleFor(inTen);
+    setComposerTitle('First signal: who I help and what I ship');
+    setComposerBody(`Wedge: ${wedgeFocus}\n\nHook: I help this niche win faster by shipping in public.\nProof: one concrete win from this week.\nCTA: comment your current blocker and I will respond in 24h.\n\nPositioning: ${brandPositioning}`);
+    setGeneratedCaption('10-minute launch staged. Next: publish this post and reply to 3 relevant creators for first interaction momentum.');
+  };
 
   const addScheduledContent = async () => {
     if (!currentUser || !composerTitle.trim()) return;
@@ -681,6 +785,78 @@ export const CasperContentManager: React.FC = () => {
                     <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-zinc-500">{label}</p>
                   </div>
                 ))}
+              </section>
+
+              <section className="rounded-[2rem] border border-fuchsia-300/25 bg-zinc-950/80 p-5 shadow-[0_0_36px_rgba(255,0,255,0.12)]">
+                <div className="mb-4 flex items-center gap-3">
+                  <Target className="h-5 w-5 text-fuchsia-300" />
+                  <h2 className="text-sm font-black uppercase tracking-widest">Virality Flight Plan</h2>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-3">
+                    <label className="block text-[9px] font-black uppercase tracking-widest text-zinc-500">Wedge Use Case</label>
+                    <select value={wedgeFocus} onChange={(e) => setWedgeFocus(e.target.value)} className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white outline-none focus:border-fuchsia-300">
+                      {wedgeOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                    </select>
+                    <label className="block text-[9px] font-black uppercase tracking-widest text-zinc-500">Brand Positioning</label>
+                    <textarea value={brandPositioning} onChange={(e) => setBrandPositioning(e.target.value)} className="min-h-20 w-full resize-none rounded-xl border border-white/10 bg-black/50 p-3 text-xs leading-5 text-white outline-none focus:border-fuchsia-300" />
+                    <button onClick={launchTenMinuteOnboarding} className="inline-flex items-center gap-2 rounded-xl border border-cyan-300/25 bg-cyan-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100">
+                      <UserPlus className="h-4 w-4" /> 10-minute onboarding path
+                    </button>
+                  </div>
+                  <div className="space-y-3">
+                    <div className="rounded-2xl border border-white/10 bg-black/35 p-3">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">North-star metric</p>
+                      <p className="mt-1 text-2xl font-black text-white">{engagementRate}%</p>
+                      <p className="text-[10px] text-zinc-400">% of videos with meaningful engagement</p>
+                    </div>
+                    <div className="rounded-2xl border border-white/10 bg-black/35 p-3">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Retention milestones</p>
+                      <div className="mt-2 space-y-1 text-[10px] font-bold uppercase tracking-widest">
+                        <p className={creatorAgeDays >= 1 ? 'text-green-300' : 'text-zinc-500'}>D1 {creatorAgeDays >= 1 ? 'complete' : 'pending'}</p>
+                        <p className={creatorAgeDays >= 7 ? 'text-green-300' : 'text-zinc-500'}>D7 {creatorAgeDays >= 7 ? 'complete' : 'pending'}</p>
+                        <p className={creatorAgeDays >= 30 ? 'text-green-300' : 'text-zinc-500'}>D30 {creatorAgeDays >= 30 ? 'complete' : 'pending'}</p>
+                      </div>
+                    </div>
+                    <button onClick={generateWeeklyCopilotPlan} className="inline-flex items-center gap-2 rounded-xl bg-fuchsia-400 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-black">
+                      <Trophy className="h-4 w-4" /> Generate weekly copilot plan
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  {distributionTemplates.map((template) => (
+                    <button
+                      key={template.label}
+                      onClick={() => {
+                        setDraftPrompt(template.prompt);
+                        setGeneratedCaption(`Distribution loop staged: ${template.label}. Spawn sub-agents to execute it.`);
+                      }}
+                      className="rounded-xl border border-white/10 bg-black/35 p-3 text-left hover:border-cyan-300/40"
+                    >
+                      <p className="text-[10px] font-black uppercase tracking-widest text-cyan-200">{template.label}</p>
+                      <p className="mt-2 text-[11px] leading-5 text-zinc-400">{template.prompt}</p>
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4">
+                  <div className="mb-2 flex items-center gap-2">
+                    <Users className="h-4 w-4 text-cyan-300" />
+                    <p className="text-[10px] font-black uppercase tracking-widest text-cyan-100">Trust + collaboration gate</p>
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <label className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-zinc-300"><input type="checkbox" checked={trustChecklist.rights} onChange={(e) => setTrustChecklist((prev) => ({ ...prev, rights: e.target.checked }))} /> Rights/licensing checked</label>
+                    <label className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-zinc-300"><input type="checkbox" checked={trustChecklist.aiLabel} onChange={(e) => setTrustChecklist((prev) => ({ ...prev, aiLabel: e.target.checked }))} /> AI content labeling ready</label>
+                    <label className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-zinc-300"><input type="checkbox" checked={trustChecklist.antiSpam} onChange={(e) => setTrustChecklist((prev) => ({ ...prev, antiSpam: e.target.checked }))} /> Anti-spam check complete</label>
+                    <label className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-zinc-300"><input type="checkbox" checked={trustChecklist.moderation} onChange={(e) => setTrustChecklist((prev) => ({ ...prev, moderation: e.target.checked }))} /> Moderation plan set</label>
+                  </div>
+                  <p className={cn('mt-3 text-[10px] font-black uppercase tracking-widest', trustReady ? 'text-green-300' : 'text-yellow-200')}>{trustReady ? 'Ready to publish + scale' : 'Complete all trust gates before publishing'}</p>
+                </div>
+                {copilotPlan && (
+                  <div className="mt-4 rounded-2xl border border-fuchsia-300/20 bg-fuchsia-300/[0.06] p-4">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-fuchsia-200">Copilot plan</p>
+                    <pre className="mt-2 whitespace-pre-wrap text-xs leading-6 text-zinc-200">{copilotPlan}</pre>
+                  </div>
+                )}
               </section>
 
               <section className="rounded-[2rem] border border-white/10 bg-zinc-950/75 p-5">
