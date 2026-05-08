@@ -400,22 +400,30 @@ function BloomDriver({ state, instability }: BloomDriverProps) {
   // Drive bloom strength from voice state, smoothed with a ref. Tuned far below
   // the demo HTML so the orb feels intense but never washed out.
   const target = getPalette(state, instability).bloom;
-  const ref = useRef({ strength: 0.35 });
+  const strengthRef = useRef(0.35);
+  // Ref to the Bloom effect so we can imperatively update its intensity every
+  // frame. Passing the lerped value as a React prop doesn't work because
+  // useFrame does not trigger re-renders, so the prop would only reflect the
+  // value on state/instability changes — losing the smooth transition.
+  const bloomRef = useRef<any>(null);
+  const chromaticOffset = useMemo(() => new THREE.Vector2(0.0008, 0.0012), []);
   useFrame((_, dt) => {
     const damp = Math.min(1, dt * 3);
-    ref.current.strength = lerp(ref.current.strength, target, damp);
+    strengthRef.current = lerp(strengthRef.current, target, damp);
+    if (bloomRef.current) bloomRef.current.intensity = strengthRef.current;
   });
   return (
     <EffectComposer>
       <Bloom
-        intensity={ref.current.strength}
+        ref={bloomRef}
+        intensity={strengthRef.current}
         luminanceThreshold={0.55}
         luminanceSmoothing={0.22}
         mipmapBlur
         radius={0.55}
       />
       <ChromaticAberration
-        offset={new THREE.Vector2(0.0008, 0.0012)}
+        offset={chromaticOffset}
         blendFunction={BlendFunction.NORMAL}
         radialModulation={false}
         modulationOffset={0}
