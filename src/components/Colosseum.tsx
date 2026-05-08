@@ -1517,6 +1517,7 @@ export const Colosseum: React.FC = () => {
       const stats = {
         speed: clampStat(46 + (seed % 16)),
         accuracy: clampStat(48 + ((seed * 3) % 18)),
+        creativity: clampStat(44 + ((seed * 7) % 20)),
         endurance: clampStat(47 + ((seed * 5) % 17)),
       };
       const { data, error } = await supabase
