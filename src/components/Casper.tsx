@@ -11,6 +11,7 @@ import { useAuth } from '../AuthContext';
 import { generateText } from '../lib/ai';
 import { fromDb, supabase, toDb } from '../supabase';
 import { cn } from '../lib/utils';
+import { casperAuthFetch } from '../lib/casperApi';
 import { formatDistanceToNow } from 'date-fns';
 import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
 import {
@@ -375,10 +376,7 @@ export const Casper: React.FC = () => {
     setAiCoreForm(initialCasperCore(nextSettings));
   }, [currentUser?.id, currentUser?.ai_settings]);
 
-  const authFetch = useCallback(async (url: string, options: RequestInit = {}) => {
-    const { data } = await supabase.auth.getSession();
-    return fetch(url, { ...options, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${data.session?.access_token ?? ''}`, ...(options.headers ?? {}) } });
-  }, []);
+  const authFetch = useCallback((url: string, options: RequestInit = {}) => casperAuthFetch(url, options), []);
 
   const fetchControlCenter = useCallback(async () => {
     if (!currentUser?.id) return;
