@@ -981,21 +981,27 @@ app.post("/api/cred/exchange", async (req, res) => {
       const auth = await resolveCasperAuth(req, supabase);
       if (!auth.ok || !auth.profile) {
         return res.status(401).json({
+          success: false,
           error: auth.message || 'Authentication required.',
           reason: auth.reason || 'invalid_token',
         });
       }
       const requestedUserId = (req.query.userId as string | undefined) || null;
+      // Admin-supplied userId still needs to be a valid UUID before it hits Supabase.
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (auth.profile.role === 'admin' && requestedUserId && !UUID_RE.test(requestedUserId)) {
+        return res.status(400).json({ success: false, error: 'userId must be a valid UUID.' });
+      }
       const targetUserId = auth.profile.role === 'admin' ? requestedUserId : auth.profile.id;
       if (!casperMemory) {
-        return res.json({ stateModifier: '', relevantMemories: '' });
+        return res.json({ success: true, stateModifier: '', relevantMemories: '' });
       }
       const stateModifier = await casperMemory.getStatePromptModifier();
       const relevantMemories = await casperMemory.getRelevantMemories(targetUserId, 5);
-      res.json({ stateModifier, relevantMemories });
+      res.json({ success: true, stateModifier, relevantMemories });
     } catch (error) {
       console.error('Error fetching Casper memory:', error);
-      res.status(500).json({ error: 'Failed to fetch memory' });
+      res.status(500).json({ success: false, error: 'Failed to fetch memory' });
     }
   });
 
@@ -1004,18 +1010,19 @@ app.post("/api/cred/exchange", async (req, res) => {
       const auth = await resolveCasperAuth(req, supabase);
       if (!auth.ok || !auth.profile) {
         return res.status(401).json({
+          success: false,
           error: auth.message || 'Authentication required.',
           reason: auth.reason || 'invalid_token',
         });
       }
       const { userId, userMessage, casperReply } = req.body ?? {};
       if (!userId || !userMessage || !casperReply) {
-        return res.status(400).json({ error: 'userId, userMessage, and casperReply are required.' });
+        return res.status(400).json({ success: false, error: 'userId, userMessage, and casperReply are required.' });
       }
       // Non-admin callers can only persist memories for themselves so a leaked
       // session token cannot poison another user's Casper memory store.
       if (auth.profile.role !== 'admin' && String(userId) !== auth.profile.id) {
-        return res.status(403).json({ error: 'You can only store Casper memory for your own profile.' });
+        return res.status(403).json({ success: false, error: 'You can only store Casper memory for your own profile.' });
       }
       if (casperMemory) {
         await casperMemory.extractConversationMemory(userId, userMessage, casperReply);
@@ -1023,7 +1030,7 @@ app.post("/api/cred/exchange", async (req, res) => {
       res.json({ success: true });
     } catch (error) {
       console.error('Error storing Casper memory:', error);
-      res.status(500).json({ error: 'Failed to store memory' });
+      res.status(500).json({ success: false, error: 'Failed to store memory' });
     }
   });
 
