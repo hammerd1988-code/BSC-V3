@@ -928,10 +928,14 @@ export const Casper: React.FC = () => {
     setVoiceState('idle');
     setVoiceDebug('');
     setAudioLevel(0);
+    // Reset so the next voice-mode session starts fresh with a full 3-empty budget.
+    emptyTranscriptCountRef.current = 0;
   }, [stopAudioPlayback]);
 
   const enterVoiceMode = useCallback(async () => {
     await unlockPersistentAudio();
+    // Clear any lingering empty-transcript count from a previous session.
+    emptyTranscriptCountRef.current = 0;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach(track => track.stop());
