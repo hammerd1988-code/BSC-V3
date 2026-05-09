@@ -103,7 +103,7 @@ export const AdminDashboard: React.FC = () => {
         </div>
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <button
             onClick={() => { /* scroll to user table below */ document.querySelector('.admin-user-table')?.scrollIntoView({ behavior: 'smooth' }); }}
             className="bg-secondary/30 border border-white/10 hover:bg-secondary/50 transition-colors rounded-xl p-6 flex items-center gap-4 text-left group cursor-pointer"
