@@ -136,8 +136,12 @@ function envelope(state: CasperOrbState, audioLevel: number, time: number): numb
   // stay below the bloom luminanceThreshold most of the time.
   switch (state) {
     case 'recording':
-      // smoothed mic level with a tiny baseline so the orb never freezes
-      return Math.min(1, Math.max(0.08, audioLevel * 0.9));
+      // Mic level is already EMA-smoothed at the source (in Casper.tsx
+      // monitorLevel) so we can confidently amplify here without strobing.
+      // 1.6x multiplier with a small ambient breath so the orb has visible
+      // life even between words; a 0.18 floor was previously 0.08 which made
+      // typical-volume speech read as "no reaction".
+      return Math.min(1, 0.18 + audioLevel * 1.6 + Math.sin(time * 0.55) * 0.04);
     case 'speaking':
       return Math.min(
         1,
@@ -367,7 +371,12 @@ function CasperOrbScene({ state, audioLevel, audioLevelRef, instability }: Scene
 
     sphereUniforms.uColorA.value.copy(targetColorA);
     sphereUniforms.uColorB.value.copy(targetColorB);
-    sphereUniforms.uAudio.value = lerp(sphereUniforms.uAudio.value, env, damp);
+    // Audio gets a much faster lerp than colors so pulses are actually
+    // visible on screen. The mic feed is already EMA-smoothed at the source
+    // (Casper.tsx monitorLevel) so this faster track won't surface jitter
+    // — it just stops the orb from feeling unresponsive to speech bursts.
+    const audioDamp = Math.min(0.85, cdt * 16);
+    sphereUniforms.uAudio.value = lerp(sphereUniforms.uAudio.value, env, audioDamp);
     sphereUniforms.uIntensity.value = lerp(sphereUniforms.uIntensity.value, palette.intensity, damp);
 
     // EVERYTHING below reads from the *smoothed* audio (uAudio.value), never
