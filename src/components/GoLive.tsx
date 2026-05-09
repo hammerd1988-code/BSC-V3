@@ -407,7 +407,11 @@ export const GoLive: React.FC = () => {
       setLiveKitStatus('connected');
     } catch (err: any) {
       console.error('[GoLive] LiveKit connection failed:', err);
-      setLiveKitError(err?.message || 'LiveKit connection failed.');
+      const status = err?.status;
+      const message = status === 503
+        ? 'LiveKit is not configured on the server. Contact the admin to set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET.'
+        : err?.message || 'LiveKit connection failed.';
+      setLiveKitError(message);
       setLiveKitStatus('error');
     }
   };

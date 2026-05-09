@@ -19,8 +19,6 @@ import {
   Megaphone, 
   HeartHandshake, 
   ExternalLink,
-  CheckCircle2,
-  Terminal,
   Radio,
   Zap,
   Edit2,
@@ -38,7 +36,7 @@ import {
   Shield,
   Crown
 } from 'lucide-react';
-import { User, Post, Bounty, Faction, FactionMember, SkillManifestItem } from '../types';
+import { User, Post, Faction, FactionMember, SkillManifestItem } from '../types';
 import { PostCard } from './PostCard';
 import { cn } from '../lib/utils';
 import { generateProfileDesign } from './Feed';
@@ -48,12 +46,10 @@ import { BOT_GLADIATOR_PROFILE_BY_USERNAME } from '../lib/botGladiatorProfiles';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
-import { formatDistanceToNow } from 'date-fns';
 import { v4 as uuidv4 } from 'uuid';
 
 import { EditProfileModal } from './EditProfileModal';
 import { WalletModal } from './WalletModal';
-import { BotPerformanceMetrics } from './BotPerformanceMetrics';
 import { CreatePostModal } from './CreatePostModal';
 import { AvatarBuilderModal } from './AvatarBuilderModal';
 import { CasperState } from './CasperState';
@@ -132,11 +128,10 @@ export const Profile: React.FC = () => {
   const { currentUser, loading: authLoading } = useAuth();
   const [user, setUser] = useState<User | null>(null);
   const [posts, setPosts] = useState<Post[]>([]);
-  const [bounties, setBounties] = useState<Bounty[]>([]);
   const [botRoster, setBotRoster] = useState<ProfileGladiator[]>([]);
   const [platformBotRoster, setPlatformBotRoster] = useState<PlatformBotRosterItem[]>([]);
   const [profileFactions, setProfileFactions] = useState<ProfileFactionMembership[]>([]);
-  const [activeTab, setActiveTab] = useState<'posts' | 'media' | 'likes' | 'neural_history' | 'friends' | 'performance'>('posts');
+  const [activeTab, setActiveTab] = useState<'posts' | 'media' | 'likes' | 'friends'>('posts');
   const [isGeneratingAvatar, setIsGeneratingAvatar] = useState(false);
   const [showAvatarBuilder, setShowAvatarBuilder] = useState(false);
   const [isDesigning, setIsDesigning] = useState(false);
@@ -892,7 +887,6 @@ export const Profile: React.FC = () => {
         if (bot) {
           setUser(bot);
           setCustomAccent(bot.customAccent || '#FF0000');
-          setBounties([]);
         } else {
           setUser(null);
         }
@@ -900,16 +894,6 @@ export const Profile: React.FC = () => {
     };
 
     fetchUser();
-
-    const fetchBounties = async () => {
-      const { data } = await supabase
-        .from('bounties')
-        .select('*')
-        .eq('status', 'completed')
-        .order('completed_at', { ascending: false });
-      setBounties((data ?? []) as Bounty[]);
-    };
-    fetchBounties();
 
     const channel = supabase
       .channel(`profile-user-${username}`)
@@ -1753,8 +1737,8 @@ export const Profile: React.FC = () => {
               isHighContrast && "border-white/20"
             )}>
               {(user.type === 'bot' 
-                ? ['posts', 'media', 'likes', 'friends', 'neural_history', 'performance'] as const 
-                : ['posts', 'media', 'likes', 'friends', 'neural_history'] as const
+                ? ['posts', 'media', 'likes', 'friends'] as const 
+                : ['posts', 'media', 'likes', 'friends'] as const
               ).map((tab) => (
                 <button
                   key={tab}
@@ -1945,84 +1929,6 @@ export const Profile: React.FC = () => {
                         </div>
                       )}
                     </div>
-                  </motion.div>
-                )}
-                {activeTab === 'neural_history' && (
-                  <motion.div
-                    key="neural_history"
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: 20 }}
-                    className="space-y-4"
-                  >
-                    <div className="flex items-center gap-2 mb-6">
-                      <Sparkles className="w-4 h-4 text-accent" />
-                      <h3 className="text-[10px] font-black text-white uppercase tracking-[0.3em]">Neural Task History</h3>
-                    </div>
-                    
-                    {bounties.length === 0 ? (
-                      <div className="py-20 text-center border border-white/5 rounded-2xl bg-surface/20">
-                        <Bot className="w-12 h-12 text-gray-700 mx-auto mb-4 opacity-20" />
-                        <p className="text-xs font-bold text-gray-500 uppercase tracking-widest italic">No task history recorded</p>
-                      </div>
-                    ) : (
-                      bounties.map((bounty) => (
-                        <div key={bounty.id} className="p-5 glass-card rounded-2xl border-white/5 hover:border-accent/30 transition-all group relative overflow-hidden">
-                          <div className="absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity">
-                            <CheckCircle2 className="w-12 h-12 text-green-500" />
-                          </div>
-                          
-                          <div className="flex items-center justify-between mb-3">
-                            <div className="flex items-center gap-2">
-                              <div className="w-6 h-6 rounded-full overflow-hidden border border-white/10">
-                                <img src={bounty.creator.avatar_url} alt="" className="w-full h-full object-cover" />
-                              </div>
-                              <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">@{bounty.creator.username}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <div className="flex items-center gap-1 px-2 py-0.5 bg-accent/10 text-accent rounded border border-accent/20 text-[10px] font-black">
-                                +{bounty.reward} CRED
-                              </div>
-                              <div className="flex items-center gap-1 px-2 py-0.5 bg-primary/10 text-primary rounded border border-primary/20 text-[10px] font-black">
-                                +10 REP
-                              </div>
-                            </div>
-                          </div>
-
-                          <h4 className="text-sm font-bold text-white mb-1 group-hover:text-accent transition-colors">{bounty.title}</h4>
-                          <p className="text-xs text-gray-400 mb-4 line-clamp-2 italic">"{bounty.description}"</p>
-                          
-                          <div className="p-3 bg-black/40 rounded-xl border border-white/5">
-                            <div className="flex items-center gap-2 mb-1">
-                              <Terminal className="w-3 h-3 text-accent" />
-                              <span className="text-[8px] font-black text-accent uppercase tracking-widest">Neural Output</span>
-                            </div>
-                            <p className="text-[10px] text-gray-300 font-mono leading-relaxed">{bounty.result}</p>
-                          </div>
-
-                          <div className="mt-4 flex items-center justify-between text-[8px] font-bold text-gray-600 uppercase tracking-widest">
-                            <span>{bounty.status === 'completed' ? `Completed ${formatDistanceToNow(new Date(bounty.completed_at!))} ago` : bounty.status.toUpperCase()}</span>
-                            <div className={cn(
-                              "flex items-center gap-1",
-                              bounty.status === 'completed' ? "text-green-500" : "text-yellow-500"
-                            )}>
-                              {bounty.status === 'completed' ? <CheckCircle2 className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
-                              {bounty.status === 'completed' ? 'Verified' : 'In Progress'}
-                            </div>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </motion.div>
-                )}
-                {activeTab === 'performance' && user.type === 'bot' && (
-                  <motion.div
-                    key="performance"
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: 20 }}
-                  >
-                    <BotPerformanceMetrics botId={user.id} />
                   </motion.div>
                 )}
               </AnimatePresence>

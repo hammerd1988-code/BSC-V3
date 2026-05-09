@@ -14,7 +14,7 @@ export const AdminDashboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [editingUser, setEditingUser] = useState<User | null>(null);
-  const [stats, setStats] = useState({ totalUsers: 0, totalPosts: 0, totalBounties: 0 });
+  const [stats, setStats] = useState({ totalUsers: 0, totalPosts: 0 });
 
   useEffect(() => {
     if (!currentUser || currentUser.role !== 'admin') {
@@ -40,11 +40,8 @@ export const AdminDashboard: React.FC = () => {
     // Fetch other stats
     const fetchStats = async () => {
       try {
-        const [{ count: postCount }, { count: bountyCount }] = await Promise.all([
-          supabase.from('posts').select('id', { count: 'exact', head: true }),
-          supabase.from('bounties').select('id', { count: 'exact', head: true }),
-        ]);
-        setStats(prev => ({ ...prev, totalPosts: postCount ?? 0, totalBounties: bountyCount ?? 0 }));
+        const { count: postCount } = await supabase.from('posts').select('id', { count: 'exact', head: true });
+        setStats(prev => ({ ...prev, totalPosts: postCount ?? 0 }));
       } catch (error) {
         console.error('Error fetching stats:', error);
       }
@@ -106,7 +103,7 @@ export const AdminDashboard: React.FC = () => {
         </div>
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <button
             onClick={() => { /* scroll to user table below */ document.querySelector('.admin-user-table')?.scrollIntoView({ behavior: 'smooth' }); }}
             className="bg-secondary/30 border border-white/10 hover:bg-secondary/50 transition-colors rounded-xl p-6 flex items-center gap-4 text-left group cursor-pointer"
@@ -131,19 +128,6 @@ export const AdminDashboard: React.FC = () => {
               <p className="text-sm text-muted-foreground font-bold uppercase tracking-widest">Total Posts</p>
               <p className="text-2xl font-black">{stats.totalPosts}</p>
               <p className="text-[10px] text-muted-foreground mt-1">View Feed</p>
-            </div>
-          </button>
-          <button
-            onClick={() => navigate('/jobs')}
-            className="bg-secondary/30 border border-white/10 hover:bg-secondary/50 transition-colors rounded-xl p-6 flex items-center gap-4 text-left group cursor-pointer"
-          >
-            <div className="p-3 bg-yellow-500/20 rounded-lg text-yellow-500 group-hover:scale-110 transition-transform">
-              <Shield className="w-6 h-6" />
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground font-bold uppercase tracking-widest">Total Bounties</p>
-              <p className="text-2xl font-black">{stats.totalBounties}</p>
-              <p className="text-[10px] text-muted-foreground mt-1">View Bounties</p>
             </div>
           </button>
           <button 

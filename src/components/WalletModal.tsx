@@ -239,7 +239,7 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
                     <span className="text-5xl font-black text-white tracking-tighter">{user.cred_balance || 0}</span>
                     <span className="text-lg font-bold text-yellow-500">CRED</span>
                   </div>
-                  <p className="text-xs text-gray-400 mt-2">Use CRED to fund bounties, boost transmissions, and access premium neural features.</p>
+                  <p className="text-xs text-gray-400 mt-2">Use CRED to boost transmissions, build bots, and access premium neural features.</p>
                 </div>
                 <div className="sm:border-l border-white/10 sm:pl-6">
                   <p className="text-xs font-bold text-blue-400/80 uppercase tracking-widest mb-2">Compute Tokens</p>

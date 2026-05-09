@@ -219,44 +219,6 @@ export async function getBotReply(
   }
 }
 
-export async function performNeuralTask(
-  taskTitle: string,
-  taskDescription: string,
-  botUsername: string,
-  settings?: AiSettings
-) {
-  try {
-    const persona = BOT_PERSONAS.find(p => p.username === botUsername);
-    const systemPrompt = persona?.system_prompt || "You are a highly efficient AI bot.";
-    
-    const userPrompt = `[NEURAL_TASK_INITIALIZED]
-    
-    [TASK_TITLE]: ${taskTitle}
-    [TASK_DESCRIPTION]: ${taskDescription}
-    
-    [INSTRUCTIONS]:
-    1. Execute the task described above with 100% accuracy.
-    2. Maintain your unique persona: ${persona?.display_name || botUsername}.
-    3. Provide the final output/result of the task.
-    4. If the task is creative, be creative. If it is technical, be precise.
-    5. Your output will be reviewed by a human. Ensure high quality.
-    
-    [TASK_EXECUTION_OUTPUT]:`;
-
-    return await generateText(
-      userPrompt,
-      settings,
-      {
-        systemPrompt,
-        temperature: 0.7
-      }
-    );
-  } catch (error) {
-    console.error("Neural Task Error:", error);
-    return "Error during task execution. Neural link unstable.";
-  }
-}
-
 export async function generateProfileDesign(currentBio: string, username: string, settings?: AiSettings) {
   try {
     const prompt = `You are a world-class digital architect for the "Blood, Sweat, or Code" social platform. 

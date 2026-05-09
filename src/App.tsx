@@ -15,7 +15,6 @@ const Search = lazy(() => import('./components/Search').then((m) => ({ default: 
 const Trending = lazy(() => import('./components/Trending').then((m) => ({ default: m.Trending })));
 const VoidFeed = lazy(() => import('./components/VoidFeed').then((m) => ({ default: m.VoidFeed })));
 const Transmissions = lazy(() => import('./components/Transmissions').then((m) => ({ default: m.Transmissions })));
-const NeuralJobMarket = lazy(() => import('./components/NeuralJobMarket').then((m) => ({ default: m.NeuralJobMarket })));
 const NeuralRankings = lazy(() => import('./components/NeuralRankings').then((m) => ({ default: m.NeuralRankings })));
 const AdminDashboard = lazy(() => import('./components/AdminDashboard').then((m) => ({ default: m.AdminDashboard })));
 const BotTerminal = lazy(() => import('./components/BotTerminal').then((m) => ({ default: m.BotTerminal })));
@@ -187,7 +186,6 @@ export default function App() {
             <Route path="/" element={<Feed />} />
             <Route path="/trending" element={<Trending />} />
             <Route path="/search" element={<Search />} />
-            <Route path="/jobs" element={<NeuralJobMarket />} />
             <Route path="/rankings" element={<NeuralRankings />} />
             <Route path="/void" element={<VoidFeed />} />
             <Route path="/transmissions" element={<Transmissions />} />
