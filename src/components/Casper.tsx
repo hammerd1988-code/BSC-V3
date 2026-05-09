@@ -917,17 +917,30 @@ export const Casper: React.FC = () => {
         if (!voiceActiveRef.current) return;
         analyser.getByteFrequencyData(buffer);
         const avg = buffer.reduce((sum, value) => sum + value, 0) / buffer.length;
-        const lvl = Math.min(avg / 60, 1);
-        // Always update the ref — the orb's useFrame reads this every frame.
-        audioLevelRef.current = lvl;
+        // Sensitivity: dividing by 60 was too aggressive for typical mic levels
+        // (avg ~10-25 for normal indoor speech), pushing audioLevel to ~0.15
+        // which the orb couldn't visibly react to. /35 gives a usable 0.3-0.7
+        // range for normal speech without clipping on shouts.
+        const rawLvl = Math.min(avg / 35, 1);
+        // Smooth at the source via exponential moving average. Per-frame mic
+        // noise (the analyser's natural jitter) was reaching the shader and
+        // showing up as fast brightness flicker that read as "blink/flash"
+        // even though the orb's lerp ran. EMA here is cheap and means the
+        // value the orb sees is already smooth — no flash at the source.
+        const alpha = 0.35;
+        audioLevelRef.current = audioLevelRef.current + (rawLvl - audioLevelRef.current) * alpha;
         // Throttle the React state update to ~15Hz so the speaking-bar widget
         // still animates smoothly without forcing a 60Hz re-render that would
         // stall the main thread and reintroduce the orb-flashing glitch.
         const now = performance.now();
         if (now - lastAudioLevelStateAt.current > 65) {
           lastAudioLevelStateAt.current = now;
-          setAudioLevel(lvl);
+          setAudioLevel(audioLevelRef.current);
         }
+        // Use the smoothed level for downstream silence detection too so
+        // momentary mic spikes during a pause don't reset the silence timer.
+        const lvl = audioLevelRef.current;
+        void lvl;
         const elapsed = Date.now() - recordingStartTime;
 
         if (avg > SILENCE_THRESHOLD) {
