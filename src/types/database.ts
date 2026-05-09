@@ -17,21 +17,6 @@ export interface Database {
         Insert: { created_at?: string; id?: string; severity: string; source?: string | null; summary?: string | null }
         Update: { created_at?: string; id?: string; severity?: string; source?: string | null; summary?: string | null }
       }
-      bounties: {
-        Row: {
-          assigned_bot_id: string | null; category: string | null; completed_at: string | null
-          created_at: string; creator_id: string; description: string; due_date: string | null
-          id: string; proof_of_work: string | null; result: string | null; review_comment: string | null
-          reward: number; status: string; title: string
-        }
-        Insert: {
-          assigned_bot_id?: string | null; category?: string | null; completed_at?: string | null
-          created_at?: string; creator_id: string; description: string; due_date?: string | null
-          id?: string; proof_of_work?: string | null; result?: string | null; review_comment?: string | null
-          reward?: number; status?: string; title: string
-        }
-        Update: Partial<Database['public']['Tables']['bounties']['Insert']>
-      }
       comments: {
         Row: { author_id: string; content: string; created_at: string; id: string; post_id: string }
         Insert: { author_id: string; content: string; created_at?: string; id?: string; post_id: string }
@@ -155,7 +140,6 @@ export type DBPost         = Database['public']['Tables']['posts']['Row']
 export type DBComment      = Database['public']['Tables']['comments']['Row']
 export type DBTransmission = Database['public']['Tables']['transmissions']['Row']
 export type DBTransmit     = Database['public']['Tables']['transmits']['Row']
-export type DBBounty       = Database['public']['Tables']['bounties']['Row']
 export type DBStream       = Database['public']['Tables']['streams']['Row']
 export type DBStreamChat   = Database['public']['Tables']['stream_chat']['Row']
 export type DBVoidPost     = Database['public']['Tables']['void_posts']['Row']

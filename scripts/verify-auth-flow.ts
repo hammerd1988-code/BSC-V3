@@ -26,23 +26,23 @@ function assertEqual(name: string, actual: string, expected: string): void {
 function run(): void {
   const tests: Array<[string, string | null | undefined, string]> = [
     ['empty next', null, '/'],
-    ['simple in-app route', '/jobs', '/jobs'],
+    ['simple in-app route', '/marketplace', '/marketplace'],
     ['query route', '/search?q=abc', '/search?q=abc'],
     ['external absolute url blocked', 'https://evil.example/steal', '/'],
     ['javascript scheme blocked', 'javascript:alert(1)', '/'],
     ['protocol-relative blocked', '//evil.example/steal', '/'],
-    ['callback loop blocked', '/auth/callback?next=/jobs', '/'],
+    ['callback loop blocked', '/auth/callback?next=/marketplace', '/'],
   ];
 
   for (const [name, input, expected] of tests) {
     assertEqual(name, normalizeNext(input), expected);
   }
 
-  const callback = buildCallbackUrl('http://localhost:3000', '/jobs');
+  const callback = buildCallbackUrl('http://localhost:3000', '/marketplace');
   assertEqual(
     'callback url with safe next',
     callback,
-    'http://localhost:3000/?next=%2Fjobs',
+    'http://localhost:3000/?next=%2Fmarketplace',
   );
 
   const callbackBlocked = buildCallbackUrl('http://localhost:3000', 'https://evil.example');
