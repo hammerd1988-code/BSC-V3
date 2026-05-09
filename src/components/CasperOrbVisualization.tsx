@@ -468,6 +468,32 @@ function isBloomLike(effect: unknown): effect is MutableBloomLike {
   return typeof e.intensity === 'number' && e.luminanceMaterial !== undefined;
 }
 
+// Memoized JSX subtree for the EffectComposer children. CRITICAL: this MUST
+// be a stable reference across renders. EffectComposer's internal
+// useLayoutEffect walks `children` and adds Bloom/ChromaticAberration to its
+// passes pipeline; if children's reference changes (which happens whenever
+// BloomDriver re-renders, which happens whenever its parent re-renders),
+// that effect re-runs, removes ALL passes, and re-adds them. On 15Hz parent
+// re-renders that manifests as the *whole image* flashing in lockstep with
+// audio level updates. Hoisting these to module scope makes them truly stable.
+const BLOOM_AND_AB_PASSES = (
+  <>
+    <Bloom
+      intensity={BLOOM_INITIAL_INTENSITY}
+      luminanceThreshold={0.85}
+      luminanceSmoothing={0.5}
+      mipmapBlur
+      radius={0.45}
+    />
+    <ChromaticAberration
+      offset={CHROMATIC_OFFSET}
+      blendFunction={BlendFunction.NORMAL}
+      radialModulation={false}
+      modulationOffset={0}
+    />
+  </>
+);
+
 function BloomDriver({ state, instability }: BloomDriverProps) {
   // CRITICAL: every prop that flows into `<Bloom>` and `<ChromaticAberration>`
   // must be referentially stable across renders, because
@@ -518,24 +544,18 @@ function BloomDriver({ state, instability }: BloomDriverProps) {
 
   return (
     <EffectComposer ref={composerRef}>
-      <Bloom
-        intensity={BLOOM_INITIAL_INTENSITY}
-        luminanceThreshold={0.85}
-        luminanceSmoothing={0.5}
-        mipmapBlur
-        radius={0.45}
-      />
-      <ChromaticAberration
-        offset={CHROMATIC_OFFSET}
-        blendFunction={BlendFunction.NORMAL}
-        radialModulation={false}
-        modulationOffset={0}
-      />
+      {BLOOM_AND_AB_PASSES}
     </EffectComposer>
   );
 }
 
-const CasperOrbVisualization: React.FC<CasperOrbVisualizationProps> = ({
+// React.memo: re-render only when one of these props actually changes
+// (state, audioLevelRef identity, instability). Without memo, the parent
+// (Casper.tsx) re-renders ~15Hz from setAudioLevel and that cascades into
+// the Canvas tree, where EffectComposer's useLayoutEffect re-adds passes
+// every render = full-screen flash. The mic level is read inside the scene
+// via audioLevelRef.current 60Hz, so we don't need React-state propagation.
+const CasperOrbVisualizationInner: React.FC<CasperOrbVisualizationProps> = ({
   state,
   audioLevel = 0,
   audioLevelRef,
@@ -561,5 +581,15 @@ const CasperOrbVisualization: React.FC<CasperOrbVisualizationProps> = ({
     </div>
   );
 };
+
+// Custom comparator: ignore audioLevel changes (orb reads via ref instead).
+// This is what stops the 15Hz re-render cascade into the Canvas tree.
+const CasperOrbVisualization = React.memo(CasperOrbVisualizationInner, (prev, next) =>
+  prev.state === next.state &&
+  prev.audioLevelRef === next.audioLevelRef &&
+  prev.instability === next.instability &&
+  prev.className === next.className,
+);
+CasperOrbVisualization.displayName = 'CasperOrbVisualization';
 
 export default CasperOrbVisualization;
