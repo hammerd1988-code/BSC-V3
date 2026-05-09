@@ -56,9 +56,9 @@ function getPalette(state: CasperOrbState, instability: number): StatePalette {
         colorB: '#0aa46c',
         particleColor: '#86efac',
         haloColor: '#4ade80',
-        intensity: 0.32,
-        bloom: 0.45,
-        particleSpeed: 0.8,
+        intensity: 0.26,
+        bloom: 0.22,
+        particleSpeed: 0.7,
       };
     case 'transcribing':
       return {
@@ -66,9 +66,9 @@ function getPalette(state: CasperOrbState, instability: number): StatePalette {
         colorB: '#f59e0b',
         particleColor: '#fde68a',
         haloColor: '#fbbf24',
-        intensity: 0.28,
-        bloom: 0.4,
-        particleSpeed: 0.9,
+        intensity: 0.22,
+        bloom: 0.2,
+        particleSpeed: 0.8,
       };
     case 'thinking':
       return {
@@ -76,9 +76,9 @@ function getPalette(state: CasperOrbState, instability: number): StatePalette {
         colorB: '#6d28d9',
         particleColor: '#c4b5fd',
         haloColor: '#a78bfa',
-        intensity: 0.45,
-        bloom: 0.55,
-        particleSpeed: 1.4,
+        intensity: 0.32,
+        bloom: 0.26,
+        particleSpeed: 1.0,
       };
     case 'speaking':
       return {
@@ -86,9 +86,9 @@ function getPalette(state: CasperOrbState, instability: number): StatePalette {
         colorB: '#00e5ff',
         particleColor: '#ffd6f1',
         haloColor: '#ff63c8',
-        intensity: 0.42,
-        bloom: 0.65,
-        particleSpeed: 1.6,
+        intensity: 0.3,
+        bloom: 0.3,
+        particleSpeed: 1.1,
       };
     case 'idle':
     default:
@@ -97,9 +97,9 @@ function getPalette(state: CasperOrbState, instability: number): StatePalette {
         colorB: hot > 0.6 ? '#5b21b6' : '#1166ff',
         particleColor: '#7dd3fc',
         haloColor: '#00e5ff',
-        intensity: 0.22,
-        bloom: 0.35,
-        particleSpeed: 0.55,
+        intensity: 0.18,
+        bloom: 0.18,
+        particleSpeed: 0.5,
       };
   }
 }
@@ -109,25 +109,27 @@ function getPalette(state: CasperOrbState, instability: number): StatePalette {
 // the orb still pulses to "speech" without wiring an analyser to the TTS
 // playback (which has CORS quirks for blob URLs).
 function envelope(state: CasperOrbState, audioLevel: number, time: number): number {
+  // All harmonics kept under ~2.4 Hz so brightness never strobes. The orb
+  // breathes; it does not flicker. Amplitudes intentionally small so peaks
+  // stay below the bloom luminanceThreshold most of the time.
   switch (state) {
     case 'recording':
       // smoothed mic level with a tiny baseline so the orb never freezes
-      return Math.min(1, Math.max(0.08, audioLevel));
+      return Math.min(1, Math.max(0.08, audioLevel * 0.9));
     case 'speaking':
       return Math.min(
         1,
-        0.42 +
-          0.3 * Math.abs(Math.sin(time * 1.9)) +
-          0.18 * Math.abs(Math.sin(time * 5.1)) +
-          0.05 * Math.sin(time * 11.3),
+        0.32 +
+          0.12 * Math.abs(Math.sin(time * 1.6)) +
+          0.06 * Math.abs(Math.sin(time * 2.3)),
       );
     case 'thinking':
-      return Math.min(1, 0.18 + 0.12 * Math.sin(time * 0.8) + 0.06 * Math.sin(time * 2.3));
+      return Math.min(1, 0.16 + 0.07 * Math.sin(time * 0.7) + 0.03 * Math.sin(time * 1.6));
     case 'transcribing':
-      return Math.min(1, 0.14 + 0.08 * Math.abs(Math.sin(time * 1.4)));
+      return Math.min(1, 0.13 + 0.05 * Math.abs(Math.sin(time * 1.1)));
     case 'idle':
     default:
-      return 0.08 + 0.05 * Math.sin(time * 0.45);
+      return 0.07 + 0.04 * Math.sin(time * 0.45);
   }
 }
 
@@ -210,10 +212,12 @@ varying float vDistortion;
 void main() {
   // Fresnel-style edge highlight.
   float fres = pow(1.0 - max(dot(vNormal, vec3(0.0, 0.0, 1.0)), 0.0), 2.4);
-  vec3 base = mix(uColorA, uColorB, clamp(vDistortion * 1.5 + uAudio * 0.4, 0.0, 1.0));
+  vec3 base = mix(uColorA, uColorB, clamp(vDistortion * 1.5 + uAudio * 0.3, 0.0, 1.0));
   // Soft inner mass so the orb still has a body when bloom is dialed back.
   vec3 inner = mix(base * 0.32, base, fres);
-  vec3 finalCol = inner + fres * (base + 0.4) * (0.18 + uAudio * 0.45);
+  // Cap audio's brightness contribution so peaks can't strobe-flash the orb.
+  float audioLift = clamp(uAudio, 0.0, 1.0) * 0.18;
+  vec3 finalCol = inner + fres * (base + 0.4) * (0.16 + audioLift);
   gl_FragColor = vec4(finalCol, 1.0);
 }
 `;
@@ -398,24 +402,26 @@ interface BloomDriverProps {
 
 function BloomDriver({ state, instability }: BloomDriverProps) {
   // Drive bloom strength from voice state, smoothed with a ref. Tuned far below
-  // the demo HTML so the orb feels intense but never washed out.
+  // the demo HTML so the orb feels intense but never washed out. luminanceThreshold
+  // is intentionally high (0.85) so bloom only triggers on the brightest fresnel
+  // edges — the body of the orb does not bloom, which prevents strobing.
   const target = getPalette(state, instability).bloom;
-  const ref = useRef({ strength: 0.35 });
+  const ref = useRef({ strength: 0.18 });
   useFrame((_, dt) => {
-    const damp = Math.min(1, dt * 3);
+    const damp = Math.min(1, dt * 2);
     ref.current.strength = lerp(ref.current.strength, target, damp);
   });
   return (
     <EffectComposer>
       <Bloom
         intensity={ref.current.strength}
-        luminanceThreshold={0.55}
-        luminanceSmoothing={0.22}
+        luminanceThreshold={0.85}
+        luminanceSmoothing={0.5}
         mipmapBlur
-        radius={0.55}
+        radius={0.45}
       />
       <ChromaticAberration
-        offset={new THREE.Vector2(0.0008, 0.0012)}
+        offset={new THREE.Vector2(0.0003, 0.0005)}
         blendFunction={BlendFunction.NORMAL}
         radialModulation={false}
         modulationOffset={0}

@@ -369,10 +369,15 @@ export const Casper: React.FC = () => {
 
   const isListening = voiceState === 'recording';
   const isSpeaking = voiceState === 'speaking';
+  // Tuned to feel responsive without cutting people off mid-sentence:
+  // - SILENCE_THRESHOLD low enough to detect quiet speech, high enough to reject mic hiss.
+  // - 1.6s of silence after detected speech is a natural conversational pause window.
+  // - 0.8s minimum speech duration so a stray noise doesn't trigger a transcription.
+  // - 1.2s minimum recording window so the recorder always has at least one full chunk.
   const SILENCE_THRESHOLD = 8;
-  const SILENCE_DURATION_MS = 3000;
-  const MIN_SPEECH_DURATION_MS = 1500;
-  const MIN_RECORDING_MS = 2000;
+  const SILENCE_DURATION_MS = 1600;
+  const MIN_SPEECH_DURATION_MS = 800;
+  const MIN_RECORDING_MS = 1200;
   const SILENT_AUDIO_UNLOCK_SRC = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYoRBqpAAAAAAD/+1DEAAAHAAGf9AAAIgAANIAAAAQAAAGkAAAAIAAANIAAAARMQU1FMy4xMDBVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVQ==';
   const BOO_LAUGH_SRC = '/sounds/boo-laugh-sm64-style.wav';
 
@@ -756,7 +761,14 @@ export const Casper: React.FC = () => {
     setVoiceDebug('Transcribing your whisper...');
     let transcript = '';
 
-    if (audioChunksRef.current.length > 0) {
+    // Track the failure mode so we can show a useful error instead of the
+    // generic "couldn't catch that" loop, which makes Casper feel deaf.
+    let transcribeFailureReason: 'no_audio' | 'http_error' | 'network_error' | 'silent_audio' | null = null;
+    let transcribeFailureDetail = '';
+
+    if (audioChunksRef.current.length === 0) {
+      transcribeFailureReason = 'no_audio';
+    } else {
       try {
         const audioBlob = new Blob(audioChunksRef.current, { type: audioChunksRef.current[0]?.type || 'audio/webm' });
         const formData = new FormData();
@@ -766,10 +778,20 @@ export const Casper: React.FC = () => {
         if (response.ok) {
           const data = await response.json();
           transcript = (data.transcript || data.text || '').trim();
+          if (!transcript) transcribeFailureReason = 'silent_audio';
         } else {
-          console.warn('[VOICE] Server transcription failed:', response.status);
+          transcribeFailureReason = 'http_error';
+          try {
+            const errBody = await response.json();
+            transcribeFailureDetail = errBody?.detail || errBody?.error || `HTTP ${response.status}`;
+          } catch {
+            transcribeFailureDetail = `HTTP ${response.status}`;
+          }
+          console.warn('[VOICE] Server transcription failed:', response.status, transcribeFailureDetail);
         }
-      } catch (error) {
+      } catch (error: any) {
+        transcribeFailureReason = 'network_error';
+        transcribeFailureDetail = error?.message || String(error);
         console.warn('[VOICE] Server transcription error:', error);
       }
     }
@@ -777,14 +799,28 @@ export const Casper: React.FC = () => {
     if (!transcript) {
       emptyTranscriptCountRef.current += 1;
       setVoiceState('idle');
-      // Stop the auto-restart loop after 3 empties so the user can re-engage
-      // intentionally instead of a frustrated infinite "couldn't catch that".
-      if (emptyTranscriptCountRef.current >= 3) {
-        setVoiceDebug("Mic seems quiet. Tap to speak when you're ready.");
+      // HTTP / network errors are real backend problems — show them once, do
+      // not silently retry forever (that's what made Casper feel deaf).
+      if (transcribeFailureReason === 'http_error' || transcribeFailureReason === 'network_error') {
+        const hint = transcribeFailureReason === 'network_error'
+          ? 'Network error reaching the transcription service.'
+          : 'Transcription service is unreachable.';
+        setVoiceDebug(`${hint} ${transcribeFailureDetail ? `(${transcribeFailureDetail.slice(0, 80)})` : ''} Tap the mic to retry.`);
         return;
       }
-      setVoiceDebug("I couldn't catch that. Try speaking again...");
-      if (voiceActiveRef.current) window.setTimeout(() => void startListeningSessionRef.current(), 1500);
+      // Stop the auto-restart loop after 3 silent attempts so the user can
+      // re-engage intentionally (e.g., unmute their OS mic) instead of
+      // looping forever.
+      if (emptyTranscriptCountRef.current >= 3) {
+        setVoiceDebug("Still not hearing you. Check that the right mic is selected and unmuted, then tap to retry.");
+        return;
+      }
+      setVoiceDebug(
+        transcribeFailureReason === 'no_audio'
+          ? "No audio captured — try speaking a little louder."
+          : "Couldn't make out any words. Try again, a bit louder...",
+      );
+      if (voiceActiveRef.current) window.setTimeout(() => void startListeningSessionRef.current(), 1200);
       return;
     }
 
