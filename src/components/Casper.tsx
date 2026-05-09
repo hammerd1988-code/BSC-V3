@@ -348,6 +348,16 @@ export const Casper: React.FC = () => {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const levelFrameRef = useRef<number>(0);
+  // Live mic amplitude (0..1) updated 60Hz from the analyser. Read by the orb's
+  // useFrame loop without going through React state, so we don't pay for a
+  // full re-render of <Casper> every frame the user is talking. The 60Hz
+  // re-renders were stalling the main thread enough to make `dt` in the orb's
+  // useFrame spike, which made its smoothing lerps snap and read on screen as
+  // a flash/blink.
+  const audioLevelRef = useRef(0);
+  // Throttle React state updates for audioLevel so the bars next to the mic
+  // still animate but we re-render the parent at most ~15Hz instead of 60Hz.
+  const lastAudioLevelStateAt = useRef(0);
   const silenceTimerRef = useRef<number | null>(null);
   const speechDetectedRef = useRef(false);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -907,7 +917,17 @@ export const Casper: React.FC = () => {
         if (!voiceActiveRef.current) return;
         analyser.getByteFrequencyData(buffer);
         const avg = buffer.reduce((sum, value) => sum + value, 0) / buffer.length;
-        setAudioLevel(Math.min(avg / 60, 1));
+        const lvl = Math.min(avg / 60, 1);
+        // Always update the ref — the orb's useFrame reads this every frame.
+        audioLevelRef.current = lvl;
+        // Throttle the React state update to ~15Hz so the speaking-bar widget
+        // still animates smoothly without forcing a 60Hz re-render that would
+        // stall the main thread and reintroduce the orb-flashing glitch.
+        const now = performance.now();
+        if (now - lastAudioLevelStateAt.current > 65) {
+          lastAudioLevelStateAt.current = now;
+          setAudioLevel(lvl);
+        }
         const elapsed = Date.now() - recordingStartTime;
 
         if (avg > SILENCE_THRESHOLD) {
@@ -1390,6 +1410,7 @@ export const Casper: React.FC = () => {
                   <CasperOrbVisualization
                     state={voiceState}
                     audioLevel={audioLevel}
+                    audioLevelRef={audioLevelRef}
                     instability={instability}
                   />
                 </Suspense>
