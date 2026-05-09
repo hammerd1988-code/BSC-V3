@@ -36,7 +36,7 @@ const ENV_AI_BASE_URL =
 const ENV_AI_API_KEY = import.meta.env.VITE_AI_API_KEY || null;
 
 const ENV_AI_MODEL =
-  import.meta.env.VITE_AI_MODEL || "openai/gpt-4o-mini";
+  import.meta.env.VITE_AI_MODEL || "google/gemini-2.0-flash-001";
 
 function apiBaseUrl() {
   return String(import.meta.env.VITE_API_URL || import.meta.env.VITE_SOCKET_URL || "").replace(/\/$/, "");
