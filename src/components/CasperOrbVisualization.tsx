@@ -1,8 +1,21 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { EffectComposer, Bloom, ChromaticAberration } from '@react-three/postprocessing';
-import { BlendFunction } from 'postprocessing';
+import { BlendFunction, EffectComposer as PostEffectComposer } from 'postprocessing';
 import * as THREE from 'three';
+
+// Module-level constants so JSX literals are stable across renders. The
+// @react-three/postprocessing wrapEffect() factory memoizes its underlying
+// effect on `JSON.stringify(props)` and recreates the postprocessing pass
+// whenever that key changes. Passing freshly-allocated Vector2/Color objects
+// (or a changing intensity number) on every render therefore *recreates*
+// the Bloom/ChromaticAberration GPU pass per render, which renders to the
+// user as a hard flash. Keep these stable.
+const CHROMATIC_OFFSET = new THREE.Vector2(0.0003, 0.0005);
+// Mid-of-range bloom intensity for the JSX literal. The actual intensity
+// is mutated every frame via a direct ref to the effect object (see
+// BloomDriver) so this number is only the mount-time value.
+const BLOOM_INITIAL_INTENSITY = 0.25;
 
 /**
  * CasperOrbVisualization
@@ -324,6 +337,14 @@ function CasperOrbScene({ state, audioLevel, audioLevelRef, instability }: Scene
   const targetColorB = useMemo(() => new THREE.Color('#1166ff'), []);
   const targetParticleColor = useMemo(() => new THREE.Color('#7dd3fc'), []);
   const targetHaloColor = useMemo(() => new THREE.Color('#00e5ff'), []);
+  // Scratch Color objects reused across frames so we don't allocate four
+  // THREE.Color instances per frame (which previously caused GC pauses
+  // visible to the user as micro-stutters during recording — yet another
+  // contributor to the flashing report).
+  const scratchA = useMemo(() => new THREE.Color(), []);
+  const scratchB = useMemo(() => new THREE.Color(), []);
+  const scratchP = useMemo(() => new THREE.Color(), []);
+  const scratchH = useMemo(() => new THREE.Color(), []);
 
   useFrame((_, dt) => {
     // Cap dt so a stalled main thread (e.g., a heavy React re-render burst
@@ -336,12 +357,13 @@ function CasperOrbScene({ state, audioLevel, audioLevelRef, instability }: Scene
     const liveAudio = audioLevelRef?.current ?? audioLevel ?? 0;
     const env = envelope(state, liveAudio, time);
 
-    // Smooth color interpolation
+    // Smooth color interpolation. .set() reuses the existing Color object;
+    // only .lerp() runs each frame.
     const damp = Math.min(0.6, cdt * 4);
-    targetColorA.lerp(new THREE.Color(palette.colorA), damp);
-    targetColorB.lerp(new THREE.Color(palette.colorB), damp);
-    targetParticleColor.lerp(new THREE.Color(palette.particleColor), damp);
-    targetHaloColor.lerp(new THREE.Color(palette.haloColor), damp);
+    targetColorA.lerp(scratchA.set(palette.colorA), damp);
+    targetColorB.lerp(scratchB.set(palette.colorB), damp);
+    targetParticleColor.lerp(scratchP.set(palette.particleColor), damp);
+    targetHaloColor.lerp(scratchH.set(palette.haloColor), damp);
 
     sphereUniforms.uColorA.value.copy(targetColorA);
     sphereUniforms.uColorB.value.copy(targetColorB);
@@ -422,39 +444,80 @@ interface BloomDriverProps {
   instability: number;
 }
 
+// Minimal subset of the postprocessing BloomEffect's API we mutate.
+interface MutableBloomLike {
+  intensity: number;
+}
+interface PassWithEffects {
+  effects?: unknown[];
+}
+
+// True when `effect` looks like a BloomEffect instance from `postprocessing`.
+function isBloomLike(effect: unknown): effect is MutableBloomLike {
+  if (!effect || typeof effect !== 'object') return false;
+  const e = effect as { intensity?: unknown; luminanceMaterial?: unknown };
+  return typeof e.intensity === 'number' && e.luminanceMaterial !== undefined;
+}
+
 function BloomDriver({ state, instability }: BloomDriverProps) {
-  // Drive bloom strength from voice state. Previously this stored strength in
-  // a plain ref and read it through JSX (`<Bloom intensity={ref.current...}>`),
-  // which only flushes on React re-render — meaning bloom intensity got stuck
-  // at whatever value it had when the component last rendered, which produced
-  // visible step-changes (= flashes) when voice state flipped.
+  // CRITICAL: every prop that flows into `<Bloom>` and `<ChromaticAberration>`
+  // must be referentially stable across renders, because
+  // @react-three/postprocessing's `wrapEffect` memoizes the underlying GPU
+  // pass on `JSON.stringify(props)` — when that key changes, the pass is
+  // *recreated*, which manifests on screen as a hard flash. The previous
+  // implementation passed a `useState`-driven `intensity={strength}`, which
+  // toggled the JSON key 10× per second during state transitions and burned
+  // the bloom pass each time. That **was** the flashing.
   //
-  // Now: lerp inside useFrame and only call setState when the smoothed value
-  // has drifted enough to be visible (>0.005). This caps the React re-render
-  // rate to ~10Hz max during transitions and 0Hz when bloom is stable, while
-  // still keeping bloom intensity smoothly animated.
-  const target = getPalette(state, instability).bloom;
-  const smoothedRef = useRef(target);
-  const [strength, setStrength] = useState(target);
+  // The fix: render `<Bloom intensity={CONST}>` once with a stable initial
+  // value, grab a ref to the underlying `EffectComposer`, and mutate
+  // `bloomEffect.intensity` directly each frame from `useFrame`. Zero React
+  // re-renders, zero JSX prop changes, zero pass recreation.
+  const stateRef = useRef(state);
+  const instabilityRef = useRef(instability);
+  stateRef.current = state;
+  instabilityRef.current = instability;
+
+  const composerRef = useRef<PostEffectComposer | null>(null);
+  const bloomEffectRef = useRef<MutableBloomLike | null>(null);
+
   useFrame((_, dt) => {
     const cdt = Math.min(0.05, Math.max(0, dt));
     const damp = Math.min(0.4, cdt * 2);
-    smoothedRef.current = lerp(smoothedRef.current, target, damp);
-    if (Math.abs(smoothedRef.current - strength) > 0.005) {
-      setStrength(smoothedRef.current);
+
+    // Lazily locate the BloomEffect by walking the composer's passes once it
+    // mounts. Cached in a ref so subsequent frames are O(1).
+    if (!bloomEffectRef.current && composerRef.current) {
+      const passes = (composerRef.current as unknown as { passes?: PassWithEffects[] }).passes ?? [];
+      outer: for (const pass of passes) {
+        const effects = pass?.effects;
+        if (!Array.isArray(effects)) continue;
+        for (const effect of effects) {
+          if (isBloomLike(effect)) {
+            bloomEffectRef.current = effect;
+            break outer;
+          }
+        }
+      }
     }
+
+    const eff = bloomEffectRef.current;
+    if (!eff) return;
+    const target = getPalette(stateRef.current, instabilityRef.current).bloom;
+    eff.intensity = lerp(eff.intensity, target, damp);
   });
+
   return (
-    <EffectComposer>
+    <EffectComposer ref={composerRef}>
       <Bloom
-        intensity={strength}
+        intensity={BLOOM_INITIAL_INTENSITY}
         luminanceThreshold={0.85}
         luminanceSmoothing={0.5}
         mipmapBlur
         radius={0.45}
       />
       <ChromaticAberration
-        offset={new THREE.Vector2(0.0003, 0.0005)}
+        offset={CHROMATIC_OFFSET}
         blendFunction={BlendFunction.NORMAL}
         radialModulation={false}
         modulationOffset={0}
