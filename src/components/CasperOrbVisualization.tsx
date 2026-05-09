@@ -582,13 +582,22 @@ const CasperOrbVisualizationInner: React.FC<CasperOrbVisualizationProps> = ({
   );
 };
 
-// Custom comparator: ignore audioLevel changes (orb reads via ref instead).
-// This is what stops the 15Hz re-render cascade into the Canvas tree.
+// Custom comparator: when `audioLevelRef` is provided, the orb reads live
+// audio amplitude from `audioLevelRef.current` inside `useFrame` 60Hz, so we
+// can safely ignore `audioLevel` prop changes — and ignoring them is what
+// breaks the 15Hz re-render cascade that was causing the whole-image flash.
+//
+// When `audioLevelRef` is NOT provided (legacy callers), we fall back to
+// comparing `audioLevel` so the orb still re-renders when the prop changes,
+// preserving the documented API contract.
 const CasperOrbVisualization = React.memo(CasperOrbVisualizationInner, (prev, next) =>
   prev.state === next.state &&
   prev.audioLevelRef === next.audioLevelRef &&
   prev.instability === next.instability &&
-  prev.className === next.className,
+  prev.className === next.className &&
+  // When ref is provided, audioLevel prop is unused → safe to ignore.
+  // When ref is absent, fall back to comparing the prop value.
+  (prev.audioLevelRef != null || prev.audioLevel === next.audioLevel),
 );
 CasperOrbVisualization.displayName = 'CasperOrbVisualization';
 
