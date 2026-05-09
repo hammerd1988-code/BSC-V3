@@ -27,14 +27,34 @@ export default defineConfig(({mode}) => {
     build: {
       rollupOptions: {
         output: {
+          // IMPORTANT: every match below is anchored to a `/node_modules/<pkg>/`
+          // path segment. Bare substring matches (e.g. id.includes('react'))
+          // wrongly pulled `recharts`, `react-three`, and other unrelated
+          // packages into `react-vendor`, which split shared deps across two
+          // chunks and produced a runtime *circular* import between
+          // `react-vendor` and `viz-vendor` that crashed React mount with
+          // `Cannot read properties of undefined (reading 'forwardRef')`.
           manualChunks(id) {
-            if (!id.includes('node_modules')) return;
+            if (!id.includes('/node_modules/')) return;
 
-            if (id.includes('@tiptap')) return 'tiptap';
-            if (id.includes('react') || id.includes('react-dom') || id.includes('react-router')) return 'react-vendor';
-            if (id.includes('@supabase')) return 'data-vendor';
-            if (id.includes('@google/genai') || id.includes('openai')) return 'ai-vendor';
-            if (id.includes('d3') || id.includes('recharts')) return 'viz-vendor';
+            const segment = (pkg: string) => id.includes(`/node_modules/${pkg}/`);
+
+            if (id.includes('/node_modules/@tiptap/')) return 'tiptap';
+
+            // React core only \u2014 no react-* / *-react libs (recharts,
+            // react-three-fiber, framer-motion, etc.) so this chunk has no
+            // reason to import from any other vendor chunk.
+            if (
+              segment('react') ||
+              segment('react-dom') ||
+              segment('react-router') ||
+              segment('react-router-dom') ||
+              segment('scheduler')
+            ) return 'react-vendor';
+
+            if (id.includes('/node_modules/@supabase/')) return 'data-vendor';
+            if (id.includes('/node_modules/@google/genai/') || segment('openai')) return 'ai-vendor';
+            if (segment('recharts') || /\/node_modules\/d3-?[^/]*\//.test(id)) return 'viz-vendor';
           },
         },
       },
