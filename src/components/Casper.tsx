@@ -937,10 +937,10 @@ export const Casper: React.FC = () => {
           lastAudioLevelStateAt.current = now;
           setAudioLevel(audioLevelRef.current);
         }
-        // Use the smoothed level for downstream silence detection too so
-        // momentary mic spikes during a pause don't reset the silence timer.
-        const lvl = audioLevelRef.current;
-        void lvl;
+        // Note: silence detection below intentionally uses raw `avg` against
+        // SILENCE_THRESHOLD (calibrated on the byte-frequency-average scale).
+        // Don't substitute the EMA-smoothed audioLevelRef here without also
+        // recalibrating the threshold — they're on different scales.
         const elapsed = Date.now() - recordingStartTime;
 
         if (avg > SILENCE_THRESHOLD) {
