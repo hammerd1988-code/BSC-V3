@@ -923,7 +923,10 @@ export const Casper: React.FC = () => {
         } else if (speechDetectedRef.current && elapsed > MIN_RECORDING_MS) {
           const speechDuration = Date.now() - speechStartTime;
           if (speechDuration > MIN_SPEECH_DURATION_MS && !silenceTimerRef.current) {
-            setVoiceDebug('Done? Processing in 3s... or tap Send Now');
+            // Derive the displayed wait time from the actual timeout constant so
+            // the message can't drift if SILENCE_DURATION_MS is ever retuned.
+            const silenceSeconds = (SILENCE_DURATION_MS / 1000).toFixed(SILENCE_DURATION_MS % 1000 === 0 ? 0 : 1);
+            setVoiceDebug(`Done? Processing in ${silenceSeconds}s... or tap Send Now`);
             silenceTimerRef.current = window.setTimeout(() => { void finishListening(); }, SILENCE_DURATION_MS);
           }
         } else if (!speechDetectedRef.current && elapsed < MIN_RECORDING_MS) {
