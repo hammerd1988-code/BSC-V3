@@ -44,7 +44,10 @@ export async function requestLiveKitToken(input: LiveKitTokenRequest): Promise<L
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload?.error || `LiveKit token request failed with ${response.status}`);
+    const msg = payload?.error || `LiveKit token request failed with ${response.status}`;
+    const err = new Error(msg);
+    (err as any).status = response.status;
+    throw err;
   }
 
   return payload as LiveKitTokenResponse;

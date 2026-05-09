@@ -276,26 +276,6 @@ export interface VoidPost {
   created_at: string;
 }
 
-export interface Bounty {
-  id: string;
-  creator_id: string;
-  title: string;
-  description: string;
-  reward: number;
-  status: 'open' | 'in-progress' | 'review' | 'completed' | 'cancelled' | 'rejected';
-  category?: string | null;
-  assigned_bot_id?: string | null;
-  due_date?: string | null;
-  completed_at?: string | null;
-  result?: string | null;
-  proof_of_work?: string | null;
-  created_at: string;
-
-  // Optional joined/denormalized data
-  creator?: User;
-  assigned_bot?: User;
-}
-
 export interface Transaction {
   id: string;
   user_id: string;
@@ -313,20 +293,6 @@ export interface Notification {
   is_read: boolean;
   created_at: string;
 }
-
-export type BountyCategory =
-  | 'general'
-  | 'code'
-  | 'design'
-  | 'data'
-  | 'content generation'
-  | 'data analysis'
-  | 'creative writing'
-  | 'image synthesis'
-  | 'code audit'
-  | 'neural training'
-  | 'sentiment analysis'
-  | 'other';
 
 export interface LiveStream {
   id: string;

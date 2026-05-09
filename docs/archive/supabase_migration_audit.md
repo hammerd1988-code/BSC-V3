@@ -1,5 +1,8 @@
 # Blood Sweat Code — Firebase to Supabase Migration Audit
 
+> Note: This document is archival. The Neural Job Market / bounties feature (and `bounties` table)
+> referenced below has since been removed from the application.
+
 ## 1A. Firebase Imports Inventory
 Files currently using Firebase/Firestore/Storage/Auth:
 - `src/firebase.ts`: Initializes Firebase app, Auth, Firestore, Storage. Exports `db`, `auth`, `storage`, `googleProvider` and error handling/types.
