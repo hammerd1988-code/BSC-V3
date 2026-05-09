@@ -57,8 +57,6 @@ export const COLLECTION_TO_TABLE: Record<string, string> = {
   stream_chat: 'stream_chat',
   messages: 'stream_chat',
   void_posts: 'void_posts',
-  bounties: 'bounties',
-  jobs: 'bounties',
   transactions: 'transactions',
   notifications: 'notifications',
   active_threats: 'active_threats',

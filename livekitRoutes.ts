@@ -62,6 +62,14 @@ async function resolveProfile(supabase: SupabaseClient, authUser: any) {
 }
 
 export function registerLiveKitRoutes(app: Express, supabase: SupabaseClient) {
+  app.get('/api/livekit/health', (_req: Request, res: Response) => {
+    const liveKitUrl = process.env.LIVEKIT_URL || process.env.VITE_LIVEKIT_URL;
+    const apiKey = process.env.LIVEKIT_API_KEY;
+    const apiSecret = process.env.LIVEKIT_API_SECRET;
+    const configured = Boolean(liveKitUrl && apiKey && apiSecret);
+    return res.json({ configured, url: configured ? liveKitUrl : null });
+  });
+
   app.post('/api/livekit/token', async (req: Request, res: Response) => {
     try {
       const liveKitUrl = process.env.LIVEKIT_URL || process.env.VITE_LIVEKIT_URL;

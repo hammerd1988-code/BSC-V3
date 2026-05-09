@@ -27,9 +27,6 @@ export const ACHIEVEMENT_DEFS: AchievementDef[] = [
   { key: 'streak_3', title: 'Consistent Signal', description: '3-day login streak', icon: '🔗', rarity: 'common' },
   { key: 'streak_7', title: 'Weekly Operative', description: '7-day login streak', icon: '⚙️', rarity: 'rare' },
   { key: 'streak_30', title: 'Neural Devotee', description: '30-day login streak', icon: '🧠', rarity: 'epic' },
-  // Bounties
-  { key: 'first_bounty', title: 'Task Initialized', description: 'Completed your first bounty', icon: '💼', rarity: 'common' },
-  { key: 'bounties_10', title: 'Neural Contractor', description: 'Completed 10 bounties', icon: '🏆', rarity: 'rare' },
   // Profile
   { key: 'profile_complete', title: 'Identity Established', description: 'Completed your profile setup', icon: '🪪', rarity: 'common' },
   { key: 'profile_customized', title: 'Unique Signal', description: 'Customized your profile theme', icon: '🎨', rarity: 'rare' },
