@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { EffectComposer, Bloom, ChromaticAberration } from '@react-three/postprocessing';
 import { BlendFunction } from 'postprocessing';
@@ -32,6 +32,15 @@ export interface CasperOrbVisualizationProps {
   state: CasperOrbState;
   /** 0..1 microphone amplitude (used while `recording`). */
   audioLevel?: number;
+  /**
+   * Optional ref to live mic amplitude (0..1). When provided, the orb reads
+   * audio amplitude from this ref every frame instead of from the prop —
+   * which lets the parent skip 60Hz re-renders during recording (the actual
+   * cause of the orb's previously-visible "flash/blink" glitch on prod: heavy
+   * parent re-renders stalled the main thread, which made `dt` in `useFrame`
+   * spike, which made the smoothing lerp snap to its target = visible jump).
+   */
+  audioLevelRef?: React.RefObject<number>;
   /** 0..100 — global Casper mood/instability that nudges base palette warmth. */
   instability?: number;
   className?: string;
@@ -255,12 +264,13 @@ void main() {
 interface SceneProps {
   state: CasperOrbState;
   audioLevel: number;
+  audioLevelRef?: React.RefObject<number>;
   instability: number;
 }
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
-function CasperOrbScene({ state, audioLevel, instability }: SceneProps) {
+function CasperOrbScene({ state, audioLevel, audioLevelRef, instability }: SceneProps) {
   const sphereRef = useRef<THREE.Mesh>(null);
   const pointsRef = useRef<THREE.Points>(null);
   const haloARef = useRef<THREE.Mesh>(null);
@@ -316,12 +326,18 @@ function CasperOrbScene({ state, audioLevel, instability }: SceneProps) {
   const targetHaloColor = useMemo(() => new THREE.Color('#00e5ff'), []);
 
   useFrame((_, dt) => {
+    // Cap dt so a stalled main thread (e.g., a heavy React re-render burst
+    // from setAudioLevel firing 60Hz) cannot snap-lerp the orb's smoothed
+    // values to their target in a single frame. Without this cap, every
+    // hiccup looks like a brightness/color flash to the user.
+    const cdt = Math.min(0.05, Math.max(0, dt));
     const palette = getPalette(state, instability);
-    const time = (sphereUniforms.uTime.value += dt);
-    const env = envelope(state, audioLevel, time);
+    const time = (sphereUniforms.uTime.value += cdt);
+    const liveAudio = audioLevelRef?.current ?? audioLevel ?? 0;
+    const env = envelope(state, liveAudio, time);
 
     // Smooth color interpolation
-    const damp = Math.min(1, dt * 4);
+    const damp = Math.min(0.6, cdt * 4);
     targetColorA.lerp(new THREE.Color(palette.colorA), damp);
     targetColorB.lerp(new THREE.Color(palette.colorB), damp);
     targetParticleColor.lerp(new THREE.Color(palette.particleColor), damp);
@@ -332,23 +348,29 @@ function CasperOrbScene({ state, audioLevel, instability }: SceneProps) {
     sphereUniforms.uAudio.value = lerp(sphereUniforms.uAudio.value, env, damp);
     sphereUniforms.uIntensity.value = lerp(sphereUniforms.uIntensity.value, palette.intensity, damp);
 
+    // EVERYTHING below reads from the *smoothed* audio (uAudio.value), never
+    // raw `env`. Reading raw env here was the second flash source: the sphere
+    // shader saw a smoothed value, but rotation speed and halo opacity jumped
+    // every frame in lockstep with mic noise, producing visible stutter.
+    const smoothAudio = sphereUniforms.uAudio.value;
+
     particleUniforms.uTime.value = time;
-    particleUniforms.uAudio.value = sphereUniforms.uAudio.value;
+    particleUniforms.uAudio.value = smoothAudio;
     particleUniforms.uSpeed.value = lerp(particleUniforms.uSpeed.value, palette.particleSpeed, damp);
     particleUniforms.uColor.value.copy(targetParticleColor);
 
     if (sphereRef.current) {
-      sphereRef.current.rotation.y += 0.003 + env * 0.012;
+      sphereRef.current.rotation.y += 0.003 + smoothAudio * 0.008;
       sphereRef.current.rotation.x += 0.0009;
     }
     if (pointsRef.current) {
-      pointsRef.current.rotation.y -= 0.0014 + env * 0.003;
+      pointsRef.current.rotation.y -= 0.0014 + smoothAudio * 0.002;
     }
-    const haloOpacity = (base: number) => Math.min(0.5, base + env * 0.15);
+    const haloOpacity = (base: number) => Math.min(0.4, base + smoothAudio * 0.08);
     [haloARef, haloBRef, haloCRef].forEach((ref, i) => {
       const m = ref.current;
       if (!m) return;
-      m.rotation.z += 0.002 + i * 0.0014 + env * 0.003;
+      m.rotation.z += 0.002 + i * 0.0014 + smoothAudio * 0.002;
       const mat = m.material as THREE.MeshBasicMaterial;
       mat.color.copy(targetHaloColor);
       mat.opacity = haloOpacity(0.22 - i * 0.05);
@@ -401,20 +423,31 @@ interface BloomDriverProps {
 }
 
 function BloomDriver({ state, instability }: BloomDriverProps) {
-  // Drive bloom strength from voice state, smoothed with a ref. Tuned far below
-  // the demo HTML so the orb feels intense but never washed out. luminanceThreshold
-  // is intentionally high (0.85) so bloom only triggers on the brightest fresnel
-  // edges — the body of the orb does not bloom, which prevents strobing.
+  // Drive bloom strength from voice state. Previously this stored strength in
+  // a plain ref and read it through JSX (`<Bloom intensity={ref.current...}>`),
+  // which only flushes on React re-render — meaning bloom intensity got stuck
+  // at whatever value it had when the component last rendered, which produced
+  // visible step-changes (= flashes) when voice state flipped.
+  //
+  // Now: lerp inside useFrame and only call setState when the smoothed value
+  // has drifted enough to be visible (>0.005). This caps the React re-render
+  // rate to ~10Hz max during transitions and 0Hz when bloom is stable, while
+  // still keeping bloom intensity smoothly animated.
   const target = getPalette(state, instability).bloom;
-  const ref = useRef({ strength: 0.18 });
+  const smoothedRef = useRef(target);
+  const [strength, setStrength] = useState(target);
   useFrame((_, dt) => {
-    const damp = Math.min(1, dt * 2);
-    ref.current.strength = lerp(ref.current.strength, target, damp);
+    const cdt = Math.min(0.05, Math.max(0, dt));
+    const damp = Math.min(0.4, cdt * 2);
+    smoothedRef.current = lerp(smoothedRef.current, target, damp);
+    if (Math.abs(smoothedRef.current - strength) > 0.005) {
+      setStrength(smoothedRef.current);
+    }
   });
   return (
     <EffectComposer>
       <Bloom
-        intensity={ref.current.strength}
+        intensity={strength}
         luminanceThreshold={0.85}
         luminanceSmoothing={0.5}
         mipmapBlur
@@ -433,6 +466,7 @@ function BloomDriver({ state, instability }: BloomDriverProps) {
 const CasperOrbVisualization: React.FC<CasperOrbVisualizationProps> = ({
   state,
   audioLevel = 0,
+  audioLevelRef,
   instability = 10,
   className,
 }) => {
@@ -440,11 +474,16 @@ const CasperOrbVisualization: React.FC<CasperOrbVisualizationProps> = ({
     <div className={className} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
       <Canvas
         camera={{ position: [0, 0, 4.2], fov: 45 }}
-        dpr={[1, 2]}
+        dpr={[1, 1.75]}
         gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
         style={{ background: 'transparent' }}
       >
-        <CasperOrbScene state={state} audioLevel={audioLevel} instability={instability} />
+        <CasperOrbScene
+          state={state}
+          audioLevel={audioLevel}
+          audioLevelRef={audioLevelRef}
+          instability={instability}
+        />
         <BloomDriver state={state} instability={instability} />
       </Canvas>
     </div>
