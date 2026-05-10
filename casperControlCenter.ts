@@ -609,16 +609,23 @@ export function isLocalEndpoint(endpoint?: string | null): boolean {
 // fan-out, follow-up) need to call an LLM but the user has a local
 // endpoint configured, the server can't reach the user's machine and
 // must NOT fall through to its own loopback interface. Strip the
-// local endpoint + key from the user's settings so callOpenAICompatible
-// falls back to the platform-default provider. Prevents:
+// local endpoint + key + model from the user's settings so
+// callOpenAICompatible falls back fully to the platform-default
+// provider. The model has to go too — `llama3:latest` (or any other
+// local-only model name) would otherwise be passed verbatim to the
+// platform's OpenAI-compatible endpoint and rejected as "unknown
+// model", which manifests as "Casper returned an empty response."
+// Prevents:
 //   1. Zombie tasks: server-side queue would otherwise hand off to
 //      `awaiting_client` and hang forever (no browser is watching).
 //   2. SSRF: subagents/follow-ups would otherwise POST the user's
 //      directive (and the composed system prompt) to whatever is
 //      running on the server's loopback interface.
+//   3. Empty responses: a stripped endpoint with the local model name
+//      still attached fails on the platform-default fallback.
 function sanitizeUserSettingsForServer(userSettings: CasperUserAiSettings): CasperUserAiSettings {
   if (isLocalEndpoint(userSettings.endpoint)) {
-    return { ...userSettings, endpoint: null, apiKey: null };
+    return { ...userSettings, endpoint: null, apiKey: null, model: null };
   }
   return userSettings;
 }
