@@ -1160,7 +1160,12 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
     let toolCalls: LlmToolCallResult[] = [];
     let toolRounds = 0;
     let toolTruncatedReason: string | undefined;
-    const useToolLoop = input.enableTools !== false && (surface === 'control_center' || surface === 'studio') && isUuid(userId);
+    // Opt-in: only callers that explicitly pass enableTools=true (currently
+    // only the browser-facing /api/casper/command POST) engage the tool loop.
+    // Sub-agents, routines, follow-ups, the task queue runner, and manual
+    // task re-runs all leave enableTools undefined and stay on the
+    // single-shot text path. See PR #56 review thread.
+    const useToolLoop = input.enableTools === true && (surface === 'control_center' || surface === 'studio') && isUuid(userId);
     let executionText: string;
     let executionProvider: string;
     let executionModel: string;
