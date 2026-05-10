@@ -73,6 +73,20 @@ export async function spawnCasperSubagents(input: {
 //   autopilot      → autonomous routines (terse, machine-parseable)
 export type CasperSurface = 'control_center' | 'studio' | 'guide' | 'autopilot';
 
+// One tool invocation made by the LLM during a directive. Persisted
+// to casper_tasks.metadata.tool_calls and surfaced in the operator
+// console as a chronological action log so operators can see exactly
+// what Casper did (vs just what it said).
+export interface CasperToolCall {
+  id: string;
+  name: string;
+  ok: boolean;
+  data: unknown;
+  error: string | null;
+  status: number | null;
+  durationMs: number;
+}
+
 export interface CasperCommandResponse {
   success: true;
   taskId: string | null;
@@ -80,6 +94,12 @@ export interface CasperCommandResponse {
   surface: CasperSurface;
   provider: string;
   model: string;
+  // Optional — present only when the directive ran through the
+  // tool-calling loop (control_center / studio surfaces). Empty when
+  // the model did not request any tool calls.
+  toolCalls?: CasperToolCall[];
+  toolRounds?: number;
+  toolTruncatedReason?: string | null;
 }
 
 // Server-side deferred-execution descriptor. When the user has
