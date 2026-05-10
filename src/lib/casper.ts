@@ -62,3 +62,69 @@ export async function spawnCasperSubagents(input: {
   });
   return parseResponse<SubagentSpawnResponse>(response);
 }
+
+// -- Integrations (PR #45) --------------------------------------------------
+
+export interface IntegrationToolDescriptor {
+  name: string;
+  description: string;
+}
+
+export interface IntegrationConnected {
+  integration_key: string;
+  status: string;
+  connected_at: string | null;
+  tools: IntegrationToolDescriptor[];
+}
+
+export interface IntegrationsConnectedResponse {
+  success: true;
+  connected: IntegrationConnected[];
+}
+
+export interface IntegrationsToolsResponse {
+  success: true;
+  adapters: Array<{
+    integration: string;
+    tools: Array<{ name: string; description: string; params: Array<{ name: string; type: string; required?: boolean; description: string; default?: unknown }> }>;
+  }>;
+}
+
+export interface IntegrationExecuteResponse {
+  success: boolean;
+  integrationKey: string;
+  toolName: string;
+  data: unknown;
+  error: string | null;
+  status: number | null;
+  durationMs: number | null;
+}
+
+export async function listCasperIntegrationTools(): Promise<IntegrationsToolsResponse> {
+  const response = await fetch(`${apiBaseUrl()}/api/casper/integrations/tools`);
+  return parseResponse<IntegrationsToolsResponse>(response);
+}
+
+export async function listCasperConnectedIntegrations(): Promise<IntegrationsConnectedResponse> {
+  const headers = await authHeaders();
+  const response = await fetch(`${apiBaseUrl()}/api/casper/integrations/connected`, { headers });
+  return parseResponse<IntegrationsConnectedResponse>(response);
+}
+
+export async function executeCasperIntegration(input: {
+  integrationKey: string;
+  toolName: string;
+  params?: Record<string, unknown>;
+}): Promise<IntegrationExecuteResponse> {
+  const headers = await authHeaders();
+  const response = await fetch(`${apiBaseUrl()}/api/casper/integrations/execute`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(input),
+  });
+  // Parse without throwing on !ok — failures here are surfaced as
+  // structured payloads so callers can distinguish auth/permission
+  // errors from the upstream provider's logical errors.
+  const payload = await response.json().catch(() => ({} as Record<string, unknown>));
+  return payload as IntegrationExecuteResponse;
+}
