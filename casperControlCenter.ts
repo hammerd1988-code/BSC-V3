@@ -451,7 +451,10 @@ function splitObjectivesServer(prompt: string): string[] {
 }
 
 const SUBAGENT_DEFAULT_TIMEOUT_MS = 60_000;
-const SUBAGENT_MAX_PARALLEL = 6;
+// Must stay in sync with the client-side splitObjectives slice in
+// src/components/CasperContentManager.tsx. If we silently dropped objectives
+// past this cap, optimistic rows would render but the work never happens.
+export const SUBAGENT_MAX_PARALLEL = 8;
 
 async function runSubagentObjective(
   supabase: SupabaseClient,
