@@ -1308,7 +1308,14 @@ app.post("/api/cred/exchange", async (req, res) => {
         },
       });
 
-      res.status(result.ok ? 200 : (result.status && result.status >= 400 && result.status < 600 ? result.status : 502)).json({
+      // Always wrap upstream failures in 502 Bad Gateway so the response
+      // status describes Casper's auth domain only. Forwarding the upstream
+      // 401 (e.g. expired GitHub PAT) would conflate it with Casper auth
+      // failure and could trigger an unwanted Supabase session refresh in
+      // any future status-code-based middleware. The original upstream
+      // status is preserved in the JSON `status` field for the client to
+      // surface the right diagnostic.
+      res.status(result.ok ? 200 : 502).json({
         success: result.ok,
         integrationKey,
         toolName,
