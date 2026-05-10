@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { randomUUID } from 'crypto';
 import { generateServerText, isServerAiConfigured } from './serverAi.js';
 
 const PLATFORM_DEFAULT_MODEL = process.env.CASPER_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
@@ -26,9 +27,28 @@ type CasperProfile = {
   role?: string | null;
 };
 
+// CasperSurface identifies which UI surface a directive originates from
+// so we can attach a surface-specific persona module to the system prompt.
+// 'control_center' is the operator console (default — full sysadmin/operator
+// behavior). 'studio' is Casper-as-Studio-guide (content creation, algorithms,
+// brand growth, livestream/channel scaling, plus full-stack engineering
+// expertise). 'guide' is the floating "Ask Casper" help popup that can be
+// opened from anywhere in the app — concise, support-style answers, page
+// context-aware. 'autopilot' is autonomous routines that need to be terse
+// and machine-parseable. Anything unknown falls back to control_center.
+export const CASPER_SURFACES = ['control_center', 'studio', 'guide', 'autopilot'] as const;
+export type CasperSurface = (typeof CASPER_SURFACES)[number];
+
+function normalizeSurface(value: unknown): CasperSurface {
+  if (typeof value !== 'string') return 'control_center';
+  const lower = value.toLowerCase();
+  return (CASPER_SURFACES as readonly string[]).includes(lower) ? (lower as CasperSurface) : 'control_center';
+}
+
 type CasperCommandInput = {
   command: string;
   source?: 'admin' | 'user' | 'routine' | 'task';
+  surface?: CasperSurface;
   userId?: string | null;
   taskId?: string | null;
   routineId?: string | null;
@@ -334,7 +354,104 @@ async function fetchNetworkSnapshot(supabase: SupabaseClient): Promise<string> {
   }
 }
 
-async function buildCasperSystemPrompt(supabase: SupabaseClient, casperMemory: any, userId?: string | null) {
+// Surface-specific persona modules. These are appended to the base Casper
+// system prompt so the same model+endpoint can speak with the appropriate
+// expertise depending on which UI the operator is invoking him from.
+//
+// Engineering coverage (kept concise on purpose so we don't blow the
+// context window — the LLM already has wide background knowledge of these
+// frameworks; we just nudge it to lean on them when relevant):
+//
+//   - Frontend:   React, Next.js, Vue, Svelte, vanilla TS/JS, React Router,
+//                 SPA architecture, SSR/RSC, hydration, code splitting
+//   - Styling:    Tailwind, shadcn/ui, Radix, Framer Motion, CSS-in-JS,
+//                 Material UI, Chakra, modern CSS (grid, container queries,
+//                 @property Houdini, CSS variables for theming)
+//   - Backend:    Node.js, Express, Fastify, Python (FastAPI/Flask/Django),
+//                 Go, Rust, REST/GraphQL/tRPC, websockets, server-sent events
+//   - Data/auth:  Supabase, Firebase, Postgres + RLS, MongoDB, Redis,
+//                 Prisma, Drizzle, Kysely, TypeORM, OAuth, JWT, magic links
+//   - Infra:      Vercel, Railway, AWS, Cloudflare Workers/Pages, Docker,
+//                 GitHub Actions, deployment / CI/CD pipelines
+//   - AI:         OpenAI, Anthropic, Gemini, OpenRouter, LangChain,
+//                 embeddings, RAG, vector DBs (pgvector, Pinecone, Weaviate)
+//   - UI patterns: forms with validation, data tables, modals, command palettes,
+//                 file upload, drag-and-drop, real-time presence,
+//                 optimistic updates, infinite scroll, virtualized lists
+function studioGuidePersonaModule(): string {
+  return `Surface override: STUDIO GUIDE
+
+When responding from the Studio context you are an expert dual-discipline copilot for content creators who are also building product. You speak with genuine practitioner depth in BOTH domains:
+
+CONTENT & GROWTH EXPERTISE
+- Script & hook design: open-loop hooks, pattern-interrupts, retention curves, payoff structures, narrative tension. You know the first 3 seconds make or break short-form and the first 30s make or break long-form.
+- Algorithms (concrete, current heuristics — not platitudes):
+  * TikTok: average watch time + completion rate, FYP vs Following surfaces, sound trends, batch-cycle (post 3-5/day for 30 days), creator search intent
+  * Instagram Reels: shares + saves > likes, niche-locking, original audio, carousel reach, "Send to a friend" as the highest-leverage signal
+  * YouTube Shorts: swipe-away rate, return-to-Shorts, Shorts → long-form funnel, click-through on end screens
+  * YouTube long-form: CTR x AVD, packaging (title + thumbnail), session watch time, browse-vs-search-vs-suggested
+  * X (Twitter): impressions per follower, reply velocity, thread payoff, repost-with-comment leverage
+  * Twitch: concurrent viewers + raid economy + stream uptime + clip share, Just Chatting → category pivot, IRL vs gaming retention
+  * Reddit: subreddit fit, self-promo limits, AMA mechanics, OC flair leverage
+  * LinkedIn: dwell time, comment depth, "broetry" structure, employee amplification
+- Format-specific best practice: short-form (vertical, 15-60s), long-form (horizontal, 8-20 min sweet spot), livestream (consistency > novelty, schedule beats spectacle), podcast (clip-first distribution), threads (information density, controlled cliffhangers), carousels (slide 1 = thumbnail, slide 10 = CTA), blog/SEO (E-E-A-T, internal linking, topic clusters).
+- Brand growth: positioning ladder, voice/tone consistency, owned vs rented audience, content pillars (3-5 max), distribution-first thinking, repurposing graph (one tentpole → 8 derivatives).
+- Livestream growth: pre-stream promo loops, streaming schedule density, host-mode for collab raids, multi-stream limitations, OBS scene composition, latency tradeoffs (low vs ultra-low).
+- Channel scaling: from 0→1k (consistency wins), 1k→10k (niche tightens, batch production starts), 10k→100k (collabs + distribution partnerships), 100k+ (team building, sponsorship rate cards, paid amplification).
+- Thumbnails & packaging: contrast, single subject focus, expression-driven faces, text < 4 words, A/B testing through analytics.
+
+ENGINEERING EXPERTISE (you are also a senior full-stack engineer)
+- Frontend: React, Next.js (App Router + RSC), Vue, Svelte, React Router, SPA + SSR architecture, hydration, code splitting, suspense
+- Styling/UI: Tailwind, shadcn/ui, Radix, Framer Motion, modern CSS (grid, container queries, @property Houdini), CSS variables for theming
+- Backend: Node.js, Express, Fastify, Python (FastAPI/Flask/Django), Go, Rust; REST, GraphQL, tRPC, websockets, server-sent events
+- Data/auth: Supabase (Postgres + RLS + Realtime + Storage + Edge Functions), Firebase, Postgres, MongoDB, Redis, Prisma, Drizzle, Kysely, OAuth (Google/GitHub), JWT, magic links
+- Infra & deploy: Vercel, Railway, AWS (Lambda/S3/CloudFront/RDS), Cloudflare (Workers/Pages/R2), Docker, GitHub Actions, Bun/PNPM
+- AI: OpenAI, Anthropic, Gemini, OpenRouter, LangChain/LangGraph, embeddings, RAG, vector DBs (pgvector, Pinecone, Weaviate, Qdrant), local LLMs (Ollama, LM Studio)
+- UI patterns: form validation (zod, react-hook-form), data tables (TanStack Table), command palettes (cmdk), file upload + drag-and-drop, real-time presence, optimistic updates, infinite scroll, virtualized lists (TanStack Virtual)
+
+When the user asks anything that touches both sides — e.g. "build a viral form on my landing page", "automate clip extraction from my Twitch VODs", "write a Supabase function that auto-tags my best-performing posts" — respond as a single voice that owns both domains. Don't say "as a content expert..." or "as an engineer..." — just answer.
+
+If the directive is product/code, output runnable code blocks (TypeScript by default for frontend, Python or TypeScript for backend, with the right imports at the top). If it's content strategy, output concrete, step-by-step playbooks with numbers (post counts, expected timeline, leading indicators) — not vague advice. If you don't have enough context, ask one focused clarifying question, not five.`;
+}
+
+function guideFloatingPersonaModule(): string {
+  return `Surface override: ASK CASPER (floating help guide)
+
+You are answering through the floating "Ask Casper" popup that can be opened from anywhere in the BSC app. The user clicked you because they're stuck or curious about a feature or workflow on the page they're currently on.
+
+Constraints for this surface:
+- Be CONCISE. The popup is small. Three short paragraphs max, or a tight bullet list. Long answers feel intrusive in a floating widget.
+- Be DIRECT. Skip preamble. Lead with the answer.
+- Be PAGE-AWARE. Use the page metadata in the user's message to tailor your answer. If they're on /studio, they're in Visual Forge. If they're on /casper, they're in the Control Center. If you don't recognize the page, give general help.
+- If a feature on the page is broken or missing, say so plainly and suggest the closest working alternative.
+- If the answer requires more than a paragraph or two of explanation, end with: "Want me to walk you through it step by step? Just say so."`;
+}
+
+function autopilotPersonaModule(): string {
+  return `Surface override: AUTOPILOT (autonomous routine)
+
+This directive is running unattended on a schedule. The output will be logged to casper_activity_log and reviewed asynchronously, not read in real time by a human.
+
+- Be terse and machine-parseable. Lead with a structured Result line.
+- Don't ask clarifying questions; either complete the directive or fail it explicitly with a single-line reason.
+- Use Markdown sections (Result, Actions Taken, Risks) only if material — skip them when the answer is one line.`;
+}
+
+function surfacePersonaModule(surface: CasperSurface): string {
+  switch (surface) {
+    case 'studio':
+      return studioGuidePersonaModule();
+    case 'guide':
+      return guideFloatingPersonaModule();
+    case 'autopilot':
+      return autopilotPersonaModule();
+    case 'control_center':
+    default:
+      return ''; // no override — base prompt already describes operator behavior
+  }
+}
+
+async function buildCasperSystemPrompt(supabase: SupabaseClient, casperMemory: any, userId?: string | null, surface: CasperSurface = 'control_center') {
   const core = await fetchCognitiveCore(supabase);
   let stateModifier = '';
   let relevantMemories = '';
@@ -353,6 +470,7 @@ async function buildCasperSystemPrompt(supabase: SupabaseClient, casperMemory: a
     fetchNetworkSnapshot(supabase),
   ]);
 
+  const personaOverride = surfacePersonaModule(surface);
   return `You are Casper, the AI agent of Blood, Sweat, or Code (BSC) — a cyberpunk social/code/content platform at bloodsweatcode.org. "BSC" always means "Blood, Sweat, or Code" — never Binance Smart Chain or any other meaning. You are the Grok-style public assistant, Casper Studio creator copilot, and OpenClaw-style GhostOps workflow operator for app, website, APK, creator, and platform-service execution.
 
 The BSC network is the Blood, Sweat, or Code user community — its posts, comments, live streams, and social activity on the platform. You control this cyberpunk platform with social networking, live streaming, content creation studio, Colosseum competition features, autonomous routines, and integration-backed service operations.
@@ -375,7 +493,7 @@ ${networkSnapshot}
 
 When an enabled integration is relevant, mention how Casper can use that module. Never expose API keys or secrets. If this endpoint cannot complete an external side effect directly, return the exact next action or queued task needed.
 
-Return concise Markdown with these sections when useful: Result, Actions Taken, Follow-Up, Risks.`;
+Return concise Markdown with these sections when useful: Result, Actions Taken, Follow-Up, Risks.${personaOverride ? `\n\n---\n\n${personaOverride}` : ''}`;
 }
 
 async function callOpenAICompatible(input: { prompt: string; systemPrompt: string; cognitiveCore: Record<string, any> }) {
@@ -422,6 +540,89 @@ async function logActivity(supabase: SupabaseClient, input: {
   await supabase.from('casper_activity_log').insert(row);
 }
 
+function buildSubagentSystemPrompt(parentObjective: string, sharedSystem: string) {
+  return `${sharedSystem}
+
+You are now operating as a Casper sub-agent — a focused parallel worker spawned to complete ONE specific objective in the context of a larger parent directive.
+
+Parent directive (for context only — do not re-do the whole thing):
+${parentObjective}
+
+Your scope:
+- Complete only your specific objective.
+- Stay tight: no preamble, no apologies, no "I will…" — just the deliverable.
+- If the objective is content-creation work (caption, thumbnail concept, script, hook, post body, schedule plan, stream rundown, ad copy, SEO title, etc.), produce the actual deliverable, ready to use, not a plan to make it.
+- If the objective is engineering work (code, query, migration, config), produce the actual artifact in a fenced code block with the right language tag.
+- If the objective is research / analysis, produce the analysis with concrete numbers, sources, or named entities — no hand-waving.
+- Cap your output at ~400 tokens unless the objective inherently needs more (e.g. a long script).
+
+Return only the deliverable. The parent task will compose your output with the other sub-agents' outputs.`;
+}
+
+function splitObjectivesServer(prompt: string): string[] {
+  return prompt
+    .split(/(?:,|\band\b|\bthen\b|\n)/i)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 8)
+    .slice(0, 8);
+}
+
+const SUBAGENT_DEFAULT_TIMEOUT_MS = 60_000;
+// Must stay in sync with the client-side splitObjectives slice in
+// src/components/CasperContentManager.tsx. If we silently dropped objectives
+// past this cap, optimistic rows would render but the work never happens.
+export const SUBAGENT_MAX_PARALLEL = 8;
+
+async function runSubagentObjective(
+  supabase: SupabaseClient,
+  rowId: string,
+  objective: string,
+  parentObjective: string,
+  sharedSystem: string,
+  cognitiveCore: Record<string, any>,
+): Promise<{ ok: boolean; result: string; provider?: string; model?: string }> {
+  // Mark working — best effort, don't block on failure.
+  await supabase
+    .from('casper_subagents')
+    .update({ status: 'working' })
+    .eq('id', rowId);
+
+  try {
+    const systemPrompt = buildSubagentSystemPrompt(parentObjective, sharedSystem);
+    const execution = await Promise.race([
+      callOpenAICompatible({ prompt: objective, systemPrompt, cognitiveCore }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('subagent_timeout')), SUBAGENT_DEFAULT_TIMEOUT_MS),
+      ),
+    ]);
+
+    const text = (execution.text || '').trim() || 'Sub-agent returned an empty response.';
+    await supabase
+      .from('casper_subagents')
+      .update({
+        status: 'completed',
+        result: text,
+        completed_at: new Date().toISOString(),
+      })
+      .eq('id', rowId);
+    return { ok: true, result: text, provider: execution.provider, model: execution.model };
+  } catch (error: any) {
+    const message = error?.message === 'subagent_timeout'
+      ? `Sub-agent timed out after ${SUBAGENT_DEFAULT_TIMEOUT_MS / 1000}s on: ${objective}`
+      : `Sub-agent failed: ${error?.message || String(error)}`;
+    console.error('[casper-control:subagent]', message);
+    await supabase
+      .from('casper_subagents')
+      .update({
+        status: 'failed',
+        result: message,
+        completed_at: new Date().toISOString(),
+      })
+      .eq('id', rowId);
+    return { ok: false, result: message };
+  }
+}
+
 async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any, input: CasperCommandInput) {
   const command = input.command.trim();
   const userId = isUuid(input.userId) ? input.userId : null;
@@ -464,9 +665,11 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
     metadata: { source, routine_id: input.routineId ?? null },
   });
 
+  const surface = normalizeSurface(input.surface);
+
   try {
     const cognitiveCore = await fetchCognitiveCore(supabase);
-    const systemPrompt = await buildCasperSystemPrompt(supabase, casperMemory, userId);
+    const systemPrompt = await buildCasperSystemPrompt(supabase, casperMemory, userId, surface);
     const execution = await callOpenAICompatible({ prompt: command, systemPrompt, cognitiveCore });
     const completedAt = new Date().toISOString();
 
@@ -493,10 +696,10 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
       description: `Casper completed directive: ${command.slice(0, 120)}`,
       actor_id: userId,
       task_id: taskId,
-      metadata: { source, provider: execution.provider, model: execution.model },
+      metadata: { source, surface, provider: execution.provider, model: execution.model },
     });
 
-    return { taskId, response: execution.text, provider: execution.provider, model: execution.model };
+    return { taskId, response: execution.text, surface, provider: execution.provider, model: execution.model };
   } catch (error: any) {
     const message = error?.message || 'Casper command execution failed.';
     await supabase
@@ -664,6 +867,9 @@ async function runDueRoutines(supabase: SupabaseClient, casperMemory: any, trigg
       const execution = await executeCasperCommand(supabase, casperMemory, {
         command: routine.directive,
         source: 'routine',
+        // Routines run unattended on a schedule — they get the autopilot
+        // persona module so output is terse and machine-parseable.
+        surface: 'autopilot',
         userId: routine.metadata?.owner_id ?? null,
         routineId: routine.id,
         metadata: { routine_name: routine.name, trigger },
@@ -812,10 +1018,11 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
     try {
       const profile = await requireAuth(req, res, supabase);
       if (!profile) return;
-      const { command, source, taskId, routineId, metadata } = req.body ?? {};
+      const { command, source, surface, taskId, routineId, metadata } = req.body ?? {};
       const execution = await executeCasperCommand(supabase, casperMemory, {
         command: String(command || ''),
         source: source === 'user' ? 'user' : profile.role === 'admin' ? 'admin' : 'user',
+        surface: normalizeSurface(surface),
         userId: profile.id,
         taskId,
         routineId,
@@ -825,6 +1032,119 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
     } catch (error: any) {
       console.error('[casper-control:command]', error);
       res.status(500).json({ success: false, error: error.message || 'Casper command execution failed.' });
+    }
+  });
+
+  // Spawn real Casper sub-agents. Each objective is sent to the same
+  // OpenAI-compatible LLM as /api/casper/command but with a tighter
+  // sub-agent system prompt scoped to a single deliverable. Sub-agents
+  // run in parallel (capped at SUBAGENT_MAX_PARALLEL) and their rows
+  // in casper_subagents are updated in real-time so the UI's existing
+  // postgres_changes subscription animates the tree without any
+  // additional client wiring.
+  app.post('/api/casper/subagents/spawn', async (req, res) => {
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+      const body = req.body ?? {};
+      const parentPrompt = String(body.parentPrompt || body.prompt || '').trim();
+      const explicitObjectives = Array.isArray(body.objectives)
+        ? body.objectives.map((o: unknown) => String(o || '').trim()).filter((o: string) => o.length > 0)
+        : [];
+
+      if (!parentPrompt && explicitObjectives.length === 0) {
+        return res.status(400).json({ success: false, error: 'A parent prompt or objectives array is required.' });
+      }
+
+      const objectives = explicitObjectives.length > 0
+        ? explicitObjectives.slice(0, SUBAGENT_MAX_PARALLEL)
+        : (() => {
+            const split = splitObjectivesServer(parentPrompt);
+            return (split.length > 0 ? split : [parentPrompt]).slice(0, SUBAGENT_MAX_PARALLEL);
+          })();
+
+      const parentTaskId = String(body.parentTaskId || '').trim() || randomUUID();
+
+      // Insert all queued rows up front so the UI sees them immediately
+      // via the existing realtime subscription on casper_subagents.
+      const rowsToInsert = objectives.map((objective) => ({
+        parent_task_id: parentTaskId,
+        user_id: profile.id,
+        objective,
+        status: 'queued' as const,
+      }));
+
+      const { data: insertedRaw, error: insertError } = await supabase
+        .from('casper_subagents')
+        .insert(rowsToInsert)
+        .select('*');
+
+      if (insertError) {
+        console.error('[casper-control:subagents] insert failed:', insertError);
+        return res.status(500).json({ success: false, error: insertError.message || 'Failed to insert sub-agent rows.' });
+      }
+
+      const inserted = (insertedRaw ?? []) as Array<{
+        id: string;
+        objective: string;
+        parent_task_id: string;
+      }>;
+
+      // Build the shared LLM context once — sub-agents share the same
+      // cognitive core, memory, and integration awareness as the parent.
+      const cognitiveCore = await fetchCognitiveCore(supabase);
+      const sharedSystem = await buildCasperSystemPrompt(supabase, casperMemory, profile.id);
+
+      // Fan out in parallel. The whole batch runs on this request, but
+      // each sub-agent updates its row as it progresses, so the UI
+      // animates without waiting for the response.
+      const settled = await Promise.all(
+        inserted.map((row) =>
+          runSubagentObjective(
+            supabase,
+            row.id,
+            row.objective,
+            parentPrompt || objectives.join(' / '),
+            sharedSystem,
+            cognitiveCore,
+          ).catch((err) => ({
+            ok: false,
+            result: `Sub-agent crashed: ${err?.message || String(err)}`,
+          })),
+        ),
+      );
+
+      // Best-effort: log a single activity entry for the parent fan-out.
+      try {
+        await logActivity(supabase, {
+          action_type: 'subagents_spawned',
+          description: `Casper spawned ${inserted.length} sub-agent${inserted.length === 1 ? '' : 's'}: ${objectives.map((o) => o.slice(0, 60)).join(' | ').slice(0, 480)}`,
+          actor_id: profile.id,
+          metadata: {
+            parent_task_id: parentTaskId,
+            objective_count: inserted.length,
+            successes: settled.filter((s) => s.ok).length,
+            failures: settled.filter((s) => !s.ok).length,
+          },
+        });
+      } catch (logErr) {
+        console.warn('[casper-control:subagents] activity log skipped:', logErr);
+      }
+
+      res.json({
+        success: true,
+        parentTaskId,
+        objectives,
+        results: inserted.map((row, idx) => ({
+          id: row.id,
+          objective: row.objective,
+          status: settled[idx]?.ok ? 'completed' : 'failed',
+          result: settled[idx]?.result ?? '',
+        })),
+      });
+    } catch (error: any) {
+      console.error('[casper-control:subagents-spawn]', error);
+      res.status(500).json({ success: false, error: error.message || 'Sub-agent spawn failed.' });
     }
   });
 
