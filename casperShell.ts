@@ -165,18 +165,36 @@ function analyzeCommandStructure(command: string): { forbidden: string | null; p
   while (i < command.length) {
     const ch = command[i];
     const next = command[i + 1];
-    const inString = single || double || backtick;
 
-    if (!inString && parenDepth === 0) {
-      // Hard rejects — these are command separators or substitution starts.
+    // Single quotes are fully literal in bash — nothing inside is expanded —
+    // so we skip ALL meta checks while `single` is true. Inside double
+    // quotes, however, bash STILL expands $(...), ${...}, and backticks.
+    // The previous version of this parser treated double quotes the same
+    // as single quotes (both blocked all meta checks), which let payloads
+    // like `echo "$(sh)"` and `` echo "`sh`" `` slip past the allowlist
+    // because the meta check was suppressed but bash later evaluated the
+    // substitution. Now we still run substitution-marker checks while
+    // inside double quotes; only top-level separators (;, &&, ||, &, |)
+    // are skipped while quoted.
+    const literalContext = single; // bash expands inside "..." and `...`
+    const expansionUnsafe = double || backtick; // expansion still happens
+
+    if (!literalContext) {
+      // Substitution markers expand inside double quotes too — always reject.
+      if (ch === '`') return { forbidden: '`', pipeSegments: [] };
+      if (ch === '$' && next === '(') return { forbidden: '$(', pipeSegments: [] };
+      if (ch === '$' && next === '{') return { forbidden: '${', pipeSegments: [] };
+    }
+
+    if (!expansionUnsafe && !literalContext && parenDepth === 0) {
+      // Top-level command separators / structural operators. These are not
+      // expanded inside any quote context, so we only check them when fully
+      // outside quotes/parens.
       if (ch === '\n') return { forbidden: 'newline', pipeSegments: [] };
       if (ch === ';') return { forbidden: ';', pipeSegments: [] };
       if (ch === '&' && next === '&') return { forbidden: '&&', pipeSegments: [] };
       if (ch === '|' && next === '|') return { forbidden: '||', pipeSegments: [] };
       if (ch === '&') return { forbidden: '&', pipeSegments: [] };
-      if (ch === '`') return { forbidden: '`', pipeSegments: [] };
-      if (ch === '$' && next === '(') return { forbidden: '$(', pipeSegments: [] };
-      if (ch === '$' && next === '{') return { forbidden: '${', pipeSegments: [] };
       if (ch === '<' && next === '(') return { forbidden: '<(', pipeSegments: [] };
       if (ch === '>' && next === '(') return { forbidden: '>(', pipeSegments: [] };
       if (ch === '(' && (current.trim() === '' || /[\s|]$/.test(current))) {
@@ -190,8 +208,9 @@ function analyzeCommandStructure(command: string): { forbidden: string | null; p
       }
     }
 
-    // Track string / paren state. We honour backslash-escapes inside double
-    // quotes the same way bash does so escaped quotes don't flip state.
+    // Track string / paren state. Backslash-escape rules differ across
+    // quote types — bash supports \" \\ \$ \` inside double quotes, but
+    // single quotes treat backslashes literally.
     if (!single && !backtick && ch === '\\' && next !== undefined) {
       current += ch + next;
       i += 2;
@@ -199,7 +218,7 @@ function analyzeCommandStructure(command: string): { forbidden: string | null; p
     }
     if (!double && !backtick && ch === "'") single = !single;
     else if (!single && !backtick && ch === '"') double = !double;
-    else if (!single && !double && ch === '`') backtick = !backtick;
+    else if (!single && ch === '`') backtick = !backtick;
     else if (!single && !double && !backtick) {
       if (ch === '(') parenDepth += 1;
       else if (ch === ')') parenDepth = Math.max(0, parenDepth - 1);
