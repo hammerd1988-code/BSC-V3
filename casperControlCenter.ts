@@ -215,6 +215,10 @@ export async function resolveCasperAuth(req: Request, supabase: SupabaseClient):
   };
 }
 
+export async function requireCasperAuth(req: Request, res: Response, supabase: SupabaseClient): Promise<CasperProfile | null> {
+  return requireAuth(req, res, supabase);
+}
+
 async function requireAuth(req: Request, res: Response, supabase: SupabaseClient): Promise<CasperProfile | null> {
   const result = await resolveCasperAuth(req, supabase);
   if (!result.ok || !result.profile) {
