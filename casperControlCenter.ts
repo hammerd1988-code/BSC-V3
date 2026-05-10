@@ -53,6 +53,14 @@ type CasperCommandInput = {
   taskId?: string | null;
   routineId?: string | null;
   metadata?: Record<string, any>;
+  // When true, the executor may return a deferred-execution payload
+  // for browser-driven local-LLM execution (LM Studio / Ollama). Only
+  // safe to set on browser-facing callers — the task queue and routine
+  // runner have no browser to pick up the deferred work, so they
+  // MUST pass false (or omit; default is false) and the executor
+  // will fall back to the platform provider when the user has a
+  // local endpoint configured.
+  allowClientDefer?: boolean;
 };
 
 // Per-user Casper LLM settings stored in `users.ai_settings` (JSONB).
@@ -597,6 +605,24 @@ export function isLocalEndpoint(endpoint?: string | null): boolean {
   return false;
 }
 
+// When server-side code paths (task queue, routine runner, sub-agent
+// fan-out, follow-up) need to call an LLM but the user has a local
+// endpoint configured, the server can't reach the user's machine and
+// must NOT fall through to its own loopback interface. Strip the
+// local endpoint + key from the user's settings so callOpenAICompatible
+// falls back to the platform-default provider. Prevents:
+//   1. Zombie tasks: server-side queue would otherwise hand off to
+//      `awaiting_client` and hang forever (no browser is watching).
+//   2. SSRF: subagents/follow-ups would otherwise POST the user's
+//      directive (and the composed system prompt) to whatever is
+//      running on the server's loopback interface.
+function sanitizeUserSettingsForServer(userSettings: CasperUserAiSettings): CasperUserAiSettings {
+  if (isLocalEndpoint(userSettings.endpoint)) {
+    return { ...userSettings, endpoint: null, apiKey: null };
+  }
+  return userSettings;
+}
+
 // Build the deferred-execution descriptor that gets returned to the
 // browser when the user has configured a local LLM (LM Studio /
 // Ollama / etc.). The browser uses these fields to call its local
@@ -842,7 +868,15 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
     // users.ai_settings — empty if the user hasn't configured a personal
     // provider. callOpenAICompatible falls back to env-var defaults when
     // these are absent so platform users are unaffected.
-    const userSettings = await loadUserAiSettings(supabase, userId);
+    const rawUserSettings = await loadUserAiSettings(supabase, userId);
+    // Browser-facing callers (the directive endpoint, manual task
+    // re-run) set allowClientDefer=true so we can hand off local-LLM
+    // work to the browser. Server-side callers (the task queue, the
+    // routine runner) leave it false; if they hit a local endpoint we
+    // strip it from the userSettings and fall back to the platform
+    // provider — otherwise the task would hang in awaiting_client
+    // forever since no browser is watching.
+    const userSettings = input.allowClientDefer ? rawUserSettings : sanitizeUserSettingsForServer(rawUserSettings);
 
     // Local LLM (LM Studio / Ollama / etc.): the server can't reach
     // the user's machine, so we return the prompt + system prompt to
@@ -851,7 +885,7 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
     // /api/casper/command/complete-client-execution which finishes
     // the task. This is the path that lets users run directives free
     // on their own hardware.
-    if (isLocalEndpoint(userSettings.endpoint)) {
+    if (input.allowClientDefer && isLocalEndpoint(userSettings.endpoint)) {
       const clientPayload = buildClientExecutionPayload(taskId, command, systemPrompt, cognitiveCore, userSettings);
       await supabase
         .from('casper_tasks')
@@ -1245,6 +1279,9 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
         taskId,
         routineId,
         metadata: { requested_by: profile.username ?? profile.id, ...(metadata ?? {}) },
+        // Browser is on the other end of this request — safe to defer
+        // local-LLM execution to the client.
+        allowClientDefer: true,
       });
       res.json({ success: true, ...execution });
     } catch (error: any) {
@@ -1429,7 +1466,13 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       // the whole fan-out runs on the user's chosen LLM (e.g. their
       // OpenRouter key) rather than splitting the parent across the
       // user's provider but billing the platform for the children.
-      const userSettings = await loadUserAiSettings(supabase, profile.id);
+      // Strip any local endpoint here — sub-agents currently run
+      // server-side (Promise.all fan-out below), so a local endpoint
+      // would either fail with ECONNREFUSED or, worse, send the
+      // user's prompt to whatever is on the server's loopback
+      // interface (SSRF). Fall back to the platform default for
+      // local-LLM users until sub-agents support browser-side fan-out.
+      const userSettings = sanitizeUserSettingsForServer(await loadUserAiSettings(supabase, profile.id));
 
       // Fan out in parallel. The whole batch runs on this request, but
       // each sub-agent updates its row as it progresses, so the UI
@@ -1503,6 +1546,8 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
         userId: profile.id,
         taskId,
         metadata: { manual_task_run: true },
+        // Manual task re-run is browser-driven — safe to defer.
+        allowClientDefer: true,
       });
       res.json({ success: true, ...execution });
     } catch (error: any) {
@@ -1538,7 +1583,12 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       // original — otherwise the parent runs on the user's OpenRouter
       // key but the follow-up silently falls back to the platform's
       // Gemini, which is jarring (different voice, different style).
-      const userSettings = await loadUserAiSettings(supabase, profile.id);
+      // Strip any local endpoint here for the same reason as the
+      // sub-agent spawn handler: this endpoint executes server-side
+      // and can't reach the user's machine. Local-LLM follow-ups
+      // gracefully fall back to the platform default until
+      // browser-side follow-up execution is implemented.
+      const userSettings = sanitizeUserSettingsForServer(await loadUserAiSettings(supabase, profile.id));
       const execution = await callOpenAICompatible({ prompt: followupPrompt, systemPrompt, cognitiveCore, userSettings });
 
       const history = Array.isArray(task.metadata?.followups) ? task.metadata.followups : [];
