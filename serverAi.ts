@@ -49,6 +49,56 @@ export interface ServerAIResult {
   lastError?: string;
 }
 
+// Multi-turn chat message shape for tool-calling. We deliberately keep
+// this aligned with OpenAI's Chat Completions API so it round-trips
+// directly through callOpenAICompatibleWithTools. Only the OpenAI-
+// compatible provider supports tool calls — Gemini falls back to a
+// text-only response (no tool_calls) and the caller's loop terminates.
+export type ServerAIMessage =
+  | { role: 'system'; content: string }
+  | { role: 'user'; content: string }
+  | { role: 'assistant'; content: string | null; tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> }
+  | { role: 'tool'; tool_call_id: string; content: string };
+
+// OpenAI-style tool spec. Mirrors casperTools.LlmToolSpec.
+// We don't import from casperTools to avoid a circular dep.
+export type ServerAIToolSpec = {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, any>;
+  };
+};
+
+export interface ServerAIToolOptions extends ServerAIOptions {
+  /**
+   * Tool specs advertised to the model. Empty/undefined means a normal
+   * single-shot completion (identical to generateServerText). Required
+   * non-empty for tool-calling to engage.
+   */
+  tools?: ServerAIToolSpec[];
+  /**
+   * Optional `tool_choice` override. Defaults to `'auto'` which lets the
+   * model decide whether to call a tool or return text.
+   */
+  toolChoice?: 'auto' | 'none' | 'required';
+}
+
+export interface ServerAIToolCall {
+  id: string;
+  name: string;
+  arguments: string; // raw JSON string; caller parses
+}
+
+export interface ServerAIToolResult {
+  provider: 'gemini' | 'openai-compatible';
+  model: string;
+  text: string;
+  toolCalls: ServerAIToolCall[];
+  lastError?: string;
+}
+
 export function isServerAIConfigured(): boolean {
   return Boolean(GEMINI_API_KEY()) || Boolean(OPENAI_API_KEY());
 }
@@ -134,6 +184,191 @@ export async function generateServerText(
     text: '',
     lastError,
   };
+}
+
+// Multi-turn tool-calling completion. Routes through the
+// OpenAI-compatible provider only — Gemini's tool-calling API has a
+// different shape and isn't worth supporting on the platform-default
+// path (Gemini is the free fallback; users who want tool-calling
+// configure their own OpenAI-compatible provider). When Gemini is the
+// only available provider, this function returns the Gemini text
+// response with no tool calls so the caller's loop terminates
+// gracefully and the directive still completes.
+//
+// The caller (casperControlCenter) drives the tool-calling loop:
+// invoke this once per round, parse `toolCalls`, execute them via
+// casperTools.executeTool, append the assistant + tool messages, and
+// invoke again until `toolCalls` is empty or a round limit is hit.
+export async function generateServerToolTurn(
+  messages: ServerAIMessage[],
+  options: ServerAIToolOptions = {},
+): Promise<ServerAIToolResult> {
+  const temperature = options.temperature ?? 0.7;
+  const maxTokens = options.maxTokens ?? 1200;
+  const apiKeyOverride = (options.apiKeyOverride || '').trim();
+  const baseUrlOverride = (options.baseUrlOverride || '').trim();
+  const errors: string[] = [];
+
+  const skipGemini = Boolean(apiKeyOverride);
+  const openaiKey = apiKeyOverride || OPENAI_API_KEY();
+  const openaiBaseUrl = baseUrlOverride
+    ? baseUrlOverride.replace(/\/$/, '')
+    : OPENAI_BASE_URL();
+
+  // Tool-calling requires the OpenAI-compatible path. If that's
+  // available, prefer it. Otherwise fall back to a text-only Gemini
+  // call (no tool_calls returned, caller's loop terminates).
+  if (openaiKey) {
+    const model = openAiModel(options.preferredModel);
+    try {
+      const result = await callOpenAICompatibleWithTools({
+        apiKey: openaiKey,
+        baseUrl: openaiBaseUrl,
+        model,
+        messages,
+        tools: options.tools ?? [],
+        toolChoice: options.toolChoice ?? 'auto',
+        temperature,
+        maxTokens,
+      });
+      return { provider: 'openai-compatible', model, text: result.text, toolCalls: result.toolCalls };
+    } catch (err: any) {
+      const msg = String(err?.message ?? err ?? 'unknown openai error').slice(0, 240);
+      errors.push(`openai(${model}): ${msg}`);
+      console.warn('[serverAi:tools] OpenAI-compatible call failed:', msg);
+    }
+  } else {
+    errors.push(skipGemini
+      ? 'openai: per-user apiKeyOverride was empty after trim'
+      : 'openai: OPENAI_API_KEY/VITE_AI_API_KEY not set');
+  }
+
+  const geminiKey = skipGemini ? '' : GEMINI_API_KEY();
+  if (geminiKey && Date.now() > geminiCooldownUntil) {
+    const model = geminiModel(options.preferredModel);
+    try {
+      // Tool-calling fallback: collapse the message history into a
+      // single prompt and call Gemini text-only. Tools are not
+      // advertised — the caller's loop will see toolCalls=[] and
+      // terminate with whatever text Gemini produced.
+      const systemPrompt = collapseSystemMessages(messages) ||
+        'You are Casper, the Blood Sweat Code AI assistant.';
+      const userPrompt = collapseUserAssistantToPrompt(messages);
+      const text = await callGemini(geminiKey, model, userPrompt, systemPrompt, temperature, maxTokens, false);
+      return { provider: 'gemini', model, text: text || '', toolCalls: [] };
+    } catch (err: any) {
+      const msg = String(err?.message ?? err ?? 'unknown gemini error').slice(0, 240);
+      errors.push(`gemini(${model}): ${msg}`);
+      if (msg.includes('429')) {
+        geminiCooldownUntil = Date.now() + 5 * 60_000;
+        console.warn('[serverAi:tools] Gemini 429 — cooling down for 5 min');
+      }
+    }
+  }
+
+  const lastError = errors.join(' | ');
+  console.warn('[serverAi:tools] All providers failed, returning empty text. Errors:', lastError);
+  return {
+    provider: openaiKey ? 'openai-compatible' : 'gemini',
+    model: openaiKey ? openAiModel(options.preferredModel) : geminiModel(options.preferredModel),
+    text: '',
+    toolCalls: [],
+    lastError,
+  };
+}
+
+function collapseSystemMessages(messages: ServerAIMessage[]): string {
+  return messages
+    .filter((m): m is { role: 'system'; content: string } => m.role === 'system')
+    .map((m) => m.content)
+    .join('\n\n');
+}
+
+function collapseUserAssistantToPrompt(messages: ServerAIMessage[]): string {
+  // Gemini fallback can't replay tool calls. We render the conversation
+  // linearly so any context from earlier rounds is at least visible to
+  // the model, even if the tool-call results are summarized as text.
+  const lines: string[] = [];
+  for (const m of messages) {
+    if (m.role === 'system') continue;
+    if (m.role === 'user') {
+      lines.push(`User: ${m.content}`);
+    } else if (m.role === 'assistant') {
+      const text = typeof m.content === 'string' && m.content ? m.content : '';
+      if (text) lines.push(`Assistant: ${text}`);
+      if (Array.isArray(m.tool_calls)) {
+        for (const tc of m.tool_calls) {
+          lines.push(`Assistant called tool ${tc.function.name} with args ${tc.function.arguments}`);
+        }
+      }
+    } else if (m.role === 'tool') {
+      lines.push(`Tool result: ${m.content}`);
+    }
+  }
+  return lines.join('\n\n');
+}
+
+async function callOpenAICompatibleWithTools(input: {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  messages: ServerAIMessage[];
+  tools: ServerAIToolSpec[];
+  toolChoice: 'auto' | 'none' | 'required';
+  temperature: number;
+  maxTokens: number;
+}): Promise<{ text: string; toolCalls: ServerAIToolCall[] }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60_000);
+  try {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${input.apiKey}`,
+      'Content-Type': 'application/json',
+    };
+    if (input.baseUrl.includes('openrouter.ai')) {
+      headers['HTTP-Referer'] = 'https://bloodsweatcode.org';
+      headers['X-Title'] = 'Blood, Sweat, or Code';
+    }
+
+    const body: Record<string, any> = {
+      model: input.model,
+      messages: input.messages,
+      temperature: input.temperature,
+      max_tokens: input.maxTokens,
+    };
+    if (input.tools.length > 0) {
+      body.tools = input.tools;
+      body.tool_choice = input.toolChoice;
+    }
+
+    const response = await fetch(`${input.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`OpenAI-compatible ${response.status}: ${errText.slice(0, 300)}`);
+    }
+
+    const data = await response.json();
+    const message = data?.choices?.[0]?.message ?? {};
+    const text = typeof message.content === 'string' ? message.content.trim() : '';
+    const rawToolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+    const toolCalls: ServerAIToolCall[] = rawToolCalls
+      .filter((tc: any) => tc && tc.type === 'function' && tc.function && typeof tc.function.name === 'string')
+      .map((tc: any) => ({
+        id: typeof tc.id === 'string' ? tc.id : `call_${Math.random().toString(36).slice(2, 10)}`,
+        name: tc.function.name as string,
+        arguments: typeof tc.function.arguments === 'string' ? tc.function.arguments : JSON.stringify(tc.function.arguments ?? {}),
+      }));
+
+    return { text, toolCalls };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function bearerToken(req: Request) {
