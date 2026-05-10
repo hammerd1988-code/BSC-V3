@@ -1,5 +1,11 @@
 import { supabase } from '../supabase';
 
+// Must stay in sync with SUBAGENT_MAX_PARALLEL in casperControlCenter.ts.
+// The server caps at the same number; if the client tried to send more,
+// the extras would be silently dropped and the optimistic rows would
+// hang forever in queued state.
+export const CASPER_SUBAGENT_MAX_PARALLEL = 8;
+
 function apiBaseUrl() {
   return String(import.meta.env.VITE_API_URL || import.meta.env.VITE_SOCKET_URL || '').replace(/\/$/, '');
 }

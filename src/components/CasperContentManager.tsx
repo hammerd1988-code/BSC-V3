@@ -45,7 +45,7 @@ import { supabase } from '../supabase';
 import { cn } from '../lib/utils';
 import { handleDbError } from '../lib/errors';
 import { getRunwayTask, requestRunwayGeneration, type RunwayAspectRatio, type RunwayAssetType, type RunwayStatus } from '../lib/runway';
-import { spawnCasperSubagents } from '../lib/casper';
+import { spawnCasperSubagents, CASPER_SUBAGENT_MAX_PARALLEL } from '../lib/casper';
 import { AgenticWorkspace } from './AgenticWorkspace';
 
 type ScheduledContent = {
@@ -211,7 +211,7 @@ function splitObjectives(prompt: string) {
     .split(/(?:,|\band\b|\bthen\b|\n)/i)
     .map((part) => part.trim())
     .filter((part) => part.length > 8)
-    .slice(0, 8);
+    .slice(0, CASPER_SUBAGENT_MAX_PARALLEL);
 }
 
 function detectCasperMediaAction(prompt: string): { prompt: string; type: RunwayAssetType; aspectRatio: RunwayAspectRatio; duration: 4 | 10; resolution: string } | null {
@@ -602,7 +602,10 @@ export const CasperContentManager: React.FC = () => {
     setIsSpawning(true);
     const parentTaskId = uuidv4();
     const objectives = splitObjectives(prompt);
-    const objectiveList = objectives.length ? objectives : [prompt];
+    // Cap matches CASPER_SUBAGENT_MAX_PARALLEL so optimistic rows never
+    // outnumber what the server will actually run. Otherwise extras would
+    // hang in "queued" forever after loadData() drops them.
+    const objectiveList = (objectives.length ? objectives : [prompt]).slice(0, CASPER_SUBAGENT_MAX_PARALLEL);
 
     // Optimistic insert so the UI shows queued rows immediately while the
     // server runs each objective through the LLM. The server uses the same
