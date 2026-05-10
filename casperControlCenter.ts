@@ -567,6 +567,72 @@ When an enabled integration is relevant, mention how Casper can use that module.
 Return concise Markdown with these sections when useful: Result, Actions Taken, Follow-Up, Risks.${personaOverride ? `\n\n---\n\n${personaOverride}` : ''}`;
 }
 
+// Returns true when the user's configured endpoint points at a local
+// LM Studio / Ollama instance (or anything else on their machine). The
+// server can never reach localhost on the user's box, so directives
+// for these endpoints get returned to the browser to execute and the
+// browser POSTs the answer back to /api/casper/command/complete-client-execution.
+// Detects: localhost, 127.0.0.0/8, ::1, 0.0.0.0, *.local, *.localhost,
+// 10/8 + 192.168/16 + 172.16-31/12 (lan addresses)
+export function isLocalEndpoint(endpoint?: string | null): boolean {
+  if (!endpoint) return false;
+  let host = '';
+  try {
+    host = new URL(endpoint).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (!host) return false;
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+  if (host === '0.0.0.0' || host === '::1' || host === '[::1]') return true;
+  if (host.startsWith('127.')) return true;
+  if (host.startsWith('10.')) return true;
+  if (host.startsWith('192.168.')) return true;
+  // 172.16.0.0 — 172.31.255.255
+  const m = host.match(/^172\.(\d+)\./);
+  if (m) {
+    const n = Number(m[1]);
+    if (n >= 16 && n <= 31) return true;
+  }
+  return false;
+}
+
+// Build the deferred-execution descriptor that gets returned to the
+// browser when the user has configured a local LLM (LM Studio /
+// Ollama / etc.). The browser uses these fields to call its local
+// endpoint directly, then POSTs the result back to
+// /api/casper/command/complete-client-execution. We deliberately do
+// NOT include the user's apiKey here — the browser already has it
+// in its own settings state; relaying it would add an unnecessary
+// round-trip surface where the key sits in flight.
+function buildClientExecutionPayload(
+  taskId: string,
+  prompt: string,
+  systemPrompt: string,
+  cognitiveCore: Record<string, any>,
+  userSettings: CasperUserAiSettings,
+) {
+  const responseStyle = cognitiveCore?.response_style ?? {};
+  const userModel = userSettings.model && userSettings.model !== 'platform_default' ? userSettings.model : null;
+  const model = userModel || responseStyle.model || PLATFORM_DEFAULT_MODEL;
+  const temperature = typeof userSettings.temperature === 'number'
+    ? userSettings.temperature
+    : Number(responseStyle.temperature ?? 0.55);
+  const maxTokens = Number(responseStyle.max_tokens ?? 900);
+  const composedSystemPrompt = userSettings.systemPromptOverride
+    ? `${systemPrompt}\n\n---\n\n[User custom instructions]\n${userSettings.systemPromptOverride}`
+    : systemPrompt;
+  return {
+    taskId,
+    endpoint: userSettings.endpoint || '',
+    model,
+    temperature,
+    maxTokens,
+    systemPrompt: composedSystemPrompt,
+    prompt,
+  };
+}
+
 async function callOpenAICompatible(input: {
   prompt: string;
   systemPrompt: string;
@@ -777,6 +843,51 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
     // provider. callOpenAICompatible falls back to env-var defaults when
     // these are absent so platform users are unaffected.
     const userSettings = await loadUserAiSettings(supabase, userId);
+
+    // Local LLM (LM Studio / Ollama / etc.): the server can't reach
+    // the user's machine, so we return the prompt + system prompt to
+    // the browser. The browser calls its localhost endpoint directly
+    // and POSTs the result back to
+    // /api/casper/command/complete-client-execution which finishes
+    // the task. This is the path that lets users run directives free
+    // on their own hardware.
+    if (isLocalEndpoint(userSettings.endpoint)) {
+      const clientPayload = buildClientExecutionPayload(taskId, command, systemPrompt, cognitiveCore, userSettings);
+      await supabase
+        .from('casper_tasks')
+        .update({
+          status: 'awaiting_client',
+          progress: 50,
+          metadata: {
+            source,
+            routine_id: input.routineId ?? null,
+            client_execution: true,
+            requested_endpoint: userSettings.endpoint,
+            requested_model: clientPayload.model,
+            ...(input.metadata ?? {}),
+          },
+        })
+        .eq('id', taskId);
+
+      await logActivity(supabase, {
+        action_type: 'command_deferred_to_client',
+        description: `Casper deferred ${source} directive to local LLM (${userSettings.endpoint}): ${command.slice(0, 100)}`,
+        actor_id: userId,
+        task_id: taskId,
+        metadata: { source, surface, endpoint: userSettings.endpoint, model: clientPayload.model },
+      });
+
+      return {
+        taskId,
+        response: '',
+        surface,
+        provider: 'client-local',
+        model: clientPayload.model,
+        deferredExecution: true as const,
+        clientExecution: clientPayload,
+      };
+    }
+
     const execution = await callOpenAICompatible({ prompt: command, systemPrompt, cognitiveCore, userSettings });
     const completedAt = new Date().toISOString();
 
@@ -1139,6 +1250,119 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
     } catch (error: any) {
       console.error('[casper-control:command]', error);
       res.status(500).json({ success: false, error: error.message || 'Casper command execution failed.' });
+    }
+  });
+
+  // Client-side LLM execution complete-back. Used when the user has
+  // configured a local provider (LM Studio / Ollama / etc.) — the
+  // browser ran the prompt against its localhost endpoint and is now
+  // posting the result back so the server can finish the task and
+  // log activity. This keeps the audit trail (casper_tasks rows, the
+  // activity log, sub-agent linkage) intact even though the actual
+  // LLM call happened on the user's machine.
+  app.post('/api/casper/command/complete-client-execution', async (req, res) => {
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+      const { taskId, response, model, error: clientError, durationMs } = req.body ?? {};
+      if (!isUuid(taskId)) {
+        return res.status(400).json({ success: false, error: 'taskId is required and must be a UUID.' });
+      }
+      const { data: task, error: taskError } = await supabase
+        .from('casper_tasks')
+        .select('id, created_by, status, metadata, title')
+        .eq('id', taskId)
+        .maybeSingle();
+      if (taskError || !task) {
+        return res.status(404).json({ success: false, error: 'Casper task not found.' });
+      }
+      // Only the original requester (or an admin) can complete a task.
+      // Otherwise a malicious user could overwrite anyone else's task
+      // with a forged "I'm done" payload.
+      if (task.created_by !== profile.id && profile.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'You can only complete your own Casper tasks.' });
+      }
+      if (task.status !== 'awaiting_client') {
+        return res.status(409).json({
+          success: false,
+          error: `Task is not awaiting client execution (status=${task.status}).`,
+        });
+      }
+
+      const completedAt = new Date().toISOString();
+      if (clientError) {
+        const errorMessage = String(clientError).slice(0, 1000);
+        await supabase
+          .from('casper_tasks')
+          .update({
+            status: 'failed',
+            progress: 100,
+            completed_at: completedAt,
+            result: errorMessage,
+            metadata: {
+              ...(task.metadata ?? {}),
+              client_execution: true,
+              client_error: errorMessage,
+              client_duration_ms: typeof durationMs === 'number' ? durationMs : null,
+              completed_at: completedAt,
+            },
+          })
+          .eq('id', taskId);
+        await logActivity(supabase, {
+          action_type: 'command_failed',
+          description: `Casper local-LLM execution failed: ${errorMessage.slice(0, 200)}`,
+          actor_id: profile.id,
+          task_id: taskId,
+          metadata: { source: 'client', client_error: errorMessage },
+        });
+        return res.json({ success: true, taskId, status: 'failed' });
+      }
+
+      const text = typeof response === 'string' && response.trim().length > 0
+        ? response.trim()
+        : 'Local LLM returned an empty response.';
+      const reportedModel = typeof model === 'string' && model.trim().length > 0 ? model.trim() : 'local-llm';
+
+      await supabase
+        .from('casper_tasks')
+        .update({
+          status: 'completed',
+          progress: 100,
+          completed_at: completedAt,
+          result: text,
+          metadata: {
+            ...(task.metadata ?? {}),
+            client_execution: true,
+            provider: 'client-local',
+            model: reportedModel,
+            client_duration_ms: typeof durationMs === 'number' ? durationMs : null,
+            completed_at: completedAt,
+          },
+        })
+        .eq('id', taskId);
+
+      await logActivity(supabase, {
+        action_type: 'command_completed',
+        description: `Casper completed local-LLM directive: ${task.title?.slice(0, 120) ?? '(no title)'}`,
+        actor_id: profile.id,
+        task_id: taskId,
+        metadata: { source: 'client', provider: 'client-local', model: reportedModel },
+      });
+
+      return res.json({
+        success: true,
+        taskId,
+        status: 'completed',
+        response: text,
+        provider: 'client-local',
+        model: reportedModel,
+      });
+    } catch (error: any) {
+      console.error('[casper-control:command:complete-client-execution]', error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || 'Failed to record local-LLM execution result.',
+      });
     }
   });
 
