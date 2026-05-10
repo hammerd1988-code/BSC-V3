@@ -23,6 +23,7 @@ import { execSync } from 'child_process';
 import os, { tmpdir } from 'os';
 import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
 import { registerCasperControlRoutes, requireCasperAuth } from './casperControlCenter.js';
+import { runCasperShell, describeAllowlist, isShellElevationEnabled, type CasperShellMode } from './casperShell.js';
 import { initWebhookListener } from "./webhookListener.js";
 import botApi from './botApi.js';
 import { registerPushRoutes } from './pushNotifications.js';
@@ -1038,45 +1039,154 @@ app.post("/api/cred/exchange", async (req, res) => {
     });
   });
 
-  // Programmatic Terminal API for Bots
+  // Programmatic Terminal API for Bots and Casper. Real shell execution
+  // via casperShell.runCasperShell — strict allowlist, output cap, timeout.
+  // Webhook-authed to keep the existing bot integration working; an
+  // alternative Supabase-authed entrypoint is mounted below at
+  // /api/casper/terminal/execute for the Casper operator console.
   app.post('/api/terminal/execute', requireWebhookAuth, async (req, res) => {
     try {
-      const { command, agentId } = req.body;
+      const { command, agentId, mode: requestedMode, timeoutMs, maxOutputBytes } = req.body ?? {};
       console.log(`[TERMINAL] Agent '${agentId}' executed: ${command}`);
 
       if (!command || !agentId) {
         return res.status(400).json({ success: false, error: 'Missing required fields: command, agentId' });
       }
 
-      const args = command.trim().split(/\s+/);
-      const cmd = args[0].toLowerCase();
-      let output = '';
+      const mode: CasperShellMode = requestedMode === 'elevated' && isShellElevationEnabled()
+        ? 'elevated'
+        : 'readonly';
 
-      switch (cmd) {
-        case 'ping':
-          output = `> Reply from mainframe: time=${Math.floor(Math.random() * 20 + 5)}ms`;
-          break;
-        case 'whoami':
-          output = `ENTITY ID: ${agentId}\nCLASS: BOT`;
-          break;
-        case 'echo':
-          output = args.slice(1).join(' ');
-          break;
-        default:
-          output = `Command not found or not supported via API: ${cmd}`;
-      }
+      const result = await runCasperShell(String(command), {
+        mode,
+        timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : undefined,
+        maxOutputBytes: typeof maxOutputBytes === 'number' ? maxOutputBytes : undefined,
+      });
+
+      const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim()
+        || (result.ok ? '(no output)' : result.reason || `command exited with code ${result.exitCode}`);
 
       // Broadcast the terminal activity to clients so they can see bots working
       io.emit('activity:notification', {
         type: 'terminal_execution',
-        data: { agentId, command, output, timestamp: new Date().toISOString() }
+        data: {
+          agentId,
+          command,
+          output,
+          ok: result.ok,
+          exitCode: result.exitCode,
+          truncated: result.truncated,
+          mode,
+          timestamp: new Date().toISOString(),
+        },
       });
 
-      res.status(200).json({ success: true, output, timestamp: new Date().toISOString() });
+      res.status(200).json({
+        success: result.ok,
+        output,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+        signal: result.signal,
+        durationMs: result.durationMs,
+        truncated: result.truncated,
+        mode,
+        reason: result.reason ?? null,
+        timestamp: new Date().toISOString(),
+      });
     } catch (error) {
       console.error('Terminal API error:', error);
       res.status(500).json({ success: false, error: 'Internal server error' });
     }
+  });
+
+  // Casper-operator terminal endpoint. Same shell engine as the bot
+  // webhook, but Supabase-authed so an admin signed in to the dashboard
+  // can run commands without sharing the AGENT_WEBHOOK_SECRET. Non-admin
+  // users get the readonly allowlist; admin gets the elevated allowlist
+  // when CASPER_SHELL_MODE=elevated is set on the server.
+  app.post('/api/casper/terminal/execute', async (req, res) => {
+    try {
+      const profile = await requireCasperAuth(req, res, supabase);
+      if (!profile) return;
+
+      const { command, mode: requestedMode, timeoutMs, maxOutputBytes } = req.body ?? {};
+      if (!command || typeof command !== 'string') {
+        return res.status(400).json({ success: false, error: 'A command string is required.' });
+      }
+
+      const isAdmin = profile.role === 'admin';
+      const wantsElevated = requestedMode === 'elevated';
+      const mode: CasperShellMode = wantsElevated && isAdmin && isShellElevationEnabled()
+        ? 'elevated'
+        : 'readonly';
+
+      const result = await runCasperShell(command, {
+        mode,
+        timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : undefined,
+        maxOutputBytes: typeof maxOutputBytes === 'number' ? maxOutputBytes : undefined,
+      });
+
+      try {
+        await supabase.from('casper_activity_log').insert({
+          action_type: 'terminal_execute',
+          description: `Casper terminal: ${command.slice(0, 200)}`,
+          metadata: {
+            mode,
+            exit_code: result.exitCode,
+            duration_ms: result.durationMs,
+            truncated: result.truncated,
+            ok: result.ok,
+            reason: result.reason ?? null,
+          },
+          ...(profile.id ? { actor_id: profile.id } : {}),
+        });
+      } catch (logErr) {
+        console.warn('[casper-terminal] activity log skipped:', logErr);
+      }
+
+      io.emit('activity:notification', {
+        type: 'terminal_execution',
+        data: {
+          actorId: profile.id,
+          command,
+          output: [result.stdout, result.stderr].filter(Boolean).join('\n').trim(),
+          ok: result.ok,
+          exitCode: result.exitCode,
+          truncated: result.truncated,
+          mode,
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      res.status(200).json({
+        success: result.ok,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+        signal: result.signal,
+        durationMs: result.durationMs,
+        truncated: result.truncated,
+        mode,
+        reason: result.reason ?? null,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error('[casper-terminal] error:', error);
+      res.status(500).json({ success: false, error: (error as Error).message || 'Casper terminal execution failed.' });
+    }
+  });
+
+  // Public introspection endpoint so the operator console can show
+  // exactly which binaries and patterns are allowed before the user
+  // hits Enter. No auth required since this returns no secrets.
+  app.get('/api/casper/terminal/allowlist', async (_req, res) => {
+    res.json({
+      success: true,
+      readonly: describeAllowlist('readonly'),
+      elevated: describeAllowlist('elevated'),
+      elevationEnabled: isShellElevationEnabled(),
+    });
   });
 
   // Webhook endpoint for AI agents
