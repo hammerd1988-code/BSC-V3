@@ -447,7 +447,22 @@ export const CasperDashboard: React.FC = () => {
       const response = await authFetch('/api/casper/command', { method: 'POST', body: JSON.stringify({ command: directCommand, source: 'admin', metadata: { console: 'ghostops' } }) });
       const payload = await response.json();
       if (!response.ok || !payload.success) throw new Error(payload.error || 'Command failed.');
-      setConsoleOutput(payload.response || 'Casper completed the directive without a textual response.');
+      const baseText = payload.response || 'Casper completed the directive without a textual response.';
+      // When the directive ran through the tool-calling loop, append a
+      // compact action log so operators can see exactly what tools
+      // Casper invoked, in what order, and whether each succeeded.
+      const toolCalls: Array<{ name: string; ok: boolean; error: string | null; durationMs: number }> = Array.isArray(payload.toolCalls) ? payload.toolCalls : [];
+      let footer = '';
+      if (toolCalls.length > 0) {
+        const lines = toolCalls.map((tc, i) => {
+          const status = tc.ok ? 'OK' : 'FAIL';
+          const errFrag = !tc.ok && tc.error ? ` — ${String(tc.error).slice(0, 120)}` : '';
+          return `  ${i + 1}. [${status}] ${tc.name} (${tc.durationMs}ms)${errFrag}`;
+        });
+        footer = `\n\n━━━ Tool calls (${toolCalls.length}, ${payload.toolRounds ?? 0} round${payload.toolRounds === 1 ? '' : 's'}) ━━━\n${lines.join('\n')}`;
+        if (payload.toolTruncatedReason) footer += `\n  [${payload.toolTruncatedReason}]`;
+      }
+      setConsoleOutput(baseText + footer);
       setDirectCommand('');
       await fetchDashboard();
     } catch (error: any) { setConsoleOutput(`ERROR: ${error?.message || 'Casper command failed.'}`); setNotice(error?.message || 'Casper command failed.'); }
