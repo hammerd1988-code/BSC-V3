@@ -45,6 +45,7 @@ import { supabase } from '../supabase';
 import { cn } from '../lib/utils';
 import { handleDbError } from '../lib/errors';
 import { getRunwayTask, requestRunwayGeneration, type RunwayAspectRatio, type RunwayAssetType, type RunwayStatus } from '../lib/runway';
+import { spawnCasperSubagents } from '../lib/casper';
 import { AgenticWorkspace } from './AgenticWorkspace';
 
 type ScheduledContent = {
@@ -234,17 +235,6 @@ function detectCasperMediaAction(prompt: string): { prompt: string; type: Runway
     duration,
     resolution,
   };
-}
-
-function synthesizeAgentResult(objective: string) {
-  const lower = objective.toLowerCase();
-  if (detectCasperMediaAction(objective)) return `Visual Forge action detected: Casper can submit this objective to Runway ML and return a generated media asset for ${objective}.`;
-  if (lower.includes('thumbnail')) return `Thumbnail concept: neon-lit subject in the foreground, high-contrast cyberpunk rim light, bold title treatment, and a clear focal object for ${objective}.`;
-  if (lower.includes('caption')) return `Caption draft: "${objective.replace(/^draft|^write/i, '').trim()} — signal boosted for the creators building after dark. #BloodSweatCode #CreatorOps"`;
-  if (lower.includes('schedule')) return `Scheduling plan: place this objective in the next high-engagement evening slot, attach reminder notifications, and reserve a pre-promo post 24 hours ahead.`;
-  if (lower.includes('stream')) return `Stream plan: title hook, opening beat, three content segments, live Q&A block, clip markers, and replay CTA prepared for ${objective}.`;
-  if (lower.includes('post')) return `Post draft: a concise hook, value-packed middle, and direct CTA tailored to ${objective}.`;
-  return `Completed objective: ${objective}. Casper packaged the output for parent task review.`;
 }
 
 function SubagentTree({ agents, onCancel }: { agents: CasperSubagent[]; onCancel: (agent: CasperSubagent) => void }) {
@@ -613,42 +603,49 @@ export const CasperContentManager: React.FC = () => {
     const parentTaskId = uuidv4();
     const objectives = splitObjectives(prompt);
     const objectiveList = objectives.length ? objectives : [prompt];
-    const rows = objectiveList.map((objective) => ({
+
+    // Optimistic insert so the UI shows queued rows immediately while the
+    // server runs each objective through the LLM. The server uses the same
+    // parent_task_id so realtime updates land on these rows.
+    const optimisticRows = objectiveList.map((objective) => ({
+      id: `pending-${uuidv4()}`,
       parent_task_id: parentTaskId,
       user_id: currentUser.id,
       objective,
       status: 'queued' as const,
+      result: null,
+      created_at: new Date().toISOString(),
+      completed_at: null,
     }));
-    const { data, error } = await supabase.from('casper_subagents').insert(rows).select('*');
-    if (error) {
-      handleDbError(error, 'CREATE', 'casper_subagents');
+    setSubagents((prev) => [...optimisticRows, ...prev]);
+
+    try {
+      const response = await spawnCasperSubagents({
+        parentPrompt: prompt,
+        objectives: objectiveList,
+        parentTaskId,
+      });
+      const successes = response.results.filter((r) => r.status === 'completed').length;
+      const failures = response.results.length - successes;
+
+      const mediaAction = detectCasperMediaAction(prompt);
+      if (mediaAction) {
+        setGeneratedCaption(`Parent task ${parentTaskId.slice(0, 8)} dispatched ${response.results.length} sub-agent${response.results.length === 1 ? '' : 's'} (${successes} ok${failures > 0 ? `, ${failures} failed` : ''}) and queued a Visual Forge generation.`);
+        void generateForgeMedia(mediaAction);
+      } else {
+        setGeneratedCaption(`Parent task ${parentTaskId.slice(0, 8)} merged ${successes} live sub-agent output${successes === 1 ? '' : 's'}${failures > 0 ? ` (${failures} failed — see the tree)` : ''}.`);
+      }
+    } catch (error: any) {
+      console.error('[CasperContentManager] spawnSubagents failed:', error);
+      // Remove the optimistic rows since the real server-side rows never got created.
+      setSubagents((prev) => prev.filter((row) => !optimisticRows.some((opt) => opt.id === row.id)));
+      const message = error?.message || 'Sub-agent spawn failed.';
+      setGeneratedCaption(`Sub-agent spawn failed: ${message}`);
+    } finally {
+      // Reload from server so optimistic rows are replaced with the real rows.
+      void loadData();
       setIsSpawning(false);
-      return;
     }
-    const inserted = (data ?? []) as CasperSubagent[];
-    setSubagents((prev) => [...inserted, ...prev]);
-
-    inserted.forEach((agent, index) => {
-      window.setTimeout(() => {
-        void supabase.from('casper_subagents').update({ status: 'working' }).eq('id', agent.id);
-      }, 500 + index * 250);
-      window.setTimeout(() => {
-        void supabase.from('casper_subagents').update({
-          status: 'completed',
-          result: synthesizeAgentResult(agent.objective),
-          completed_at: new Date().toISOString(),
-        }).eq('id', agent.id);
-      }, 1800 + index * 500);
-    });
-
-    const mediaAction = detectCasperMediaAction(prompt);
-    if (mediaAction) {
-      setGeneratedCaption(`Parent task ${parentTaskId.slice(0, 8)} detected a Casper media-generation action. Visual Forge is submitting it to Runway ML now.`);
-      void generateForgeMedia(mediaAction);
-    } else {
-      setGeneratedCaption(`Parent task ${parentTaskId.slice(0, 8)} will merge ${inserted.length} sub-agent outputs into the composer once completed.`);
-    }
-    setIsSpawning(false);
   };
 
   const cancelSubagent = async (agent: CasperSubagent) => {
