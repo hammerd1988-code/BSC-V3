@@ -63,6 +63,62 @@ export async function spawnCasperSubagents(input: {
   return parseResponse<SubagentSpawnResponse>(response);
 }
 
+// Casper UI surfaces — each one swaps in a different persona module on
+// the server side. Must stay in sync with CASPER_SURFACES in
+// casperControlCenter.ts; if the client sends an unknown value the
+// server falls back to 'control_center'.
+//   control_center → operator console (default — full sysadmin/operator)
+//   studio         → Studio guide (content + engineering dual expert)
+//   guide          → "Ask Casper" floating help popup (concise, page-aware)
+//   autopilot      → autonomous routines (terse, machine-parseable)
+export type CasperSurface = 'control_center' | 'studio' | 'guide' | 'autopilot';
+
+export interface CasperCommandResponse {
+  success: true;
+  taskId: string | null;
+  response: string;
+  surface: CasperSurface;
+  provider: string;
+  model: string;
+}
+
+// Send a directive to Casper from any UI surface. The server appends a
+// surface-specific persona module to the system prompt so the same
+// /api/casper/command endpoint speaks with the right expertise depending
+// on context. Pass `pageContext` (URL path, current feature, etc.) and
+// it will be appended to the directive so Casper knows where the user is.
+export async function sendCasperCommand(input: {
+  command: string;
+  surface?: CasperSurface;
+  source?: 'admin' | 'user';
+  pageContext?: { path?: string; feature?: string; description?: string };
+  metadata?: Record<string, unknown>;
+}): Promise<CasperCommandResponse> {
+  const headers = await authHeaders();
+  let command = input.command.trim();
+  if (input.pageContext) {
+    const ctx = input.pageContext;
+    const parts: string[] = [];
+    if (ctx.path) parts.push(`path: ${ctx.path}`);
+    if (ctx.feature) parts.push(`feature: ${ctx.feature}`);
+    if (ctx.description) parts.push(ctx.description);
+    if (parts.length > 0) {
+      command = `[Page context — ${parts.join(' | ')}]\n\n${command}`;
+    }
+  }
+  const response = await fetch(`${apiBaseUrl()}/api/casper/command`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      command,
+      surface: input.surface ?? 'control_center',
+      source: input.source,
+      metadata: input.metadata ?? {},
+    }),
+  });
+  return parseResponse<CasperCommandResponse>(response);
+}
+
 // -- Integrations (PR #45) --------------------------------------------------
 
 export interface IntegrationToolDescriptor {
