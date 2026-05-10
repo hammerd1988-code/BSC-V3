@@ -193,8 +193,8 @@ const CASPER_PROVIDER_PRESETS: CasperProviderPreset[] = [
   { id: 'together',     label: 'Together.ai',  description: 'Llama / Qwen / DeepSeek / etc. cheaply',             baseUrl: 'https://api.together.xyz/v1',   exampleModel: 'meta-llama/Llama-3.1-8B-Instruct-Turbo' },
   { id: 'groq',         label: 'Groq',         description: 'Ultra-fast Llama / Mixtral inference',                baseUrl: 'https://api.groq.com/openai/v1', exampleModel: 'llama-3.1-70b-versatile' },
   { id: 'fireworks',    label: 'Fireworks',    description: 'Fast Llama / DeepSeek / Qwen',                       baseUrl: 'https://api.fireworks.ai/inference/v1', exampleModel: 'accounts/fireworks/models/llama-v3p1-70b-instruct' },
-  { id: 'lmstudio',     label: 'LM Studio (Local)', description: 'Free — runs on your machine. Requires PR #51.', baseUrl: 'http://localhost:1234/v1',      exampleModel: 'lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF', isLocal: true },
-  { id: 'ollama',       label: 'Ollama (Local)',    description: 'Free — runs on your machine. Requires PR #51.', baseUrl: 'http://localhost:11434/v1',     exampleModel: 'llama3.1:8b', isLocal: true },
+  { id: 'lmstudio',     label: 'LM Studio (Local)', description: 'Free — runs on your machine. Enable CORS in LM Studio settings.', baseUrl: 'http://localhost:1234/v1',      exampleModel: 'lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF', isLocal: true },
+  { id: 'ollama',       label: 'Ollama (Local)',    description: 'Free — runs on your machine. Set OLLAMA_ORIGINS=* before starting.', baseUrl: 'http://localhost:11434/v1',     exampleModel: 'llama3.1:8b', isLocal: true },
 ];
 
 const CASPER_SYSTEM_PROMPT = `You are CASPER, the face of the Blood Sweat Code neural network: a Grok-style public assistant, Casper Studio creator copilot, and OpenClaw-style autonomous workflow operator for app, website, APK, and platform-service execution.
