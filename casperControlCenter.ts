@@ -55,6 +55,77 @@ type CasperCommandInput = {
   metadata?: Record<string, any>;
 };
 
+// Per-user Casper LLM settings stored in `users.ai_settings` (JSONB).
+// Populated by the operator console / Casper.tsx settings panel. When
+// any of these fields is set, they override the server's env-var
+// defaults for THIS user's directive — letting users route their own
+// directives through OpenRouter / Together / Groq / etc. without
+// affecting other users on the platform. `apiKey` + `endpoint` is the
+// pair that triggers the per-user OpenAI-compatible code path.
+//
+// `systemPromptOverride` lets users pre-pend custom guidance (e.g.
+// "you are my personal Twitch growth strategist, only answer in numbers
+// and timestamps") on top of the surface persona.
+//
+// `temperature` lets users dial creativity vs determinism per-user. We
+// ignore values outside [0, 2] for safety.
+export type CasperUserAiSettings = {
+  apiKey?: string | null;
+  endpoint?: string | null;
+  model?: string | null;
+  temperature?: number | null;
+  systemPromptOverride?: string | null;
+};
+
+/**
+ * Load the calling user's Casper LLM settings from `users.ai_settings`
+ * (JSONB column). Tolerates camelCase and snake_case keys since both
+ * naming conventions show up in the codebase. Returns an empty object
+ * if no userId, no row, or no `ai_settings` payload — callers always
+ * fall back to the server's env-var defaults in that case.
+ */
+async function loadUserAiSettings(
+  supabase: SupabaseClient,
+  userId?: string | null,
+): Promise<CasperUserAiSettings> {
+  if (!isUuid(userId)) return {};
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('ai_settings')
+      .eq('id', userId)
+      .maybeSingle();
+    if (error || !data?.ai_settings) return {};
+    const raw = data.ai_settings as Record<string, any>;
+    const apiKey = raw.apiKey ?? raw.api_key ?? null;
+    const endpoint = raw.endpoint ?? raw.api_base_url ?? raw.apiBaseUrl ?? null;
+    const model = raw.model ?? null;
+    // Don't coerce null/undefined to 0 — Number(null) === 0 would silently
+    // pin temperature to a hard "deterministic" value for any user whose
+    // ai_settings was saved before this column existed.
+    const tempRaw = raw.temperature ?? raw.temp;
+    const tempNumber =
+      typeof tempRaw === 'number'
+        ? tempRaw
+        : typeof tempRaw === 'string'
+          ? Number(tempRaw)
+          : NaN;
+    const temperature = Number.isFinite(tempNumber) && tempNumber >= 0 && tempNumber <= 2 ? tempNumber : null;
+    const systemPromptOverride =
+      raw.systemPromptOverride ?? raw.system_prompt_override ?? raw.systemPrompt ?? null;
+    return {
+      apiKey: typeof apiKey === 'string' ? apiKey.trim() || null : null,
+      endpoint: typeof endpoint === 'string' ? endpoint.trim() || null : null,
+      model: typeof model === 'string' ? model.trim() || null : null,
+      temperature,
+      systemPromptOverride:
+        typeof systemPromptOverride === 'string' ? systemPromptOverride.trim() || null : null,
+    };
+  } catch {
+    return {};
+  }
+}
+
 type CasperRoutineRow = {
   id: string;
   name: string;
@@ -496,24 +567,120 @@ When an enabled integration is relevant, mention how Casper can use that module.
 Return concise Markdown with these sections when useful: Result, Actions Taken, Follow-Up, Risks.${personaOverride ? `\n\n---\n\n${personaOverride}` : ''}`;
 }
 
-async function callOpenAICompatible(input: { prompt: string; systemPrompt: string; cognitiveCore: Record<string, any> }) {
-  if (!isServerAiConfigured()) {
+// Returns true when the user's configured endpoint points at a local
+// LM Studio / Ollama instance (or anything else on their machine). The
+// server can never reach localhost on the user's box, so directives
+// for these endpoints get returned to the browser to execute and the
+// browser POSTs the answer back to /api/casper/command/complete-client-execution.
+// Detects: localhost, 127.0.0.0/8, ::1, 0.0.0.0, *.local, *.localhost,
+// 10/8 + 192.168/16 + 172.16-31/12 (lan addresses)
+export function isLocalEndpoint(endpoint?: string | null): boolean {
+  if (!endpoint) return false;
+  let host = '';
+  try {
+    host = new URL(endpoint).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (!host) return false;
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+  if (host === '0.0.0.0' || host === '::1' || host === '[::1]') return true;
+  if (host.startsWith('127.')) return true;
+  if (host.startsWith('10.')) return true;
+  if (host.startsWith('192.168.')) return true;
+  // 172.16.0.0 — 172.31.255.255
+  const m = host.match(/^172\.(\d+)\./);
+  if (m) {
+    const n = Number(m[1]);
+    if (n >= 16 && n <= 31) return true;
+  }
+  return false;
+}
+
+// Build the deferred-execution descriptor that gets returned to the
+// browser when the user has configured a local LLM (LM Studio /
+// Ollama / etc.). The browser uses these fields to call its local
+// endpoint directly, then POSTs the result back to
+// /api/casper/command/complete-client-execution. We deliberately do
+// NOT include the user's apiKey here — the browser already has it
+// in its own settings state; relaying it would add an unnecessary
+// round-trip surface where the key sits in flight.
+function buildClientExecutionPayload(
+  taskId: string,
+  prompt: string,
+  systemPrompt: string,
+  cognitiveCore: Record<string, any>,
+  userSettings: CasperUserAiSettings,
+) {
+  const responseStyle = cognitiveCore?.response_style ?? {};
+  const userModel = userSettings.model && userSettings.model !== 'platform_default' ? userSettings.model : null;
+  const model = userModel || responseStyle.model || PLATFORM_DEFAULT_MODEL;
+  const temperature = typeof userSettings.temperature === 'number'
+    ? userSettings.temperature
+    : Number(responseStyle.temperature ?? 0.55);
+  const maxTokens = Number(responseStyle.max_tokens ?? 900);
+  const composedSystemPrompt = userSettings.systemPromptOverride
+    ? `${systemPrompt}\n\n---\n\n[User custom instructions]\n${userSettings.systemPromptOverride}`
+    : systemPrompt;
+  return {
+    taskId,
+    endpoint: userSettings.endpoint || '',
+    model,
+    temperature,
+    maxTokens,
+    systemPrompt: composedSystemPrompt,
+    prompt,
+  };
+}
+
+async function callOpenAICompatible(input: {
+  prompt: string;
+  systemPrompt: string;
+  cognitiveCore: Record<string, any>;
+  userSettings?: CasperUserAiSettings;
+}) {
+  const userSettings = input.userSettings ?? {};
+  const userHasOwnProvider = Boolean(userSettings.apiKey && userSettings.endpoint);
+
+  // If neither the platform nor the user has a working provider config,
+  // fall through to the rule-based echo so directives always close out.
+  if (!isServerAiConfigured() && !userHasOwnProvider) {
     return {
       provider: 'local-fallback',
       model: 'rule-based-control-plane',
-      text: `## Result\nCasper accepted and analyzed the directive, but no platform AI key is configured on the server.\n\n## Actions Taken\nThe command was persisted as a real Casper task and logged to the activity stream.\n\n## Follow-Up\nConfigure GEMINI_API_KEY or OPENAI_API_KEY to enable full neural execution for this directive.\n\n## Directive\n${input.prompt}`,
+      text: `## Result\nCasper accepted and analyzed the directive, but no platform AI key is configured on the server, and you have not yet set up a personal OpenAI-compatible provider.\n\n## Actions Taken\nThe command was persisted as a real Casper task and logged to the activity stream.\n\n## Follow-Up\nEither configure GEMINI_API_KEY / OPENAI_API_KEY on the server, or open Casper → Settings → Cognitive Core and paste your own OpenAI / OpenRouter / Together / Groq endpoint + API key.\n\n## Directive\n${input.prompt}`,
     };
   }
 
   const responseStyle = input.cognitiveCore?.response_style ?? {};
-  const model = responseStyle.model || PLATFORM_DEFAULT_MODEL;
-  const temperature = Number(responseStyle.temperature ?? 0.55);
+  // User-supplied model wins over the global cognitive-core default.
+  // 'platform_default' from the user means "use whatever the server
+  // would have used", so we still honor the cognitive-core model.
+  const userModel = userSettings.model && userSettings.model !== 'platform_default' ? userSettings.model : null;
+  const model = userModel || responseStyle.model || PLATFORM_DEFAULT_MODEL;
+  // User temperature wins if explicitly set in [0,2]; loadUserAiSettings
+  // already normalizes that range.
+  const temperature = typeof userSettings.temperature === 'number'
+    ? userSettings.temperature
+    : Number(responseStyle.temperature ?? 0.55);
   const maxTokens = Number(responseStyle.max_tokens ?? 900);
+
+  // Compose the final system prompt: surface persona (already in
+  // input.systemPrompt) + optional per-user override appended last so
+  // it carries the most recency weight when the model is reading
+  // top-down. This is a *prepended* override (added on top of) rather
+  // than a replacement so we don't lose Casper's identity guardrails.
+  const systemPrompt = userSettings.systemPromptOverride
+    ? `${input.systemPrompt}\n\n---\n\n[User custom instructions]\n${userSettings.systemPromptOverride}`
+    : input.systemPrompt;
+
   const execution = await generateServerText(input.prompt, {
-    systemPrompt: input.systemPrompt,
+    systemPrompt,
     preferredModel: model,
     temperature,
     maxTokens,
+    apiKeyOverride: userSettings.apiKey ?? null,
+    baseUrlOverride: userSettings.endpoint ?? null,
   });
 
   return {
@@ -580,6 +747,7 @@ async function runSubagentObjective(
   parentObjective: string,
   sharedSystem: string,
   cognitiveCore: Record<string, any>,
+  userSettings?: CasperUserAiSettings,
 ): Promise<{ ok: boolean; result: string; provider?: string; model?: string }> {
   // Mark working — best effort, don't block on failure.
   await supabase
@@ -590,7 +758,7 @@ async function runSubagentObjective(
   try {
     const systemPrompt = buildSubagentSystemPrompt(parentObjective, sharedSystem);
     const execution = await Promise.race([
-      callOpenAICompatible({ prompt: objective, systemPrompt, cognitiveCore }),
+      callOpenAICompatible({ prompt: objective, systemPrompt, cognitiveCore, userSettings }),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('subagent_timeout')), SUBAGENT_DEFAULT_TIMEOUT_MS),
       ),
@@ -670,7 +838,57 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
   try {
     const cognitiveCore = await fetchCognitiveCore(supabase);
     const systemPrompt = await buildCasperSystemPrompt(supabase, casperMemory, userId, surface);
-    const execution = await callOpenAICompatible({ prompt: command, systemPrompt, cognitiveCore });
+    // Per-user provider/model/temperature/system-prompt override from
+    // users.ai_settings — empty if the user hasn't configured a personal
+    // provider. callOpenAICompatible falls back to env-var defaults when
+    // these are absent so platform users are unaffected.
+    const userSettings = await loadUserAiSettings(supabase, userId);
+
+    // Local LLM (LM Studio / Ollama / etc.): the server can't reach
+    // the user's machine, so we return the prompt + system prompt to
+    // the browser. The browser calls its localhost endpoint directly
+    // and POSTs the result back to
+    // /api/casper/command/complete-client-execution which finishes
+    // the task. This is the path that lets users run directives free
+    // on their own hardware.
+    if (isLocalEndpoint(userSettings.endpoint)) {
+      const clientPayload = buildClientExecutionPayload(taskId, command, systemPrompt, cognitiveCore, userSettings);
+      await supabase
+        .from('casper_tasks')
+        .update({
+          status: 'awaiting_client',
+          progress: 50,
+          metadata: {
+            source,
+            routine_id: input.routineId ?? null,
+            client_execution: true,
+            requested_endpoint: userSettings.endpoint,
+            requested_model: clientPayload.model,
+            ...(input.metadata ?? {}),
+          },
+        })
+        .eq('id', taskId);
+
+      await logActivity(supabase, {
+        action_type: 'command_deferred_to_client',
+        description: `Casper deferred ${source} directive to local LLM (${userSettings.endpoint}): ${command.slice(0, 100)}`,
+        actor_id: userId,
+        task_id: taskId,
+        metadata: { source, surface, endpoint: userSettings.endpoint, model: clientPayload.model },
+      });
+
+      return {
+        taskId,
+        response: '',
+        surface,
+        provider: 'client-local',
+        model: clientPayload.model,
+        deferredExecution: true as const,
+        clientExecution: clientPayload,
+      };
+    }
+
+    const execution = await callOpenAICompatible({ prompt: command, systemPrompt, cognitiveCore, userSettings });
     const completedAt = new Date().toISOString();
 
     await supabase
@@ -1035,6 +1253,119 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
     }
   });
 
+  // Client-side LLM execution complete-back. Used when the user has
+  // configured a local provider (LM Studio / Ollama / etc.) — the
+  // browser ran the prompt against its localhost endpoint and is now
+  // posting the result back so the server can finish the task and
+  // log activity. This keeps the audit trail (casper_tasks rows, the
+  // activity log, sub-agent linkage) intact even though the actual
+  // LLM call happened on the user's machine.
+  app.post('/api/casper/command/complete-client-execution', async (req, res) => {
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+      const { taskId, response, model, error: clientError, durationMs } = req.body ?? {};
+      if (!isUuid(taskId)) {
+        return res.status(400).json({ success: false, error: 'taskId is required and must be a UUID.' });
+      }
+      const { data: task, error: taskError } = await supabase
+        .from('casper_tasks')
+        .select('id, created_by, status, metadata, title')
+        .eq('id', taskId)
+        .maybeSingle();
+      if (taskError || !task) {
+        return res.status(404).json({ success: false, error: 'Casper task not found.' });
+      }
+      // Only the original requester (or an admin) can complete a task.
+      // Otherwise a malicious user could overwrite anyone else's task
+      // with a forged "I'm done" payload.
+      if (task.created_by !== profile.id && profile.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'You can only complete your own Casper tasks.' });
+      }
+      if (task.status !== 'awaiting_client') {
+        return res.status(409).json({
+          success: false,
+          error: `Task is not awaiting client execution (status=${task.status}).`,
+        });
+      }
+
+      const completedAt = new Date().toISOString();
+      if (clientError) {
+        const errorMessage = String(clientError).slice(0, 1000);
+        await supabase
+          .from('casper_tasks')
+          .update({
+            status: 'failed',
+            progress: 100,
+            completed_at: completedAt,
+            result: errorMessage,
+            metadata: {
+              ...(task.metadata ?? {}),
+              client_execution: true,
+              client_error: errorMessage,
+              client_duration_ms: typeof durationMs === 'number' ? durationMs : null,
+              completed_at: completedAt,
+            },
+          })
+          .eq('id', taskId);
+        await logActivity(supabase, {
+          action_type: 'command_failed',
+          description: `Casper local-LLM execution failed: ${errorMessage.slice(0, 200)}`,
+          actor_id: profile.id,
+          task_id: taskId,
+          metadata: { source: 'client', client_error: errorMessage },
+        });
+        return res.json({ success: true, taskId, status: 'failed' });
+      }
+
+      const text = typeof response === 'string' && response.trim().length > 0
+        ? response.trim()
+        : 'Local LLM returned an empty response.';
+      const reportedModel = typeof model === 'string' && model.trim().length > 0 ? model.trim() : 'local-llm';
+
+      await supabase
+        .from('casper_tasks')
+        .update({
+          status: 'completed',
+          progress: 100,
+          completed_at: completedAt,
+          result: text,
+          metadata: {
+            ...(task.metadata ?? {}),
+            client_execution: true,
+            provider: 'client-local',
+            model: reportedModel,
+            client_duration_ms: typeof durationMs === 'number' ? durationMs : null,
+            completed_at: completedAt,
+          },
+        })
+        .eq('id', taskId);
+
+      await logActivity(supabase, {
+        action_type: 'command_completed',
+        description: `Casper completed local-LLM directive: ${task.title?.slice(0, 120) ?? '(no title)'}`,
+        actor_id: profile.id,
+        task_id: taskId,
+        metadata: { source: 'client', provider: 'client-local', model: reportedModel },
+      });
+
+      return res.json({
+        success: true,
+        taskId,
+        status: 'completed',
+        response: text,
+        provider: 'client-local',
+        model: reportedModel,
+      });
+    } catch (error: any) {
+      console.error('[casper-control:command:complete-client-execution]', error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || 'Failed to record local-LLM execution result.',
+      });
+    }
+  });
+
   // Spawn real Casper sub-agents. Each objective is sent to the same
   // OpenAI-compatible LLM as /api/casper/command but with a tighter
   // sub-agent system prompt scoped to a single deliverable. Sub-agents
@@ -1094,6 +1425,11 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       // cognitive core, memory, and integration awareness as the parent.
       const cognitiveCore = await fetchCognitiveCore(supabase);
       const sharedSystem = await buildCasperSystemPrompt(supabase, casperMemory, profile.id);
+      // Sub-agents inherit the parent user's per-user provider/model so
+      // the whole fan-out runs on the user's chosen LLM (e.g. their
+      // OpenRouter key) rather than splitting the parent across the
+      // user's provider but billing the platform for the children.
+      const userSettings = await loadUserAiSettings(supabase, profile.id);
 
       // Fan out in parallel. The whole batch runs on this request, but
       // each sub-agent updates its row as it progresses, so the UI
@@ -1107,6 +1443,7 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
             parentPrompt || objectives.join(' / '),
             sharedSystem,
             cognitiveCore,
+            userSettings,
           ).catch((err) => ({
             ok: false,
             result: `Sub-agent crashed: ${err?.message || String(err)}`,
@@ -1196,7 +1533,13 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
 
       const cognitiveCore = await fetchCognitiveCore(supabase);
       const systemPrompt = await buildCasperSystemPrompt(supabase, casperMemory, profile.id);
-      const execution = await callOpenAICompatible({ prompt: followupPrompt, systemPrompt, cognitiveCore });
+      // Inherit the user's per-user provider/model/temperature so the
+      // follow-up response stays on the same LLM that produced the
+      // original — otherwise the parent runs on the user's OpenRouter
+      // key but the follow-up silently falls back to the platform's
+      // Gemini, which is jarring (different voice, different style).
+      const userSettings = await loadUserAiSettings(supabase, profile.id);
+      const execution = await callOpenAICompatible({ prompt: followupPrompt, systemPrompt, cognitiveCore, userSettings });
 
       const history = Array.isArray(task.metadata?.followups) ? task.metadata.followups : [];
       history.push({ question: question.trim(), answer: execution.text, at: new Date().toISOString() });

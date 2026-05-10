@@ -19,6 +19,22 @@ export interface ServerAIOptions {
   maxTokens?: number;
   preferredModel?: string | null;
   jsonResponse?: boolean;
+  /**
+   * Optional per-user OpenAI-compatible API key override. When provided,
+   * Gemini is skipped entirely (caller has explicitly chosen an
+   * OpenAI-compatible provider) and this key is used instead of the
+   * server's env-var key. Used by Casper's per-user model selection so
+   * users can route their own directives through OpenRouter / Together /
+   * Groq / Anthropic-via-OAI-compat / etc. without affecting other users.
+   */
+  apiKeyOverride?: string | null;
+  /**
+   * Optional per-user OpenAI-compatible base URL override. When provided,
+   * the request goes to this URL (e.g. https://openrouter.ai/api/v1)
+   * instead of the server's default. Empty / undefined falls back to the
+   * server's OPENAI_BASE_URL env var.
+   */
+  baseUrlOverride?: string | null;
 }
 
 export interface ServerAIResult {
@@ -55,8 +71,17 @@ export async function generateServerText(
   const systemPrompt = options.systemPrompt || 'You are Casper, the Blood Sweat Code AI assistant.';
   const temperature = options.temperature ?? 0.8;
   const maxTokens = options.maxTokens ?? 512;
-  const geminiKey = GEMINI_API_KEY();
+  const apiKeyOverride = (options.apiKeyOverride || '').trim();
+  const baseUrlOverride = (options.baseUrlOverride || '').trim();
   const errors: string[] = [];
+
+  // When the caller supplies a per-user OpenAI-compatible key/endpoint
+  // (e.g. user picked OpenRouter / Together / Groq / Anthropic-via-OAI),
+  // skip Gemini entirely. The user has explicitly opted into an
+  // OpenAI-compatible provider; falling back to Gemini would silently
+  // ignore that choice and bill the platform's key instead of theirs.
+  const skipGemini = Boolean(apiKeyOverride);
+  const geminiKey = skipGemini ? '' : GEMINI_API_KEY();
 
   if (geminiKey && Date.now() > geminiCooldownUntil) {
     const model = geminiModel(options.preferredModel);
@@ -76,15 +101,18 @@ export async function generateServerText(
     }
   } else if (geminiKey) {
     errors.push('gemini: cooling down after recent 429');
-  } else {
+  } else if (!skipGemini) {
     errors.push('gemini: GEMINI_API_KEY not set');
   }
 
-  const openaiKey = OPENAI_API_KEY();
+  const openaiKey = apiKeyOverride || OPENAI_API_KEY();
+  const openaiBaseUrl = baseUrlOverride
+    ? baseUrlOverride.replace(/\/$/, '')
+    : OPENAI_BASE_URL();
   if (openaiKey) {
     const model = openAiModel(options.preferredModel);
     try {
-      const text = await callOpenAICompatible(openaiKey, model, prompt, systemPrompt, temperature, maxTokens, Boolean(options.jsonResponse));
+      const text = await callOpenAICompatible(openaiKey, openaiBaseUrl, model, prompt, systemPrompt, temperature, maxTokens, Boolean(options.jsonResponse));
       if (text) return { provider: 'openai-compatible', model, text };
       errors.push(`openai(${model}): empty response`);
     } catch (err: any) {
@@ -93,7 +121,9 @@ export async function generateServerText(
       console.warn('[serverAi] OpenAI-compatible call failed:', msg);
     }
   } else {
-    errors.push('openai: OPENAI_API_KEY/VITE_AI_API_KEY not set');
+    errors.push(skipGemini
+      ? 'openai: per-user apiKeyOverride was empty after trim'
+      : 'openai: OPENAI_API_KEY/VITE_AI_API_KEY not set');
   }
 
   const lastError = errors.join(' | ');
@@ -227,6 +257,7 @@ async function callGemini(
 
 async function callOpenAICompatible(
   apiKey: string,
+  baseUrl: string,
   model: string,
   prompt: string,
   systemPrompt: string,
@@ -237,7 +268,6 @@ async function callOpenAICompatible(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 45_000);
   try {
-    const baseUrl = OPENAI_BASE_URL();
     const headers: Record<string, string> = {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
