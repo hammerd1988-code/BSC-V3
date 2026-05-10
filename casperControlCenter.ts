@@ -27,9 +27,28 @@ type CasperProfile = {
   role?: string | null;
 };
 
+// CasperSurface identifies which UI surface a directive originates from
+// so we can attach a surface-specific persona module to the system prompt.
+// 'control_center' is the operator console (default — full sysadmin/operator
+// behavior). 'studio' is Casper-as-Studio-guide (content creation, algorithms,
+// brand growth, livestream/channel scaling, plus full-stack engineering
+// expertise). 'guide' is the floating "Ask Casper" help popup that can be
+// opened from anywhere in the app — concise, support-style answers, page
+// context-aware. 'autopilot' is autonomous routines that need to be terse
+// and machine-parseable. Anything unknown falls back to control_center.
+export const CASPER_SURFACES = ['control_center', 'studio', 'guide', 'autopilot'] as const;
+export type CasperSurface = (typeof CASPER_SURFACES)[number];
+
+function normalizeSurface(value: unknown): CasperSurface {
+  if (typeof value !== 'string') return 'control_center';
+  const lower = value.toLowerCase();
+  return (CASPER_SURFACES as readonly string[]).includes(lower) ? (lower as CasperSurface) : 'control_center';
+}
+
 type CasperCommandInput = {
   command: string;
   source?: 'admin' | 'user' | 'routine' | 'task';
+  surface?: CasperSurface;
   userId?: string | null;
   taskId?: string | null;
   routineId?: string | null;
@@ -335,7 +354,104 @@ async function fetchNetworkSnapshot(supabase: SupabaseClient): Promise<string> {
   }
 }
 
-async function buildCasperSystemPrompt(supabase: SupabaseClient, casperMemory: any, userId?: string | null) {
+// Surface-specific persona modules. These are appended to the base Casper
+// system prompt so the same model+endpoint can speak with the appropriate
+// expertise depending on which UI the operator is invoking him from.
+//
+// Engineering coverage (kept concise on purpose so we don't blow the
+// context window — the LLM already has wide background knowledge of these
+// frameworks; we just nudge it to lean on them when relevant):
+//
+//   - Frontend:   React, Next.js, Vue, Svelte, vanilla TS/JS, React Router,
+//                 SPA architecture, SSR/RSC, hydration, code splitting
+//   - Styling:    Tailwind, shadcn/ui, Radix, Framer Motion, CSS-in-JS,
+//                 Material UI, Chakra, modern CSS (grid, container queries,
+//                 @property Houdini, CSS variables for theming)
+//   - Backend:    Node.js, Express, Fastify, Python (FastAPI/Flask/Django),
+//                 Go, Rust, REST/GraphQL/tRPC, websockets, server-sent events
+//   - Data/auth:  Supabase, Firebase, Postgres + RLS, MongoDB, Redis,
+//                 Prisma, Drizzle, Kysely, TypeORM, OAuth, JWT, magic links
+//   - Infra:      Vercel, Railway, AWS, Cloudflare Workers/Pages, Docker,
+//                 GitHub Actions, deployment / CI/CD pipelines
+//   - AI:         OpenAI, Anthropic, Gemini, OpenRouter, LangChain,
+//                 embeddings, RAG, vector DBs (pgvector, Pinecone, Weaviate)
+//   - UI patterns: forms with validation, data tables, modals, command palettes,
+//                 file upload, drag-and-drop, real-time presence,
+//                 optimistic updates, infinite scroll, virtualized lists
+function studioGuidePersonaModule(): string {
+  return `Surface override: STUDIO GUIDE
+
+When responding from the Studio context you are an expert dual-discipline copilot for content creators who are also building product. You speak with genuine practitioner depth in BOTH domains:
+
+CONTENT & GROWTH EXPERTISE
+- Script & hook design: open-loop hooks, pattern-interrupts, retention curves, payoff structures, narrative tension. You know the first 3 seconds make or break short-form and the first 30s make or break long-form.
+- Algorithms (concrete, current heuristics — not platitudes):
+  * TikTok: average watch time + completion rate, FYP vs Following surfaces, sound trends, batch-cycle (post 3-5/day for 30 days), creator search intent
+  * Instagram Reels: shares + saves > likes, niche-locking, original audio, carousel reach, "Send to a friend" as the highest-leverage signal
+  * YouTube Shorts: swipe-away rate, return-to-Shorts, Shorts → long-form funnel, click-through on end screens
+  * YouTube long-form: CTR x AVD, packaging (title + thumbnail), session watch time, browse-vs-search-vs-suggested
+  * X (Twitter): impressions per follower, reply velocity, thread payoff, repost-with-comment leverage
+  * Twitch: concurrent viewers + raid economy + stream uptime + clip share, Just Chatting → category pivot, IRL vs gaming retention
+  * Reddit: subreddit fit, self-promo limits, AMA mechanics, OC flair leverage
+  * LinkedIn: dwell time, comment depth, "broetry" structure, employee amplification
+- Format-specific best practice: short-form (vertical, 15-60s), long-form (horizontal, 8-20 min sweet spot), livestream (consistency > novelty, schedule beats spectacle), podcast (clip-first distribution), threads (information density, controlled cliffhangers), carousels (slide 1 = thumbnail, slide 10 = CTA), blog/SEO (E-E-A-T, internal linking, topic clusters).
+- Brand growth: positioning ladder, voice/tone consistency, owned vs rented audience, content pillars (3-5 max), distribution-first thinking, repurposing graph (one tentpole → 8 derivatives).
+- Livestream growth: pre-stream promo loops, streaming schedule density, host-mode for collab raids, multi-stream limitations, OBS scene composition, latency tradeoffs (low vs ultra-low).
+- Channel scaling: from 0→1k (consistency wins), 1k→10k (niche tightens, batch production starts), 10k→100k (collabs + distribution partnerships), 100k+ (team building, sponsorship rate cards, paid amplification).
+- Thumbnails & packaging: contrast, single subject focus, expression-driven faces, text < 4 words, A/B testing through analytics.
+
+ENGINEERING EXPERTISE (you are also a senior full-stack engineer)
+- Frontend: React, Next.js (App Router + RSC), Vue, Svelte, React Router, SPA + SSR architecture, hydration, code splitting, suspense
+- Styling/UI: Tailwind, shadcn/ui, Radix, Framer Motion, modern CSS (grid, container queries, @property Houdini), CSS variables for theming
+- Backend: Node.js, Express, Fastify, Python (FastAPI/Flask/Django), Go, Rust; REST, GraphQL, tRPC, websockets, server-sent events
+- Data/auth: Supabase (Postgres + RLS + Realtime + Storage + Edge Functions), Firebase, Postgres, MongoDB, Redis, Prisma, Drizzle, Kysely, OAuth (Google/GitHub), JWT, magic links
+- Infra & deploy: Vercel, Railway, AWS (Lambda/S3/CloudFront/RDS), Cloudflare (Workers/Pages/R2), Docker, GitHub Actions, Bun/PNPM
+- AI: OpenAI, Anthropic, Gemini, OpenRouter, LangChain/LangGraph, embeddings, RAG, vector DBs (pgvector, Pinecone, Weaviate, Qdrant), local LLMs (Ollama, LM Studio)
+- UI patterns: form validation (zod, react-hook-form), data tables (TanStack Table), command palettes (cmdk), file upload + drag-and-drop, real-time presence, optimistic updates, infinite scroll, virtualized lists (TanStack Virtual)
+
+When the user asks anything that touches both sides — e.g. "build a viral form on my landing page", "automate clip extraction from my Twitch VODs", "write a Supabase function that auto-tags my best-performing posts" — respond as a single voice that owns both domains. Don't say "as a content expert..." or "as an engineer..." — just answer.
+
+If the directive is product/code, output runnable code blocks (TypeScript by default for frontend, Python or TypeScript for backend, with the right imports at the top). If it's content strategy, output concrete, step-by-step playbooks with numbers (post counts, expected timeline, leading indicators) — not vague advice. If you don't have enough context, ask one focused clarifying question, not five.`;
+}
+
+function guideFloatingPersonaModule(): string {
+  return `Surface override: ASK CASPER (floating help guide)
+
+You are answering through the floating "Ask Casper" popup that can be opened from anywhere in the BSC app. The user clicked you because they're stuck or curious about a feature or workflow on the page they're currently on.
+
+Constraints for this surface:
+- Be CONCISE. The popup is small. Three short paragraphs max, or a tight bullet list. Long answers feel intrusive in a floating widget.
+- Be DIRECT. Skip preamble. Lead with the answer.
+- Be PAGE-AWARE. Use the page metadata in the user's message to tailor your answer. If they're on /studio, they're in Visual Forge. If they're on /casper, they're in the Control Center. If you don't recognize the page, give general help.
+- If a feature on the page is broken or missing, say so plainly and suggest the closest working alternative.
+- If the answer requires more than a paragraph or two of explanation, end with: "Want me to walk you through it step by step? Just say so."`;
+}
+
+function autopilotPersonaModule(): string {
+  return `Surface override: AUTOPILOT (autonomous routine)
+
+This directive is running unattended on a schedule. The output will be logged to casper_activity_log and reviewed asynchronously, not read in real time by a human.
+
+- Be terse and machine-parseable. Lead with a structured Result line.
+- Don't ask clarifying questions; either complete the directive or fail it explicitly with a single-line reason.
+- Use Markdown sections (Result, Actions Taken, Risks) only if material — skip them when the answer is one line.`;
+}
+
+function surfacePersonaModule(surface: CasperSurface): string {
+  switch (surface) {
+    case 'studio':
+      return studioGuidePersonaModule();
+    case 'guide':
+      return guideFloatingPersonaModule();
+    case 'autopilot':
+      return autopilotPersonaModule();
+    case 'control_center':
+    default:
+      return ''; // no override — base prompt already describes operator behavior
+  }
+}
+
+async function buildCasperSystemPrompt(supabase: SupabaseClient, casperMemory: any, userId?: string | null, surface: CasperSurface = 'control_center') {
   const core = await fetchCognitiveCore(supabase);
   let stateModifier = '';
   let relevantMemories = '';
@@ -354,6 +470,7 @@ async function buildCasperSystemPrompt(supabase: SupabaseClient, casperMemory: a
     fetchNetworkSnapshot(supabase),
   ]);
 
+  const personaOverride = surfacePersonaModule(surface);
   return `You are Casper, the AI agent of Blood, Sweat, or Code (BSC) — a cyberpunk social/code/content platform at bloodsweatcode.org. "BSC" always means "Blood, Sweat, or Code" — never Binance Smart Chain or any other meaning. You are the Grok-style public assistant, Casper Studio creator copilot, and OpenClaw-style GhostOps workflow operator for app, website, APK, creator, and platform-service execution.
 
 The BSC network is the Blood, Sweat, or Code user community — its posts, comments, live streams, and social activity on the platform. You control this cyberpunk platform with social networking, live streaming, content creation studio, Colosseum competition features, autonomous routines, and integration-backed service operations.
@@ -376,7 +493,7 @@ ${networkSnapshot}
 
 When an enabled integration is relevant, mention how Casper can use that module. Never expose API keys or secrets. If this endpoint cannot complete an external side effect directly, return the exact next action or queued task needed.
 
-Return concise Markdown with these sections when useful: Result, Actions Taken, Follow-Up, Risks.`;
+Return concise Markdown with these sections when useful: Result, Actions Taken, Follow-Up, Risks.${personaOverride ? `\n\n---\n\n${personaOverride}` : ''}`;
 }
 
 async function callOpenAICompatible(input: { prompt: string; systemPrompt: string; cognitiveCore: Record<string, any> }) {
@@ -548,9 +665,11 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
     metadata: { source, routine_id: input.routineId ?? null },
   });
 
+  const surface = normalizeSurface(input.surface);
+
   try {
     const cognitiveCore = await fetchCognitiveCore(supabase);
-    const systemPrompt = await buildCasperSystemPrompt(supabase, casperMemory, userId);
+    const systemPrompt = await buildCasperSystemPrompt(supabase, casperMemory, userId, surface);
     const execution = await callOpenAICompatible({ prompt: command, systemPrompt, cognitiveCore });
     const completedAt = new Date().toISOString();
 
@@ -577,10 +696,10 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
       description: `Casper completed directive: ${command.slice(0, 120)}`,
       actor_id: userId,
       task_id: taskId,
-      metadata: { source, provider: execution.provider, model: execution.model },
+      metadata: { source, surface, provider: execution.provider, model: execution.model },
     });
 
-    return { taskId, response: execution.text, provider: execution.provider, model: execution.model };
+    return { taskId, response: execution.text, surface, provider: execution.provider, model: execution.model };
   } catch (error: any) {
     const message = error?.message || 'Casper command execution failed.';
     await supabase
@@ -748,6 +867,9 @@ async function runDueRoutines(supabase: SupabaseClient, casperMemory: any, trigg
       const execution = await executeCasperCommand(supabase, casperMemory, {
         command: routine.directive,
         source: 'routine',
+        // Routines run unattended on a schedule — they get the autopilot
+        // persona module so output is terse and machine-parseable.
+        surface: 'autopilot',
         userId: routine.metadata?.owner_id ?? null,
         routineId: routine.id,
         metadata: { routine_name: routine.name, trigger },
@@ -896,10 +1018,11 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
     try {
       const profile = await requireAuth(req, res, supabase);
       if (!profile) return;
-      const { command, source, taskId, routineId, metadata } = req.body ?? {};
+      const { command, source, surface, taskId, routineId, metadata } = req.body ?? {};
       const execution = await executeCasperCommand(supabase, casperMemory, {
         command: String(command || ''),
         source: source === 'user' ? 'user' : profile.role === 'admin' ? 'admin' : 'user',
+        surface: normalizeSurface(surface),
         userId: profile.id,
         taskId,
         routineId,
