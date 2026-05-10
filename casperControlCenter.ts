@@ -57,13 +57,71 @@ function isUuid(value?: string | null) {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-export type CasperAuthFailureReason = 'no_token' | 'invalid_token' | 'lookup_failed';
+/**
+ * Decode the payload of a Supabase JWT *without* verifying its signature.
+ * Used purely for diagnostic purposes when supabase.auth.getUser rejects a
+ * token — we want to surface "the token your client sent was issued by
+ * project X but this server is configured for project Y" rather than a
+ * generic "session expired" that misleads users into endless re-sign-in
+ * loops.
+ *
+ * Returns the issuer host (and project ref if it can be parsed) on success,
+ * or null on any parse error.
+ */
+function decodeJwtIssuer(token: string): { issuerHost: string | null; projectRef: string | null } {
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return { issuerHost: null, projectRef: null };
+    const payloadB64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padding = payloadB64.length % 4 === 0 ? '' : '='.repeat(4 - (payloadB64.length % 4));
+    const decoded = Buffer.from(payloadB64 + padding, 'base64').toString('utf8');
+    const payload = JSON.parse(decoded) as { iss?: string };
+    if (!payload.iss) return { issuerHost: null, projectRef: null };
+    let issuerHost: string | null = null;
+    try {
+      issuerHost = new URL(payload.iss).host;
+    } catch {
+      issuerHost = payload.iss;
+    }
+    // Supabase issuers look like `https://<project-ref>.supabase.co/auth/v1`.
+    const refMatch = issuerHost?.match(/^([a-z0-9]+)\.supabase\.co$/i);
+    return {
+      issuerHost,
+      projectRef: refMatch ? refMatch[1] : null,
+    };
+  } catch {
+    return { issuerHost: null, projectRef: null };
+  }
+}
+
+function getServerSupabaseHost(): string | null {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+  if (!url) return null;
+  try {
+    return new URL(url).host;
+  } catch {
+    return null;
+  }
+}
+
+export type CasperAuthFailureReason =
+  | 'no_token'
+  | 'invalid_token'
+  | 'project_mismatch'
+  | 'lookup_failed';
 
 export type CasperAuthResolution = {
   ok: boolean;
   profile?: CasperProfile;
   reason?: CasperAuthFailureReason;
   message?: string;
+  /** Diagnostic-only fields. Safe to expose: no secrets, no PII. */
+  diagnostic?: {
+    serverSupabaseHost?: string | null;
+    tokenIssuerHost?: string | null;
+    tokenProjectRef?: string | null;
+    underlyingError?: string;
+  };
 };
 
 export async function resolveCasperAuth(req: Request, supabase: SupabaseClient): Promise<CasperAuthResolution> {
@@ -74,10 +132,53 @@ export async function resolveCasperAuth(req: Request, supabase: SupabaseClient):
 
   const { data: authData, error: authError } = await supabase.auth.getUser(token);
   if (authError || !authData.user) {
+    const serverHost = getServerSupabaseHost();
+    const { issuerHost, projectRef } = decodeJwtIssuer(token);
+    const underlying = authError?.message || 'no_user_returned';
+
+    // Project-mismatch detection: if the server's Supabase URL host doesn't
+    // match the JWT issuer host, that's almost certainly the real reason —
+    // re-signing in won't fix it. Surface this as a distinct reason so the
+    // client can show actionable guidance.
+    if (serverHost && issuerHost && serverHost !== issuerHost) {
+      console.error(
+        '[casper-control:auth] project mismatch:',
+        `server=${serverHost}`,
+        `token_issuer=${issuerHost}`,
+        `underlying=${underlying}`,
+      );
+      return {
+        ok: false,
+        reason: 'project_mismatch',
+        message:
+          'This server is configured for a different Supabase project than the one that issued your sign-in token. ' +
+          'Re-signing in will not fix this — the server admin needs to set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY ' +
+          'on Railway to match the frontend project.',
+        diagnostic: {
+          serverSupabaseHost: serverHost,
+          tokenIssuerHost: issuerHost,
+          tokenProjectRef: projectRef,
+          underlyingError: underlying,
+        },
+      };
+    }
+
+    console.error(
+      '[casper-control:auth] getUser rejected token:',
+      `server=${serverHost ?? 'unset'}`,
+      `token_issuer=${issuerHost ?? 'unparseable'}`,
+      `underlying=${underlying}`,
+    );
     return {
       ok: false,
       reason: 'invalid_token',
       message: 'Your session has expired or is invalid. Please sign in again.',
+      diagnostic: {
+        serverSupabaseHost: serverHost,
+        tokenIssuerHost: issuerHost,
+        tokenProjectRef: projectRef,
+        underlyingError: underlying,
+      },
     };
   }
 
@@ -117,10 +218,14 @@ export async function resolveCasperAuth(req: Request, supabase: SupabaseClient):
 async function requireAuth(req: Request, res: Response, supabase: SupabaseClient): Promise<CasperProfile | null> {
   const result = await resolveCasperAuth(req, supabase);
   if (!result.ok || !result.profile) {
-    res.status(401).json({
+    // 403 reads more accurately than 401 for "your token is well-formed
+    // but the server can't validate it because of a config mismatch".
+    const status = result.reason === 'project_mismatch' ? 403 : 401;
+    res.status(status).json({
       success: false,
       error: result.message || 'Authentication required.',
       reason: result.reason || 'invalid_token',
+      ...(result.diagnostic ? { diagnostic: result.diagnostic } : {}),
     });
     return null;
   }
@@ -616,6 +721,65 @@ async function runtimeStatus(supabase: SupabaseClient) {
 }
 
 export function registerCasperControlRoutes(app: Express, supabase: SupabaseClient, casperMemory: any) {
+  // Public diagnostic endpoint. Reports whether the server's Supabase
+  // configuration matches the project that issued the bearer token (if one
+  // is supplied). Designed to make "Your session has expired or is
+  // invalid" diagnosable without server log access. Exposes only host
+  // names — never keys or token contents.
+  app.get('/api/casper/auth-debug', async (req, res) => {
+    const serverSupabaseHost = getServerSupabaseHost();
+    const hasServiceRoleKey = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
+    const hasAnonKey = Boolean(process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY);
+    const token = bearerToken(req);
+
+    if (!token) {
+      return res.json({
+        success: true,
+        token: { provided: false },
+        server: {
+          supabaseHost: serverSupabaseHost,
+          hasServiceRoleKey,
+          hasAnonKey,
+          configured: Boolean(serverSupabaseHost && hasServiceRoleKey),
+        },
+        hint: serverSupabaseHost
+          ? `Server is configured for ${serverSupabaseHost}. Send your bearer token to compare against the issuer.`
+          : 'Server SUPABASE_URL is not set. Set it on Railway to the same project as the frontend (VITE_SUPABASE_URL).',
+      });
+    }
+
+    const { issuerHost, projectRef } = decodeJwtIssuer(token);
+    const { data, error } = await supabase.auth.getUser(token);
+    const validates = !error && Boolean(data?.user);
+    const matches = serverSupabaseHost && issuerHost && serverSupabaseHost === issuerHost;
+
+    return res.json({
+      success: true,
+      token: {
+        provided: true,
+        issuerHost,
+        projectRef,
+        validates,
+        validationError: error?.message ?? null,
+      },
+      server: {
+        supabaseHost: serverSupabaseHost,
+        hasServiceRoleKey,
+        hasAnonKey,
+        configured: Boolean(serverSupabaseHost && hasServiceRoleKey),
+      },
+      diagnosis: !validates && serverSupabaseHost && issuerHost && !matches
+        ? `Project mismatch — server=${serverSupabaseHost} vs token_issuer=${issuerHost}. Update SUPABASE_URL on Railway.`
+        : !validates && !serverSupabaseHost
+          ? 'Server SUPABASE_URL is not set. Set it on Railway to match the frontend project.'
+          : !validates && !hasServiceRoleKey
+            ? 'Server SUPABASE_SERVICE_ROLE_KEY is not set. Set it on Railway.'
+            : !validates
+              ? `Token rejected by server's Supabase project (${serverSupabaseHost}). Underlying error: ${error?.message || 'unknown'}.`
+              : 'OK — token validates against the server\u2019s Supabase project.',
+    });
+  });
+
   app.get('/api/casper/status', async (req, res) => {
     try {
       const profile = await requireAuth(req, res, supabase);
