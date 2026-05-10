@@ -146,11 +146,18 @@ function resolveCasperModel(model: string, customModelId: string) {
 
 function initialCasperCore(settings: any) {
   const modelValue = casperModelSelectValue(settings?.model);
-  // Temperature lives in users.ai_settings.temperature. We keep it as
-  // a plain number string in the form so the slider value and the
-  // editable input stay in sync; saveAiCore re-parses on submit.
-  const tempRaw = settings?.temperature ?? settings?.temp ?? null;
-  const tempNumber = typeof tempRaw === 'number' ? tempRaw : Number(tempRaw);
+  // Temperature lives in users.ai_settings.temperature. Don't coerce
+  // null/undefined to 0 — Number(null) === 0 would silently move the
+  // slider to "deterministic" for any user whose ai_settings was
+  // saved before this column existed, then they'd unknowingly save
+  // it back at temp=0.
+  const tempRaw = settings?.temperature ?? settings?.temp;
+  const tempNumber =
+    typeof tempRaw === 'number'
+      ? tempRaw
+      : typeof tempRaw === 'string'
+        ? Number(tempRaw)
+        : NaN;
   const temperature = Number.isFinite(tempNumber) && tempNumber >= 0 && tempNumber <= 2 ? tempNumber : 0.7;
   return {
     apiKey: settings?.apiKey || settings?.api_key || '',

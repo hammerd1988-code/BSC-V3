@@ -100,8 +100,16 @@ async function loadUserAiSettings(
     const apiKey = raw.apiKey ?? raw.api_key ?? null;
     const endpoint = raw.endpoint ?? raw.api_base_url ?? raw.apiBaseUrl ?? null;
     const model = raw.model ?? null;
-    const tempRaw = raw.temperature ?? raw.temp ?? null;
-    const tempNumber = typeof tempRaw === 'number' ? tempRaw : Number(tempRaw);
+    // Don't coerce null/undefined to 0 — Number(null) === 0 would silently
+    // pin temperature to a hard "deterministic" value for any user whose
+    // ai_settings was saved before this column existed.
+    const tempRaw = raw.temperature ?? raw.temp;
+    const tempNumber =
+      typeof tempRaw === 'number'
+        ? tempRaw
+        : typeof tempRaw === 'string'
+          ? Number(tempRaw)
+          : NaN;
     const temperature = Number.isFinite(tempNumber) && tempNumber >= 0 && tempNumber <= 2 ? tempNumber : null;
     const systemPromptOverride =
       raw.systemPromptOverride ?? raw.system_prompt_override ?? raw.systemPrompt ?? null;
@@ -1301,7 +1309,13 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
 
       const cognitiveCore = await fetchCognitiveCore(supabase);
       const systemPrompt = await buildCasperSystemPrompt(supabase, casperMemory, profile.id);
-      const execution = await callOpenAICompatible({ prompt: followupPrompt, systemPrompt, cognitiveCore });
+      // Inherit the user's per-user provider/model/temperature so the
+      // follow-up response stays on the same LLM that produced the
+      // original — otherwise the parent runs on the user's OpenRouter
+      // key but the follow-up silently falls back to the platform's
+      // Gemini, which is jarring (different voice, different style).
+      const userSettings = await loadUserAiSettings(supabase, profile.id);
+      const execution = await callOpenAICompatible({ prompt: followupPrompt, systemPrompt, cognitiveCore, userSettings });
 
       const history = Array.isArray(task.metadata?.followups) ? task.metadata.followups : [];
       history.push({ question: question.trim(), answer: execution.text, at: new Date().toISOString() });
