@@ -140,7 +140,11 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [turns.length, busy]);
 
-  if (!open) return null;
+  // Note: we don't early-return on !open here. AnimatePresence has to stay
+  // mounted to detect a removed child and play its exit animation, so the
+  // motion.div is conditionally rendered as a child of AnimatePresence
+  // instead. Returning null at this level would unmount the wrapper and
+  // the exit transition would never run — the popup would just blink out.
 
   const send = async () => {
     const text = draft.trim();
@@ -190,6 +194,7 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
 
   return (
     <AnimatePresence>
+      {open && (
       <motion.div
         key="ask-casper-widget"
         initial={{ opacity: 0, y: 24, scale: 0.96 }}
@@ -276,6 +281,7 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
           </div>
         </form>
       </motion.div>
+      )}
     </AnimatePresence>
   );
 };
