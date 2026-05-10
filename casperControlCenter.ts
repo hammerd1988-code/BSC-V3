@@ -1,7 +1,23 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { randomUUID } from 'crypto';
-import { generateServerText, isServerAiConfigured } from './serverAi.js';
+import {
+  generateServerText,
+  generateServerToolTurn,
+  isServerAiConfigured,
+  type ServerAIMessage,
+} from './serverAi.js';
+import {
+  buildToolSpecs,
+  executeTool,
+  loadConnectedIntegrationsForTools,
+  resolveShellMode,
+  MAX_TOOL_CALL_ROUNDS,
+  MAX_TOOL_CALLS_PER_DIRECTIVE,
+  type LlmToolCall,
+  type LlmToolCallResult,
+  type ToolExecutionContext,
+} from './casperTools.js';
 
 const PLATFORM_DEFAULT_MODEL = process.env.CASPER_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const ROUTINE_POLL_INTERVAL_MS = Number(process.env.CASPER_ROUTINE_POLL_INTERVAL_MS || 60_000);
@@ -61,6 +77,23 @@ type CasperCommandInput = {
   // will fall back to the platform provider when the user has a
   // local endpoint configured.
   allowClientDefer?: boolean;
+  // Whether the caller has admin clearance. Currently only used to
+  // decide whether the LLM tool-calling loop gets an `elevated` shell
+  // (write commands like mkdir/mv/rm/cp) or stays read-only. Defaults
+  // to false which means the read-only allowlist applies. The shell
+  // is gated separately by surface (only control_center + studio
+  // expose it at all) and the global EXECUTION_MODE env flag, so this
+  // is the third lock — all three must be on for elevated access.
+  isAdmin?: boolean;
+  // When true (default), the executor advertises Casper's connected
+  // integrations + the hardened shell as OpenAI tool-calling specs and
+  // runs a bounded multi-turn loop so a single directive can actually
+  // create a GitHub issue / run lint / post a Slack message instead of
+  // just describing them. Set to false to force a single-shot text
+  // completion (used by sub-agents, follow-ups, and routines for the
+  // initial rollout — the blast radius from those callers is harder
+  // to reason about). Falsy by default in those code paths.
+  enableTools?: boolean;
 };
 
 // Per-user Casper LLM settings stored in `users.ai_settings` (JSONB).
@@ -723,6 +756,193 @@ async function callOpenAICompatible(input: {
   };
 }
 
+// Tool-calling variant of callOpenAICompatible. Runs a bounded
+// multi-turn loop so a single directive can drive multiple real tool
+// calls (shell + integration adapters). Falls through to the
+// single-shot path automatically when:
+//   - no tools are exposed for this caller (user has no integrations
+//     connected and the shell is disabled for the surface)
+//   - the model returns a final text answer (no tool_calls)
+//   - the round limit or per-directive call limit is hit
+//
+// Persists every tool call to the returned `toolCalls` array so the
+// caller can write them to casper_tasks.metadata.tool_calls for audit
+// (the operator console renders them as a chronological action log).
+async function callOpenAICompatibleWithToolLoop(input: {
+  prompt: string;
+  systemPrompt: string;
+  cognitiveCore: Record<string, any>;
+  userSettings?: CasperUserAiSettings;
+  toolCtx: ToolExecutionContext;
+}): Promise<{
+  provider: string;
+  model: string;
+  text: string;
+  toolCalls: LlmToolCallResult[];
+  rounds: number;
+  truncatedReason?: string;
+}> {
+  const userSettings = input.userSettings ?? {};
+  const responseStyle = input.cognitiveCore?.response_style ?? {};
+  const userModel = userSettings.model && userSettings.model !== 'platform_default' ? userSettings.model : null;
+  const model = userModel || responseStyle.model || PLATFORM_DEFAULT_MODEL;
+  const temperature = typeof userSettings.temperature === 'number'
+    ? userSettings.temperature
+    : Number(responseStyle.temperature ?? 0.55);
+  const maxTokens = Number(responseStyle.max_tokens ?? 1500);
+
+  const systemPrompt = userSettings.systemPromptOverride
+    ? `${input.systemPrompt}\n\n---\n\n[User custom instructions]\n${userSettings.systemPromptOverride}`
+    : input.systemPrompt;
+
+  const toolSpecs = buildToolSpecs(input.toolCtx);
+  // No tools exposed at all → single-shot path is identical, take it.
+  if (toolSpecs.length === 0) {
+    const single = await callOpenAICompatible({
+      prompt: input.prompt,
+      systemPrompt: input.systemPrompt,
+      cognitiveCore: input.cognitiveCore,
+      userSettings: input.userSettings,
+    });
+    return { ...single, toolCalls: [], rounds: 0 };
+  }
+
+  // Inject a tool-usage primer so the model knows it should ACT
+  // rather than describe. Surface personas already explain Casper's
+  // operator role; this is a small reinforcement specific to the
+  // tool loop.
+  const toolPrimer =
+    `\n\n---\n\nYou have access to ${toolSpecs.length} concrete tool(s) on this directive (integrations + shell). ` +
+    `When the user asks for an action that one of your tools can perform, CALL the tool — do not merely describe what you would do. ` +
+    `When all needed tools have been called and you have the data to answer, return a clear final response that summarizes what you did and what the user can verify. ` +
+    `If a tool fails, surface the error briefly and suggest a fix instead of pretending it succeeded.`;
+
+  const messages: ServerAIMessage[] = [
+    { role: 'system', content: systemPrompt + toolPrimer },
+    { role: 'user', content: input.prompt },
+  ];
+
+  const allToolCalls: LlmToolCallResult[] = [];
+  let provider: string = 'openai-compatible';
+  let resolvedModel: string = model;
+  let truncatedReason: string | undefined;
+
+  for (let round = 0; round < MAX_TOOL_CALL_ROUNDS; round += 1) {
+    const turn = await generateServerToolTurn(messages, {
+      tools: toolSpecs,
+      preferredModel: model,
+      temperature,
+      maxTokens,
+      apiKeyOverride: userSettings.apiKey ?? null,
+      baseUrlOverride: userSettings.endpoint ?? null,
+    });
+    provider = turn.provider;
+    resolvedModel = turn.model;
+
+    if (turn.toolCalls.length === 0) {
+      // Final text answer.
+      return {
+        provider,
+        model: resolvedModel,
+        text: turn.text || 'Casper returned an empty response.',
+        toolCalls: allToolCalls,
+        rounds: round,
+        truncatedReason,
+      };
+    }
+
+    // Append assistant message with tool_calls so the model can see
+    // its own request in the next round.
+    messages.push({
+      role: 'assistant',
+      content: turn.text || null,
+      tool_calls: turn.toolCalls.map((tc) => ({
+        id: tc.id,
+        type: 'function' as const,
+        function: { name: tc.name, arguments: tc.arguments },
+      })),
+    });
+
+    // Execute the requested tool calls. Cap per-directive total.
+    for (const tc of turn.toolCalls) {
+      if (allToolCalls.length >= MAX_TOOL_CALLS_PER_DIRECTIVE) {
+        truncatedReason = `Stopped after ${MAX_TOOL_CALLS_PER_DIRECTIVE} tool calls (per-directive ceiling).`;
+        messages.push({
+          role: 'tool',
+          tool_call_id: tc.id,
+          content: `Skipped: ${truncatedReason}`,
+        });
+        continue;
+      }
+      let parsedArgs: Record<string, any> = {};
+      try {
+        parsedArgs = tc.arguments ? JSON.parse(tc.arguments) : {};
+      } catch {
+        parsedArgs = {};
+      }
+      const call: LlmToolCall = { id: tc.id, name: tc.name, args: parsedArgs };
+      const result = await executeTool(call, input.toolCtx);
+      allToolCalls.push(result);
+      messages.push({
+        role: 'tool',
+        tool_call_id: tc.id,
+        content: JSON.stringify(stripOversizedToolPayload(result), null, 2),
+      });
+    }
+
+    if (truncatedReason) break;
+  }
+
+  if (!truncatedReason) truncatedReason = `Stopped after ${MAX_TOOL_CALL_ROUNDS} tool-calling rounds.`;
+
+  // Round limit hit. Force a final text answer with tool_choice='none'
+  // so the model summarizes what it did instead of trying to call
+  // another tool.
+  const final = await generateServerToolTurn(messages, {
+    tools: toolSpecs,
+    toolChoice: 'none',
+    preferredModel: model,
+    temperature,
+    maxTokens,
+    apiKeyOverride: userSettings.apiKey ?? null,
+    baseUrlOverride: userSettings.endpoint ?? null,
+  });
+
+  return {
+    provider: final.provider || provider,
+    model: final.model || resolvedModel,
+    text: final.text || 'Casper exhausted the tool-calling round limit before producing a final answer.',
+    toolCalls: allToolCalls,
+    rounds: MAX_TOOL_CALL_ROUNDS,
+    truncatedReason,
+  };
+}
+
+// Tool results vary wildly in size — a single `ls /home` can return
+// 50KB of stdout, a `gh repos list` can return a 500-element JSON
+// array, a Slack `list_channels` call can return tens of KB. We cap
+// what's fed back to the model so a verbose tool doesn't blow the
+// context window or send token usage through the roof. The full
+// result is still recorded in `allToolCalls` for the audit trail —
+// this only affects what the *model* sees on the next turn.
+function stripOversizedToolPayload(result: LlmToolCallResult): Record<string, unknown> {
+  const MAX_DATA_CHARS = 4000;
+  const dataJson = (() => {
+    try { return JSON.stringify(result.data); }
+    catch { return String(result.data); }
+  })();
+  const truncatedData = dataJson.length > MAX_DATA_CHARS
+    ? dataJson.slice(0, MAX_DATA_CHARS) + `\n[...truncated ${dataJson.length - MAX_DATA_CHARS} chars]`
+    : dataJson;
+  return {
+    ok: result.ok,
+    error: result.error,
+    status: result.status,
+    durationMs: result.durationMs,
+    data: truncatedData,
+  };
+}
+
 async function logActivity(supabase: SupabaseClient, input: {
   action_type: string;
   description: string;
@@ -929,7 +1149,56 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
       };
     }
 
-    const execution = await callOpenAICompatible({ prompt: command, systemPrompt, cognitiveCore, userSettings });
+    // Tool-calling path: when the caller opts in (browser-driven
+    // directives from control_center / studio), advertise the user's
+    // connected integrations + the hardened shell to the model and
+    // run a bounded multi-turn loop so directives like "create a
+    // GitHub issue titled X" actually create the issue. Sub-agents,
+    // routines, and follow-ups skip this path for now (single-shot
+    // text completion only) until we've audited the blast radius
+    // from those code paths.
+    let toolCalls: LlmToolCallResult[] = [];
+    let toolRounds = 0;
+    let toolTruncatedReason: string | undefined;
+    const useToolLoop = input.enableTools !== false && (surface === 'control_center' || surface === 'studio') && isUuid(userId);
+    let executionText: string;
+    let executionProvider: string;
+    let executionModel: string;
+    if (useToolLoop) {
+      const integrations = await loadConnectedIntegrationsForTools(supabase, String(userId));
+      const shellMode = resolveShellMode({
+        isAdmin: Boolean(input.isAdmin),
+        surface,
+        // Even when the surface allows shell, we keep it gated on the
+        // operator opting in (admin sources / control_center). Studio
+        // gets read-only by default, no elevated.
+        enableShell: true,
+      });
+      const toolCtx: ToolExecutionContext = {
+        supabase,
+        userId: String(userId),
+        integrations,
+        shellMode,
+      };
+      const execution = await callOpenAICompatibleWithToolLoop({
+        prompt: command,
+        systemPrompt,
+        cognitiveCore,
+        userSettings,
+        toolCtx,
+      });
+      executionText = execution.text;
+      executionProvider = execution.provider;
+      executionModel = execution.model;
+      toolCalls = execution.toolCalls;
+      toolRounds = execution.rounds;
+      toolTruncatedReason = execution.truncatedReason;
+    } else {
+      const execution = await callOpenAICompatible({ prompt: command, systemPrompt, cognitiveCore, userSettings });
+      executionText = execution.text;
+      executionProvider = execution.provider;
+      executionModel = execution.model;
+    }
     const completedAt = new Date().toISOString();
 
     await supabase
@@ -938,13 +1207,21 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
         status: 'completed',
         progress: 100,
         completed_at: completedAt,
-        result: execution.text,
+        result: executionText,
         metadata: {
           source,
           routine_id: input.routineId ?? null,
-          provider: execution.provider,
-          model: execution.model,
+          provider: executionProvider,
+          model: executionModel,
           completed_at: completedAt,
+          // Audit trail for the operator console: every tool call
+          // the model made, with timing and ok/error status. The
+          // payload sent back to the model on the next turn was
+          // truncated (see stripOversizedToolPayload) but the full
+          // structured data lives here.
+          tool_calls: toolCalls,
+          tool_rounds: toolRounds,
+          tool_truncated_reason: toolTruncatedReason ?? null,
           ...(input.metadata ?? {}),
         },
       })
@@ -955,10 +1232,24 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
       description: `Casper completed directive: ${command.slice(0, 120)}`,
       actor_id: userId,
       task_id: taskId,
-      metadata: { source, surface, provider: execution.provider, model: execution.model },
+      metadata: {
+        source,
+        surface,
+        provider: executionProvider,
+        model: executionModel,
+        tool_call_count: toolCalls.length,
+        tool_rounds: toolRounds,
+      },
     });
 
-    return { taskId, response: execution.text, surface, provider: execution.provider, model: execution.model };
+    return {
+      taskId,
+      response: executionText,
+      surface,
+      provider: executionProvider,
+      model: executionModel,
+      ...(useToolLoop ? { toolCalls, toolRounds, toolTruncatedReason } : {}),
+    };
   } catch (error: any) {
     const message = error?.message || 'Casper command execution failed.';
     await supabase
@@ -1289,6 +1580,14 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
         // Browser is on the other end of this request — safe to defer
         // local-LLM execution to the client.
         allowClientDefer: true,
+        // Browser-driven directive — admin clearance opens the
+        // elevated shell allowlist (still gated on EXECUTION_MODE
+        // and surface). Tool-calling is on by default for these
+        // directives so a directive like "create a GitHub issue
+        // titled X" actually creates the issue instead of just
+        // describing it.
+        isAdmin: profile.role === 'admin',
+        enableTools: true,
       });
       res.json({ success: true, ...execution });
     } catch (error: any) {
