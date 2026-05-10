@@ -24,6 +24,7 @@ import os, { tmpdir } from 'os';
 import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
 import { registerCasperControlRoutes, requireCasperAuth } from './casperControlCenter.js';
 import { runCasperShell, describeAllowlist, isShellElevationEnabled, type CasperShellMode } from './casperShell.js';
+import { getAdapter, listAdapterTools, decodeIntegrationKey, CASPER_ADAPTERS } from './casperAdapters.js';
 import { initWebhookListener } from "./webhookListener.js";
 import botApi from './botApi.js';
 import { registerPushRoutes } from './pushNotifications.js';
@@ -1187,6 +1188,139 @@ app.post("/api/cred/exchange", async (req, res) => {
       elevated: describeAllowlist('elevated'),
       elevationEnabled: isShellElevationEnabled(),
     });
+  });
+
+  // Casper integration adapters. Until now, casper_integrations was just
+  // a registry — Casper stored API keys but had no way to call any of
+  // the third-party APIs. These endpoints make integrations real:
+  //   GET  /api/casper/integrations/tools      — list tool catalogue
+  //   GET  /api/casper/integrations/connected  — list user-connected adapters
+  //   POST /api/casper/integrations/execute    — invoke a tool
+  app.get('/api/casper/integrations/tools', async (_req, res) => {
+    res.json({
+      success: true,
+      adapters: listAdapterTools(),
+    });
+  });
+
+  app.get('/api/casper/integrations/connected', async (req, res) => {
+    try {
+      const profile = await requireCasperAuth(req, res, supabase);
+      if (!profile) return;
+      const { data, error } = await supabase
+        .from('casper_integrations')
+        .select('integration_key, enabled, status, connected_at, config, error_message')
+        .eq('user_id', profile.id)
+        .eq('enabled', true)
+        .eq('status', 'connected');
+      if (error) {
+        return res.status(500).json({ success: false, error: error.message });
+      }
+      const supported = (data ?? []).filter((row) => Boolean(CASPER_ADAPTERS[row.integration_key as string]));
+      res.json({
+        success: true,
+        connected: supported.map((row) => ({
+          integration_key: row.integration_key,
+          status: row.status,
+          connected_at: row.connected_at,
+          tools: CASPER_ADAPTERS[row.integration_key as string].tools.map((t) => ({ name: t.name, description: t.description })),
+        })),
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || 'Failed to load connected integrations.' });
+    }
+  });
+
+  app.post('/api/casper/integrations/execute', async (req, res) => {
+    try {
+      const profile = await requireCasperAuth(req, res, supabase);
+      if (!profile) return;
+
+      const { integrationKey, toolName, params } = req.body ?? {};
+      if (!integrationKey || typeof integrationKey !== 'string') {
+        return res.status(400).json({ success: false, error: 'integrationKey is required.' });
+      }
+      if (!toolName || typeof toolName !== 'string') {
+        return res.status(400).json({ success: false, error: 'toolName is required.' });
+      }
+
+      const adapter = getAdapter(integrationKey);
+      if (!adapter) {
+        return res.status(404).json({ success: false, error: `No adapter registered for integration "${integrationKey}".` });
+      }
+      const tool = adapter.tools.find((t) => t.name === toolName);
+      if (!tool) {
+        return res.status(404).json({ success: false, error: `Tool "${toolName}" is not exposed by ${adapter.name}.` });
+      }
+
+      const { data: row, error: lookupError } = await supabase
+        .from('casper_integrations')
+        .select('integration_key, enabled, status, api_key_encrypted, config')
+        .eq('user_id', profile.id)
+        .eq('integration_key', integrationKey)
+        .maybeSingle();
+
+      if (lookupError) {
+        return res.status(500).json({ success: false, error: lookupError.message });
+      }
+      if (!row || !row.enabled || row.status !== 'connected') {
+        return res.status(409).json({ success: false, error: `${adapter.name} is not connected for this user.` });
+      }
+
+      const apiKey = decodeIntegrationKey(row.api_key_encrypted as string | null);
+      if (!apiKey) {
+        return res.status(409).json({ success: false, error: `${adapter.name} is connected but no API key is stored.` });
+      }
+
+      const result = await adapter.execute(
+        toolName,
+        (params && typeof params === 'object' ? params : {}) as Record<string, any>,
+        { apiKey, config: (row.config as Record<string, any> | null) ?? null },
+      );
+
+      try {
+        await supabase.from('casper_activity_log').insert({
+          action_type: 'integration_execute',
+          description: `Casper integration ${integrationKey}.${toolName}`,
+          metadata: {
+            integration_key: integrationKey,
+            tool_name: toolName,
+            ok: result.ok,
+            status: result.status ?? null,
+            duration_ms: result.durationMs ?? null,
+            error: result.error ?? null,
+          },
+          ...(profile.id ? { actor_id: profile.id } : {}),
+        });
+      } catch (logErr) {
+        console.warn('[casper-integrations] activity log skipped:', logErr);
+      }
+
+      io.emit('activity:notification', {
+        type: 'integration_execution',
+        data: {
+          actorId: profile.id,
+          integrationKey,
+          toolName,
+          ok: result.ok,
+          status: result.status ?? null,
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      res.status(result.ok ? 200 : (result.status && result.status >= 400 && result.status < 600 ? result.status : 502)).json({
+        success: result.ok,
+        integrationKey,
+        toolName,
+        data: result.data ?? null,
+        error: result.error ?? null,
+        status: result.status ?? null,
+        durationMs: result.durationMs ?? null,
+      });
+    } catch (error: any) {
+      console.error('[casper-integrations] error:', error);
+      res.status(500).json({ success: false, error: error?.message || 'Casper integration call failed.' });
+    }
   });
 
   // Webhook endpoint for AI agents
