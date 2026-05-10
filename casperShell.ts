@@ -42,6 +42,27 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
 const HARD_TIMEOUT_CEILING_MS = 5 * 60 * 1000;
 
+// Allowlist of environment variables that are safe to pass to spawned
+// shell commands. The previous denylist approach required us to remember
+// every secret; flipping to an allowlist means new secrets are blocked
+// by default (no SQUARE_ACCESS_TOKEN / GROQ_API_KEY / SUPABASE_DB_URL
+// leaks via `printenv`). Anything not on this list is dropped from the
+// child env unless the caller explicitly injects it via opts.env.
+const SAFE_CHILD_ENV_KEYS = [
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'LANG',
+  'TERM',
+  'SHELL',
+  'TZ',
+  'NODE_ENV',
+  'PWD',
+  'TMPDIR',
+  'CASPER_SHELL_CWD',
+];
+
 // Read-only commands. These are safe to expose to anyone authenticated as
 // a Casper operator. Each entry is the binary name; `shell: '/bin/bash'`
 // then handles the rest of the line, but we validate the FIRST token
@@ -94,33 +115,106 @@ const DENY_PATTERNS: RegExp[] = [
   /\bexec\s+["`'$]/,
 ];
 
-// Strip leading ${VAR}=, command substitution, etc. and pull out the
-// first real binary token.
-function extractBinaryName(command: string): string | null {
-  const trimmed = command.trim();
+// Pull out the first real binary token from a single command segment.
+// Skips leading env-var prefixes like FOO=bar BAR=baz <binary> ...
+// and converts absolute paths to their basename.
+function extractBinaryName(segment: string): string | null {
+  const trimmed = segment.trim();
   if (!trimmed) return null;
 
-  // Reject pure subshells / backtick-wrapped commands at the top level —
-  // we want to be able to evaluate the binary name directly.
   if (trimmed.startsWith('(') || trimmed.startsWith('`') || trimmed.startsWith('$(')) {
     return null;
   }
 
-  // Skip env-var prefixes like FOO=bar BAR=baz <binary> ...
   const tokens = trimmed.split(/\s+/);
   let idx = 0;
   while (idx < tokens.length && /^[A-Z_][A-Z0-9_]*=/i.test(tokens[idx])) {
     idx += 1;
   }
-
   if (idx >= tokens.length) return null;
 
-  // For absolute paths, take the basename.
   const first = tokens[idx];
   if (first.startsWith('/') || first.startsWith('./') || first.includes('/')) {
     return path.basename(first);
   }
   return first;
+}
+
+// Walk the command string and identify command-separation / substitution
+// metacharacters at the top level (i.e. outside quoted regions). Pipes (|)
+// are tracked separately because they are legitimately useful and we will
+// validate each pipe segment's binary individually.
+//
+// Returned `forbidden` is the offending metacharacter, or null if only
+// pipes (or no metas) are present. `pipeSegments` is the command split on
+// top-level pipes (already trimmed).
+function analyzeCommandStructure(command: string): { forbidden: string | null; pipeSegments: string[] } {
+  const segments: string[] = [];
+  let current = '';
+  let i = 0;
+  let single = false;
+  let double = false;
+  let backtick = false;
+  let parenDepth = 0;
+
+  const push = () => {
+    segments.push(current);
+    current = '';
+  };
+
+  while (i < command.length) {
+    const ch = command[i];
+    const next = command[i + 1];
+    const inString = single || double || backtick;
+
+    if (!inString && parenDepth === 0) {
+      // Hard rejects — these are command separators or substitution starts.
+      if (ch === '\n') return { forbidden: 'newline', pipeSegments: [] };
+      if (ch === ';') return { forbidden: ';', pipeSegments: [] };
+      if (ch === '&' && next === '&') return { forbidden: '&&', pipeSegments: [] };
+      if (ch === '|' && next === '|') return { forbidden: '||', pipeSegments: [] };
+      if (ch === '&') return { forbidden: '&', pipeSegments: [] };
+      if (ch === '`') return { forbidden: '`', pipeSegments: [] };
+      if (ch === '$' && next === '(') return { forbidden: '$(', pipeSegments: [] };
+      if (ch === '$' && next === '{') return { forbidden: '${', pipeSegments: [] };
+      if (ch === '<' && next === '(') return { forbidden: '<(', pipeSegments: [] };
+      if (ch === '>' && next === '(') return { forbidden: '>(', pipeSegments: [] };
+      if (ch === '(' && (current.trim() === '' || /[\s|]$/.test(current))) {
+        return { forbidden: '(', pipeSegments: [] };
+      }
+      // Top-level pipe — split here.
+      if (ch === '|') {
+        push();
+        i += 1;
+        continue;
+      }
+    }
+
+    // Track string / paren state. We honour backslash-escapes inside double
+    // quotes the same way bash does so escaped quotes don't flip state.
+    if (!single && !backtick && ch === '\\' && next !== undefined) {
+      current += ch + next;
+      i += 2;
+      continue;
+    }
+    if (!double && !backtick && ch === "'") single = !single;
+    else if (!single && !backtick && ch === '"') double = !double;
+    else if (!single && !double && ch === '`') backtick = !backtick;
+    else if (!single && !double && !backtick) {
+      if (ch === '(') parenDepth += 1;
+      else if (ch === ')') parenDepth = Math.max(0, parenDepth - 1);
+    }
+    current += ch;
+    i += 1;
+  }
+  push();
+
+  if (single || double || backtick) return { forbidden: 'unterminated_quote', pipeSegments: [] };
+
+  return {
+    forbidden: null,
+    pipeSegments: segments.map((s) => s.trim()).filter((s) => s.length > 0),
+  };
 }
 
 export function describeAllowlist(mode: CasperShellMode): { binaries: string[]; denyPatterns: string[] } {
@@ -185,54 +279,79 @@ export async function runCasperShell(
     };
   }
 
-  const binary = extractBinaryName(trimmed);
-  if (!binary) {
+  // Walk the command for shell metacharacters that bypass the allowlist.
+  // The previous version only validated the first token; bash -c was given
+  // the entire string, so `echo hi; sh` slipped through. We now reject ;,
+  // &&, ||, &, backticks, $(, ${, <(, >(, newlines, and unbalanced quotes.
+  // Pipes are allowed — every pipe segment is validated individually.
+  const structure = analyzeCommandStructure(trimmed);
+  if (structure.forbidden) {
+    const reason = `Command rejected: shell metacharacter "${structure.forbidden}" is not permitted (use a single command or piped binaries on the allowlist).`;
     return {
       ok: false,
       command: trimmed,
       exitCode: null,
       signal: null,
       stdout: '',
-      stderr: 'Could not parse a binary name from the command.',
+      stderr: reason,
       durationMs: Date.now() - start,
       truncated: false,
-      reason: 'unparseable_command',
+      reason,
     };
   }
 
+  const segments = structure.pipeSegments.length > 0 ? structure.pipeSegments : [trimmed];
   const allowSet = mode === 'elevated' ? ELEVATED_BINARY_ALLOWLIST : READONLY_BINARY_ALLOWLIST;
-  if (!allowSet.has(binary)) {
-    return {
-      ok: false,
-      command: trimmed,
-      exitCode: null,
-      signal: null,
-      stdout: '',
-      stderr: `Binary "${binary}" is not on the ${mode} allowlist.`,
-      durationMs: Date.now() - start,
-      truncated: false,
-      reason: 'binary_not_allowlisted',
-    };
+  let firstBinary: string | null = null;
+  for (const segment of segments) {
+    const binary = extractBinaryName(segment);
+    if (!binary) {
+      return {
+        ok: false,
+        command: trimmed,
+        exitCode: null,
+        signal: null,
+        stdout: '',
+        stderr: `Could not parse a binary name from segment: ${segment}`,
+        durationMs: Date.now() - start,
+        truncated: false,
+        reason: 'unparseable_command',
+      };
+    }
+    if (!allowSet.has(binary)) {
+      return {
+        ok: false,
+        command: trimmed,
+        exitCode: null,
+        signal: null,
+        stdout: '',
+        stderr: `Binary "${binary}" is not on the ${mode} allowlist.`,
+        durationMs: Date.now() - start,
+        truncated: false,
+        reason: 'binary_not_allowlisted',
+      };
+    }
+    if (!firstBinary) firstBinary = binary;
   }
 
   const cwd = options.cwd ?? defaultCwd();
-  const env = { ...process.env, ...(options.env ?? {}) };
-
-  // Strip secrets that leak the platform's identity to spawned processes
-  // unless the caller explicitly opted in.
-  for (const secret of [
-    'SUPABASE_SERVICE_ROLE_KEY',
-    'OPENAI_API_KEY',
-    'GEMINI_API_KEY',
-    'ANTHROPIC_API_KEY',
-    'AGENT_WEBHOOK_SECRET',
-    'STRIPE_SECRET_KEY',
-    'RUNWAY_API_KEY',
-    'HEYGEN_API_KEY',
-    'LIVEKIT_API_SECRET',
-  ]) {
-    if (!options.env || !(secret in options.env)) {
-      delete env[secret];
+  // Build the child env from an explicit allowlist of safe variables. Any
+  // secret on the parent process (Supabase keys, OpenAI keys, payment
+  // tokens, etc.) is blocked by default — including future env vars added
+  // to the server. Callers can still inject specific values via opts.env.
+  const env: Record<string, string> = {};
+  for (const key of SAFE_CHILD_ENV_KEYS) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  for (const [key, value] of Object.entries(process.env)) {
+    // Allow LC_* locale variables since `LC_*` is a family rather than a
+    // single name. Everything else stays excluded unless explicitly added.
+    if (key.startsWith('LC_') && typeof value === 'string') env[key] = value;
+  }
+  if (options.env) {
+    for (const [key, value] of Object.entries(options.env)) {
+      if (typeof value === 'string') env[key] = value;
     }
   }
 
