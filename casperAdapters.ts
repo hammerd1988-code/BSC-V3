@@ -89,10 +89,23 @@ async function jsonFetch(
       }
     }
     if (!response.ok) {
-      const message = (data && typeof data === 'object' && (data.message || data.error))
-        || (typeof data === 'string' ? data.slice(0, 500) : null)
-        || `Upstream returned ${response.status}`;
-      return { ok: false, status: response.status, data, error: String(message) };
+      // Different providers nest the error message at different paths:
+      //   GitHub:  { message: "..." }
+      //   Notion:  { message: "...", code: "..." }
+      //   Discord: { message: "...", code: ... }
+      //   Slack:   HTTP 200 with { ok: false, error: "..." } — handled separately
+      //   Stripe:  { error: { type, message: "..." } }  ← nested
+      // Stringifying a nested object directly yields "[object Object]", so
+      // we walk the common shapes explicitly.
+      let message: string | null = null;
+      if (data && typeof data === 'object') {
+        if (typeof data.message === 'string') message = data.message;
+        else if (typeof data.error === 'string') message = data.error;
+        else if (data.error && typeof data.error === 'object' && typeof data.error.message === 'string') message = data.error.message;
+      }
+      if (!message && typeof data === 'string') message = data.slice(0, 500);
+      if (!message) message = `Upstream returned ${response.status}`;
+      return { ok: false, status: response.status, data, error: message };
     }
     return { ok: true, status: response.status, data };
   } catch (err: any) {
