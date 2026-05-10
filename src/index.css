@@ -45,6 +45,212 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
   @apply shadow-[0_0_10px_rgba(255,0,0,0.5)];
 }
 
+/* === Login page cyberpunk artwork === */
+
+/* Perspective grid floor that scrolls toward the viewer */
+@keyframes auth-grid-scroll {
+  from { background-position: 0 0; }
+  to   { background-position: 0 80px; }
+}
+
+/* Slow drift for the radial glow blobs */
+@keyframes auth-glow-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.55; }
+  50%      { transform: translate3d(8%, -6%, 0) scale(1.15); opacity: 0.8; }
+}
+@keyframes auth-glow-drift-alt {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1.05); opacity: 0.5; }
+  50%      { transform: translate3d(-10%, 5%, 0) scale(0.9); opacity: 0.75; }
+}
+
+/* Subtle CRT scanline sweep */
+@keyframes auth-scanline-sweep {
+  0%   { transform: translateY(-100%); opacity: 0; }
+  10%  { opacity: 0.5; }
+  100% { transform: translateY(100vh); opacity: 0; }
+}
+
+/* Hero glitch — RGB split offsets */
+@keyframes auth-glitch-r {
+  0%, 92%, 100% { transform: translate(0, 0); opacity: 0.7; }
+  93%           { transform: translate(2px, -1px); }
+  95%           { transform: translate(-1px, 1px); }
+  97%           { transform: translate(1px, 0); }
+}
+@keyframes auth-glitch-b {
+  0%, 92%, 100% { transform: translate(0, 0); opacity: 0.7; }
+  93%           { transform: translate(-2px, 1px); }
+  95%           { transform: translate(1px, -1px); }
+  97%           { transform: translate(-1px, 0); }
+}
+
+/* Drifting data shards in the background */
+@keyframes auth-shard-rise {
+  0%   { transform: translateY(110vh) translateX(0); opacity: 0; }
+  10%  { opacity: 0.6; }
+  90%  { opacity: 0.6; }
+  100% { transform: translateY(-10vh) translateX(20px); opacity: 0; }
+}
+
+/* Pulsing border glow on the auth card */
+@keyframes auth-card-pulse {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(255, 0, 0, 0.35), 0 0 60px -10px rgba(255, 0, 0, 0.45), inset 0 0 30px -10px rgba(255, 0, 0, 0.15); }
+  50%      { box-shadow: 0 0 0 1px rgba(255, 0, 0, 0.6), 0 0 90px -10px rgba(255, 0, 0, 0.7), inset 0 0 30px -10px rgba(255, 0, 0, 0.25); }
+}
+
+/* Corner-bracket ticking */
+@keyframes auth-bracket-tick {
+  0%, 50%, 100% { opacity: 1; }
+  51%, 99%      { opacity: 0.4; }
+}
+
+.auth-stage {
+  background:
+    radial-gradient(ellipse at 50% 110%, rgba(139, 0, 0, 0.45) 0%, transparent 55%),
+    radial-gradient(ellipse at 0% 0%, rgba(80, 0, 0, 0.55) 0%, transparent 50%),
+    radial-gradient(ellipse at 100% 0%, rgba(20, 0, 40, 0.55) 0%, transparent 55%),
+    #050505;
+}
+
+.auth-grid-floor {
+  position: absolute;
+  inset: 50% -25% -25% -25%;
+  background-image:
+    linear-gradient(rgba(255, 0, 0, 0.22) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 0, 0, 0.22) 1px, transparent 1px);
+  background-size: 80px 80px;
+  transform: perspective(700px) rotateX(62deg);
+  transform-origin: top center;
+  animation: auth-grid-scroll 6s linear infinite;
+  mask-image: linear-gradient(to bottom, transparent 0%, black 25%, black 75%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 25%, black 75%, transparent 100%);
+}
+
+.auth-glow-a {
+  position: absolute;
+  width: 60vmax;
+  height: 60vmax;
+  left: -20vmax;
+  top: -20vmax;
+  background: radial-gradient(circle at center, rgba(255, 0, 0, 0.35) 0%, transparent 60%);
+  filter: blur(40px);
+  animation: auth-glow-drift 14s ease-in-out infinite;
+}
+.auth-glow-b {
+  position: absolute;
+  width: 55vmax;
+  height: 55vmax;
+  right: -18vmax;
+  bottom: -22vmax;
+  background: radial-gradient(circle at center, rgba(180, 0, 80, 0.3) 0%, transparent 65%);
+  filter: blur(45px);
+  animation: auth-glow-drift-alt 18s ease-in-out infinite;
+}
+
+.auth-scanlines {
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.025) 0px,
+    rgba(255, 255, 255, 0.025) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  mix-blend-mode: overlay;
+  pointer-events: none;
+}
+
+.auth-scanline-sweep {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 200px;
+  background: linear-gradient(to bottom, transparent 0%, rgba(255, 0, 0, 0.08) 50%, transparent 100%);
+  animation: auth-scanline-sweep 8s linear infinite;
+  pointer-events: none;
+}
+
+.auth-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at center, transparent 30%, rgba(0, 0, 0, 0.7) 90%);
+  pointer-events: none;
+}
+
+.auth-noise {
+  position: absolute;
+  inset: 0;
+  opacity: 0.06;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.6 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+.auth-shard {
+  position: absolute;
+  width: 1px;
+  background: linear-gradient(to bottom, transparent, rgba(255, 60, 60, 0.9), transparent);
+  bottom: -10vh;
+  animation: auth-shard-rise linear infinite;
+  filter: drop-shadow(0 0 6px rgba(255, 0, 0, 0.6));
+}
+
+.auth-hero-glitch {
+  position: relative;
+  display: inline-block;
+  color: #fff;
+  text-shadow: 0 0 24px rgba(255, 0, 0, 0.45);
+}
+.auth-hero-glitch::before,
+.auth-hero-glitch::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.auth-hero-glitch::before {
+  color: #ff2a2a;
+  mix-blend-mode: screen;
+  animation: auth-glitch-r 4s steps(1) infinite;
+}
+.auth-hero-glitch::after {
+  color: #00d0ff;
+  mix-blend-mode: screen;
+  animation: auth-glitch-b 4s steps(1) infinite;
+}
+
+.auth-card {
+  position: relative;
+  background: linear-gradient(180deg, rgba(15, 6, 8, 0.78) 0%, rgba(8, 4, 6, 0.85) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  animation: auth-card-pulse 4.5s ease-in-out infinite;
+}
+
+.auth-bracket {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border-color: rgba(255, 0, 0, 0.85);
+  animation: auth-bracket-tick 2.4s steps(1) infinite;
+  filter: drop-shadow(0 0 6px rgba(255, 0, 0, 0.6));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-grid-floor,
+  .auth-glow-a,
+  .auth-glow-b,
+  .auth-scanline-sweep,
+  .auth-shard,
+  .auth-card,
+  .auth-bracket,
+  .auth-hero-glitch::before,
+  .auth-hero-glitch::after {
+    animation: none !important;
+  }
+}
+
 /* Tiptap Placeholder Styles */
 .ProseMirror p.is-editor-empty:first-child::before {
   color: #6b7280; /* text-gray-500 */

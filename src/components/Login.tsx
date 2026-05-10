@@ -1,7 +1,7 @@
 import React from 'react';
 import { supabase } from '../supabase';
 import type { Session, AuthError } from '@supabase/supabase-js';
-import { BrainCircuit, Loader2, Mail, CheckCircle2 } from 'lucide-react';
+import { Loader2, Mail, CheckCircle2, ArrowRight, Activity, Lock } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 function mapAuthErrorMessage(message: string): string {
@@ -277,117 +277,236 @@ export const Login: React.FC = () => {
     return 'Signing in...';
   }, [authAction]);
 
+  // Stable ping value so it doesn't flicker on every keystroke
+  const pingMs = React.useMemo(() => Math.floor(Math.random() * 90 + 10), []);
+
+  // Pre-computed shard positions/durations so they don't reshuffle on every render
+  const shards = React.useMemo(
+    () =>
+      Array.from({ length: 18 }).map((_, i) => ({
+        left: `${(i * 5.7 + 4) % 100}%`,
+        height: `${20 + ((i * 13) % 40)}px`,
+        duration: `${6 + ((i * 7) % 9)}s`,
+        delay: `${(i * 0.6) % 8}s`,
+        opacity: 0.35 + ((i % 5) * 0.1),
+      })),
+    []
+  );
+
   return (
-    <div className="min-h-screen bg-transparent flex flex-col items-center justify-center p-6">
-      <div className="w-24 h-24 bg-accent/10 rounded-3xl flex items-center justify-center mb-8 border border-accent/20 shadow-[0_0_50px_rgba(255,0,0,0.15)]">
-        <BrainCircuit className="w-12 h-12 text-accent" />
+    <div className="auth-stage relative min-h-screen w-full overflow-hidden flex items-center justify-center p-4 sm:p-6">
+      {/* === Layered cyberpunk backdrop === */}
+      <div className="auth-glow-a" aria-hidden />
+      <div className="auth-glow-b" aria-hidden />
+      <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden>
+        <div className="auth-grid-floor" />
       </div>
-      <h1 className="text-3xl font-black text-white uppercase italic tracking-tighter mb-2">Neural Link</h1>
-      <p className="text-zinc-500 font-bold uppercase tracking-widest text-xs mb-10 text-center max-w-xs leading-relaxed">
-        {shouldFinalizeOAuth
-          ? 'Finalizing secure OAuth handshake...'
-          : 'Establish connection to the global consciousness network.'}
-      </p>
-
-      {/* Google OAuth buttons */}
-      <button
-        onClick={() => { void startGoogleAuth('signin'); }}
-        disabled={isLoggingIn}
-        className="w-full max-w-xs py-4 bg-white text-black rounded-xl text-[10px] font-black uppercase tracking-[0.3em] italic hover:bg-zinc-200 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
-      >
-        {isLoggingIn && (authAction === 'signin' || authAction === 'callback') ? (
-          <>
-            <Loader2 className="w-4 h-4 animate-spin" />
-            {loadingLabel}
-          </>
-        ) : (
-          <>
-            <img src="https://www.google.com/favicon.ico" alt="Google" className="w-4 h-4 grayscale" />
-            Sync via Google
-          </>
-        )}
-      </button>
-
-      <button
-        onClick={() => { void startGoogleAuth('signup'); }}
-        disabled={isLoggingIn}
-        className="mt-3 w-full max-w-xs py-4 border border-zinc-700 text-white rounded-xl text-[10px] font-black uppercase tracking-[0.3em] italic hover:border-zinc-500 hover:bg-zinc-900/40 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
-      >
-        <img src="https://www.google.com/favicon.ico" alt="Google" className="w-4 h-4 grayscale" />
-        Create Account via Google
-      </button>
-
-      {/* Divider */}
-      <div className="w-full max-w-xs flex items-center gap-3 my-6">
-        <div className="flex-1 h-px bg-zinc-800" />
-        <span className="text-zinc-600 text-[10px] font-bold uppercase tracking-widest">or</span>
-        <div className="flex-1 h-px bg-zinc-800" />
+      <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden>
+        {shards.map((s, i) => (
+          <span
+            key={i}
+            className="auth-shard"
+            style={{
+              left: s.left,
+              height: s.height,
+              animationDuration: s.duration,
+              animationDelay: s.delay,
+              opacity: s.opacity,
+            }}
+          />
+        ))}
       </div>
+      <div className="auth-scanlines" aria-hidden />
+      <div className="auth-scanline-sweep" aria-hidden />
+      <div className="auth-noise" aria-hidden />
+      <div className="auth-vignette" aria-hidden />
 
-      {/* Email magic-link section */}
-      {emailSent ? (
-        <div className="w-full max-w-xs flex flex-col items-center gap-3 text-center">
-          <CheckCircle2 className="w-10 h-10 text-green-500" />
-          <p className="text-white font-bold text-sm">Check your inbox</p>
-          <p className="text-zinc-400 text-xs leading-relaxed">
-            A magic link has been sent to <span className="text-white font-mono">{email}</span>.
-            Click it to sign in — no password needed.
-          </p>
-          <button
-            onClick={() => { setEmailSent(false); setEmail(''); }}
-            className="mt-2 text-zinc-500 text-[10px] uppercase tracking-widest hover:text-zinc-300 transition-colors"
-          >
-            Use a different email
-          </button>
+      {/* === Foreground content === */}
+      <div className="relative z-10 w-full max-w-md">
+        {/* Status pill */}
+        <div className="flex items-center justify-center mb-8">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-red-500/30 bg-red-500/10 backdrop-blur-md">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+            </span>
+            <span className="text-[10px] font-black uppercase tracking-[0.3em] text-red-300">
+              Network Online
+            </span>
+          </div>
         </div>
-      ) : (
-        <form onSubmit={(e) => { void sendMagicLink(e); }} className="w-full max-w-xs flex flex-col gap-3">
-          <div className="flex flex-col gap-1">
-            <label htmlFor="email-input" className="text-zinc-500 text-[10px] font-bold uppercase tracking-widest">
-              Email address
-            </label>
-            <input
-              id="email-input"
-              type="email"
-              value={email}
-              onChange={(e) => { setEmail(e.target.value); setEmailError(null); }}
-              placeholder="you@example.com"
-              disabled={isLoggingIn}
-              className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-xl text-white text-sm placeholder-zinc-600 focus:outline-none focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500 transition-all disabled:opacity-50"
-            />
-            {emailError && (
-              <p className="text-red-400 text-[11px] font-mono mt-1">{emailError}</p>
-            )}
+
+        {/* Hero brand — glitched */}
+        <div className="text-center mb-2 select-none">
+          <h1
+            data-text="BLOOD SWEAT CODE"
+            className="auth-hero-glitch text-4xl sm:text-5xl md:text-6xl font-black uppercase italic tracking-tighter leading-none"
+          >
+            BLOOD SWEAT CODE
+          </h1>
+        </div>
+        <div className="flex items-center justify-center gap-3 mb-6">
+          <div className="h-px w-12 bg-gradient-to-r from-transparent to-red-500/70" />
+          <p className="text-zinc-400 font-mono text-[10px] uppercase tracking-[0.4em]">
+            Neural Link Authentication
+          </p>
+          <div className="h-px w-12 bg-gradient-to-l from-transparent to-red-500/70" />
+        </div>
+        <p className="text-center text-zinc-500 font-mono text-[11px] tracking-wide mb-8 max-w-sm mx-auto leading-relaxed">
+          {shouldFinalizeOAuth
+            ? '> finalizing secure oauth handshake...'
+            : '> establishing encrypted channel to the global consciousness network'}
+        </p>
+
+        {/* Auth card with corner brackets */}
+        <div className="auth-card relative rounded-2xl p-6 sm:p-8">
+          {/* Corner brackets */}
+          <span className="auth-bracket -top-1 -left-1 border-t-2 border-l-2 rounded-tl-lg" aria-hidden />
+          <span className="auth-bracket -top-1 -right-1 border-t-2 border-r-2 rounded-tr-lg" aria-hidden />
+          <span className="auth-bracket -bottom-1 -left-1 border-b-2 border-l-2 rounded-bl-lg" aria-hidden />
+          <span className="auth-bracket -bottom-1 -right-1 border-b-2 border-r-2 rounded-br-lg" aria-hidden />
+
+          {/* Card header */}
+          <div className="flex items-center justify-between mb-6 pb-4 border-b border-white/5">
+            <div className="flex items-center gap-2">
+              <Lock className="w-3.5 h-3.5 text-red-400" />
+              <span className="text-[10px] font-mono uppercase tracking-[0.3em] text-zinc-400">
+                Secure Channel
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Activity className="w-3 h-3 text-red-400 animate-pulse" />
+              <span className="text-[9px] font-mono text-red-300/80">
+                {pingMs}ms
+              </span>
+            </div>
           </div>
 
+          {/* Google OAuth — primary */}
           <button
-            type="submit"
-            disabled={isLoggingIn || !email.trim()}
-            className="w-full py-4 bg-zinc-800 text-white rounded-xl text-[10px] font-black uppercase tracking-[0.3em] italic hover:bg-zinc-700 transition-all flex items-center justify-center gap-3 disabled:opacity-50 border border-zinc-700"
+            onClick={() => { void startGoogleAuth('signin'); }}
+            disabled={isLoggingIn}
+            className="group relative w-full py-4 bg-white text-black rounded-xl text-[10px] font-black uppercase tracking-[0.3em] italic hover:bg-zinc-100 transition-all flex items-center justify-center gap-3 disabled:opacity-50 overflow-hidden shadow-[0_0_30px_-8px_rgba(255,255,255,0.4)] hover:shadow-[0_0_40px_-4px_rgba(255,0,0,0.5)]"
           >
-            {isLoggingIn && authAction === 'magic' ? (
+            <span className="absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-700 bg-gradient-to-r from-transparent via-red-500/20 to-transparent" />
+            {isLoggingIn && (authAction === 'signin' || authAction === 'callback') ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
                 {loadingLabel}
               </>
             ) : (
               <>
-                <Mail className="w-4 h-4" />
-                Send Magic Link
+                <img src="https://www.google.com/favicon.ico" alt="" className="w-4 h-4 grayscale" />
+                <span>Sync via Google</span>
+                <ArrowRight className="w-3.5 h-3.5 opacity-60 group-hover:translate-x-0.5 group-hover:opacity-100 transition-all" />
               </>
             )}
           </button>
-          <p className="text-zinc-600 text-[10px] text-center leading-relaxed">
-            We'll email you a one-click sign-in link. No password required.
-          </p>
-        </form>
-      )}
 
-      {loginError && (
-        <p className="mt-4 max-w-xs text-center text-[11px] text-red-400 font-mono break-words">
-          {loginError}
-        </p>
-      )}
+          {/* Google OAuth — signup secondary */}
+          <button
+            onClick={() => { void startGoogleAuth('signup'); }}
+            disabled={isLoggingIn}
+            className="group mt-3 w-full py-4 border border-red-500/30 bg-red-500/5 text-white rounded-xl text-[10px] font-black uppercase tracking-[0.3em] italic hover:border-red-500/60 hover:bg-red-500/10 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
+          >
+            <img src="https://www.google.com/favicon.ico" alt="" className="w-4 h-4 grayscale opacity-80" />
+            <span>Create Account via Google</span>
+            <ArrowRight className="w-3.5 h-3.5 opacity-60 group-hover:translate-x-0.5 group-hover:opacity-100 transition-all" />
+          </button>
+
+          {/* Divider */}
+          <div className="flex items-center gap-3 my-6">
+            <div className="flex-1 h-px bg-gradient-to-r from-transparent via-red-500/30 to-transparent" />
+            <span className="text-zinc-500 text-[10px] font-mono uppercase tracking-[0.3em]">
+              alt::route
+            </span>
+            <div className="flex-1 h-px bg-gradient-to-r from-transparent via-red-500/30 to-transparent" />
+          </div>
+
+          {/* Magic-link form */}
+          {emailSent ? (
+            <div className="flex flex-col items-center gap-3 text-center py-2">
+              <div className="relative">
+                <div className="absolute inset-0 bg-green-500/30 blur-xl rounded-full" />
+                <CheckCircle2 className="relative w-10 h-10 text-green-400" />
+              </div>
+              <p className="text-white font-black uppercase tracking-widest text-sm">Transmission Sent</p>
+              <p className="text-zinc-400 text-xs leading-relaxed font-mono">
+                Magic link dispatched to <span className="text-red-300">{email}</span>.
+                <br />Open it to complete the handshake.
+              </p>
+              <button
+                onClick={() => { setEmailSent(false); setEmail(''); }}
+                className="mt-2 text-zinc-500 text-[10px] uppercase tracking-[0.3em] hover:text-red-300 transition-colors"
+              >
+                Use a different email
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={(e) => { void sendMagicLink(e); }} className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="email-input" className="text-zinc-500 text-[10px] font-mono uppercase tracking-[0.3em]">
+                  &gt; identifier::email
+                </label>
+                <div className="relative group">
+                  <input
+                    id="email-input"
+                    type="email"
+                    value={email}
+                    onChange={(e) => { setEmail(e.target.value); setEmailError(null); }}
+                    placeholder="operator@network.io"
+                    disabled={isLoggingIn}
+                    className="w-full px-4 py-3 bg-black/60 border border-red-500/20 rounded-lg text-white text-sm placeholder-zinc-600 font-mono focus:outline-none focus:border-red-500/70 focus:ring-1 focus:ring-red-500/50 focus:bg-black/80 transition-all disabled:opacity-50"
+                  />
+                  <div className="pointer-events-none absolute inset-0 rounded-lg opacity-0 group-focus-within:opacity-100 transition-opacity shadow-[0_0_25px_-4px_rgba(255,0,0,0.5)]" />
+                </div>
+                {emailError && (
+                  <p className="text-red-400 text-[11px] font-mono mt-1">! {emailError}</p>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                disabled={isLoggingIn || !email.trim()}
+                className="group relative w-full py-4 bg-gradient-to-r from-red-700 via-red-600 to-red-700 text-white rounded-xl text-[10px] font-black uppercase tracking-[0.3em] italic hover:from-red-600 hover:via-red-500 hover:to-red-600 transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_25px_-8px_rgba(255,0,0,0.7)] hover:shadow-[0_0_35px_-4px_rgba(255,0,0,0.8)] overflow-hidden"
+              >
+                <span className="absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-700 bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+                {isLoggingIn && authAction === 'magic' ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    {loadingLabel}
+                  </>
+                ) : (
+                  <>
+                    <Mail className="w-4 h-4" />
+                    <span>Transmit Magic Link</span>
+                  </>
+                )}
+              </button>
+              <p className="text-zinc-500 text-[10px] text-center leading-relaxed font-mono">
+                One-click sign-in dispatch. No password required.
+              </p>
+            </form>
+          )}
+
+          {loginError && (
+            <div className="mt-4 px-3 py-2 border border-red-500/40 bg-red-500/10 rounded-lg">
+              <p className="text-center text-[11px] text-red-300 font-mono break-words">
+                ! {loginError}
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Footer signature */}
+        <div className="mt-6 flex items-center justify-center gap-4 text-[9px] font-mono uppercase tracking-[0.3em] text-zinc-600">
+          <span>v3.0</span>
+          <span className="w-1 h-1 rounded-full bg-zinc-700" />
+          <span>encrypted::tls</span>
+          <span className="w-1 h-1 rounded-full bg-zinc-700" />
+          <span>node::001</span>
+        </div>
+      </div>
     </div>
   );
 };
