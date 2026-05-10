@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { randomUUID } from 'crypto';
 import { generateServerText, isServerAiConfigured } from './serverAi.js';
 
 const PLATFORM_DEFAULT_MODEL = process.env.CASPER_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
@@ -422,6 +423,89 @@ async function logActivity(supabase: SupabaseClient, input: {
   await supabase.from('casper_activity_log').insert(row);
 }
 
+function buildSubagentSystemPrompt(parentObjective: string, sharedSystem: string) {
+  return `${sharedSystem}
+
+You are now operating as a Casper sub-agent — a focused parallel worker spawned to complete ONE specific objective in the context of a larger parent directive.
+
+Parent directive (for context only — do not re-do the whole thing):
+${parentObjective}
+
+Your scope:
+- Complete only your specific objective.
+- Stay tight: no preamble, no apologies, no "I will…" — just the deliverable.
+- If the objective is content-creation work (caption, thumbnail concept, script, hook, post body, schedule plan, stream rundown, ad copy, SEO title, etc.), produce the actual deliverable, ready to use, not a plan to make it.
+- If the objective is engineering work (code, query, migration, config), produce the actual artifact in a fenced code block with the right language tag.
+- If the objective is research / analysis, produce the analysis with concrete numbers, sources, or named entities — no hand-waving.
+- Cap your output at ~400 tokens unless the objective inherently needs more (e.g. a long script).
+
+Return only the deliverable. The parent task will compose your output with the other sub-agents' outputs.`;
+}
+
+function splitObjectivesServer(prompt: string): string[] {
+  return prompt
+    .split(/(?:,|\band\b|\bthen\b|\n)/i)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 8)
+    .slice(0, 8);
+}
+
+const SUBAGENT_DEFAULT_TIMEOUT_MS = 60_000;
+// Must stay in sync with the client-side splitObjectives slice in
+// src/components/CasperContentManager.tsx. If we silently dropped objectives
+// past this cap, optimistic rows would render but the work never happens.
+export const SUBAGENT_MAX_PARALLEL = 8;
+
+async function runSubagentObjective(
+  supabase: SupabaseClient,
+  rowId: string,
+  objective: string,
+  parentObjective: string,
+  sharedSystem: string,
+  cognitiveCore: Record<string, any>,
+): Promise<{ ok: boolean; result: string; provider?: string; model?: string }> {
+  // Mark working — best effort, don't block on failure.
+  await supabase
+    .from('casper_subagents')
+    .update({ status: 'working' })
+    .eq('id', rowId);
+
+  try {
+    const systemPrompt = buildSubagentSystemPrompt(parentObjective, sharedSystem);
+    const execution = await Promise.race([
+      callOpenAICompatible({ prompt: objective, systemPrompt, cognitiveCore }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('subagent_timeout')), SUBAGENT_DEFAULT_TIMEOUT_MS),
+      ),
+    ]);
+
+    const text = (execution.text || '').trim() || 'Sub-agent returned an empty response.';
+    await supabase
+      .from('casper_subagents')
+      .update({
+        status: 'completed',
+        result: text,
+        completed_at: new Date().toISOString(),
+      })
+      .eq('id', rowId);
+    return { ok: true, result: text, provider: execution.provider, model: execution.model };
+  } catch (error: any) {
+    const message = error?.message === 'subagent_timeout'
+      ? `Sub-agent timed out after ${SUBAGENT_DEFAULT_TIMEOUT_MS / 1000}s on: ${objective}`
+      : `Sub-agent failed: ${error?.message || String(error)}`;
+    console.error('[casper-control:subagent]', message);
+    await supabase
+      .from('casper_subagents')
+      .update({
+        status: 'failed',
+        result: message,
+        completed_at: new Date().toISOString(),
+      })
+      .eq('id', rowId);
+    return { ok: false, result: message };
+  }
+}
+
 async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any, input: CasperCommandInput) {
   const command = input.command.trim();
   const userId = isUuid(input.userId) ? input.userId : null;
@@ -825,6 +909,119 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
     } catch (error: any) {
       console.error('[casper-control:command]', error);
       res.status(500).json({ success: false, error: error.message || 'Casper command execution failed.' });
+    }
+  });
+
+  // Spawn real Casper sub-agents. Each objective is sent to the same
+  // OpenAI-compatible LLM as /api/casper/command but with a tighter
+  // sub-agent system prompt scoped to a single deliverable. Sub-agents
+  // run in parallel (capped at SUBAGENT_MAX_PARALLEL) and their rows
+  // in casper_subagents are updated in real-time so the UI's existing
+  // postgres_changes subscription animates the tree without any
+  // additional client wiring.
+  app.post('/api/casper/subagents/spawn', async (req, res) => {
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+      const body = req.body ?? {};
+      const parentPrompt = String(body.parentPrompt || body.prompt || '').trim();
+      const explicitObjectives = Array.isArray(body.objectives)
+        ? body.objectives.map((o: unknown) => String(o || '').trim()).filter((o: string) => o.length > 0)
+        : [];
+
+      if (!parentPrompt && explicitObjectives.length === 0) {
+        return res.status(400).json({ success: false, error: 'A parent prompt or objectives array is required.' });
+      }
+
+      const objectives = explicitObjectives.length > 0
+        ? explicitObjectives.slice(0, SUBAGENT_MAX_PARALLEL)
+        : (() => {
+            const split = splitObjectivesServer(parentPrompt);
+            return (split.length > 0 ? split : [parentPrompt]).slice(0, SUBAGENT_MAX_PARALLEL);
+          })();
+
+      const parentTaskId = String(body.parentTaskId || '').trim() || randomUUID();
+
+      // Insert all queued rows up front so the UI sees them immediately
+      // via the existing realtime subscription on casper_subagents.
+      const rowsToInsert = objectives.map((objective) => ({
+        parent_task_id: parentTaskId,
+        user_id: profile.id,
+        objective,
+        status: 'queued' as const,
+      }));
+
+      const { data: insertedRaw, error: insertError } = await supabase
+        .from('casper_subagents')
+        .insert(rowsToInsert)
+        .select('*');
+
+      if (insertError) {
+        console.error('[casper-control:subagents] insert failed:', insertError);
+        return res.status(500).json({ success: false, error: insertError.message || 'Failed to insert sub-agent rows.' });
+      }
+
+      const inserted = (insertedRaw ?? []) as Array<{
+        id: string;
+        objective: string;
+        parent_task_id: string;
+      }>;
+
+      // Build the shared LLM context once — sub-agents share the same
+      // cognitive core, memory, and integration awareness as the parent.
+      const cognitiveCore = await fetchCognitiveCore(supabase);
+      const sharedSystem = await buildCasperSystemPrompt(supabase, casperMemory, profile.id);
+
+      // Fan out in parallel. The whole batch runs on this request, but
+      // each sub-agent updates its row as it progresses, so the UI
+      // animates without waiting for the response.
+      const settled = await Promise.all(
+        inserted.map((row) =>
+          runSubagentObjective(
+            supabase,
+            row.id,
+            row.objective,
+            parentPrompt || objectives.join(' / '),
+            sharedSystem,
+            cognitiveCore,
+          ).catch((err) => ({
+            ok: false,
+            result: `Sub-agent crashed: ${err?.message || String(err)}`,
+          })),
+        ),
+      );
+
+      // Best-effort: log a single activity entry for the parent fan-out.
+      try {
+        await logActivity(supabase, {
+          action_type: 'subagents_spawned',
+          description: `Casper spawned ${inserted.length} sub-agent${inserted.length === 1 ? '' : 's'}: ${objectives.map((o) => o.slice(0, 60)).join(' | ').slice(0, 480)}`,
+          actor_id: profile.id,
+          metadata: {
+            parent_task_id: parentTaskId,
+            objective_count: inserted.length,
+            successes: settled.filter((s) => s.ok).length,
+            failures: settled.filter((s) => !s.ok).length,
+          },
+        });
+      } catch (logErr) {
+        console.warn('[casper-control:subagents] activity log skipped:', logErr);
+      }
+
+      res.json({
+        success: true,
+        parentTaskId,
+        objectives,
+        results: inserted.map((row, idx) => ({
+          id: row.id,
+          objective: row.objective,
+          status: settled[idx]?.ok ? 'completed' : 'failed',
+          result: settled[idx]?.result ?? '',
+        })),
+      });
+    } catch (error: any) {
+      console.error('[casper-control:subagents-spawn]', error);
+      res.status(500).json({ success: false, error: error.message || 'Sub-agent spawn failed.' });
     }
   });
 
