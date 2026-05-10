@@ -1777,13 +1777,79 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       // the whole fan-out runs on the user's chosen LLM (e.g. their
       // OpenRouter key) rather than splitting the parent across the
       // user's provider but billing the platform for the children.
-      // Strip any local endpoint here — sub-agents currently run
-      // server-side (Promise.all fan-out below), so a local endpoint
-      // would either fail with ECONNREFUSED or, worse, send the
-      // user's prompt to whatever is on the server's loopback
-      // interface (SSRF). Fall back to the platform default for
-      // local-LLM users until sub-agents support browser-side fan-out.
-      const userSettings = sanitizeUserSettingsForServer(await loadUserAiSettings(supabase, profile.id));
+      const rawUserSettings = await loadUserAiSettings(supabase, profile.id);
+
+      // ---- Local-LLM fan-out: defer to browser ----
+      //
+      // When the user has configured a local LLM (LM Studio / Ollama
+      // / etc.), the server can't reach localhost on the user's box.
+      // We park each sub-agent row at status='awaiting_client', return
+      // a per-row clientExecution descriptor, and the browser runs
+      // them in parallel against its localhost endpoint and POSTs
+      // each result back to /api/casper/subagents/:id/complete-client-execution.
+      //
+      // This keeps the entire fan-out on the user's hardware — no
+      // platform tokens spent — while preserving the audit trail
+      // (one row per sub-agent, status updated as each completes).
+      if (isLocalEndpoint(rawUserSettings.endpoint)) {
+        const parentObjectiveString = parentPrompt || objectives.join(' / ');
+        // Mark all rows awaiting_client so the realtime subscription
+        // shows them in the right state on the UI's tree view.
+        await supabase
+          .from('casper_subagents')
+          .update({ status: 'awaiting_client' })
+          .in('id', inserted.map((r) => r.id));
+
+        const clientExecutions = inserted.map((row) => ({
+          subagentId: row.id,
+          ...buildClientExecutionPayload(
+            row.id,
+            row.objective,
+            buildSubagentSystemPrompt(parentObjectiveString, sharedSystem),
+            cognitiveCore,
+            rawUserSettings,
+          ),
+        }));
+
+        try {
+          await logActivity(supabase, {
+            action_type: 'subagents_spawned',
+            description: `Casper deferred ${inserted.length} sub-agent${inserted.length === 1 ? '' : 's'} to local LLM (${rawUserSettings.endpoint}): ${objectives.map((o) => o.slice(0, 60)).join(' | ').slice(0, 480)}`,
+            actor_id: profile.id,
+            metadata: {
+              parent_task_id: parentTaskId,
+              objective_count: inserted.length,
+              endpoint: rawUserSettings.endpoint,
+              client_execution: true,
+            },
+          });
+        } catch (logErr) {
+          console.warn('[casper-control:subagents] activity log skipped:', logErr);
+        }
+
+        return res.json({
+          success: true,
+          parentTaskId,
+          objectives,
+          deferredExecution: true as const,
+          clientExecutions,
+          // Existing field for back-compat — UI initializes the
+          // sub-agent tree with awaiting_client rows.
+          results: inserted.map((row) => ({
+            id: row.id,
+            objective: row.objective,
+            status: 'awaiting_client' as const,
+            result: '',
+          })),
+        });
+      }
+
+      // ---- Server-side fan-out (default: cloud / platform LLM) ----
+      // Strip any local endpoint here as a safety belt — at this
+      // point isLocalEndpoint() returned false, but if a user
+      // somehow has a partially-configured local endpoint we fall
+      // through to the platform default rather than risk SSRF.
+      const userSettings = sanitizeUserSettingsForServer(rawUserSettings);
 
       // Fan out in parallel. The whole batch runs on this request, but
       // each sub-agent updates its row as it progresses, so the UI
@@ -1894,12 +1960,65 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       // original — otherwise the parent runs on the user's OpenRouter
       // key but the follow-up silently falls back to the platform's
       // Gemini, which is jarring (different voice, different style).
-      // Strip any local endpoint here for the same reason as the
-      // sub-agent spawn handler: this endpoint executes server-side
-      // and can't reach the user's machine. Local-LLM follow-ups
-      // gracefully fall back to the platform default until
-      // browser-side follow-up execution is implemented.
-      const userSettings = sanitizeUserSettingsForServer(await loadUserAiSettings(supabase, profile.id));
+      const rawUserSettings = await loadUserAiSettings(supabase, profile.id);
+
+      // ---- Local-LLM follow-up: defer to browser ----
+      //
+      // When the user has a local endpoint configured, we can't call
+      // it from the server. Return a clientExecution descriptor and
+      // a token the browser can use to POST the answer back to
+      // /api/casper/tasks/:id/followup/complete-client-execution
+      // (which appends to the task's followups[] history).
+      //
+      // We pre-record the pending follow-up question on the task's
+      // metadata so the audit trail captures it even if the browser
+      // never POSTs back (lost connection, page reload, etc.).
+      if (isLocalEndpoint(rawUserSettings.endpoint)) {
+        const pendingId = randomUUID();
+        const pending = (task.metadata as any)?.pending_followups;
+        const pendingList = Array.isArray(pending) ? pending : [];
+        pendingList.push({ id: pendingId, question: question.trim(), at: new Date().toISOString() });
+
+        await supabase
+          .from('casper_tasks')
+          .update({
+            metadata: {
+              ...(task.metadata ?? {}),
+              pending_followups: pendingList,
+            },
+          })
+          .eq('id', taskId);
+
+        const clientExecution = buildClientExecutionPayload(
+          // taskId is the parent task; the follow-up isn't its own
+          // row, so we send the parent id and rely on `pendingId` in
+          // the completion payload to disambiguate.
+          taskId,
+          followupPrompt,
+          systemPrompt,
+          cognitiveCore,
+          rawUserSettings,
+        );
+
+        await logActivity(supabase, {
+          action_type: 'task_followup_deferred',
+          description: `Casper deferred follow-up to local LLM (${rawUserSettings.endpoint}) on mission "${task.title}": ${question.trim().slice(0, 120)}`,
+          actor_id: profile.id,
+          task_id: taskId,
+          metadata: { endpoint: rawUserSettings.endpoint, pending_id: pendingId, client_execution: true },
+        });
+
+        return res.json({
+          success: true,
+          taskId,
+          deferredExecution: true as const,
+          followupId: pendingId,
+          clientExecution,
+        });
+      }
+
+      // ---- Server-side follow-up (default: cloud / platform LLM) ----
+      const userSettings = sanitizeUserSettingsForServer(rawUserSettings);
       const execution = await callOpenAICompatible({ prompt: followupPrompt, systemPrompt, cognitiveCore, userSettings });
 
       const history = Array.isArray(task.metadata?.followups) ? task.metadata.followups : [];
@@ -1925,6 +2044,168 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
     } catch (error: any) {
       console.error('[casper-control:task-followup]', error);
       res.status(500).json({ success: false, error: error.message || 'Unable to process follow-up.' });
+    }
+  });
+
+  // Companion to /api/casper/subagents/spawn for local-LLM users.
+  // The browser POSTs each sub-agent's local-LLM result here so the
+  // server can update the row and the realtime subscription can
+  // animate the sub-agent tree the same way it does for server-side
+  // fan-out.
+  app.post('/api/casper/subagents/:id/complete-client-execution', async (req, res) => {
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+      const subagentId = req.params.id;
+      const { response, model, error: clientError, durationMs } = req.body ?? {};
+
+      const { data: row, error: rowError } = await supabase
+        .from('casper_subagents')
+        .select('id, user_id, status, objective')
+        .eq('id', subagentId)
+        .maybeSingle();
+      if (rowError || !row) {
+        return res.status(404).json({ success: false, error: 'Sub-agent not found.' });
+      }
+      if (row.user_id !== profile.id && profile.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'You can only complete your own sub-agents.' });
+      }
+      if (row.status !== 'awaiting_client') {
+        return res.status(409).json({ success: false, error: `Sub-agent is not awaiting client execution (status=${row.status}).` });
+      }
+
+      const completedAt = new Date().toISOString();
+      if (clientError) {
+        const errorMessage = String(clientError).slice(0, 1000);
+        await supabase
+          .from('casper_subagents')
+          .update({ status: 'failed', result: errorMessage, completed_at: completedAt })
+          .eq('id', subagentId);
+        return res.json({ success: true, id: subagentId, status: 'failed' });
+      }
+
+      const text = typeof response === 'string' && response.trim().length > 0
+        ? response.trim()
+        : 'Local LLM returned an empty sub-agent response.';
+      await supabase
+        .from('casper_subagents')
+        .update({ status: 'completed', result: text, completed_at: completedAt })
+        .eq('id', subagentId);
+
+      // Best-effort: durationMs and model live only in activity log;
+      // the row schema is intentionally narrow so we don't migrate
+      // it here.
+      try {
+        await logActivity(supabase, {
+          action_type: 'subagent_completed_client',
+          description: `Sub-agent completed locally: ${row.objective.slice(0, 120)}`,
+          actor_id: profile.id,
+          metadata: {
+            subagent_id: subagentId,
+            model: typeof model === 'string' ? model.slice(0, 100) : null,
+            client_duration_ms: typeof durationMs === 'number' ? durationMs : null,
+          },
+        });
+      } catch (logErr) {
+        console.warn('[casper-control:subagent-complete] activity log skipped:', logErr);
+      }
+
+      return res.json({ success: true, id: subagentId, status: 'completed', result: text });
+    } catch (error: any) {
+      console.error('[casper-control:subagent-complete]', error);
+      return res.status(500).json({ success: false, error: error?.message || 'Failed to record sub-agent client execution.' });
+    }
+  });
+
+  // Companion to /api/casper/tasks/:id/followup for local-LLM users.
+  // The browser POSTs the local-LLM follow-up answer here so we can
+  // append it to the task's followups[] history (the same shape the
+  // server-side follow-up writes), and also clear the matching entry
+  // from pending_followups[].
+  app.post('/api/casper/tasks/:id/followup/complete-client-execution', async (req, res) => {
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+      const taskId = req.params.id;
+      const { followupId, response, model, error: clientError, durationMs } = req.body ?? {};
+      if (!followupId || typeof followupId !== 'string') {
+        return res.status(400).json({ success: false, error: 'followupId is required.' });
+      }
+
+      const { data: task, error: taskError } = await supabase
+        .from('casper_tasks')
+        .select('id, created_by, metadata, title, result')
+        .eq('id', taskId)
+        .maybeSingle();
+      if (taskError || !task) {
+        return res.status(404).json({ success: false, error: 'Casper task not found.' });
+      }
+      if (task.created_by !== profile.id && profile.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'You can only complete your own Casper task follow-ups.' });
+      }
+
+      const meta = (task.metadata ?? {}) as Record<string, any>;
+      const pendingList: Array<{ id: string; question: string; at: string }> = Array.isArray(meta.pending_followups) ? meta.pending_followups : [];
+      const pending = pendingList.find((p) => p.id === followupId);
+      if (!pending) {
+        return res.status(404).json({ success: false, error: 'No pending follow-up matches this followupId.' });
+      }
+      const remainingPending = pendingList.filter((p) => p.id !== followupId);
+
+      const completedAt = new Date().toISOString();
+      if (clientError) {
+        const errorMessage = String(clientError).slice(0, 1000);
+        await supabase
+          .from('casper_tasks')
+          .update({
+            metadata: {
+              ...meta,
+              pending_followups: remainingPending,
+              last_followup_error: errorMessage,
+              last_followup_error_at: completedAt,
+            },
+          })
+          .eq('id', taskId);
+        return res.json({ success: true, taskId, status: 'failed', error: errorMessage });
+      }
+
+      const text = typeof response === 'string' && response.trim().length > 0
+        ? response.trim()
+        : 'Local LLM returned an empty follow-up response.';
+      const history = Array.isArray(meta.followups) ? meta.followups : [];
+      history.push({ question: pending.question, answer: text, at: completedAt });
+
+      await supabase
+        .from('casper_tasks')
+        .update({
+          result: text,
+          metadata: {
+            ...meta,
+            original_result: meta.original_result ?? task.result,
+            followups: history,
+            pending_followups: remainingPending,
+            last_followup_at: completedAt,
+          },
+        })
+        .eq('id', taskId);
+
+      await logActivity(supabase, {
+        action_type: 'task_followup',
+        description: `Local follow-up on mission "${task.title}": ${pending.question.slice(0, 120)}`,
+        actor_id: profile.id,
+        task_id: taskId,
+        metadata: {
+          provider: 'client-local',
+          model: typeof model === 'string' ? model.slice(0, 100) : null,
+          client_duration_ms: typeof durationMs === 'number' ? durationMs : null,
+          source: 'client',
+        },
+      });
+
+      return res.json({ success: true, taskId, status: 'completed', response: text, provider: 'client-local', model: typeof model === 'string' ? model : 'local-llm' });
+    } catch (error: any) {
+      console.error('[casper-control:task-followup-complete]', error);
+      return res.status(500).json({ success: false, error: error?.message || 'Failed to record local follow-up.' });
     }
   });
 
