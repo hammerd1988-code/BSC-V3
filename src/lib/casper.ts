@@ -38,7 +38,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
 export interface SubagentResult {
   id: string;
   objective: string;
-  status: 'queued' | 'working' | 'completed' | 'failed';
+  status: 'queued' | 'working' | 'awaiting_client' | 'completed' | 'failed';
   result: string;
 }
 
@@ -46,6 +46,19 @@ export interface SubagentSpawnResponse {
   success: true;
   parentTaskId: string;
   objectives: string[];
+  results: SubagentResult[];
+}
+
+// Sent back from the server when the user has a local LLM endpoint
+// configured. Each entry in clientExecutions is identical in shape to
+// the directive ClientExecutionDescriptor + a `subagentId` so the
+// browser can POST each result back to the right row.
+interface DeferredSubagentSpawnResponse {
+  success: true;
+  parentTaskId: string;
+  objectives: string[];
+  deferredExecution: true;
+  clientExecutions: Array<ClientExecutionDescriptor & { subagentId: string }>;
   results: SubagentResult[];
 }
 
@@ -60,7 +73,78 @@ export async function spawnCasperSubagents(input: {
     headers,
     body: JSON.stringify(input),
   });
-  return parseResponse<SubagentSpawnResponse>(response);
+  const initial = await parseResponse<SubagentSpawnResponse | DeferredSubagentSpawnResponse>(response);
+
+  if ('deferredExecution' in initial && initial.deferredExecution && Array.isArray(initial.clientExecutions)) {
+    // Fan out to local LLM in parallel. Each sub-agent posts its
+    // result back to the matching row independently. We don't fail
+    // the whole batch on a single sub-agent error — the row is
+    // marked failed and the others continue.
+    const completed = await Promise.all(
+      initial.clientExecutions.map(async (desc) => {
+        const startedAt = Date.now();
+        try {
+          const text = await runDirectiveOnLocalLLM(desc);
+          return reportSubagentClientExecution(desc.subagentId, {
+            response: text,
+            model: desc.model,
+            durationMs: Date.now() - startedAt,
+          });
+        } catch (err: any) {
+          const message = err?.message || String(err);
+          try {
+            await reportSubagentClientExecution(desc.subagentId, {
+              error: message,
+              durationMs: Date.now() - startedAt,
+            });
+          } catch {
+            // already in error path; nothing to do
+          }
+          return { id: desc.subagentId, status: 'failed' as const, result: message };
+        }
+      }),
+    );
+
+    // Adapt the deferred response into the normal SubagentSpawnResponse
+    // shape so callers don't need to know whether the execution ran
+    // server-side or client-side.
+    return {
+      success: true,
+      parentTaskId: initial.parentTaskId,
+      objectives: initial.objectives,
+      results: initial.clientExecutions.map((desc) => {
+        const c = completed.find((cr) => cr.id === desc.subagentId);
+        return {
+          id: desc.subagentId,
+          objective: desc.prompt,
+          status: c?.status === 'completed' ? 'completed' : 'failed',
+          result: c?.result ?? '',
+        };
+      }),
+    };
+  }
+
+  return initial as SubagentSpawnResponse;
+}
+
+// Companion to /api/casper/subagents/:id/complete-client-execution.
+// Posts a single sub-agent's local-LLM result so the row gets updated.
+async function reportSubagentClientExecution(
+  subagentId: string,
+  result: { response: string; model: string; durationMs: number } | { error: string; durationMs: number },
+): Promise<{ id: string; status: 'completed' | 'failed'; result: string }> {
+  const headers = await authHeaders();
+  const response = await fetch(`${apiBaseUrl()}/api/casper/subagents/${encodeURIComponent(subagentId)}/complete-client-execution`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(result),
+  });
+  const payload = await parseResponse<{ success: true; id: string; status: 'completed' | 'failed'; result?: string; error?: string }>(response);
+  return {
+    id: payload.id,
+    status: payload.status,
+    result: payload.result ?? payload.error ?? '',
+  };
 }
 
 // Casper UI surfaces — each one swaps in a different persona module on
@@ -282,6 +366,95 @@ export async function sendCasperCommand(input: {
   }
 
   return initial as CasperCommandResponse;
+}
+
+export interface CasperFollowupResponse {
+  success: true;
+  response: string;
+  provider: string;
+  model: string;
+}
+
+interface DeferredCasperFollowupResponse {
+  success: true;
+  taskId: string;
+  deferredExecution: true;
+  followupId: string;
+  clientExecution: ClientExecutionDescriptor;
+}
+
+// Send a follow-up question on a completed Casper task. Like
+// sendCasperCommand, transparently handles the local-LLM deferred
+// execution path so callers get a uniform response shape regardless
+// of whether the follow-up ran on the server's cloud LLM or the
+// user's local LM Studio / Ollama.
+export async function sendCasperFollowup(input: {
+  taskId: string;
+  question: string;
+}): Promise<CasperFollowupResponse> {
+  const headers = await authHeaders();
+  const response = await fetch(`${apiBaseUrl()}/api/casper/tasks/${encodeURIComponent(input.taskId)}/followup`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ question: input.question }),
+  });
+  const initial = await parseResponse<CasperFollowupResponse | DeferredCasperFollowupResponse>(response);
+
+  if ('deferredExecution' in initial && initial.deferredExecution && initial.clientExecution) {
+    const desc = initial.clientExecution;
+    const startedAt = Date.now();
+    try {
+      const text = await runDirectiveOnLocalLLM(desc);
+      const completed = await reportFollowupClientExecution(input.taskId, {
+        followupId: initial.followupId,
+        response: text,
+        model: desc.model,
+        durationMs: Date.now() - startedAt,
+      });
+      return {
+        success: true,
+        response: completed.response ?? text,
+        provider: completed.provider ?? 'client-local',
+        model: completed.model ?? desc.model,
+      };
+    } catch (err: any) {
+      const message = err?.message || String(err);
+      try {
+        await reportFollowupClientExecution(input.taskId, {
+          followupId: initial.followupId,
+          error: message,
+          durationMs: Date.now() - startedAt,
+        });
+      } catch {
+        // already in error path
+      }
+      const wrapped = new Error(
+        `Local LLM follow-up failed (${desc.endpoint}): ${message}. Make sure your local LLM server is running and CORS is enabled.`,
+      ) as Error & { cause?: unknown };
+      wrapped.cause = err;
+      throw wrapped;
+    }
+  }
+
+  return initial as CasperFollowupResponse;
+}
+
+async function reportFollowupClientExecution(
+  taskId: string,
+  result:
+    | { followupId: string; response: string; model: string; durationMs: number }
+    | { followupId: string; error: string; durationMs: number },
+): Promise<{ response?: string; provider?: string; model?: string }> {
+  const headers = await authHeaders();
+  const response = await fetch(
+    `${apiBaseUrl()}/api/casper/tasks/${encodeURIComponent(taskId)}/followup/complete-client-execution`,
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(result),
+    },
+  );
+  return parseResponse<{ response?: string; provider?: string; model?: string }>(response);
 }
 
 // -- Integrations (PR #45) --------------------------------------------------

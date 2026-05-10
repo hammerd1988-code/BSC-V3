@@ -41,6 +41,7 @@ import { useAuth } from '../AuthContext';
 import { fromDb, supabase, toDb } from '../supabase';
 import { cn } from '../lib/utils';
 import { casperAuthFetch } from '../lib/casperApi';
+import { sendCasperFollowup } from '../lib/casper';
 import {
   AVAILABLE_CASPER_INTEGRATIONS,
   CASPER_INTEGRATION_CATEGORIES,
@@ -486,7 +487,7 @@ export const CasperDashboard: React.FC = () => {
   const updateTask = async (task: CasperTaskRow, patch: Partial<CasperTaskRow>) => { const { error } = await supabase.from('casper_tasks').update(patch).eq('id', task.id); if (error) setNotice(error.message); else await fetchDashboard(); };
   const deleteTask = async (task: CasperTaskRow) => { const { error } = await supabase.from('casper_tasks').delete().eq('id', task.id); if (error) setNotice(error.message); else setTasks(prev => prev.filter(item => item.id !== task.id)); };
   const runTask = async (task: CasperTaskRow) => { setSaving(true); try { const res = await authFetch(`/api/casper/tasks/${task.id}/run`, { method: 'POST', body: '{}' }); const payload = await res.json(); if (!res.ok || !payload.success) throw new Error(payload.error); setNotice('Mission executed through Casper backend.'); await fetchDashboard(); } catch (error: any) { setNotice(error?.message || 'Mission execution failed.'); } finally { setSaving(false); } };
-  const sendFollowup = async (taskId: string) => { if (!followupText.trim()) return; setFollowupLoading(true); try { const res = await authFetch(`/api/casper/tasks/${taskId}/followup`, { method: 'POST', body: JSON.stringify({ question: followupText.trim() }) }); const payload = await res.json(); if (!res.ok || !payload.success) throw new Error(payload.error); setFollowupText(''); await fetchDashboard(); } catch (error: any) { setNotice(error?.message || 'Follow-up failed.'); } finally { setFollowupLoading(false); } };
+  const sendFollowup = async (taskId: string) => { if (!followupText.trim()) return; setFollowupLoading(true); try { await sendCasperFollowup({ taskId, question: followupText.trim() }); setFollowupText(''); await fetchDashboard(); } catch (error: any) { setNotice(error?.message || 'Follow-up failed.'); } finally { setFollowupLoading(false); } };
 
   const nextRun = (frequency: CasperRoutineRow['frequency'], time: string) => {
     const next = new Date(); const [h, m] = time.split(':').map(Number); next.setHours(h || 0, m || 0, 0, 0);
