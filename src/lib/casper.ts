@@ -82,11 +82,120 @@ export interface CasperCommandResponse {
   model: string;
 }
 
+// Server-side deferred-execution descriptor. When the user has
+// configured a local LLM (LM Studio / Ollama / etc.) the directive
+// endpoint returns this instead of a finished response — the browser
+// then runs the prompt against its localhost endpoint and posts the
+// result back so the server can finish the task. This is what lets
+// users run directives free on their own hardware.
+interface ClientExecutionDescriptor {
+  taskId: string;
+  endpoint: string;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+  systemPrompt: string;
+  prompt: string;
+}
+
+interface DeferredCasperCommandResponse {
+  success: true;
+  taskId: string | null;
+  surface: CasperSurface;
+  provider: 'client-local';
+  model: string;
+  deferredExecution: true;
+  clientExecution: ClientExecutionDescriptor;
+}
+
+// Read the user's Casper API key from their stored ai_settings on
+// the users row. The server doesn't relay this back (deliberate — no
+// reason to send the key on a round trip when the browser already
+// has it), so the browser fetches it itself when running locally.
+async function loadLocalApiKey(): Promise<string | null> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    if (!userId) return null;
+    const { data } = await supabase
+      .from('users')
+      .select('ai_settings')
+      .eq('auth_uid', userId)
+      .maybeSingle();
+    const raw = data?.ai_settings as Record<string, any> | null | undefined;
+    if (!raw) return null;
+    const key = raw.apiKey ?? raw.api_key ?? null;
+    return typeof key === 'string' && key.trim().length > 0 ? key.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+// Run the directive against the user's local OpenAI-compatible
+// endpoint (LM Studio, Ollama, etc.). Both expose the same
+// /v1/chat/completions shape.
+async function runDirectiveOnLocalLLM(payload: ClientExecutionDescriptor): Promise<string> {
+  const url = payload.endpoint.replace(/\/$/, '') + '/chat/completions';
+  // Some local servers (LM Studio especially) require a non-empty
+  // bearer token even though they ignore the value. Default to a
+  // placeholder when the user hasn't set one.
+  const apiKey = (await loadLocalApiKey()) || 'local';
+  const body = {
+    model: payload.model,
+    temperature: payload.temperature,
+    max_tokens: payload.maxTokens,
+    messages: [
+      { role: 'system' as const, content: payload.systemPrompt },
+      { role: 'user' as const, content: payload.prompt },
+    ],
+  };
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`Local LLM responded ${response.status}: ${text.slice(0, 300)}`);
+  }
+  const json = await response.json().catch(() => null);
+  const content = json?.choices?.[0]?.message?.content;
+  if (typeof content !== 'string' || content.trim().length === 0) {
+    throw new Error('Local LLM returned an empty completion.');
+  }
+  return content.trim();
+}
+
+// POST the local-LLM result (or error) back so the server can finish
+// the task row and write to the activity log.
+async function reportClientExecution(
+  taskId: string,
+  result: { response: string; model: string; durationMs: number } | { error: string; durationMs: number },
+): Promise<CasperCommandResponse> {
+  const headers = await authHeaders();
+  const response = await fetch(`${apiBaseUrl()}/api/casper/command/complete-client-execution`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ taskId, ...result }),
+  });
+  return parseResponse<CasperCommandResponse>(response);
+}
+
 // Send a directive to Casper from any UI surface. The server appends a
 // surface-specific persona module to the system prompt so the same
 // /api/casper/command endpoint speaks with the right expertise depending
 // on context. Pass `pageContext` (URL path, current feature, etc.) and
 // it will be appended to the directive so Casper knows where the user is.
+//
+// If the user has configured a local LLM (LM Studio / Ollama), the
+// server returns a deferred-execution descriptor instead of a finished
+// response. We then run the prompt against the user's localhost
+// endpoint and POST the answer back. The caller gets the same
+// CasperCommandResponse shape regardless — local execution is fully
+// transparent.
 export async function sendCasperCommand(input: {
   command: string;
   surface?: CasperSurface;
@@ -116,7 +225,43 @@ export async function sendCasperCommand(input: {
       metadata: input.metadata ?? {},
     }),
   });
-  return parseResponse<CasperCommandResponse>(response);
+  const initial = await parseResponse<CasperCommandResponse | DeferredCasperCommandResponse>(response);
+
+  if ('deferredExecution' in initial && initial.deferredExecution && initial.clientExecution) {
+    const desc = initial.clientExecution;
+    if (!desc.taskId) {
+      throw new Error('Local LLM execution failed: server did not return a taskId.');
+    }
+    const startedAt = Date.now();
+    try {
+      const text = await runDirectiveOnLocalLLM(desc);
+      return reportClientExecution(desc.taskId, {
+        response: text,
+        model: desc.model,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (err: any) {
+      const message = err?.message || String(err);
+      // Best-effort report-back so the task gets marked as failed
+      // server-side, but we don't want to mask the original error
+      // from the caller.
+      try {
+        await reportClientExecution(desc.taskId, {
+          error: message,
+          durationMs: Date.now() - startedAt,
+        });
+      } catch {
+        // ignore — we'll throw the original error anyway
+      }
+      const wrapped = new Error(
+        `Local LLM execution failed (${desc.endpoint}): ${message}. Make sure your local LLM server is running and CORS is enabled.`,
+      ) as Error & { cause?: unknown };
+      wrapped.cause = err;
+      throw wrapped;
+    }
+  }
+
+  return initial as CasperCommandResponse;
 }
 
 // -- Integrations (PR #45) --------------------------------------------------

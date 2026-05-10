@@ -146,13 +146,56 @@ function resolveCasperModel(model: string, customModelId: string) {
 
 function initialCasperCore(settings: any) {
   const modelValue = casperModelSelectValue(settings?.model);
+  // Temperature lives in users.ai_settings.temperature. Don't coerce
+  // null/undefined to 0 — Number(null) === 0 would silently move the
+  // slider to "deterministic" for any user whose ai_settings was
+  // saved before this column existed, then they'd unknowingly save
+  // it back at temp=0.
+  const tempRaw = settings?.temperature ?? settings?.temp;
+  const tempNumber =
+    typeof tempRaw === 'number'
+      ? tempRaw
+      : typeof tempRaw === 'string'
+        ? Number(tempRaw)
+        : NaN;
+  const temperature = Number.isFinite(tempNumber) && tempNumber >= 0 && tempNumber <= 2 ? tempNumber : 0.7;
   return {
     apiKey: settings?.apiKey || settings?.api_key || '',
     endpoint: settings?.endpoint || settings?.api_base_url || settings?.apiBaseUrl || '',
     model: modelValue,
     customModelId: modelValue === 'custom_model' ? settings?.model || '' : '',
+    temperature,
+    systemPromptOverride: settings?.systemPromptOverride || settings?.system_prompt_override || settings?.systemPrompt || '',
   };
 }
+
+// Provider presets — clicking one auto-fills the OpenAI-compatible
+// base URL so users don't have to remember the exact endpoint. These
+// are all OpenAI-compatible: each provider exposes /chat/completions
+// at the listed URL and respects standard `model`/`messages` params.
+// Local presets (LM Studio + Ollama) point at the user's own machine
+// and only work in PR #51 once the deferred client-side runner is
+// wired up — for now they save the URL but the server can't reach
+// localhost so the directive falls back to the platform default.
+type CasperProviderPreset = {
+  id: string;
+  label: string;
+  description: string;
+  baseUrl: string;
+  exampleModel: string;
+  isLocal?: boolean;
+};
+
+const CASPER_PROVIDER_PRESETS: CasperProviderPreset[] = [
+  { id: 'openai',       label: 'OpenAI',       description: 'Direct to OpenAI (GPT-4o, o1, etc.)',                baseUrl: 'https://api.openai.com/v1',     exampleModel: 'gpt-4o-mini' },
+  { id: 'openrouter',   label: 'OpenRouter',   description: 'Aggregator — pay-per-token for Claude/Llama/etc.',   baseUrl: 'https://openrouter.ai/api/v1',  exampleModel: 'anthropic/claude-3.5-sonnet' },
+  { id: 'anthropic',    label: 'Anthropic',    description: 'Anthropic via OpenAI-compatible adapter',            baseUrl: 'https://api.anthropic.com/v1',  exampleModel: 'claude-3-5-sonnet-latest' },
+  { id: 'together',     label: 'Together.ai',  description: 'Llama / Qwen / DeepSeek / etc. cheaply',             baseUrl: 'https://api.together.xyz/v1',   exampleModel: 'meta-llama/Llama-3.1-8B-Instruct-Turbo' },
+  { id: 'groq',         label: 'Groq',         description: 'Ultra-fast Llama / Mixtral inference',                baseUrl: 'https://api.groq.com/openai/v1', exampleModel: 'llama-3.1-70b-versatile' },
+  { id: 'fireworks',    label: 'Fireworks',    description: 'Fast Llama / DeepSeek / Qwen',                       baseUrl: 'https://api.fireworks.ai/inference/v1', exampleModel: 'accounts/fireworks/models/llama-v3p1-70b-instruct' },
+  { id: 'lmstudio',     label: 'LM Studio (Local)', description: 'Free — runs on your machine. Enable CORS in LM Studio settings.', baseUrl: 'http://localhost:1234/v1',      exampleModel: 'lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF', isLocal: true },
+  { id: 'ollama',       label: 'Ollama (Local)',    description: 'Free — runs on your machine. Set OLLAMA_ORIGINS=* before starting.', baseUrl: 'http://localhost:11434/v1',     exampleModel: 'llama3.1:8b', isLocal: true },
+];
 
 const CASPER_SYSTEM_PROMPT = `You are CASPER, the face of the Blood Sweat Code neural network: a Grok-style public assistant, Casper Studio creator copilot, and OpenClaw-style autonomous workflow operator for app, website, APK, and platform-service execution.
 
@@ -439,12 +482,16 @@ export const Casper: React.FC = () => {
     setSavingAiCore(true);
     try {
       const resolvedModel = resolveCasperModel(aiCoreForm.model, aiCoreForm.customModelId);
+      const trimmedSystemPrompt = aiCoreForm.systemPromptOverride.trim();
+      const clampedTemperature = Math.max(0, Math.min(2, Number(aiCoreForm.temperature) || 0));
       const nextSettings = {
         ...(aiSettings || {}),
         apiKey: aiCoreForm.apiKey.trim() || undefined,
         endpoint: aiCoreForm.endpoint.trim() || undefined,
         api_base_url: aiCoreForm.endpoint.trim() || undefined,
         model: resolvedModel || undefined,
+        temperature: clampedTemperature,
+        systemPromptOverride: trimmedSystemPrompt || undefined,
       };
 
       if (!aiCoreForm.apiKey.trim()) delete nextSettings.apiKey;
@@ -453,6 +500,7 @@ export const Casper: React.FC = () => {
         delete nextSettings.api_base_url;
       }
       if (!resolvedModel) delete nextSettings.model;
+      if (!trimmedSystemPrompt) delete nextSettings.systemPromptOverride;
 
       const { error } = await supabase.from('users').update({ ai_settings: nextSettings }).eq('id', currentUser.id);
       if (error) throw error;
@@ -463,6 +511,27 @@ export const Casper: React.FC = () => {
     } finally {
       setSavingAiCore(false);
     }
+  };
+
+  const applyProviderPreset = (preset: CasperProviderPreset) => {
+    setAiCoreForm((prev) => {
+      // Only overwrite the model when the current selection is the
+      // platform default — users who already typed a custom model
+      // value shouldn't lose it just because they re-clicked a preset
+      // to update the base URL.
+      const existingModelId = resolveCasperModel(prev.model, prev.customModelId);
+      const shouldUpdateModel = !existingModelId || prev.model === 'platform_default';
+      const nextModelValue = shouldUpdateModel ? casperModelSelectValue(preset.exampleModel) : prev.model;
+      const nextCustomModelId = shouldUpdateModel
+        ? (nextModelValue === 'custom_model' ? preset.exampleModel : '')
+        : prev.customModelId;
+      return {
+        ...prev,
+        endpoint: preset.baseUrl,
+        model: nextModelValue,
+        customModelId: nextCustomModelId,
+      };
+    });
   };
 
   const createTask = async () => {
@@ -1206,6 +1275,37 @@ export const Casper: React.FC = () => {
                 </div>
               </div>
 
+              {/* Provider presets — clicking auto-fills the OpenAI-compatible
+                  base URL. Saves the user from memorizing endpoints. */}
+              <div className="mb-5">
+                <label className="block text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500 mb-2 ml-1">Provider Preset</label>
+                <div className="flex flex-wrap gap-2">
+                  {CASPER_PROVIDER_PRESETS.map((preset) => {
+                    const isActive = aiCoreForm.endpoint.trim() === preset.baseUrl;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => applyProviderPreset(preset)}
+                        title={preset.description}
+                        className={`rounded-xl border px-3 py-1.5 text-[10px] font-black uppercase tracking-widest transition-all ${
+                          isActive
+                            ? 'border-cyan-300/60 bg-cyan-400/15 text-cyan-100 shadow-[0_0_18px_rgba(0,229,255,0.18)]'
+                            : 'border-white/10 bg-white/[0.03] text-zinc-400 hover:border-white/30 hover:text-white'
+                        } ${preset.isLocal ? 'border-dashed' : ''}`}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
+                  Pick a provider, then paste your API key below. Local
+                  presets (LM Studio / Ollama) require the client-side
+                  runner — coming in PR #51.
+                </p>
+              </div>
+
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-4">
                   <div>
@@ -1277,6 +1377,51 @@ export const Casper: React.FC = () => {
                     </div>
                   </div>
                 </div>
+              </div>
+
+              {/* Temperature slider — controls how exploratory / deterministic
+                  Casper's responses are. 0 = strict / repeatable, 0.7 = a
+                  good default for chat, 1.0+ = creative / less reliable. */}
+              <div className="mt-5">
+                <div className="flex items-end justify-between mb-2 ml-1">
+                  <label className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500">Temperature</label>
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-cyan-200">{aiCoreForm.temperature.toFixed(2)}</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={2}
+                  step={0.05}
+                  value={aiCoreForm.temperature}
+                  onChange={(e) => setAiCoreForm((prev) => ({ ...prev, temperature: Number(e.target.value) }))}
+                  className="w-full accent-cyan-400"
+                />
+                <div className="mt-1 flex justify-between text-[9px] uppercase tracking-widest text-zinc-600">
+                  <span>0 · deterministic</span>
+                  <span>0.7 · balanced</span>
+                  <span>2 · wild</span>
+                </div>
+              </div>
+
+              {/* System prompt override — appended to the surface persona
+                  for THIS user only. Useful for niche specialization
+                  ("you only answer in numbers and timestamps", "speak as
+                  my personal Twitch growth strategist", etc.). Empty =
+                  pure platform persona. */}
+              <div className="mt-5">
+                <label className="block text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500 mb-2 ml-1">System Prompt Override (Optional)</label>
+                <textarea
+                  value={aiCoreForm.systemPromptOverride}
+                  onChange={(e) => setAiCoreForm((prev) => ({ ...prev, systemPromptOverride: e.target.value }))}
+                  placeholder="e.g. You are my personal Twitch growth strategist — only answer in numbers and timestamps."
+                  rows={3}
+                  className="w-full resize-y bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-cyan-500/50 transition-all"
+                />
+                <p className="mt-1 text-[10px] leading-relaxed text-zinc-500">
+                  Appended to Casper's surface persona for your account.
+                  Doesn't replace identity guardrails — adds your custom
+                  guidance on top.
+                </p>
               </div>
 
               <div className="mt-8 flex items-center justify-end gap-3">
