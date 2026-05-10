@@ -22,7 +22,7 @@ import multer from 'multer';
 import { execSync } from 'child_process';
 import os, { tmpdir } from 'os';
 import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
-import { registerCasperControlRoutes, resolveCasperAuth } from './casperControlCenter.js';
+import { registerCasperControlRoutes, requireCasperAuth } from './casperControlCenter.js';
 import { initWebhookListener } from "./webhookListener.js";
 import botApi from './botApi.js';
 import { registerPushRoutes } from './pushNotifications.js';
@@ -978,15 +978,10 @@ app.post("/api/cred/exchange", async (req, res) => {
   // ── Casper Memory Endpoints ──
   app.get('/api/casper/memory', async (req, res) => {
     try {
-      const auth = await resolveCasperAuth(req, supabase);
-      if (!auth.ok || !auth.profile) {
-        return res.status(401).json({
-          error: auth.message || 'Authentication required.',
-          reason: auth.reason || 'invalid_token',
-        });
-      }
+      const profile = await requireCasperAuth(req, res, supabase);
+      if (!profile) return;
       const requestedUserId = (req.query.userId as string | undefined) || null;
-      const targetUserId = auth.profile.role === 'admin' ? requestedUserId : auth.profile.id;
+      const targetUserId = profile.role === 'admin' ? requestedUserId : profile.id;
       if (!casperMemory) {
         return res.json({ stateModifier: '', relevantMemories: '' });
       }
@@ -1001,20 +996,15 @@ app.post("/api/cred/exchange", async (req, res) => {
 
   app.post('/api/casper/memory', async (req, res) => {
     try {
-      const auth = await resolveCasperAuth(req, supabase);
-      if (!auth.ok || !auth.profile) {
-        return res.status(401).json({
-          error: auth.message || 'Authentication required.',
-          reason: auth.reason || 'invalid_token',
-        });
-      }
+      const profile = await requireCasperAuth(req, res, supabase);
+      if (!profile) return;
       const { userId, userMessage, casperReply } = req.body ?? {};
       if (!userId || !userMessage || !casperReply) {
         return res.status(400).json({ error: 'userId, userMessage, and casperReply are required.' });
       }
       // Non-admin callers can only persist memories for themselves so a leaked
       // session token cannot poison another user's Casper memory store.
-      if (auth.profile.role !== 'admin' && String(userId) !== auth.profile.id) {
+      if (profile.role !== 'admin' && String(userId) !== profile.id) {
         return res.status(403).json({ error: 'You can only store Casper memory for your own profile.' });
       }
       if (casperMemory) {
