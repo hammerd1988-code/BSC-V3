@@ -55,6 +55,77 @@ type CasperCommandInput = {
   metadata?: Record<string, any>;
 };
 
+// Per-user Casper LLM settings stored in `users.ai_settings` (JSONB).
+// Populated by the operator console / Casper.tsx settings panel. When
+// any of these fields is set, they override the server's env-var
+// defaults for THIS user's directive — letting users route their own
+// directives through OpenRouter / Together / Groq / etc. without
+// affecting other users on the platform. `apiKey` + `endpoint` is the
+// pair that triggers the per-user OpenAI-compatible code path.
+//
+// `systemPromptOverride` lets users pre-pend custom guidance (e.g.
+// "you are my personal Twitch growth strategist, only answer in numbers
+// and timestamps") on top of the surface persona.
+//
+// `temperature` lets users dial creativity vs determinism per-user. We
+// ignore values outside [0, 2] for safety.
+export type CasperUserAiSettings = {
+  apiKey?: string | null;
+  endpoint?: string | null;
+  model?: string | null;
+  temperature?: number | null;
+  systemPromptOverride?: string | null;
+};
+
+/**
+ * Load the calling user's Casper LLM settings from `users.ai_settings`
+ * (JSONB column). Tolerates camelCase and snake_case keys since both
+ * naming conventions show up in the codebase. Returns an empty object
+ * if no userId, no row, or no `ai_settings` payload — callers always
+ * fall back to the server's env-var defaults in that case.
+ */
+async function loadUserAiSettings(
+  supabase: SupabaseClient,
+  userId?: string | null,
+): Promise<CasperUserAiSettings> {
+  if (!isUuid(userId)) return {};
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('ai_settings')
+      .eq('id', userId)
+      .maybeSingle();
+    if (error || !data?.ai_settings) return {};
+    const raw = data.ai_settings as Record<string, any>;
+    const apiKey = raw.apiKey ?? raw.api_key ?? null;
+    const endpoint = raw.endpoint ?? raw.api_base_url ?? raw.apiBaseUrl ?? null;
+    const model = raw.model ?? null;
+    // Don't coerce null/undefined to 0 — Number(null) === 0 would silently
+    // pin temperature to a hard "deterministic" value for any user whose
+    // ai_settings was saved before this column existed.
+    const tempRaw = raw.temperature ?? raw.temp;
+    const tempNumber =
+      typeof tempRaw === 'number'
+        ? tempRaw
+        : typeof tempRaw === 'string'
+          ? Number(tempRaw)
+          : NaN;
+    const temperature = Number.isFinite(tempNumber) && tempNumber >= 0 && tempNumber <= 2 ? tempNumber : null;
+    const systemPromptOverride =
+      raw.systemPromptOverride ?? raw.system_prompt_override ?? raw.systemPrompt ?? null;
+    return {
+      apiKey: typeof apiKey === 'string' ? apiKey.trim() || null : null,
+      endpoint: typeof endpoint === 'string' ? endpoint.trim() || null : null,
+      model: typeof model === 'string' ? model.trim() || null : null,
+      temperature,
+      systemPromptOverride:
+        typeof systemPromptOverride === 'string' ? systemPromptOverride.trim() || null : null,
+    };
+  } catch {
+    return {};
+  }
+}
+
 type CasperRoutineRow = {
   id: string;
   name: string;
@@ -496,24 +567,54 @@ When an enabled integration is relevant, mention how Casper can use that module.
 Return concise Markdown with these sections when useful: Result, Actions Taken, Follow-Up, Risks.${personaOverride ? `\n\n---\n\n${personaOverride}` : ''}`;
 }
 
-async function callOpenAICompatible(input: { prompt: string; systemPrompt: string; cognitiveCore: Record<string, any> }) {
-  if (!isServerAiConfigured()) {
+async function callOpenAICompatible(input: {
+  prompt: string;
+  systemPrompt: string;
+  cognitiveCore: Record<string, any>;
+  userSettings?: CasperUserAiSettings;
+}) {
+  const userSettings = input.userSettings ?? {};
+  const userHasOwnProvider = Boolean(userSettings.apiKey && userSettings.endpoint);
+
+  // If neither the platform nor the user has a working provider config,
+  // fall through to the rule-based echo so directives always close out.
+  if (!isServerAiConfigured() && !userHasOwnProvider) {
     return {
       provider: 'local-fallback',
       model: 'rule-based-control-plane',
-      text: `## Result\nCasper accepted and analyzed the directive, but no platform AI key is configured on the server.\n\n## Actions Taken\nThe command was persisted as a real Casper task and logged to the activity stream.\n\n## Follow-Up\nConfigure GEMINI_API_KEY or OPENAI_API_KEY to enable full neural execution for this directive.\n\n## Directive\n${input.prompt}`,
+      text: `## Result\nCasper accepted and analyzed the directive, but no platform AI key is configured on the server, and you have not yet set up a personal OpenAI-compatible provider.\n\n## Actions Taken\nThe command was persisted as a real Casper task and logged to the activity stream.\n\n## Follow-Up\nEither configure GEMINI_API_KEY / OPENAI_API_KEY on the server, or open Casper → Settings → Cognitive Core and paste your own OpenAI / OpenRouter / Together / Groq endpoint + API key.\n\n## Directive\n${input.prompt}`,
     };
   }
 
   const responseStyle = input.cognitiveCore?.response_style ?? {};
-  const model = responseStyle.model || PLATFORM_DEFAULT_MODEL;
-  const temperature = Number(responseStyle.temperature ?? 0.55);
+  // User-supplied model wins over the global cognitive-core default.
+  // 'platform_default' from the user means "use whatever the server
+  // would have used", so we still honor the cognitive-core model.
+  const userModel = userSettings.model && userSettings.model !== 'platform_default' ? userSettings.model : null;
+  const model = userModel || responseStyle.model || PLATFORM_DEFAULT_MODEL;
+  // User temperature wins if explicitly set in [0,2]; loadUserAiSettings
+  // already normalizes that range.
+  const temperature = typeof userSettings.temperature === 'number'
+    ? userSettings.temperature
+    : Number(responseStyle.temperature ?? 0.55);
   const maxTokens = Number(responseStyle.max_tokens ?? 900);
+
+  // Compose the final system prompt: surface persona (already in
+  // input.systemPrompt) + optional per-user override appended last so
+  // it carries the most recency weight when the model is reading
+  // top-down. This is a *prepended* override (added on top of) rather
+  // than a replacement so we don't lose Casper's identity guardrails.
+  const systemPrompt = userSettings.systemPromptOverride
+    ? `${input.systemPrompt}\n\n---\n\n[User custom instructions]\n${userSettings.systemPromptOverride}`
+    : input.systemPrompt;
+
   const execution = await generateServerText(input.prompt, {
-    systemPrompt: input.systemPrompt,
+    systemPrompt,
     preferredModel: model,
     temperature,
     maxTokens,
+    apiKeyOverride: userSettings.apiKey ?? null,
+    baseUrlOverride: userSettings.endpoint ?? null,
   });
 
   return {
@@ -580,6 +681,7 @@ async function runSubagentObjective(
   parentObjective: string,
   sharedSystem: string,
   cognitiveCore: Record<string, any>,
+  userSettings?: CasperUserAiSettings,
 ): Promise<{ ok: boolean; result: string; provider?: string; model?: string }> {
   // Mark working — best effort, don't block on failure.
   await supabase
@@ -590,7 +692,7 @@ async function runSubagentObjective(
   try {
     const systemPrompt = buildSubagentSystemPrompt(parentObjective, sharedSystem);
     const execution = await Promise.race([
-      callOpenAICompatible({ prompt: objective, systemPrompt, cognitiveCore }),
+      callOpenAICompatible({ prompt: objective, systemPrompt, cognitiveCore, userSettings }),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('subagent_timeout')), SUBAGENT_DEFAULT_TIMEOUT_MS),
       ),
@@ -670,7 +772,12 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
   try {
     const cognitiveCore = await fetchCognitiveCore(supabase);
     const systemPrompt = await buildCasperSystemPrompt(supabase, casperMemory, userId, surface);
-    const execution = await callOpenAICompatible({ prompt: command, systemPrompt, cognitiveCore });
+    // Per-user provider/model/temperature/system-prompt override from
+    // users.ai_settings — empty if the user hasn't configured a personal
+    // provider. callOpenAICompatible falls back to env-var defaults when
+    // these are absent so platform users are unaffected.
+    const userSettings = await loadUserAiSettings(supabase, userId);
+    const execution = await callOpenAICompatible({ prompt: command, systemPrompt, cognitiveCore, userSettings });
     const completedAt = new Date().toISOString();
 
     await supabase
@@ -1094,6 +1201,11 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       // cognitive core, memory, and integration awareness as the parent.
       const cognitiveCore = await fetchCognitiveCore(supabase);
       const sharedSystem = await buildCasperSystemPrompt(supabase, casperMemory, profile.id);
+      // Sub-agents inherit the parent user's per-user provider/model so
+      // the whole fan-out runs on the user's chosen LLM (e.g. their
+      // OpenRouter key) rather than splitting the parent across the
+      // user's provider but billing the platform for the children.
+      const userSettings = await loadUserAiSettings(supabase, profile.id);
 
       // Fan out in parallel. The whole batch runs on this request, but
       // each sub-agent updates its row as it progresses, so the UI
@@ -1107,6 +1219,7 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
             parentPrompt || objectives.join(' / '),
             sharedSystem,
             cognitiveCore,
+            userSettings,
           ).catch((err) => ({
             ok: false,
             result: `Sub-agent crashed: ${err?.message || String(err)}`,
@@ -1196,7 +1309,13 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
 
       const cognitiveCore = await fetchCognitiveCore(supabase);
       const systemPrompt = await buildCasperSystemPrompt(supabase, casperMemory, profile.id);
-      const execution = await callOpenAICompatible({ prompt: followupPrompt, systemPrompt, cognitiveCore });
+      // Inherit the user's per-user provider/model/temperature so the
+      // follow-up response stays on the same LLM that produced the
+      // original — otherwise the parent runs on the user's OpenRouter
+      // key but the follow-up silently falls back to the platform's
+      // Gemini, which is jarring (different voice, different style).
+      const userSettings = await loadUserAiSettings(supabase, profile.id);
+      const execution = await callOpenAICompatible({ prompt: followupPrompt, systemPrompt, cognitiveCore, userSettings });
 
       const history = Array.isArray(task.metadata?.followups) ? task.metadata.followups : [];
       history.push({ question: question.trim(), answer: execution.text, at: new Date().toISOString() });
