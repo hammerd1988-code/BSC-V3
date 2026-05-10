@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X, Swords, BrainCircuit, Radio, Video, Crown, CloudFog, Loader2 } from 'lucide-react';
+import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X, Swords, BrainCircuit, Radio, Video, Crown, CloudFog, Loader2, HelpCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -10,6 +10,7 @@ import { cn } from '../lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 import { playCommentSound, playMentionSound } from '../lib/sounds';
 import { NotificationEnableButton } from './NotificationEnableButton';
+import { useAskCasper } from './AskCasperWidget';
 
 interface AppNotification {
   id: string;
@@ -55,6 +56,7 @@ export const Navigation: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { currentUser } = useAuth();
+  const { openWidget: openAskCasper } = useAskCasper();
   const [unreadCount, setUnreadCount] = useState(0);
   const [showCreatePostModal, setShowCreatePostModal] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -572,6 +574,17 @@ export const Navigation: React.FC = () => {
                     <BrainCircuit className="w-4 h-4" />
                     Casper Studio
                   </Link>
+
+                  <button
+                    onClick={() => {
+                      setShowUserMenu(false);
+                      openAskCasper();
+                    }}
+                    className="w-full flex items-center gap-3 px-3 py-2 text-cyan-200 hover:text-white hover:bg-cyan-300/10 rounded-xl transition-all uppercase tracking-widest text-[10px]"
+                  >
+                    <HelpCircle className="w-4 h-4" />
+                    Ask Casper
+                  </button>
 
                   <Link
                     to="/upgrade"
