@@ -6,6 +6,7 @@ import { Login } from './components/Login';
 import { Navigation } from './components/Navigation';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { NetworkTutorial } from './components/NetworkTutorial';
+import { AskCasperProvider } from './components/AskCasperWidget';
 import { updateDailyStreak } from './lib/achievements';
 import { supabase } from './supabase';
 
@@ -161,6 +162,7 @@ export default function App() {
   }
 
   return (
+    <AskCasperProvider>
     <div className="min-h-screen bg-background text-foreground">
       {/* Onboarding wizard for new users */}
       {showOnboarding && (
@@ -227,5 +229,6 @@ export default function App() {
       </main>
       <Navigation />
     </div>
+    </AskCasperProvider>
   );
 }
