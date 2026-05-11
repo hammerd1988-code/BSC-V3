@@ -108,6 +108,9 @@ interface CasperSubagentRow {
   parent_task_id: string;
   user_id: string;
   objective: string;
+  // 'awaiting_client' indicates the row is parked while the user's
+  // browser runs the sub-agent against a local LLM (LM Studio /
+  // Ollama) — see migration 0027 + casperControlCenter.ts.
   status: 'queued' | 'working' | 'awaiting_client' | 'completed' | 'failed';
   result: string | null;
   created_at: string;
@@ -266,6 +269,8 @@ const statusStyles: Record<CasperTaskRow['status'], string> = {
 const subagentStatusStyles: Record<CasperSubagentRow['status'], string> = {
   queued: 'border-zinc-500/30 bg-zinc-500/10 text-zinc-300',
   working: 'border-cyan-300/35 bg-cyan-300/10 text-cyan-100',
+  // Distinct amber tone so operators can see at a glance which
+  // rows are waiting on the browser's local LLM vs the server.
   awaiting_client: 'border-amber-300/35 bg-amber-400/10 text-amber-100',
   completed: 'border-green-300/35 bg-green-400/10 text-green-100',
   failed: 'border-red-300/35 bg-red-500/10 text-red-100',
