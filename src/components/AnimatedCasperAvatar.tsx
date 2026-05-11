@@ -25,12 +25,10 @@ export const AnimatedCasperAvatar: React.FC<AnimatedCasperAvatarProps> = ({
     hero: 'w-48 h-48'
   };
   
-  // Use the appropriately sized image based on requested size
+  // Use the Runway character avatar for all sizes
   const imageSrc = size === 'sm' || size === 'md' 
-    ? '/casper-avatar-128.png' 
-    : size === 'lg' || size === 'xl' 
-      ? '/casper-avatar-256.png'
-      : '/casper-avatar-chat.png'; // Use v1 for hero/chat
+    ? '/casper-runway-128.png' 
+    : '/casper-runway-256.png';
 
   // Determine colors based on instability/mood
   const getGlowColor = () => {

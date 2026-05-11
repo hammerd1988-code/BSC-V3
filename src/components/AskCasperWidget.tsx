@@ -2,7 +2,6 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { Send, X, Loader2 } from 'lucide-react';
-import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
 import { sendCasperCommand, type CasperSurface } from '../lib/casper';
 import { useAuth } from '../AuthContext';
 import { cn } from '../lib/utils';
@@ -206,21 +205,37 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
         role="dialog"
         aria-label="Ask Casper"
       >
-        {/* Avatar header pinned to the top */}
-        <div className="flex items-center gap-3 border-b border-white/10 bg-gradient-to-r from-cyan-500/5 via-transparent to-fuchsia-500/5 px-4 py-3">
-          <AnimatedCasperAvatar size="md" isActive={busy} instability={busy ? 60 : 30} showParticles />
-          <div className="flex-1">
-            <div className="text-[10px] uppercase tracking-[0.3em] text-cyan-300/70">Ask Casper</div>
-            <div className="text-sm font-semibold text-white">{pageContext.feature}</div>
+        {/* Animated avatar banner */}
+        <div className="relative overflow-hidden border-b border-cyan-500/20">
+          <video
+            autoPlay
+            loop
+            muted
+            playsInline
+            className="h-28 w-full object-cover brightness-90"
+            poster="/casper-runway-256.png"
+            src="/casper-avatar-banner.mp4"
+          />
+          <div className="absolute inset-0 bg-gradient-to-t from-[#0a0d14] via-transparent to-transparent" />
+          <div className="absolute inset-x-0 bottom-0 flex items-end justify-between px-4 pb-2">
+            <div>
+              <div className="text-[10px] font-black uppercase tracking-[0.3em] text-cyan-300/80">Ask Casper</div>
+              <div className="text-sm font-semibold text-white drop-shadow-lg">{pageContext.feature}</div>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-full border border-white/20 bg-black/40 p-1.5 text-gray-300 backdrop-blur-sm transition-colors hover:text-white"
+              aria-label="Close Ask Casper"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full border border-white/10 bg-white/5 p-1.5 text-gray-400 transition-colors hover:text-white"
-            aria-label="Close Ask Casper"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          {busy && (
+            <div className="absolute inset-0 pointer-events-none">
+              <div className="absolute inset-0 animate-pulse bg-cyan-400/5" />
+            </div>
+          )}
         </div>
 
         {/* Conversation history */}
@@ -229,22 +244,36 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
             <div
               key={`${turn.ts}-${idx}`}
               className={cn(
-                'rounded-2xl border px-3 py-2 leading-relaxed',
-                turn.role === 'user'
-                  ? 'ml-6 border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-50'
-                  : turn.error
-                    ? 'mr-6 border-red-500/30 bg-red-500/10 text-red-100'
-                    : 'mr-6 border-cyan-500/20 bg-white/5 text-cyan-50',
+                'flex gap-2',
+                turn.role === 'user' ? 'flex-row-reverse' : 'flex-row',
               )}
             >
-              {turn.pending ? (
-                <span className="inline-flex items-center gap-2 text-cyan-200/70">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Casper is thinking…
-                </span>
-              ) : (
-                <span className="whitespace-pre-wrap">{turn.text}</span>
+              {turn.role === 'casper' && (
+                <img
+                  src="/casper-runway-128.png"
+                  alt="Casper"
+                  className="h-6 w-6 flex-shrink-0 rounded-full border border-cyan-500/30 object-cover mt-0.5"
+                />
               )}
+              <div
+                className={cn(
+                  'rounded-2xl border px-3 py-2 leading-relaxed',
+                  turn.role === 'user'
+                    ? 'border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-50'
+                    : turn.error
+                      ? 'border-red-500/30 bg-red-500/10 text-red-100'
+                      : 'border-cyan-500/20 bg-white/5 text-cyan-50',
+                )}
+              >
+                {turn.pending ? (
+                  <span className="inline-flex items-center gap-2 text-cyan-200/70">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Casper is thinking…
+                  </span>
+                ) : (
+                  <span className="whitespace-pre-wrap">{turn.text}</span>
+                )}
+              </div>
             </div>
           ))}
         </div>
