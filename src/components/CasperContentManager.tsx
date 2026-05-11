@@ -627,6 +627,7 @@ export const CasperContentManager: React.FC = () => {
         parentPrompt: prompt,
         objectives: objectiveList,
         parentTaskId,
+        enableTools: true,
       });
       const successes = response.results.filter((r) => r.status === 'completed').length;
       const failures = response.results.length - successes;
