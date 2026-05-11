@@ -2067,7 +2067,7 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       if (rowError || !row) {
         return res.status(404).json({ success: false, error: 'Sub-agent not found.' });
       }
-      if (row.user_id !== profile.id && profile.role !== 'admin') {
+      if (profile.role !== 'admin' && String(row.user_id) !== profile.id) {
         return res.status(403).json({ success: false, error: 'You can only complete your own sub-agents.' });
       }
       if (row.status !== 'awaiting_client') {
@@ -2140,7 +2140,7 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       if (taskError || !task) {
         return res.status(404).json({ success: false, error: 'Casper task not found.' });
       }
-      if (task.created_by !== profile.id && profile.role !== 'admin') {
+      if (profile.role !== 'admin' && String(task.created_by) !== profile.id) {
         return res.status(403).json({ success: false, error: 'You can only complete your own Casper task follow-ups.' });
       }
 
@@ -2155,12 +2155,16 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       const completedAt = new Date().toISOString();
       if (clientError) {
         const errorMessage = String(clientError).slice(0, 1000);
+        // Keep the entry in pending_followups so the operator can
+        // retry later (e.g. after restarting their local LLM). We
+        // still write last_followup_error / last_followup_error_at
+        // so the UI can surface the failure.
         await supabase
           .from('casper_tasks')
           .update({
             metadata: {
               ...meta,
-              pending_followups: remainingPending,
+              pending_followups: pendingList,
               last_followup_error: errorMessage,
               last_followup_error_at: completedAt,
             },
