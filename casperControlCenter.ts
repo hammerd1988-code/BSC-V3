@@ -774,6 +774,8 @@ async function callOpenAICompatibleWithToolLoop(input: {
   cognitiveCore: Record<string, any>;
   userSettings?: CasperUserAiSettings;
   toolCtx: ToolExecutionContext;
+  maxToolRounds?: number;
+  maxToolCalls?: number;
 }): Promise<{
   provider: string;
   model: string;
@@ -827,7 +829,10 @@ async function callOpenAICompatibleWithToolLoop(input: {
   let resolvedModel: string = model;
   let truncatedReason: string | undefined;
 
-  for (let round = 0; round < MAX_TOOL_CALL_ROUNDS; round += 1) {
+  const maxRounds = input.maxToolRounds ?? MAX_TOOL_CALL_ROUNDS;
+  const maxCalls = input.maxToolCalls ?? MAX_TOOL_CALLS_PER_DIRECTIVE;
+
+  for (let round = 0; round < maxRounds; round += 1) {
     const turn = await generateServerToolTurn(messages, {
       tools: toolSpecs,
       preferredModel: model,
@@ -865,8 +870,8 @@ async function callOpenAICompatibleWithToolLoop(input: {
 
     // Execute the requested tool calls. Cap per-directive total.
     for (const tc of turn.toolCalls) {
-      if (allToolCalls.length >= MAX_TOOL_CALLS_PER_DIRECTIVE) {
-        truncatedReason = `Stopped after ${MAX_TOOL_CALLS_PER_DIRECTIVE} tool calls (per-directive ceiling).`;
+      if (allToolCalls.length >= maxCalls) {
+        truncatedReason = `Stopped after ${maxCalls} tool calls (per-directive ceiling).`;
         messages.push({
           role: 'tool',
           tool_call_id: tc.id,
@@ -893,7 +898,7 @@ async function callOpenAICompatibleWithToolLoop(input: {
     if (truncatedReason) break;
   }
 
-  if (!truncatedReason) truncatedReason = `Stopped after ${MAX_TOOL_CALL_ROUNDS} tool-calling rounds.`;
+  if (!truncatedReason) truncatedReason = `Stopped after ${maxRounds} tool-calling rounds.`;
 
   // Round limit hit. Force a final text answer with tool_choice='none'
   // so the model summarizes what it did instead of trying to call
@@ -913,7 +918,7 @@ async function callOpenAICompatibleWithToolLoop(input: {
     model: final.model || resolvedModel,
     text: final.text || 'Casper exhausted the tool-calling round limit before producing a final answer.',
     toolCalls: allToolCalls,
-    rounds: MAX_TOOL_CALL_ROUNDS,
+    rounds: maxRounds,
     truncatedReason,
   };
 }
@@ -993,6 +998,13 @@ const SUBAGENT_DEFAULT_TIMEOUT_MS = 60_000;
 // past this cap, optimistic rows would render but the work never happens.
 export const SUBAGENT_MAX_PARALLEL = 8;
 
+// Sub-agent tool-calling loop bounds. Tighter than the parent
+// directive's bounds (MAX_TOOL_CALL_ROUNDS=5, MAX_TOOL_CALLS_PER_DIRECTIVE=15)
+// since each sub-agent is a focused single-objective worker. Keeping
+// these smaller limits the blast radius from N agents × M tools.
+const SUBAGENT_MAX_TOOL_ROUNDS = 3;
+const SUBAGENT_MAX_TOOL_CALLS = 8;
+
 async function runSubagentObjective(
   supabase: SupabaseClient,
   rowId: string,
@@ -1001,7 +1013,8 @@ async function runSubagentObjective(
   sharedSystem: string,
   cognitiveCore: Record<string, any>,
   userSettings?: CasperUserAiSettings,
-): Promise<{ ok: boolean; result: string; provider?: string; model?: string }> {
+  toolCtx?: ToolExecutionContext | null,
+): Promise<{ ok: boolean; result: string; provider?: string; model?: string; toolCalls?: LlmToolCallResult[] }> {
   // Mark working — best effort, don't block on failure.
   await supabase
     .from('casper_subagents')
@@ -1010,23 +1023,59 @@ async function runSubagentObjective(
 
   try {
     const systemPrompt = buildSubagentSystemPrompt(parentObjective, sharedSystem);
-    const execution = await Promise.race([
-      callOpenAICompatible({ prompt: objective, systemPrompt, cognitiveCore, userSettings }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('subagent_timeout')), SUBAGENT_DEFAULT_TIMEOUT_MS),
-      ),
-    ]);
 
-    const text = (execution.text || '').trim() || 'Sub-agent returned an empty response.';
+    let text: string;
+    let provider: string | undefined;
+    let model: string | undefined;
+    let toolCalls: LlmToolCallResult[] = [];
+
+    if (toolCtx) {
+      // Tool-calling path: the sub-agent can invoke shell + integrations
+      // independently, each sub-agent running its own bounded loop in
+      // parallel with the other sub-agents.
+      const execution = await Promise.race([
+        callOpenAICompatibleWithToolLoop({
+          prompt: objective,
+          systemPrompt,
+          cognitiveCore,
+          userSettings,
+          toolCtx,
+          maxToolRounds: SUBAGENT_MAX_TOOL_ROUNDS,
+          maxToolCalls: SUBAGENT_MAX_TOOL_CALLS,
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('subagent_timeout')), SUBAGENT_DEFAULT_TIMEOUT_MS),
+        ),
+      ]);
+      text = (execution.text || '').trim() || 'Sub-agent returned an empty response.';
+      provider = execution.provider;
+      model = execution.model;
+      toolCalls = execution.toolCalls;
+    } else {
+      // Single-shot text completion (no tools).
+      const execution = await Promise.race([
+        callOpenAICompatible({ prompt: objective, systemPrompt, cognitiveCore, userSettings }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('subagent_timeout')), SUBAGENT_DEFAULT_TIMEOUT_MS),
+        ),
+      ]);
+      text = (execution.text || '').trim() || 'Sub-agent returned an empty response.';
+      provider = execution.provider;
+      model = execution.model;
+    }
+
     await supabase
       .from('casper_subagents')
       .update({
         status: 'completed',
         result: text,
         completed_at: new Date().toISOString(),
+        metadata: toolCalls.length > 0
+          ? { tool_calls: toolCalls, tool_call_count: toolCalls.length }
+          : undefined,
       })
       .eq('id', rowId);
-    return { ok: true, result: text, provider: execution.provider, model: execution.model };
+    return { ok: true, result: text, provider, model, toolCalls: toolCalls.length > 0 ? toolCalls : undefined };
   } catch (error: any) {
     const message = error?.message === 'subagent_timeout'
       ? `Sub-agent timed out after ${SUBAGENT_DEFAULT_TIMEOUT_MS / 1000}s on: ${objective}`
@@ -1851,9 +1900,32 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       // through to the platform default rather than risk SSRF.
       const userSettings = sanitizeUserSettingsForServer(rawUserSettings);
 
+      // Tool-calling fan-out: when the caller opts in (enableTools=true),
+      // each sub-agent gets its own tool-calling loop so it can invoke
+      // shell + integrations independently in parallel. The ToolExecutionContext
+      // is shared (same user integrations/creds) but each sub-agent runs
+      // its own bounded loop with SUBAGENT_MAX_TOOL_ROUNDS/SUBAGENT_MAX_TOOL_CALLS.
+      const wantTools = body.enableTools === true && profile.role === 'admin';
+      let subagentToolCtx: ToolExecutionContext | null = null;
+      if (wantTools) {
+        const integrations = await loadConnectedIntegrationsForTools(supabase, profile.id);
+        const shellMode = resolveShellMode({
+          isAdmin: profile.role === 'admin',
+          surface: 'control_center',
+          enableShell: true,
+        });
+        subagentToolCtx = {
+          supabase,
+          userId: profile.id,
+          integrations,
+          shellMode,
+        };
+      }
+
       // Fan out in parallel. The whole batch runs on this request, but
       // each sub-agent updates its row as it progresses, so the UI
-      // animates without waiting for the response.
+      // animates without waiting for the response. Each sub-agent runs
+      // its own tool-calling loop independently when toolCtx is provided.
       const settled = await Promise.all(
         inserted.map((row) =>
           runSubagentObjective(
@@ -1864,24 +1936,33 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
             sharedSystem,
             cognitiveCore,
             userSettings,
+            subagentToolCtx,
           ).catch((err) => ({
-            ok: false,
+            ok: false as const,
             result: `Sub-agent crashed: ${err?.message || String(err)}`,
           })),
         ),
+      );
+
+      // Aggregate tool-call counts for the activity log.
+      const totalToolCalls = settled.reduce(
+        (sum, s) => sum + (('toolCalls' in s && Array.isArray(s.toolCalls)) ? s.toolCalls.length : 0),
+        0,
       );
 
       // Best-effort: log a single activity entry for the parent fan-out.
       try {
         await logActivity(supabase, {
           action_type: 'subagents_spawned',
-          description: `Casper spawned ${inserted.length} sub-agent${inserted.length === 1 ? '' : 's'}: ${objectives.map((o) => o.slice(0, 60)).join(' | ').slice(0, 480)}`,
+          description: `Casper spawned ${inserted.length} sub-agent${inserted.length === 1 ? '' : 's'}${wantTools ? ' (tools enabled)' : ''}: ${objectives.map((o) => o.slice(0, 60)).join(' | ').slice(0, 480)}`,
           actor_id: profile.id,
           metadata: {
             parent_task_id: parentTaskId,
             objective_count: inserted.length,
             successes: settled.filter((s) => s.ok).length,
             failures: settled.filter((s) => !s.ok).length,
+            tools_enabled: wantTools,
+            total_tool_calls: totalToolCalls,
           },
         });
       } catch (logErr) {
@@ -1892,12 +1973,17 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
         success: true,
         parentTaskId,
         objectives,
-        results: inserted.map((row, idx) => ({
-          id: row.id,
-          objective: row.objective,
-          status: settled[idx]?.ok ? 'completed' : 'failed',
-          result: settled[idx]?.result ?? '',
-        })),
+        toolsEnabled: wantTools,
+        results: inserted.map((row, idx) => {
+          const s = settled[idx];
+          return {
+            id: row.id,
+            objective: row.objective,
+            status: s?.ok ? 'completed' : 'failed',
+            result: s?.result ?? '',
+            toolCalls: ('toolCalls' in s && Array.isArray(s.toolCalls)) ? s.toolCalls : undefined,
+          };
+        }),
       });
     } catch (error: any) {
       console.error('[casper-control:subagents-spawn]', error);

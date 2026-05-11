@@ -40,12 +40,14 @@ export interface SubagentResult {
   objective: string;
   status: 'queued' | 'working' | 'awaiting_client' | 'completed' | 'failed';
   result: string;
+  toolCalls?: CasperToolCall[];
 }
 
 export interface SubagentSpawnResponse {
   success: true;
   parentTaskId: string;
   objectives: string[];
+  toolsEnabled?: boolean;
   results: SubagentResult[];
 }
 
@@ -66,6 +68,7 @@ export async function spawnCasperSubagents(input: {
   parentPrompt: string;
   objectives?: string[];
   parentTaskId?: string;
+  enableTools?: boolean;
 }): Promise<SubagentSpawnResponse> {
   const headers = await authHeaders();
   const response = await fetch(`${apiBaseUrl()}/api/casper/subagents/spawn`, {
