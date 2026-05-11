@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Film, Image as ImageIcon, Loader2, Play, Send, Sparkles, Wand2, CalendarClock, Layers, Upload, RefreshCw, Scissors, PanelTop, Zap } from 'lucide-react';
+import { CasperStudioGuide } from './CasperStudioGuide';
 import { getRunwayTask, requestRunwayGeneration, type RunwayTaskResponse } from '../lib/runway';
 import { supabase, toDb } from '../supabase';
 import { useAuth } from '../AuthContext';
@@ -336,6 +337,8 @@ export function ContentCreationStudio() {
                 </div>
               )}
             </div>
+
+            <CasperStudioGuide mode={mode} />
 
             <div className="rounded-[2rem] border border-white/10 bg-zinc-950/70 p-5">
               <h3 className="mb-3 text-xs font-black uppercase tracking-widest text-white">Usage</h3>
