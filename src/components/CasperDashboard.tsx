@@ -602,10 +602,12 @@ export const CasperDashboard: React.FC = () => {
   if (currentUser?.role !== 'admin') return <div className="grid min-h-screen place-items-center bg-black text-white">Admin clearance required.</div>;
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#020205] pb-32 text-white">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(0,229,255,0.2),transparent_30%),radial-gradient(circle_at_90%_15%,rgba(255,23,68,0.16),transparent_28%),radial-gradient(circle_at_50%_90%,rgba(139,92,246,0.18),transparent_35%)]" />
-      <div className="pointer-events-none absolute inset-0 opacity-25 [background-image:linear-gradient(rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(0,229,255,0.06)_1px,transparent_1px)] [background-size:44px_44px]" />
-      {Array.from({ length: 28 }).map((_, index) => <motion.span key={index} className="pointer-events-none absolute h-1 w-1 rounded-full bg-cyan-200" style={{ left: `${(index * 37) % 100}%`, top: `${(index * 19) % 92}%`, boxShadow: '0 0 16px rgba(0,229,255,0.95)' }} animate={{ y: [0, -22, 0], opacity: [0.15, 0.85, 0.15] }} transition={{ duration: 3 + (index % 5), repeat: Infinity, delay: index * 0.08 }} />)}
+    <div className="relative min-h-screen bg-[#020205] pb-32 text-white">
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(0,229,255,0.2),transparent_30%),radial-gradient(circle_at_90%_15%,rgba(255,23,68,0.16),transparent_28%),radial-gradient(circle_at_50%_90%,rgba(139,92,246,0.18),transparent_35%)]" />
+        <div className="absolute inset-0 opacity-25 [background-image:linear-gradient(rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(0,229,255,0.06)_1px,transparent_1px)] [background-size:44px_44px]" />
+        {Array.from({ length: 28 }).map((_, index) => <motion.span key={index} className="absolute h-1 w-1 rounded-full bg-cyan-200" style={{ left: `${(index * 37) % 100}%`, top: `${(index * 19) % 92}%`, boxShadow: '0 0 16px rgba(0,229,255,0.95)' }} animate={{ y: [0, -22, 0], opacity: [0.15, 0.85, 0.15] }} transition={{ duration: 3 + (index % 5), repeat: Infinity, delay: index * 0.08 }} />)}
+      </div>
       <div className="relative mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         <motion.header initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }} className="mb-8 flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
           <div>
