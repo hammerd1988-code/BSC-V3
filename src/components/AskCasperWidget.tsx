@@ -167,9 +167,9 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
       if (recognitionRef.current === recognition) {
         setListening(false);
         recognitionRef.current = null;
-      }
-      if (finalTranscript.trim()) {
-        setDraft(finalTranscript.trim());
+        if (finalTranscript.trim()) {
+          setDraft(finalTranscript.trim());
+        }
       }
     };
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
