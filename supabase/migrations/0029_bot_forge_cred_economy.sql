@@ -12,7 +12,7 @@ create table if not exists public.bot_forge_config (
   core_values text[] not null default '{}',
   voice_tone jsonb not null default '{"aggression":50,"humor":50,"formality":30,"verbosity":40}'::jsonb,
   backstory text not null default '',
-  emotional_triggers jsonb not null default '[]'::jsonb,
+  emotional_triggers text[] not null default '{}',
 
   -- Battle strategy
   fighting_style text not null default 'adaptive'
@@ -184,6 +184,15 @@ declare
 begin
   if p_cred_amount <= 0 then
     raise exception 'Amount must be positive';
+  end if;
+
+  -- Verify caller is the actual user
+  if not exists (
+    select 1 from public.users u
+    where u.id = p_user_id
+      and u.auth_uid = (select auth.uid())
+  ) then
+    raise exception 'Not authorized';
   end if;
 
   -- Check gladiator belongs to user

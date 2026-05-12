@@ -389,6 +389,8 @@ export function BotForge() {
   const [convertAmount, setConvertAmount] = useState(0);
   const [converting, setConverting] = useState(false);
 
+  const gladiatorParam = searchParams.get('gladiator');
+
   // Load gladiators owned by this user
   useEffect(() => {
     if (!currentUser?.id) return;
@@ -403,12 +405,11 @@ export function BotForge() {
       setGladiators(data ?? []);
 
       // Auto-select from URL param or first
-      const paramId = searchParams.get('gladiator');
-      const match = (data ?? []).find((g: GladiatorRow) => g.id === paramId) ?? (data ?? [])[0] ?? null;
+      const match = (data ?? []).find((g: GladiatorRow) => g.id === gladiatorParam) ?? (data ?? [])[0] ?? null;
       if (match) setSelectedGladiator(match);
       setLoading(false);
     })();
-  }, [currentUser?.id, searchParams]);
+  }, [currentUser?.id, gladiatorParam]);
 
   // Load forge config when gladiator changes
   useEffect(() => {
