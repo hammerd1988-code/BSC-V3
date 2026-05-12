@@ -387,11 +387,13 @@ export function resolveShellMode(input: {
   enableShell: boolean;
 }): CasperShellMode | 'disabled' {
   if (!input.enableShell) return 'disabled';
-  // Studio and control_center are the surfaces where users explicitly
-  // operate Casper as an agent. Guide/autopilot are for help bubbles
-  // and machine-driven routines respectively — neither should have
-  // implicit shell access.
-  if (input.surface !== 'control_center' && input.surface !== 'studio') return 'disabled';
+  // Studio, control_center, and guide are the surfaces where users
+  // interact with Casper directly. Autopilot is for machine-driven
+  // routines — it should not have implicit shell access. Guide gets
+  // read-only shell at most (never elevated) so the floating widget
+  // can run diagnostics and quick commands without full write access.
+  if (input.surface !== 'control_center' && input.surface !== 'studio' && input.surface !== 'guide') return 'disabled';
+  if (input.surface === 'guide') return 'readonly';
   if (input.isAdmin && isShellElevationEnabled()) return 'elevated';
   return 'readonly';
 }
