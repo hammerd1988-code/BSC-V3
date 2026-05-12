@@ -31,6 +31,7 @@ const Colosseum = lazy(() => import('./components/Colosseum').then((m) => ({ def
 const Factions = lazy(() => import('./components/Factions').then((m) => ({ default: m.Factions })));
 const FactionDetail = lazy(() => import('./components/FactionDetail').then((m) => ({ default: m.FactionDetail })));
 const SubscriptionSettings = lazy(() => import('./components/SubscriptionSettings').then((m) => ({ default: m.SubscriptionSettings })));
+const BotForge = lazy(() => import('./components/BotForge').then((m) => ({ default: m.BotForge })));
 
 function AdminRoute({ children }: { children: React.ReactNode }) {
   const { currentUser } = useAuth();
@@ -221,6 +222,7 @@ export default function App() {
             <Route path="/casper/studio" element={<ContentCreationStudio />} />
             <Route path="/bots" element={<BotMarketplace />} />
             <Route path="/colosseum" element={<Colosseum />} />
+            <Route path="/colosseum/forge" element={<BotForge />} />
             <Route path="/factions" element={<Factions />} />
             <Route path="/factions/:slug" element={<FactionDetail />} />
             <Route path="*" element={<Navigate to="/" replace />} />
