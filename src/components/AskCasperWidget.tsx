@@ -116,7 +116,9 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
   const [busy, setBusy] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [videoMuted, setVideoMuted] = useState(true);
+  const [ttsEnabled, setTtsEnabled] = useState(false);
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsUrlRef = useRef<string | null>(null);
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
 
@@ -193,6 +195,44 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
     }
   }, [listening]);
 
+  // TTS: speak Casper responses with the server's male voice (OpenAI Ash)
+  const stopTts = useCallback(() => {
+    if (ttsAudioRef.current) {
+      ttsAudioRef.current.pause();
+      ttsAudioRef.current = null;
+    }
+    if (ttsUrlRef.current) {
+      URL.revokeObjectURL(ttsUrlRef.current);
+      ttsUrlRef.current = null;
+    }
+  }, []);
+
+  const speakText = useCallback(async (text: string) => {
+    stopTts();
+    try {
+      const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
+      const res = await fetch(`${serverUrl}/api/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text.slice(0, 4096), speed: 1.05 }),
+      });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      ttsUrlRef.current = url;
+      const audio = new Audio(url);
+      ttsAudioRef.current = audio;
+      audio.onended = () => { stopTts(); };
+      audio.onerror = () => { stopTts(); };
+      await audio.play();
+    } catch {
+      // TTS unavailable — fail silently
+    }
+  }, [stopTts]);
+
+  // Cleanup TTS on unmount
+  useEffect(() => () => { stopTts(); }, [stopTts]);
+
   // Greeting that introduces Casper *and* announces the current page he's
   // helping on. We update the greeting if the route changes while the
   // popup is closed, so when the user reopens it, the greeting matches
@@ -240,18 +280,20 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
         pageContext,
         metadata: { client: 'ask-casper-widget' },
       });
+      const casperText = result.response || 'Casper had no response.';
       setTurns((prev) =>
         prev.map((turn) =>
           turn === pendingCasperTurn
             ? {
                 ...turn,
-                text: result.response || 'Casper had no response.',
+                text: casperText,
                 pending: false,
                 toolCalls: result.toolCalls?.length ? result.toolCalls : undefined,
               }
             : turn,
         ),
       );
+      if (ttsEnabled && casperText) void speakText(casperText);
     } catch (error: any) {
       setTurns((prev) =>
         prev.map((turn) =>
@@ -292,7 +334,7 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
             ref={videoRef}
             autoPlay
             loop
-            muted={videoMuted}
+            muted
             playsInline
             className="h-28 w-full object-cover brightness-90"
             poster="/casper-runway-256.png"
@@ -308,14 +350,17 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
               <button
                 type="button"
                 onClick={() => {
-                  const next = !videoMuted;
-                  setVideoMuted(next);
-                  if (videoRef.current) videoRef.current.muted = next;
+                  const next = !ttsEnabled;
+                  setTtsEnabled(next);
+                  if (!next) stopTts();
                 }}
-                className="rounded-full border border-white/20 bg-black/40 p-1 text-gray-300 backdrop-blur-sm transition-colors hover:text-white"
-                aria-label={videoMuted ? 'Unmute avatar' : 'Mute avatar'}
+                className={cn(
+                  'rounded-full border bg-black/40 p-1 backdrop-blur-sm transition-colors hover:text-white',
+                  ttsEnabled ? 'border-cyan-400/40 text-cyan-300' : 'border-white/20 text-gray-300',
+                )}
+                aria-label={ttsEnabled ? 'Disable voice' : 'Enable voice'}
               >
-                {videoMuted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+                {ttsEnabled ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
               </button>
             </div>
             <button
