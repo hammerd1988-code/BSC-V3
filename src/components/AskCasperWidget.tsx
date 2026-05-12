@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, X, Loader2 } from 'lucide-react';
+import { Send, X, Loader2, Volume2, VolumeX, Mic, MicOff } from 'lucide-react';
 import { sendCasperCommand, type CasperSurface } from '../lib/casper';
 import { useAuth } from '../AuthContext';
 import { cn } from '../lib/utils';
@@ -114,8 +114,59 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [busy, setBusy] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [videoMuted, setVideoMuted] = useState(true);
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
 
   const pageContext = useMemo(() => describeCurrentPage(location.pathname), [location.pathname]);
+
+  // Speech recognition setup
+  const hasSpeechSupport = typeof window !== 'undefined' &&
+    ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+
+  const toggleListening = useCallback(() => {
+    if (listening) {
+      recognitionRef.current?.stop();
+      setListening(false);
+      return;
+    }
+    const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionCtor) return;
+    const recognition = new SpeechRecognitionCtor() as SpeechRecognition;
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    let finalTranscript = '';
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      let interim = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += transcript;
+        } else {
+          interim += transcript;
+        }
+      }
+      setDraft(finalTranscript + interim);
+    };
+    recognition.onend = () => {
+      setListening(false);
+      recognitionRef.current = null;
+      if (finalTranscript.trim()) {
+        setDraft(finalTranscript.trim());
+      }
+    };
+    recognition.onerror = () => {
+      setListening(false);
+      recognitionRef.current = null;
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    setListening(true);
+  }, [listening]);
 
   // Greeting that introduces Casper *and* announces the current page he's
   // helping on. We update the greeting if the route changes while the
@@ -208,9 +259,10 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
         {/* Animated avatar banner */}
         <div className="relative overflow-hidden border-b border-cyan-500/20">
           <video
+            ref={videoRef}
             autoPlay
             loop
-            muted
+            muted={videoMuted}
             playsInline
             className="h-28 w-full object-cover brightness-90"
             poster="/casper-runway-256.png"
@@ -218,9 +270,23 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
           />
           <div className="absolute inset-0 bg-gradient-to-t from-[#0a0d14] via-transparent to-transparent" />
           <div className="absolute inset-x-0 bottom-0 flex items-end justify-between px-4 pb-2">
-            <div>
-              <div className="text-[10px] font-black uppercase tracking-[0.3em] text-cyan-300/80">Ask Casper</div>
-              <div className="text-sm font-semibold text-white drop-shadow-lg">{pageContext.feature}</div>
+            <div className="flex items-center gap-2">
+              <div>
+                <div className="text-[10px] font-black uppercase tracking-[0.3em] text-cyan-300/80">Ask Casper</div>
+                <div className="text-sm font-semibold text-white drop-shadow-lg">{pageContext.feature}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !videoMuted;
+                  setVideoMuted(next);
+                  if (videoRef.current) videoRef.current.muted = next;
+                }}
+                className="rounded-full border border-white/20 bg-black/40 p-1 text-gray-300 backdrop-blur-sm transition-colors hover:text-white"
+                aria-label={videoMuted ? 'Unmute avatar' : 'Mute avatar'}
+              >
+                {videoMuted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+              </button>
             </div>
             <button
               type="button"
@@ -287,13 +353,32 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
           }}
         >
           <div className="flex items-end gap-2">
+            {hasSpeechSupport && (
+              <button
+                type="button"
+                onClick={toggleListening}
+                className={cn(
+                  'rounded-xl border p-2.5 transition-all',
+                  listening
+                    ? 'border-red-400/60 bg-red-500/20 text-red-300 animate-pulse'
+                    : 'border-white/10 bg-white/5 text-gray-400 hover:text-cyan-300 hover:border-cyan-400/40'
+                )}
+                aria-label={listening ? 'Stop listening' : 'Speak to Casper'}
+                disabled={busy}
+              >
+                {listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+              </button>
+            )}
             <textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={onKeyDown}
-              placeholder={`Ask about ${pageContext.feature}…`}
+              placeholder={listening ? 'Listening…' : `Ask about ${pageContext.feature}…`}
               rows={2}
-              className="flex-1 resize-none rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-cyan-400/60 focus:outline-none"
+              className={cn(
+                'flex-1 resize-none rounded-xl border bg-black/40 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-cyan-400/60 focus:outline-none',
+                listening ? 'border-red-400/30' : 'border-white/10'
+              )}
               disabled={busy}
             />
             <button
@@ -306,7 +391,7 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
             </button>
           </div>
           <div className="mt-1 text-[10px] uppercase tracking-widest text-gray-500">
-            Enter to send · Shift+Enter for newline
+            {listening ? '🎙️ Speaking — click mic to stop' : 'Enter to send · Shift+Enter for newline'}
           </div>
         </form>
       </motion.div>
