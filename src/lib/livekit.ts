@@ -27,7 +27,11 @@ export function liveKitRoomName(roomType: LiveKitRoomType, resourceId: string): 
 }
 
 export async function requestLiveKitToken(input: LiveKitTokenRequest): Promise<LiveKitTokenResponse> {
-  const { data: { session } } = await supabase.auth.getSession();
+  let { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) {
+    const refreshed = await supabase.auth.refreshSession();
+    session = refreshed.data.session;
+  }
   if (!session?.access_token) {
     throw new Error('Sign in is required before joining a LiveKit room.');
   }

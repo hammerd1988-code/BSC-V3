@@ -125,7 +125,11 @@ async function callOpenAICompatible(
 }
 
 async function callServerAi(prompt: string, options: GenerateOptions = {}): Promise<string> {
-  const { data: { session } } = await supabase.auth.getSession();
+  let { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) {
+    const refreshed = await supabase.auth.refreshSession();
+    session = refreshed.data.session;
+  }
   if (!session?.access_token) return "";
 
   const response = await fetch(`${apiBaseUrl()}/api/ai/generate-text`, {
