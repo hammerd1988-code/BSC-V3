@@ -128,10 +128,11 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
 
   const toggleListening = useCallback(() => {
     if (listening) {
-      // Explicitly stop the current recognition instance
+      // Stop the instance — onend will handle ref cleanup and draft trim.
+      // We set listening=false immediately for responsive UI, but leave
+      // recognitionRef intact so the onend identity guard passes.
       recognitionRef.current?.stop();
       setListening(false);
-      recognitionRef.current = null;
       return;
     }
     const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -167,9 +168,9 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
       if (recognitionRef.current === recognition) {
         setListening(false);
         recognitionRef.current = null;
-      }
-      if (finalTranscript.trim()) {
-        setDraft(finalTranscript.trim());
+        if (finalTranscript.trim()) {
+          setDraft(finalTranscript.trim());
+        }
       }
     };
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
