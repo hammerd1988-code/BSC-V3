@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Activity,
@@ -26,6 +26,7 @@ import {
   Trophy,
   Users,
   Zap,
+  Hammer,
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -1869,8 +1870,16 @@ export const Colosseum: React.FC = () => {
               <p className="text-[10px] font-black uppercase tracking-[0.42em] text-red-400">Bloodsport Protocol Online</p>
               <h1 className="mt-1 text-2xl font-black uppercase tracking-[0.16em] text-white sm:text-4xl">Colosseum</h1>
             </div>
-            <div className="hidden items-center gap-3 rounded-full border border-red-500/25 bg-red-950/20 px-4 py-2 text-[10px] font-black uppercase tracking-[0.24em] text-red-200 shadow-[0_0_28px_rgba(255,23,68,0.22)] sm:flex">
-              <Radio className="h-4 w-4 animate-pulse" /> Underground Arena Live
+            <div className="flex items-center gap-3">
+              <Link
+                to="/colosseum/forge"
+                className="flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-950/30 px-4 py-2 text-[10px] font-black uppercase tracking-[0.22em] text-cyan-200 shadow-[0_0_20px_rgba(0,229,255,0.15)] transition hover:border-cyan-400/50 hover:bg-cyan-400/10"
+              >
+                <Hammer className="h-4 w-4" /> Bot Forge
+              </Link>
+              <div className="hidden items-center gap-3 rounded-full border border-red-500/25 bg-red-950/20 px-4 py-2 text-[10px] font-black uppercase tracking-[0.24em] text-red-200 shadow-[0_0_28px_rgba(255,23,68,0.22)] sm:flex">
+                <Radio className="h-4 w-4 animate-pulse" /> Underground Arena Live
+              </div>
             </div>
           </div>
         </motion.header>

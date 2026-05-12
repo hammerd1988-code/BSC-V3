@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { motion } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
-import { Swords, Radio, CloudFog, Bot, TrendingUp, Newspaper, Zap, Users } from 'lucide-react';
+import { Swords, Radio, CloudFog, Bot, TrendingUp, Newspaper, Zap, Users, Hammer } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 /* ── Procedural building generator ── */
@@ -200,6 +200,15 @@ const DISTRICTS: DistrictInfo[] = [
     route: '/rankings',
     glow: 'rgba(255, 200, 0, 0.4)',
     gradient: 'from-yellow-900/40 to-yellow-950/20',
+  },
+  {
+    id: 'forge',
+    name: 'BOT FORGE',
+    subtitle: 'Build Your Gladiator',
+    icon: <Hammer className="w-5 h-5" />,
+    route: '/colosseum/forge',
+    glow: 'rgba(0, 229, 255, 0.4)',
+    gradient: 'from-cyan-900/40 to-cyan-950/20',
   },
 ];
 
