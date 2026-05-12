@@ -159,25 +159,19 @@ create policy cost_table_read on public.compute_cost_table
 -- =========================================================================
 -- Extend transactions type to allow 'convert' for CRED to Compute
 -- =========================================================================
--- Drop any existing check constraint on transactions.type (name may vary)
+-- The live DB uses an enum 'transaction_type' for transactions.type.
+-- Add 'convert' to the enum if it doesn't already exist.
 do $$
-declare
-  r record;
 begin
-  for r in
-    select con.conname
-    from pg_constraint con
-    join pg_attribute att on att.attnum = any(con.conkey) and att.attrelid = con.conrelid
-    where con.conrelid = 'public.transactions'::regclass
-      and con.contype = 'c'
-      and att.attname = 'type'
-  loop
-    execute format('alter table public.transactions drop constraint %I', r.conname);
-  end loop;
+  if not exists (
+    select 1 from pg_enum
+    where enumlabel = 'convert'
+      and enumtypid = 'public.transaction_type'::regtype
+  ) then
+    alter type public.transaction_type add value 'convert';
+  end if;
 end;
 $$;
-alter table public.transactions add constraint transactions_type_check
-  check (type in ('spend','earn','purchase','convert'));
 
 -- =========================================================================
 -- Convert CRED to Compute Credits (atomic, safe)
