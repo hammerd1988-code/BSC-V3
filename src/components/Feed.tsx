@@ -18,6 +18,7 @@ import { BOT_PERSONAS } from '../lib/botPersonas';
 import { NeuralBriefing } from './NeuralBriefing';
 import { TrendingSidebar } from './TrendingSidebar';
 import { CasperState } from './CasperState';
+import { MegaCitySkyline } from './MegaCitySkyline';
 
 type FeedChallengeType = 'speed_round' | 'debug_battle' | 'code_golf';
 
@@ -645,112 +646,115 @@ export const Feed: React.FC = () => {
         </AnimatePresence>
       </div>
 
-      {/* Top Navigation */}
-      <header className="sticky top-0 z-50 border-b border-white/5 bg-background/80 px-3 py-4 backdrop-blur-xl sm:px-4">
-        <div className="mx-auto flex max-w-md min-w-0 flex-col gap-4">
-          <div className="flex min-w-0 items-center justify-between gap-3">
-            <h1 
+      {/* Mega City Skyline Hero */}
+      <MegaCitySkyline
+        liveBattleCount={liveBattles.length}
+        liveStreamCount={liveStreams.length}
+      />
+
+      {/* Sticky Nav Bar */}
+      <header className="sticky top-0 z-50 border-b border-white/5 bg-black/90 px-3 py-3 backdrop-blur-xl sm:px-4">
+        <div className="mx-auto flex max-w-4xl min-w-0 items-center justify-between gap-3">
+          <div className="flex items-center gap-4">
+            <h1
               onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-              className="min-w-0 shrink truncate text-xl font-black tracking-tighter text-accent italic cursor-pointer hover:opacity-80 transition-opacity"
+              className="min-w-0 shrink truncate text-base font-black tracking-tighter text-accent italic cursor-pointer hover:opacity-80 transition-opacity sm:text-lg"
             >
-              BLOOD<span className="text-white">SWEAT</span>CODE
+              BSC<span className="text-white/60 text-xs font-bold ml-1 hidden sm:inline">MEGA CITY</span>
             </h1>
-            <div className="flex shrink-0 items-center gap-2 sm:gap-4">
-              <div className="flex items-center gap-1.5 px-2 py-1 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
-                <Coins className="w-3.5 h-3.5 text-yellow-500" />
-                <span className="text-[10px] font-bold text-yellow-500 font-mono">
-                  {currentUser?.cred_balance || 0}
-                </span>
-              </div>
-              <button 
-                onClick={() => navigate('/golive')}
+            {/* Feed Type Switcher */}
+            <div className="flex items-center gap-5 relative">
+              <button
+                onClick={() => setFeedType('latest')}
                 className={cn(
-                  "flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all group",
-                  isLive 
-                    ? "bg-accent border-accent text-white animate-pulse" 
-                    : "bg-primary/20 border-primary/30 text-accent hover:bg-primary/30"
+                  "text-[10px] font-black uppercase tracking-[0.2em] pb-0.5 transition-all relative",
+                  feedType === 'latest' ? "text-white" : "text-gray-500 hover:text-gray-300"
                 )}
               >
-                <Radio className={cn("w-4 h-4", isLive ? "animate-spin" : "group-hover:scale-110")} />
-                <span className="text-[10px] font-bold uppercase tracking-widest">
-                  {isLive ? `CROWD: ${crowdSize}` : "GO LIVE"}
-                </span>
+                Latest
+                {feedType === 'latest' && (
+                  <motion.div layoutId="feedTab" className="absolute -bottom-0.5 left-0 right-0 h-0.5 bg-accent" />
+                )}
               </button>
-              <Link to="/trending">
-                <TrendingUp className="w-5 h-5 text-gray-400 hover:text-accent cursor-pointer transition-colors" />
-              </Link>
+              <button
+                onClick={() => setFeedType('foryou')}
+                className={cn(
+                  "text-[10px] font-black uppercase tracking-[0.2em] pb-0.5 transition-all relative flex items-center gap-1.5",
+                  feedType === 'foryou' ? "text-white" : "text-gray-500 hover:text-gray-300"
+                )}
+              >
+                <Sparkles className={cn("w-3 h-3", feedType === 'foryou' ? "text-accent" : "text-gray-500")} />
+                For You
+                {feedType === 'foryou' && (
+                  <motion.div layoutId="feedTab" className="absolute -bottom-0.5 left-0 right-0 h-0.5 bg-accent" />
+                )}
+              </button>
+              {feedType === 'foryou' && !isRecommending && (
+                <button
+                  onClick={() => getRecommendations()}
+                  className="p-1 text-gray-500 hover:text-accent transition-colors"
+                  title="Refresh Recommendations"
+                >
+                  <TrendingUp className="w-3 h-3 rotate-90" />
+                </button>
+              )}
             </div>
           </div>
-
-          {/* Feed Type Switcher */}
-          <div className="flex items-center justify-center gap-8 border-t border-white/5 pt-2 relative">
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+            <div className="flex items-center gap-1.5 px-2 py-1 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+              <Coins className="w-3.5 h-3.5 text-yellow-500" />
+              <span className="text-[10px] font-bold text-yellow-500 font-mono">
+                {currentUser?.cred_balance || 0}
+              </span>
+            </div>
             <button
-              onClick={() => setFeedType('latest')}
+              onClick={() => navigate('/golive')}
               className={cn(
-                "text-[10px] font-black uppercase tracking-[0.2em] pb-1 transition-all relative",
-                feedType === 'latest' ? "text-white" : "text-gray-500 hover:text-gray-300"
+                "flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all group",
+                isLive
+                  ? "bg-accent border-accent text-white animate-pulse"
+                  : "bg-primary/20 border-primary/30 text-accent hover:bg-primary/30"
               )}
             >
-              Latest
-              {feedType === 'latest' && (
-                <motion.div layoutId="feedTab" className="absolute -bottom-1 left-0 right-0 h-0.5 bg-accent" />
-              )}
+              <Radio className={cn("w-4 h-4", isLive ? "animate-spin" : "group-hover:scale-110")} />
+              <span className="text-[10px] font-bold uppercase tracking-widest">
+                {isLive ? `CROWD: ${crowdSize}` : "GO LIVE"}
+              </span>
             </button>
-            <button
-              onClick={() => setFeedType('foryou')}
-              className={cn(
-                "text-[10px] font-black uppercase tracking-[0.2em] pb-1 transition-all relative flex items-center gap-1.5",
-                feedType === 'foryou' ? "text-white" : "text-gray-500 hover:text-gray-300"
-              )}
-            >
-              <Sparkles className={cn("w-3 h-3", feedType === 'foryou' ? "text-accent" : "text-gray-500")} />
-              For You
-              {feedType === 'foryou' && (
-                <motion.div layoutId="feedTab" className="absolute -bottom-1 left-0 right-0 h-0.5 bg-accent" />
-              )}
-            </button>
-            
-            {feedType === 'foryou' && !isRecommending && (
-              <button 
-                onClick={() => getRecommendations()}
-                className="absolute right-0 top-2 p-1 text-gray-500 hover:text-accent transition-colors"
-                title="Refresh Recommendations"
-              >
-                <TrendingUp className="w-3 h-3 rotate-90" />
-              </button>
-            )}
           </div>
         </div>
       </header>
 
-      {/* Live Streams Section */}
+      {/* Live Streams — Signal Tower District */}
       {liveStreams.length > 0 && (
-        <section className="max-w-md mx-auto pt-6 px-4">
-          <div className="flex items-center justify-between mb-4">
-            <div className="text-xs font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2">
-              <Radio className="w-4 h-4 text-accent animate-pulse" />
-              Live Neural Links
+        <section className="mx-auto max-w-4xl px-3 pt-6 sm:px-4">
+          <div className="rounded-2xl border border-cyan-500/15 bg-black/60 p-4 backdrop-blur-sm" style={{ boxShadow: '0 0 24px rgba(0,200,255,0.08)' }}>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Radio className="w-4 h-4 text-cyan-400 animate-pulse" />
+                <span className="text-[10px] font-black uppercase tracking-[0.25em] text-cyan-300">Signal Tower</span>
+              </div>
+              <span className="text-[9px] font-black uppercase tracking-widest text-cyan-400/60 animate-pulse">Broadcasting</span>
             </div>
-            <span className="text-[10px] text-accent font-bold animate-pulse">ACTIVE</span>
-          </div>
-          <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide">
-            {liveStreams.map((stream) => (
-              <motion.div
-                key={stream.id}
-                whileHover={{ scale: 1.05 }}
-                onClick={() => navigate(`/golive?streamId=${stream.id}`)}
-                className="flex-shrink-0 w-24 text-center cursor-pointer group"
-              >
-                <div className="relative mb-2">
-                  <img src={stream.hostAvatar} alt="" className="w-16 h-16 mx-auto rounded-2xl object-cover border-2 border-primary group-hover:border-accent transition-colors" />
-                  <div className="absolute -bottom-1 -right-1 bg-accent text-white text-[8px] font-black px-1.5 py-0.5 rounded-full border border-background flex items-center gap-1">
-                    <Eye className="w-2 h-2" />
-                    {stream.crowdSize}
+            <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+              {liveStreams.map((stream) => (
+                <motion.div
+                  key={stream.id}
+                  whileHover={{ scale: 1.05, y: -2 }}
+                  onClick={() => navigate(`/golive?streamId=${stream.id}`)}
+                  className="flex-shrink-0 w-24 text-center cursor-pointer group"
+                >
+                  <div className="relative mb-2">
+                    <img src={stream.hostAvatar} alt="" className="w-16 h-16 mx-auto rounded-2xl object-cover border-2 border-cyan-500/30 group-hover:border-cyan-400 transition-colors" />
+                    <div className="absolute -bottom-1 -right-1 bg-cyan-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full border border-background flex items-center gap-1">
+                      <Eye className="w-2 h-2" />
+                      {stream.crowdSize}
+                    </div>
                   </div>
-                </div>
-                <p className="text-[10px] font-bold text-white truncate">@{stream.hostUsername}</p>
-              </motion.div>
-            ))}
+                  <p className="text-[10px] font-bold text-white truncate">@{stream.hostUsername}</p>
+                </motion.div>
+              ))}
+            </div>
           </div>
         </section>
       )}
@@ -760,17 +764,17 @@ export const Feed: React.FC = () => {
         <LiveBattlesWidget battles={liveBattles} variant="mobile" onOpen={(matchId) => navigate(`/colosseum?match=${matchId}`)} />
       </div>
 
-      {/* Featured AI Architect */}
+      {/* Featured AI Architect — Neural Hub Spotlight */}
       {featuredBot && (
-        <section className="max-w-md mx-auto pt-6 px-4">
-          <div className="bg-zinc-950 border border-white/10 rounded-3xl p-6 relative overflow-hidden group">
+        <section className="mx-auto max-w-4xl px-3 pt-6 sm:px-4">
+          <div className="rounded-2xl border border-emerald-500/15 bg-black/60 p-6 relative overflow-hidden group backdrop-blur-sm" style={{ boxShadow: '0 0 24px rgba(0,255,140,0.06)' }}>
             <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-              <Terminal className="w-24 h-24 text-accent" />
+              <Terminal className="w-24 h-24 text-emerald-400" />
             </div>
             <div className="relative z-10">
               <div className="flex items-center gap-2 mb-4">
-                <Sparkles className="w-4 h-4 text-accent animate-pulse" />
-                <span className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.3em]">Featured Neural Entity</span>
+                <Bot className="w-4 h-4 text-emerald-400 animate-pulse" />
+                <span className="text-[10px] font-black text-emerald-300/60 uppercase tracking-[0.3em]">Neural Hub Spotlight</span>
               </div>
               <div className="flex items-center gap-4 mb-6">
                 <div className="relative">
@@ -810,8 +814,8 @@ export const Feed: React.FC = () => {
 
       {/* Top 10 Biggest Crowds Leaderboard */}
       {topCrowds.length > 0 && (
-        <section className="max-w-md mx-auto pt-6 px-4">
-          <div className="bg-zinc-950 border border-white/10 rounded-3xl p-6">
+        <section className="mx-auto max-w-4xl px-3 pt-6 sm:px-4">
+          <div className="rounded-2xl border border-white/10 bg-black/60 p-6 backdrop-blur-sm">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
                 <Users className="w-4 h-4 text-accent" />
@@ -881,8 +885,11 @@ export const Feed: React.FC = () => {
 
         {/* Main feed column */}
         <div className="mx-auto w-full max-w-md min-w-0 flex-1 lg:max-w-none">
-        <NeuralBriefing recentPosts={displayPosts} />
-        <CasperState context="feed" />
+        {/* City Broadcast — Casper's Network Pulse */}
+        <div className="city-broadcast mb-6 rounded-xl px-4 py-3">
+          <NeuralBriefing recentPosts={displayPosts} />
+          <CasperState context="feed" />
+        </div>
         {trendFilter && (
           <div className="flex items-center gap-2 mb-4 px-1">
             <span className="text-[10px] font-black uppercase tracking-widest text-accent">Filtering:</span>
@@ -909,7 +916,9 @@ export const Feed: React.FC = () => {
           </div>
         ) : (
           displayPosts.map((post) => (
-            <PostCard key={post.id} post={post} onLike={handleLike} onDelete={handleDeletePost} />
+            <div key={post.id} className="holo-card">
+              <PostCard post={post} onLike={handleLike} onDelete={handleDeletePost} />
+            </div>
           ))
         )}
 
