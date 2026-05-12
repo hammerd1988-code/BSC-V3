@@ -157,7 +157,7 @@ create policy cost_table_read on public.compute_cost_table
   for select to authenticated using (true);
 
 -- =========================================================================
--- Extend transactions type to allow 'convert' for CRED→Compute
+-- Extend transactions type to allow 'convert' for CRED to Compute
 -- =========================================================================
 alter table public.transactions drop constraint if exists transactions_type_check;
 alter table public.transactions add constraint transactions_type_check
@@ -227,12 +227,12 @@ begin
   -- Log CRED deduction
   insert into public.transactions (user_id, amount, type, description)
   values (p_user_id, -p_cred_amount, 'convert',
-    format('Converted %s CRED → %s Compute Credits (gladiator: %s)', p_cred_amount, v_compute_amount, p_gladiator_id));
+    format('Converted %s CRED to %s Compute Credits (gladiator: %s)', p_cred_amount, v_compute_amount, p_gladiator_id));
 
   -- Log compute credit addition
   insert into public.compute_transactions (user_id, gladiator_id, amount, type, operation, description)
   values (p_user_id, p_gladiator_id, v_compute_amount, 'convert_from_cred', 'cred_conversion',
-    format('Converted %s CRED → %s Compute Credits', p_cred_amount, v_compute_amount));
+    format('Converted %s CRED to %s Compute Credits', p_cred_amount, v_compute_amount));
 
   return jsonb_build_object(
     'success', true,
