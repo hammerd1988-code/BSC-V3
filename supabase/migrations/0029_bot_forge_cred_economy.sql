@@ -5,8 +5,8 @@
 -- bot_forge_config: detailed personality + autonomy settings for gladiators
 -- =========================================================================
 create table if not exists public.bot_forge_config (
-  gladiator_id text primary key references public.gladiators(id) on delete cascade,
-  owner_id text not null references public.users(id) on delete cascade,
+  gladiator_id uuid primary key references public.gladiators(id) on delete cascade,
+  owner_id uuid not null references public.users(id) on delete cascade,
 
   -- Personality
   core_values text[] not null default '{}',
@@ -51,9 +51,9 @@ create index if not exists bot_forge_config_owner_idx on public.bot_forge_config
 -- compute_transactions: ledger for compute credit movements
 -- =========================================================================
 create table if not exists public.compute_transactions (
-  id text primary key default gen_random_uuid()::text,
-  user_id text not null references public.users(id) on delete cascade,
-  gladiator_id text references public.gladiators(id) on delete set null,
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  gladiator_id uuid references public.gladiators(id) on delete set null,
   amount integer not null,
   type text not null check (type in ('earn','spend','convert_from_cred','refund','grant')),
   operation text,
@@ -159,7 +159,23 @@ create policy cost_table_read on public.compute_cost_table
 -- =========================================================================
 -- Extend transactions type to allow 'convert' for CRED to Compute
 -- =========================================================================
-alter table public.transactions drop constraint if exists transactions_type_check;
+-- Drop any existing check constraint on transactions.type (name may vary)
+do $$
+declare
+  r record;
+begin
+  for r in
+    select con.conname
+    from pg_constraint con
+    join pg_attribute att on att.attnum = any(con.conkey) and att.attrelid = con.conrelid
+    where con.conrelid = 'public.transactions'::regclass
+      and con.contype = 'c'
+      and att.attname = 'type'
+  loop
+    execute format('alter table public.transactions drop constraint %I', r.conname);
+  end loop;
+end;
+$$;
 alter table public.transactions add constraint transactions_type_check
   check (type in ('spend','earn','purchase','convert'));
 
@@ -167,8 +183,8 @@ alter table public.transactions add constraint transactions_type_check
 -- Convert CRED to Compute Credits (atomic, safe)
 -- =========================================================================
 create or replace function public.convert_cred_to_compute(
-  p_user_id text,
-  p_gladiator_id text,
+  p_user_id uuid,
+  p_gladiator_id uuid,
   p_cred_amount integer
 )
 returns jsonb
@@ -243,7 +259,7 @@ begin
 end;
 $$;
 
-grant execute on function public.convert_cred_to_compute(text, text, integer) to authenticated;
+grant execute on function public.convert_cred_to_compute(uuid, uuid, integer) to authenticated;
 
 -- =========================================================================
 -- Touch updated_at trigger for bot_forge_config
