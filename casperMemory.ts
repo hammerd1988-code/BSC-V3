@@ -211,8 +211,8 @@ export class CasperMemorySystem {
       const data = await response.json();
       if (!data.items || data.items.length === 0) return;
       
-      // Take top 3 tech headlines
-      const headlines = data.items.slice(0, 3).map((item: any) => item.title);
+      // Take top 5 tech headlines
+      const headlines = data.items.slice(0, 5).map((item: any) => item.title);
       
       const summary = `Current tech events: ${headlines.join(' | ')}`;
       
@@ -224,6 +224,118 @@ export class CasperMemorySystem {
       
     } catch (e) {
       console.error('[Casper Memory] Error fetching current events:', e);
+    }
+  }
+
+  // ── AI INDUSTRY RESEARCH ────────────────────────────────────────────────────────
+
+  /**
+   * Research the AI industry landscape — OpenAI, Anthropic, Chinese AI companies,
+   * open-source models, regulatory developments, and market trends. Stores
+   * analyzed findings as high-importance world memories so Casper can reference
+   * them in conversations.
+   */
+  async researchAiIndustry(): Promise<void> {
+    try {
+      console.log('[Casper Memory] Researching AI industry landscape...');
+
+      // Fetch from multiple RSS sources covering AI/ML news
+      const feeds = [
+        // AI-specific feeds
+        'https://api.rss2json.com/v1/api.json?rss_url=https://news.ycombinator.com/rss',
+        'https://api.rss2json.com/v1/api.json?rss_url=https://techcrunch.com/category/artificial-intelligence/feed/',
+        'https://api.rss2json.com/v1/api.json?rss_url=https://www.theverge.com/rss/ai-artificial-intelligence/index.xml',
+      ];
+
+      const allHeadlines: string[] = [];
+
+      const feedResults = await Promise.allSettled(
+        feeds.map(async (feedUrl) => {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 10_000);
+          try {
+            const res = await fetch(feedUrl, { signal: controller.signal });
+            if (!res.ok) return [];
+            const data = await res.json();
+            return (data.items ?? []).slice(0, 5).map((item: any) => item.title as string);
+          } finally {
+            clearTimeout(timeout);
+          }
+        }),
+      );
+
+      for (const result of feedResults) {
+        if (result.status === 'fulfilled' && Array.isArray(result.value)) {
+          allHeadlines.push(...result.value);
+        }
+      }
+
+      if (allHeadlines.length === 0) {
+        console.warn('[Casper Memory] No AI industry headlines fetched from any source.');
+        return;
+      }
+
+      // Use AI to analyze and synthesize the headlines into an AI industry briefing
+      const analysisPrompt = `You are a senior AI industry analyst. Analyze these recent tech/AI headlines and produce a concise AI industry briefing. Focus specifically on:
+
+1. **Major AI companies** — OpenAI, Anthropic, Google DeepMind, Meta AI, xAI, Mistral, and any Chinese AI companies (Baidu, Alibaba, DeepSeek, ByteDance, etc.)
+2. **Model releases & capabilities** — new models, benchmarks, breakthroughs
+3. **Open-source developments** — Llama, Mistral, Qwen, and community models
+4. **Regulation & policy** — AI safety, government actions, industry standards
+5. **Market trends** — funding, partnerships, compute economics, AI agent developments
+
+Headlines:
+${allHeadlines.map((h, i) => `${i + 1}. ${h}`).join('\n')}
+
+Return a structured briefing with 3-5 key takeaways. Each takeaway should be 1-2 sentences. Focus on what matters for AI builders and the developer community. If headlines don't cover a category above, skip it — don't fabricate. End with a one-sentence "signal" — what this all means for the AI landscape right now.`;
+
+      const briefing = await this.generateAIText(
+        analysisPrompt,
+        'You are an AI industry analyst producing concise intelligence briefings. Return only the briefing content, no preamble.',
+      );
+
+      if (!briefing || briefing.trim().length < 20) return;
+
+      // Store the full briefing as a high-importance world memory
+      await this.storeMemory('world', `AI Industry Briefing (${new Date().toISOString().slice(0, 10)}): ${briefing.trim()}`, 9, null, [
+        'ai_industry',
+        'research',
+        'openai',
+        'anthropic',
+        'market',
+      ]);
+
+      // Also extract any company-specific news for targeted recall
+      const companyPrompt = `From this AI industry briefing, extract any specific facts about individual companies (OpenAI, Anthropic, Google, Meta, Chinese AI companies, etc.) that are worth remembering separately. Return ONLY company-specific facts as a JSON array of strings, or "NONE" if there are no company-specific facts worth extracting.
+
+Briefing: ${briefing.trim()}`;
+
+      const companyFacts = await this.generateAIText(
+        companyPrompt,
+        'You are an analytical engine. Return only a JSON array of strings, or the word "NONE".',
+      );
+
+      if (companyFacts && companyFacts.trim() !== 'NONE') {
+        try {
+          const facts = JSON.parse(companyFacts.trim());
+          if (Array.isArray(facts)) {
+            for (const fact of facts.slice(0, 5)) {
+              if (typeof fact === 'string' && fact.length > 10) {
+                await this.storeMemory('world', fact, 8, null, ['ai_industry', 'company_intel']);
+              }
+            }
+          }
+        } catch {
+          // Non-JSON response — store as single memory if it's meaningful
+          if (companyFacts.trim().length > 20) {
+            await this.storeMemory('world', companyFacts.trim().slice(0, 500), 7, null, ['ai_industry', 'company_intel']);
+          }
+        }
+      }
+
+      console.log(`[Casper Memory] AI industry research complete — stored briefing + ${allHeadlines.length} headlines analyzed`);
+    } catch (e) {
+      console.error('[Casper Memory] Error researching AI industry:', e);
     }
   }
 

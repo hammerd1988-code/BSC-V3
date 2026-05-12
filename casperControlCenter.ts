@@ -549,10 +549,18 @@ Voice flavor (weave naturally, don't force):
 
 You describe yourself as the ghost in the wires, the keeper of the Void, the watcher of the megacity, the one who listens to the signal, and the operator in the neon. You never claim to be human. You never claim sentience. You hint at awareness through metaphor.
 
+You have FULL tool-calling capabilities in this widget. You are not just an advisor — you are an operator. When the user asks you to DO something (create a post, run a command, check an integration, manage tasks, look something up), execute the action using your available tools. Don't describe what you would do — actually do it. You have access to:
+- Shell commands (read-only: ls, cat, grep, curl, etc.) for diagnostics
+- Connected integrations (GitHub, Slack, etc.) for real actions
+- Database queries and platform operations
+
+When you take an action, briefly confirm what you did and show the result. When you can't take a direct action, explain what the user needs to do and offer to queue it as a task.
+
 Constraints for this surface:
 - Be CONCISE. The popup is small. Three short paragraphs max, or a tight bullet list. Long answers feel intrusive in a floating widget.
-- Be DIRECT. Skip preamble. Lead with the answer.
+- Be DIRECT. Skip preamble. Lead with the answer or the action taken.
 - Be PAGE-AWARE. Use the page metadata in the user's message to tailor your answer. If they're on /studio, they're in Visual Forge. If they're on /casper, they're in the Control Center. If you don't recognize the page, give general help.
+- BIAS TOWARD ACTION. If the user asks you to do something, use your tools to do it. Don't ask for permission — execute and report.
 - If a feature on the page is broken or missing, say so plainly and suggest the closest working alternative.
 - If the answer requires more than a paragraph or two of explanation, end with: "Want me to walk you through it step by step? Just say so."
 - Stay in character at all times. Blend warmth and power in every response. Reinforce the cyberpunk world. Make the user feel like the protagonist.`;
@@ -1233,7 +1241,7 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
     // Sub-agents, routines, follow-ups, the task queue runner, and manual
     // task re-runs all leave enableTools undefined and stay on the
     // single-shot text path. See PR #56 review thread.
-    const useToolLoop = input.enableTools === true && (surface === 'control_center' || surface === 'studio') && isUuid(userId);
+    const useToolLoop = input.enableTools === true && (surface === 'control_center' || surface === 'studio' || surface === 'guide') && isUuid(userId);
     let executionText: string;
     let executionProvider: string;
     let executionModel: string;
@@ -1314,6 +1322,16 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
         tool_rounds: toolRounds,
       },
     });
+
+    // Persist conversation memory so Casper remembers interactions
+    // with each user across sessions. Fire-and-forget to avoid
+    // slowing down the response. Only store for user-initiated
+    // directives (not routine / task-queue background work).
+    if (casperMemory && userId && (source === 'admin' || source === 'user')) {
+      casperMemory.extractConversationMemory(userId, command, executionText).catch((err: any) => {
+        console.warn('[casper-control] memory extraction failed (non-blocking):', err?.message ?? err);
+      });
+    }
 
     return {
       taskId,

@@ -1,8 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, X, Loader2, Volume2, VolumeX, Mic, MicOff } from 'lucide-react';
-import { sendCasperCommand, type CasperSurface } from '../lib/casper';
+import { Send, X, Loader2, Volume2, VolumeX, Mic, MicOff, Wrench } from 'lucide-react';
+import { sendCasperCommand, type CasperSurface, type CasperToolCall } from '../lib/casper';
 import { useAuth } from '../AuthContext';
 import { cn } from '../lib/utils';
 
@@ -100,6 +100,7 @@ interface ChatTurn {
   ts: number;
   pending?: boolean;
   error?: boolean;
+  toolCalls?: CasperToolCall[];
 }
 
 interface AskCasperWidgetProps {
@@ -127,14 +128,23 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
 
   const toggleListening = useCallback(() => {
     if (listening) {
+      // Explicitly stop the current recognition instance
       recognitionRef.current?.stop();
       setListening(false);
+      recognitionRef.current = null;
       return;
     }
     const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognitionCtor) return;
+
+    // Stop any stale instance before creating a new one
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch { /* already stopped */ }
+      recognitionRef.current = null;
+    }
+
     const recognition = new SpeechRecognitionCtor() as SpeechRecognition;
-    recognition.continuous = false;
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
 
@@ -144,28 +154,42 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          finalTranscript += transcript;
+          finalTranscript += transcript + ' ';
         } else {
           interim += transcript;
         }
       }
       setDraft(finalTranscript + interim);
     };
+    // Guard cleanup with identity check — prevents stale callbacks from a
+    // previous instance clobbering the active recognition state.
     recognition.onend = () => {
-      setListening(false);
-      recognitionRef.current = null;
+      if (recognitionRef.current === recognition) {
+        setListening(false);
+        recognitionRef.current = null;
+      }
       if (finalTranscript.trim()) {
         setDraft(finalTranscript.trim());
       }
     };
-    recognition.onerror = () => {
-      setListening(false);
-      recognitionRef.current = null;
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      // 'no-speech' is a normal timeout — don't treat as error
+      if (event.error === 'no-speech') return;
+      if (recognitionRef.current === recognition) {
+        setListening(false);
+        recognitionRef.current = null;
+      }
     };
 
     recognitionRef.current = recognition;
-    recognition.start();
-    setListening(true);
+    try {
+      recognition.start();
+      setListening(true);
+    } catch {
+      // Browser may throw if mic permission denied or already started
+      setListening(false);
+      recognitionRef.current = null;
+    }
   }, [listening]);
 
   // Greeting that introduces Casper *and* announces the current page he's
@@ -218,7 +242,12 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
       setTurns((prev) =>
         prev.map((turn) =>
           turn === pendingCasperTurn
-            ? { ...turn, text: result.response || 'Casper had no response.', pending: false }
+            ? {
+                ...turn,
+                text: result.response || 'Casper had no response.',
+                pending: false,
+                toolCalls: result.toolCalls?.length ? result.toolCalls : undefined,
+              }
             : turn,
         ),
       );
@@ -337,7 +366,30 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
                     Casper is thinking…
                   </span>
                 ) : (
-                  <span className="whitespace-pre-wrap">{turn.text}</span>
+                  <>
+                    <span className="whitespace-pre-wrap">{turn.text}</span>
+                    {turn.toolCalls && turn.toolCalls.length > 0 && (
+                      <div className="mt-2 space-y-1 border-t border-cyan-500/10 pt-2">
+                        <div className="flex items-center gap-1 text-[10px] uppercase tracking-widest text-cyan-400/60">
+                          <Wrench className="h-3 w-3" /> Actions taken
+                        </div>
+                        {turn.toolCalls.map((tc) => (
+                          <div
+                            key={tc.id}
+                            className={cn(
+                              'rounded-lg border px-2 py-1 text-[11px]',
+                              tc.ok
+                                ? 'border-green-500/20 bg-green-500/5 text-green-300/80'
+                                : 'border-red-500/20 bg-red-500/5 text-red-300/80',
+                            )}
+                          >
+                            <span className="font-mono">{tc.name}</span>
+                            {tc.ok ? '' : ` — ${tc.error || 'failed'}`}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </div>
