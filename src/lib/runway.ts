@@ -38,7 +38,11 @@ function apiBaseUrl() {
 }
 
 async function authHeaders() {
-  const { data: { session } } = await supabase.auth.getSession();
+  let { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) {
+    const refreshed = await supabase.auth.refreshSession();
+    session = refreshed.data.session;
+  }
   if (!session?.access_token) {
     throw new Error('Sign in is required before using Visual Forge.');
   }
