@@ -739,13 +739,26 @@ export async function initCasperAutonomy(): Promise<void> {
     }
   }, 24 * 60 * 60 * 1000); // Daily
 
-  // Run initial memory tasks
+  // AI Industry Research — runs once daily, researches OpenAI, Anthropic,
+  // Chinese AI companies, open-source models, regulation, and market trends.
+  // Stores structured findings so Casper can reference them in conversations.
+  setInterval(async () => {
+    try {
+      await casperMemory.researchAiIndustry();
+      await logActivity('scheduled_task_completed', 'Casper completed daily AI industry research', { task: 'ai_industry_research' });
+    } catch (e) {
+      await notifyAdmins(`Casper AI industry research failed: ${e instanceof Error ? e.message : String(e)}`, { action: 'scheduled_task_failed', task: 'ai_industry_research' });
+    }
+  }, 24 * 60 * 60 * 1000); // Daily
+
+  // Run initial memory tasks (including first AI industry research)
   setTimeout(async () => {
     try {
       await casperMemory.scanNetworkActivity();
       await casperMemory.fetchCurrentEvents();
+      await casperMemory.researchAiIndustry();
       await casperMemory.evolvePersonality();
-      await logActivity('scheduled_task_completed', 'Casper completed initial memory and awareness tasks', { task: 'initial_memory_tasks' });
+      await logActivity('scheduled_task_completed', 'Casper completed initial memory, awareness, and AI research tasks', { task: 'initial_memory_tasks' });
     } catch (e) {
       await notifyAdmins(`Casper initial memory tasks failed: ${e instanceof Error ? e.message : String(e)}`, { action: 'scheduled_task_failed', task: 'initial_memory_tasks' });
     }
