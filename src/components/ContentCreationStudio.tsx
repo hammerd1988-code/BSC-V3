@@ -21,6 +21,23 @@ interface StudioAsset {
 
 type StudioMode = 'image' | 'video' | 'thumbnail';
 type AssetAction = 'thumbnail' | 'feed' | 'short' | 'project' | 'download';
+type LibraryStatus = 'draft' | 'finished' | 'published';
+
+interface CreatorLibraryItem {
+  id: string;
+  status: LibraryStatus;
+  mode: StudioMode;
+  title: string;
+  prompt: string;
+  composer: string;
+  scheduleAt?: string;
+  assetId?: string;
+  assetUrl?: string;
+  assetType?: StudioAsset['type'];
+  ratio: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
 const IMAGE_PRESETS = ['cyberpunk', 'minimal', 'cinematic', 'abstract', 'product hero', 'neon portrait', 'editorial', 'dark terminal'];
 const VIDEO_PRESETS = ['promo', 'tutorial intro', 'shorts clip', 'stream overlay', 'product reveal', 'battle teaser'];
@@ -35,6 +52,7 @@ const THUMBNAIL_TEMPLATES = [
 ];
 
 const STORAGE_KEY = 'bsc_content_studio_assets_v1';
+const LIBRARY_KEY = 'bsc_content_studio_library_v1';
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 const safeRunwayRatio = (ratio: string): '16:9' | '9:16' | '1:1' => ratio === '16:9' || ratio === '9:16' ? ratio : '1:1';
@@ -49,6 +67,18 @@ function loadAssets(): StudioAsset[] {
 
 function saveAssets(assets: StudioAsset[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(assets.slice(0, 80)));
+}
+
+function loadLibrary(): CreatorLibraryItem[] {
+  try {
+    return JSON.parse(localStorage.getItem(LIBRARY_KEY) || '[]') as CreatorLibraryItem[];
+  } catch {
+    return [];
+  }
+}
+
+function saveLibrary(items: CreatorLibraryItem[]) {
+  localStorage.setItem(LIBRARY_KEY, JSON.stringify(items.slice(0, 120)));
 }
 
 async function pollRunwayTask(initial: RunwayTaskResponse, setProgress: (value: string) => void): Promise<RunwayTaskResponse> {
@@ -72,6 +102,7 @@ export function ContentCreationStudio() {
   const { canAccess, recordUsage, refresh, usageMeters } = useSubscription();
   const [mode, setMode] = useState<StudioMode>('image');
   const [assets, setAssets] = useState<StudioAsset[]>(() => loadAssets());
+  const [library, setLibrary] = useState<CreatorLibraryItem[]>(() => loadLibrary());
   const [selectedAssetId, setSelectedAssetId] = useState<string>('');
   const [prompt, setPrompt] = useState('Create a high-impact Blood Sweat Code creator asset with neon cyan and magenta glassmorphism energy.');
   const [imagePreset, setImagePreset] = useState(IMAGE_PRESETS[0]);
@@ -97,6 +128,13 @@ export function ContentCreationStudio() {
   const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? assets[0] ?? null;
 
   useEffect(() => saveAssets(assets), [assets]);
+  useEffect(() => saveLibrary(library), [library]);
+
+  const libraryCounts = useMemo(() => ({
+    draft: library.filter((item) => item.status === 'draft').length,
+    finished: library.filter((item) => item.status === 'finished').length,
+    published: library.filter((item) => item.status === 'published').length,
+  }), [library]);
 
   const metered = useMemo(() => usageMeters.filter((meter) => ['ai_image_generation', 'ai_video_generation', 'thumbnail_generation'].includes(meter.feature)), [usageMeters]);
 
@@ -218,6 +256,7 @@ export function ContentCreationStudio() {
           view_count: 0,
         });
       }
+      setLibrary((prev) => prev.map((item) => (item.assetId === asset.id || item.assetUrl === asset.url) ? { ...item, status: 'published', updatedAt: new Date().toISOString() } : item));
       setStatus(kind === 'short' ? 'Posted as a Short.' : 'Posted to the BSC feed.');
       setComposer('');
     } catch (err: any) {
@@ -250,6 +289,58 @@ export function ContentCreationStudio() {
     setThumbnailBg(asset.url);
     setMode('thumbnail');
     setStatus('Asset loaded into Thumbnail Creator background.');
+  };
+
+  const saveLibraryItem = (status: LibraryStatus) => {
+    const now = new Date().toISOString();
+    const asset = selectedAsset;
+    const title = (thumbnailTitle || composer.split('\n')[0] || prompt.slice(0, 48) || 'Untitled Studio Project').trim();
+    const item: CreatorLibraryItem = {
+      id: crypto.randomUUID(),
+      status,
+      mode,
+      title,
+      prompt: mode === 'thumbnail' ? `${thumbnailTitle} — ${thumbnailSubtitle}` : prompt,
+      composer,
+      scheduleAt,
+      assetId: asset?.id,
+      assetUrl: asset?.url,
+      assetType: asset?.type,
+      ratio: asset?.ratio ?? (mode === 'video' ? videoRatio : ratio),
+      createdAt: now,
+      updatedAt: now,
+    };
+    setLibrary((prev) => [item, ...prev]);
+    setStatus(status === 'draft' ? 'Draft saved to Creator Library.' : 'Finished project saved to Creator Library.');
+  };
+
+  const reopenLibraryItem = (item: CreatorLibraryItem) => {
+    setMode(item.mode);
+    setPrompt(item.prompt);
+    setComposer(item.composer);
+    setScheduleAt(item.scheduleAt ?? '');
+    if (item.assetUrl) {
+      const existing = assets.find((asset) => asset.id === item.assetId || asset.url === item.assetUrl);
+      if (existing) {
+        setSelectedAssetId(existing.id);
+      } else {
+        const restored: StudioAsset = {
+          id: item.assetId || crypto.randomUUID(),
+          type: item.assetType || (item.mode === 'video' ? 'video' : 'image'),
+          url: item.assetUrl,
+          prompt: item.prompt,
+          ratio: item.ratio,
+          createdAt: item.createdAt,
+        };
+        addAsset(restored);
+      }
+    }
+    setStatus('Library project loaded back into Studio.');
+  };
+
+  const setLibraryStatus = (id: string, status: LibraryStatus) => {
+    setLibrary((prev) => prev.map((item) => item.id === id ? { ...item, status, updatedAt: new Date().toISOString() } : item));
+    setStatus(status === 'finished' ? 'Project marked finished in Creator Library.' : 'Project moved back to drafts.');
   };
 
   const handleAssetAction = async (action: AssetAction, asset: StudioAsset | null = selectedAsset) => {
@@ -390,14 +481,45 @@ export function ContentCreationStudio() {
                 <textarea value={composer} onChange={(e) => setComposer(e.target.value)} placeholder="Caption, post copy, project notes, or scheduled content body..." className="min-h-36 w-full resize-y rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm leading-6 text-white outline-none focus:border-cyan-300" />
                 <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto_auto]">
                   <input value={scheduleAt} onChange={(e) => setScheduleAt(e.target.value)} type="datetime-local" className="rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-xs text-white outline-none focus:border-fuchsia-300" />
+                  <button onClick={() => saveLibraryItem('draft')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white"><Scissors className="h-4 w-4" /> Save Draft</button>
+                  <button onClick={() => saveLibraryItem('finished')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-300/30 bg-emerald-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-emerald-100"><Layers className="h-4 w-4" /> Finished</button>
                   <button onClick={() => void scheduleAsset()} disabled={!selectedAsset || !scheduleAt} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-fuchsia-300/30 bg-fuchsia-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-fuchsia-100 disabled:opacity-40"><CalendarClock className="h-4 w-4" /> Schedule</button>
                   <button onClick={() => void postAsset(selectedAsset, selectedAsset?.type === 'video' ? 'short' : 'post')} disabled={!selectedAsset} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-40"><Send className="h-4 w-4" /> Post Now</button>
                 </div>
               </div>
 
               <div className="rounded-[2rem] border border-white/10 bg-zinc-950/70 p-5">
-                <h2 className="mb-4 text-sm font-black uppercase tracking-widest">Generation History</h2>
-                <div className="max-h-[410px] space-y-3 overflow-y-auto pr-1">
+                <h2 className="text-sm font-black uppercase tracking-widest">Creator Library</h2>
+                <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500">Drafts, finished projects, and published drops</p>
+                <div className="my-4 grid grid-cols-3 gap-2">
+                  {(['draft', 'finished', 'published'] as LibraryStatus[]).map((item) => <div key={item} className="rounded-2xl border border-white/10 bg-black/35 p-3 text-center"><p className="text-lg font-black text-white">{libraryCounts[item]}</p><p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">{item}</p></div>)}
+                </div>
+                <div className="max-h-64 space-y-3 overflow-y-auto pr-1">
+                  {library.length ? library.map((item) => (
+                    <div key={item.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-2">
+                      <button onClick={() => reopenLibraryItem(item)} className="flex w-full gap-3 text-left">
+                        <div className="grid h-16 w-20 flex-shrink-0 place-items-center overflow-hidden rounded-xl bg-black">
+                          {item.assetUrl ? (item.assetType === 'video' ? <video src={item.assetUrl} className="h-full w-full object-cover" /> : <img src={item.assetUrl} alt="" className="h-full w-full object-cover" />) : <Layers className="h-6 w-6 text-zinc-700" />}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-cyan-100">{item.status}</span>
+                            <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">{item.mode} // {item.ratio}</span>
+                          </div>
+                          <p className="mt-1 line-clamp-1 text-xs font-black uppercase tracking-wider text-white">{item.title}</p>
+                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">{item.composer || item.prompt}</p>
+                        </div>
+                      </button>
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <button onClick={() => setLibraryStatus(item.id, 'draft')} className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-zinc-300">Draft</button>
+                        <button onClick={() => setLibraryStatus(item.id, 'finished')} className="rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-emerald-100">Finished</button>
+                      </div>
+                    </div>
+                  )) : <p className="rounded-2xl border border-dashed border-white/10 p-5 text-center text-xs uppercase tracking-widest text-zinc-600">Save a draft or mark a project finished to build your library.</p>}
+                </div>
+
+                <h3 className="mb-3 mt-6 border-t border-white/10 pt-5 text-xs font-black uppercase tracking-widest text-zinc-400">Generation History</h3>
+                <div className="max-h-64 space-y-3 overflow-y-auto pr-1">
                   {assets.length ? assets.map((asset) => <button key={asset.id} onClick={() => setSelectedAssetId(asset.id)} className={cn('flex w-full gap-3 rounded-2xl border p-2 text-left transition', selectedAsset?.id === asset.id ? 'border-cyan-300/40 bg-cyan-300/10' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]')}><div className="h-16 w-20 flex-shrink-0 overflow-hidden rounded-xl bg-black">{asset.type === 'video' ? <video src={asset.url} className="h-full w-full object-cover" /> : <img src={asset.url} alt="" className="h-full w-full object-cover" />}</div><div className="min-w-0"><p className="text-[10px] font-black uppercase tracking-widest text-white">{asset.type} // {asset.ratio}</p><p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">{asset.prompt}</p></div></button>) : <p className="rounded-2xl border border-dashed border-white/10 p-5 text-center text-xs uppercase tracking-widest text-zinc-600">History will appear here.</p>}
                 </div>
               </div>
