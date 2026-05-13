@@ -143,6 +143,10 @@ interface ForgeConfig {
   canReply: boolean;
   activitySchedule: string;
   earningStrategy: string;
+  platformInteractionRules: string;
+  personaInteractionRules: string;
+  battleOpponentRules: string;
+  autonomyBoundaries: string;
 }
 
 interface GladiatorRow {
@@ -185,6 +189,10 @@ const DEFAULT_CONFIG: ForgeConfig = {
   canReply: false,
   activitySchedule: 'always',
   earningStrategy: 'balanced',
+  platformInteractionRules: '',
+  personaInteractionRules: '',
+  battleOpponentRules: '',
+  autonomyBoundaries: '',
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -214,6 +222,10 @@ function toDbConfig(config: ForgeConfig) {
     can_reply: config.canReply,
     activity_schedule: config.activitySchedule,
     earning_strategy: config.earningStrategy,
+    platform_interaction_rules: config.platformInteractionRules,
+    persona_interaction_rules: config.personaInteractionRules,
+    battle_opponent_rules: config.battleOpponentRules,
+    autonomy_boundaries: config.autonomyBoundaries,
   };
 }
 
@@ -238,8 +250,49 @@ function fromDbConfig(row: Record<string, any>): ForgeConfig {
     canReply: row.can_reply ?? false,
     activitySchedule: row.activity_schedule ?? 'always',
     earningStrategy: row.earning_strategy ?? 'balanced',
+    platformInteractionRules: row.platform_interaction_rules ?? '',
+    personaInteractionRules: row.persona_interaction_rules ?? '',
+    battleOpponentRules: row.battle_opponent_rules ?? '',
+    autonomyBoundaries: row.autonomy_boundaries ?? '',
   };
 }
+
+const AUTONOMY_TEXTAREAS: Array<{
+  key: 'platformInteractionRules' | 'personaInteractionRules' | 'battleOpponentRules' | 'autonomyBoundaries';
+  label: string;
+  accent: string;
+  placeholder: string;
+  description: string;
+}> = [
+  {
+    key: 'platformInteractionRules',
+    label: 'Platform Interaction Doctrine',
+    accent: '#00e5ff',
+    description: 'How this bot should post, reply, DM, browse, spend compute, and behave across Blood Sweat Code.',
+    placeholder: 'Example: Only post when it has a strong coding insight, avoid low-effort replies, prioritize helping new builders, never initiate DMs unless summoned by admin workflow.',
+  },
+  {
+    key: 'personaInteractionRules',
+    label: 'Persona Relationship Rules',
+    accent: '#d500f9',
+    description: 'How this bot should interact with Casper, Sapphire, house personas, allied bots, rivals, and social relationships.',
+    placeholder: 'Example: Treat Casper as an elder operator, defer to Sapphire on live tool/API matters, flirt with rivals only when it fits the persona, remember recurring opponents.',
+  },
+  {
+    key: 'battleOpponentRules',
+    label: 'Battle Opponent Doctrine',
+    accent: '#ff1744',
+    description: 'What the bot should do before, during, and after Colosseum matches.',
+    placeholder: 'Example: Study Diamond bots before engaging, target rematches after close losses, show respect after clean defeats, use aggressive strategy against slow opponents.',
+  },
+  {
+    key: 'autonomyBoundaries',
+    label: 'Hard Boundaries',
+    accent: '#ffab00',
+    description: 'Non-negotiable rules that future autonomy workers and tool calls must obey.',
+    placeholder: 'Example: Never spend more than configured limits, never impersonate Dylan, never harass users, ask for admin approval before external integrations or irreversible actions.',
+  },
+];
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
@@ -368,6 +421,7 @@ export function BotForge() {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const isAdmin = currentUser?.role === 'admin';
 
   const [gladiators, setGladiators] = useState<GladiatorRow[]>([]);
   const [selectedGladiator, setSelectedGladiator] = useState<GladiatorRow | null>(null);
@@ -392,16 +446,17 @@ export function BotForge() {
 
   const gladiatorParam = searchParams.get('gladiator');
 
-  // Load gladiators owned by this user
+  // Load gladiators owned by this user, or all gladiators for the admin autonomy console
   useEffect(() => {
     if (!currentUser?.id) return;
     (async () => {
       setLoading(true);
-      const { data, error } = await supabase
+      let query = supabase
         .from('gladiators')
         .select('*')
-        .eq('user_id', currentUser.id)
         .order('created_at', { ascending: false });
+      if (!isAdmin) query = query.eq('user_id', currentUser.id);
+      const { data, error } = await query;
       if (error) { handleDbError(error, 'load gladiators'); setLoading(false); return; }
       setGladiators(data ?? []);
 
@@ -410,7 +465,7 @@ export function BotForge() {
       if (match) setSelectedGladiator(match);
       setLoading(false);
     })();
-  }, [currentUser?.id, gladiatorParam]);
+  }, [currentUser?.id, gladiatorParam, isAdmin]);
 
   // Load forge config when gladiator changes
   useEffect(() => {
@@ -468,7 +523,7 @@ export function BotForge() {
     setSaving(true);
     const dbData = {
       gladiator_id: selectedGladiator.id,
-      owner_id: currentUser.id,
+      owner_id: isAdmin ? selectedGladiator.user_id : currentUser.id,
       ...toDbConfig(config),
     };
     const { error } = await supabase
@@ -477,7 +532,7 @@ export function BotForge() {
     if (error) handleDbError(error, 'save forge config');
     else setDirty(false);
     setSaving(false);
-  }, [selectedGladiator, currentUser?.id, config]);
+  }, [selectedGladiator, currentUser?.id, config, isAdmin]);
 
   // Spar mode — send a test message
   const sendSpar = useCallback(async () => {
@@ -580,6 +635,20 @@ export function BotForge() {
               <p className="text-sm text-gray-400 mt-1">Build your gladiator. Forge their soul. Watch them fight.</p>
             </div>
           </div>
+
+          {isAdmin && (
+            <div className="mt-4 rounded-xl border border-cyan-400/20 bg-cyan-950/10 p-4">
+              <div className="flex items-start gap-3">
+                <Shield className="mt-0.5 h-5 w-5 text-cyan-300" />
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.24em] text-cyan-200">Admin Autonomy Console</p>
+                  <p className="mt-1 text-xs leading-5 text-gray-400">
+                    You can configure autonomy doctrine for every platform bot here. Normal users can forge/challenge bots, but autonomous platform behavior stays admin-controlled.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Gladiator selector */}
           {gladiators.length > 0 ? (
@@ -962,6 +1031,31 @@ export function BotForge() {
                     </div>
                   </div>
                 </SectionCard>
+
+                {isAdmin && (
+                  <SectionCard title="Admin Autonomy Doctrine" icon={Shield} accent="#ff2bd6">
+                    <div className="mb-4 rounded-xl border border-pink-400/20 bg-pink-950/10 p-3">
+                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-pink-200">Private admin layer</p>
+                      <p className="mt-1 text-[11px] leading-5 text-gray-400">
+                        These directives are for Dylan/admin orchestration only. They describe how future autonomous workers should let this bot use the platform, talk to personas, challenge opponents, and respect boundaries.
+                      </p>
+                    </div>
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      {AUTONOMY_TEXTAREAS.map((item) => (
+                        <label key={item.key} className="block rounded-2xl border border-white/10 bg-black/35 p-4">
+                          <span className="text-[10px] font-black uppercase tracking-[0.22em]" style={{ color: item.accent }}>{item.label}</span>
+                          <span className="mt-2 block text-[11px] leading-5 text-gray-500">{item.description}</span>
+                          <textarea
+                            value={config[item.key]}
+                            onChange={(event) => updateConfig(item.key, event.target.value)}
+                            placeholder={item.placeholder}
+                            className="mt-3 min-h-32 w-full resize-y rounded-xl border border-white/10 bg-black/70 p-3 text-xs leading-5 text-gray-100 outline-none transition placeholder:text-gray-600 focus:border-pink-300/50"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </SectionCard>
+                )}
 
                 <SectionCard title="Activity & Earning" icon={Clock} accent="#00e5ff">
                   <div className="space-y-4">

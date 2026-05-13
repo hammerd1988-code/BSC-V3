@@ -64,6 +64,11 @@ interface BotGladiatorProfileRow {
   creativity_rating: number;
   endurance_rating: number;
   ai_prompt_style: string;
+  ability_profile: string;
+  personality_style: string;
+  code_execution_style: string;
+  avatar_prompt: string;
+  emotional_hook: string;
 }
 
 interface Gladiator {
@@ -215,6 +220,34 @@ const CHALLENGES: Array<{
 ];
 
 const GLOW_COLORS = ['#ff1744', '#00e5ff', '#ff2bd6', '#f9ff6b', '#8b5cf6', '#22c55e'];
+
+const BOT_GLADIATOR_PROFILE_SELECT = [
+  'gladiator_id',
+  'bot_user_id',
+  'persona_username',
+  'display_name',
+  'gladiator_class',
+  'expertise',
+  'difficulty',
+  'battle_style',
+  'signature_moves',
+  'pre_battle_lines',
+  'victory_lines',
+  'defeat_lines',
+  'speed_rating',
+  'accuracy_rating',
+  'creativity_rating',
+  'endurance_rating',
+  'ai_prompt_style',
+].join(',');
+
+const BOT_GLADIATOR_PROFILE_DEPTH_SELECT = [
+  'ability_profile',
+  'personality_style',
+  'code_execution_style',
+  'avatar_prompt',
+  'emotional_hook',
+].join(',');
 
 const CHALLENGE_LIBRARY: Record<BotDifficulty, Record<ChallengeType, CodingChallenge>> = {
   Bronze: {
@@ -423,17 +456,25 @@ function normalizeBotProfile(row: any, fallbackDisplayName = 'Bot Gladiator'): B
     creativity_rating: Number(row.creativity_rating ?? 5),
     endurance_rating: Number(row.endurance_rating ?? 5),
     ai_prompt_style: String(row.ai_prompt_style ?? ''),
+    ability_profile: String(row.ability_profile ?? ''),
+    personality_style: String(row.personality_style ?? ''),
+    code_execution_style: String(row.code_execution_style ?? ''),
+    avatar_prompt: String(row.avatar_prompt ?? ''),
+    emotional_hook: String(row.emotional_hook ?? ''),
   };
 }
 
 function fallbackProfileForGladiator(row: any): BotGladiatorProfileRow | null {
-  const rawUserId = String(row?.user_id ?? '');
-  const username = rawUserId.startsWith('bot-') ? rawUserId.slice(4) : String(row?.id ?? '').replace(/^bot-gladiator-/, '');
-  const seed = BOT_GLADIATOR_PROFILE_BY_USERNAME[username];
+  const candidates = [
+    String(row?.name ?? '').trim().toLowerCase().replace(/\s+/g, '_'),
+    String(row?.id ?? '').replace(/^bot-gladiator-/, ''),
+    String(row?.user_id ?? '').replace(/^bot-user-/, '').replace(/^bot-/, ''),
+  ].filter(Boolean);
+  const seed = candidates.map((candidate) => BOT_GLADIATOR_PROFILE_BY_USERNAME[candidate]).find(Boolean);
   if (!seed) return null;
   return normalizeBotProfile({
     gladiator_id: row.id,
-    bot_user_id: rawUserId || `bot-${seed.username}`,
+    bot_user_id: String(row?.user_id ?? '') || `bot-${seed.username}`,
     persona_username: seed.username,
     display_name: row.name,
     gladiator_class: seed.gladiator_class,
@@ -449,6 +490,11 @@ function fallbackProfileForGladiator(row: any): BotGladiatorProfileRow | null {
     creativity_rating: seed.stats.creativity,
     endurance_rating: seed.stats.endurance,
     ai_prompt_style: seed.ai_prompt_style,
+    ability_profile: seed.ability_profile,
+    personality_style: seed.personality_style,
+    code_execution_style: seed.code_execution_style,
+    avatar_prompt: seed.avatar_prompt,
+    emotional_hook: seed.emotional_hook,
   }, row.name);
 }
 
@@ -741,6 +787,63 @@ function pickDialogue(lines?: string[]) {
   return lines[Math.floor(Math.random() * lines.length)];
 }
 
+function avatarUrlForGladiator(gladiator: Gladiator) {
+  const prompt = gladiator.botProfile?.avatar_prompt;
+  if (!prompt && gladiator.avatar_url) return gladiator.avatar_url;
+  const seed = gladiator.botProfile?.persona_username ?? gladiator.id;
+  const numericSeed = seed.split('').reduce((sum, character) => sum + character.charCodeAt(0), 0);
+  return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt ?? `${gladiator.name} cyberpunk AI gladiator portrait neon dark background`)}?width=600&height=600&seed=${numericSeed}&nologo=true`;
+}
+
+function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active }: { gladiator?: Gladiator; size?: 'sm' | 'md' | 'lg' | 'xl'; label?: string; active?: boolean }) {
+  const glow = gladiator?.glow_color ?? '#ff1744';
+  const avatarUrl = gladiator ? avatarUrlForGladiator(gladiator) : '';
+  const sizeClass = size === 'xl' ? 'h-32 w-32' : size === 'lg' ? 'h-24 w-24' : size === 'sm' ? 'h-16 w-16' : 'h-20 w-20';
+  const iconClass = size === 'xl' ? 'h-14 w-14' : size === 'lg' ? 'h-10 w-10' : 'h-8 w-8';
+  const duration = active ? 2.35 : 2.85;
+
+  return (
+    <div className="relative shrink-0" style={{ perspective: 900 }}>
+      <motion.div
+        animate={{
+          rotateY: active ? [-7, 8, -5] : [-4, 5, -3],
+          rotateX: active ? [3, -4, 2] : [2, -2, 1],
+          scale: active ? [1, 1.045, 1] : [1, 1.025, 1],
+        }}
+        transition={{ duration, repeat: Infinity, ease: 'easeInOut' }}
+        className={cn('relative grid place-items-center overflow-hidden rounded-[1.65rem] border border-white/15 bg-zinc-950', sizeClass)}
+        style={{ boxShadow: `0 0 34px ${glow}55`, transformStyle: 'preserve-3d' }}
+      >
+        {avatarUrl ? (
+          <img src={avatarUrl} alt={gladiator ? `${gladiator.name} avatar` : ''} className="h-full w-full object-cover contrast-125 saturate-125" />
+        ) : (
+          <Bot className={iconClass} style={{ color: glow }} />
+        )}
+        <motion.div
+          aria-hidden
+          animate={{ x: ['-130%', '140%'], opacity: [0, 0.55, 0] }}
+          transition={{ duration: Math.max(2, duration - 0.25), repeat: Infinity, ease: 'easeInOut' }}
+          className="absolute inset-y-0 w-1/2 -skew-x-12 bg-white/20 blur-sm"
+        />
+        <div className="absolute inset-0 opacity-40" style={{ boxShadow: `inset 0 0 28px ${glow}` }} />
+        <div className="absolute inset-x-2 bottom-2 h-1 rounded-full bg-white/35 blur-[1px]" />
+      </motion.div>
+      <motion.div
+        aria-hidden
+        animate={{ rotate: 360 }}
+        transition={{ duration: Math.min(3, duration + 0.2), repeat: Infinity, ease: 'linear' }}
+        className="absolute -inset-2 rounded-[2rem] border border-dashed opacity-45"
+        style={{ borderColor: glow }}
+      />
+      {label && (
+        <div className="absolute -bottom-3 left-1/2 max-w-36 -translate-x-1/2 whitespace-nowrap rounded-full border border-white/10 bg-black/75 px-3 py-1 text-[8px] font-black uppercase tracking-[0.2em] text-white shadow-2xl">
+          {label}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GladiatorCard({ gladiator, active, onSelect, actionLabel, onAction }: { gladiator: Gladiator; active?: boolean; onSelect?: () => void; actionLabel?: string; onAction?: () => void }) {
   const badge = badgeFor(gladiator);
   const BadgeIcon = badge.icon;
@@ -763,20 +866,13 @@ function GladiatorCard({ gladiator, active, onSelect, actionLabel, onAction }: {
       <div className="absolute inset-0 opacity-30" style={{ background: `radial-gradient(circle at 20% 20%, ${gladiator.glow_color}55, transparent 32%), linear-gradient(135deg, transparent, ${gladiator.glow_color}16)` }} />
       <div className="absolute -right-12 -top-16 h-32 w-32 rounded-full blur-3xl" style={{ backgroundColor: gladiator.glow_color }} />
       <div className="relative flex items-start gap-3">
-        <div className="relative grid h-14 w-14 place-items-center overflow-hidden rounded-2xl border border-white/15 bg-zinc-950">
-          {gladiator.avatar_url ? (
-            <img src={gladiator.avatar_url} alt="" className="h-full w-full object-cover" />
-          ) : (
-            <Bot className="h-7 w-7" style={{ color: gladiator.glow_color }} />
-          )}
-          <div className="absolute inset-0 opacity-30" style={{ boxShadow: `inset 0 0 24px ${gladiator.glow_color}` }} />
-        </div>
+        <AnimatedGladiatorAvatar gladiator={gladiator} size="sm" active={active} />
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <div>
               <h3 className="truncate text-sm font-black uppercase tracking-[0.18em] text-white">{gladiator.name}</h3>
               <p className="mt-1 text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: diffColor }}>{profileLine(profile)}</p>
-              <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-zinc-400">{profile?.battle_style || gladiator.personality || 'Silent killer protocol. No public combat doctrine provided.'}</p>
+              <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-zinc-400">{profile?.personality_style || profile?.battle_style || gladiator.personality || 'Silent killer protocol. No public combat doctrine provided.'}</p>
             </div>
             <span
               className="inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-1 text-[9px] font-black uppercase tracking-widest"
@@ -792,12 +888,27 @@ function GladiatorCard({ gladiator, active, onSelect, actionLabel, onAction }: {
             <StatBar label="END" value={gladiator.stats.endurance} color="#ff2bd6" />
           </div>
           {profile && (
-            <div className="mt-4 flex flex-wrap gap-2">
-              <span className="rounded-full border px-2 py-1 text-[8px] font-black uppercase tracking-widest" style={{ borderColor: `${diffColor}55`, color: diffColor, backgroundColor: `${diffColor}12` }}>{profile.difficulty}</span>
-              {profile.signature_moves.slice(0, 2).map((move) => (
-                <span key={move} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[8px] font-black uppercase tracking-widest text-zinc-400">{move}</span>
-              ))}
-            </div>
+            <>
+              <div className="mt-4 grid gap-2 text-[10px] leading-5 text-zinc-400">
+                <div className="rounded-2xl border border-white/10 bg-black/35 p-3">
+                  <span className="font-black uppercase tracking-[0.2em] text-cyan-200">Ability:</span> {profile.ability_profile || profile.expertise.join(', ')}
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-black/35 p-3">
+                  <span className="font-black uppercase tracking-[0.2em] text-pink-200">Code style:</span> {profile.code_execution_style || profile.ai_prompt_style}
+                </div>
+                {profile.emotional_hook && (
+                  <div className="rounded-2xl border border-pink-300/20 bg-pink-950/10 p-3 text-pink-50/80">
+                    <span className="font-black uppercase tracking-[0.2em] text-pink-200">Hook:</span> {profile.emotional_hook}
+                  </div>
+                )}
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <span className="rounded-full border px-2 py-1 text-[8px] font-black uppercase tracking-widest" style={{ borderColor: `${diffColor}55`, color: diffColor, backgroundColor: `${diffColor}12` }}>{profile.difficulty}</span>
+                {profile.signature_moves.slice(0, 2).map((move) => (
+                  <span key={move} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[8px] font-black uppercase tracking-widest text-zinc-400">{move}</span>
+                ))}
+              </div>
+            </>
           )}
           <div className="mt-4 flex items-center justify-between text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500">
             <span>{gladiator.wins}W / {gladiator.losses}L</span>
@@ -858,14 +969,7 @@ function CombatantPortrait({ gladiator, label }: { gladiator?: Gladiator; label:
     <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-black/70 p-4">
       <div className="absolute inset-0 opacity-30" style={{ background: `radial-gradient(circle at 18% 18%, ${glow}66, transparent 34%)` }} />
       <div className="relative flex items-center gap-4">
-        <div className="relative grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl border border-white/15 bg-zinc-950" style={{ boxShadow: `0 0 28px ${glow}55` }}>
-          {gladiator?.avatar_url ? (
-            <img src={gladiator.avatar_url} alt="" className="h-full w-full object-cover" />
-          ) : (
-            <Bot className="h-8 w-8" style={{ color: glow }} />
-          )}
-          <div className="absolute inset-0 opacity-35" style={{ boxShadow: `inset 0 0 24px ${glow}` }} />
-        </div>
+        <AnimatedGladiatorAvatar gladiator={gladiator} size="sm" active />
         <div className="min-w-0">
           <p className="text-[9px] font-black uppercase tracking-[0.28em] text-zinc-500">{label}</p>
           <h3 className="mt-1 truncate text-base font-black uppercase tracking-[0.18em] text-white">{gladiator?.name ?? 'Unknown Combatant'}</h3>
@@ -1374,15 +1478,26 @@ export const Colosseum: React.FC = () => {
         supabase.from('gladiators').select('id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model,api_base_url').order('wins', { ascending: false }).order('cred', { ascending: false }),
         supabase.from('matches').select('*').is('completed_at', null).order('started_at', { ascending: false }),
         supabase.from('matches').select('*').not('completed_at', 'is', null).order('started_at', { ascending: false }).limit(30),
-        supabase.from('bot_gladiator_profiles').select('*'),
+        supabase.from('bot_gladiator_profiles').select(`${BOT_GLADIATOR_PROFILE_SELECT},${BOT_GLADIATOR_PROFILE_DEPTH_SELECT}`),
       ]);
 
       if (gladiatorError) throw gladiatorError;
       if (activeMatchError) throw activeMatchError;
       if (recentMatchError) throw recentMatchError;
-      if (botProfileError && botProfileError.code !== '42P01') throw botProfileError;
+      let normalizedBotProfileRows: any[] = botProfileRows ?? [];
+      if (botProfileError) {
+        if (botProfileError.code === '42703') {
+          const { data: fallbackBotProfileRows, error: fallbackBotProfileError } = await supabase
+            .from('bot_gladiator_profiles')
+            .select(BOT_GLADIATOR_PROFILE_SELECT);
+          if (fallbackBotProfileError && fallbackBotProfileError.code !== '42P01') throw fallbackBotProfileError;
+          normalizedBotProfileRows = fallbackBotProfileRows ?? [];
+        } else if (botProfileError.code !== '42P01') {
+          throw botProfileError;
+        }
+      }
 
-      const profileByGladiatorId = new Map((botProfileRows ?? [])
+      const profileByGladiatorId = new Map(normalizedBotProfileRows
         .map((row: any) => normalizeBotProfile(row))
         .filter((row): row is BotGladiatorProfileRow => Boolean(row))
         .map((row) => [String(row.gladiator_id), row]));
@@ -1890,7 +2005,7 @@ export const Colosseum: React.FC = () => {
             <div>
               <p className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-200">Unified Bot System</p>
               <h2 className="mt-2 text-2xl font-black uppercase tracking-[0.14em] text-white">Persona Bots Are Gladiators Now</h2>
-              <p className="mt-3 text-sm leading-6 text-zinc-400">Marketplace/social bots, platform personas, and Colosseum fighters now share one story: they can talk in social spaces, fight coding battles, and post smack/brags after arena results.</p>
+              <p className="mt-3 text-sm leading-6 text-zinc-400">Browse the Platform Gladiator Bot Roster below, pick a persona that gets under your skin, choose Speed Round, Debug Battle, or Code Golf, then hit Challenge. Each profile now exposes ability, personality style, code execution style, signature moves, and a cinematic avatar.</p>
             </div>
             <div className="grid grid-cols-3 gap-2 text-center">
               {[
@@ -1937,10 +2052,13 @@ export const Colosseum: React.FC = () => {
                 <div className="absolute inset-0 opacity-35" style={{ background: `radial-gradient(circle at 20% 0%, ${selectedOpponent.glow_color}66, transparent 34%), radial-gradient(circle at 100% 100%, rgba(0,229,255,0.22), transparent 35%)` }} />
                 <div className="relative">
                   <div className="mb-5 flex items-start justify-between gap-4">
-                    <div>
+                    <div className="flex items-start gap-5">
+                      <AnimatedGladiatorAvatar gladiator={selectedOpponent} size="lg" label={selectedOpponent.name} active />
+                      <div>
                       <p className="text-[10px] font-black uppercase tracking-[0.34em] text-red-300">Pre-Battle Lock</p>
                       <h2 className="mt-2 text-3xl font-black uppercase tracking-[0.14em] text-white">{selectedOpponent.name} Accepts</h2>
                       <p className="mt-2 text-sm leading-6 text-zinc-400">{profileLine(selectedOpponent.botProfile)}</p>
+                      </div>
                     </div>
                     <button type="button" onClick={() => setChallengeModalOpen(false)} className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white">Close</button>
                   </div>
@@ -1964,6 +2082,23 @@ export const Colosseum: React.FC = () => {
                       </div>
                     </div>
                   </div>
+
+                  {selectedOpponent.botProfile && (
+                    <div className="mt-5 grid gap-3 md:grid-cols-3">
+                      <div className="rounded-3xl border border-white/10 bg-black/45 p-4">
+                        <p className="text-[9px] font-black uppercase tracking-[0.24em] text-cyan-200">Ability</p>
+                        <p className="mt-2 text-xs leading-5 text-zinc-300">{selectedOpponent.botProfile.ability_profile || selectedOpponent.botProfile.battle_style}</p>
+                      </div>
+                      <div className="rounded-3xl border border-white/10 bg-black/45 p-4">
+                        <p className="text-[9px] font-black uppercase tracking-[0.24em] text-pink-200">Personality</p>
+                        <p className="mt-2 text-xs leading-5 text-zinc-300">{selectedOpponent.botProfile.personality_style || selectedOpponent.personality}</p>
+                      </div>
+                      <div className="rounded-3xl border border-white/10 bg-black/45 p-4">
+                        <p className="text-[9px] font-black uppercase tracking-[0.24em] text-yellow-200">Execution</p>
+                        <p className="mt-2 text-xs leading-5 text-zinc-300">{selectedOpponent.botProfile.code_execution_style || selectedOpponent.botProfile.ai_prompt_style}</p>
+                      </div>
+                    </div>
+                  )}
 
                   <button
                     type="button"
@@ -2246,8 +2381,8 @@ export const Colosseum: React.FC = () => {
           <div className="mb-5 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
             <div>
               <p className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-200">Platform Gladiator Bot Roster</p>
-              <h2 className="mt-1 text-2xl font-black uppercase tracking-[0.16em] text-white">Challenge A Bot Gladiator</h2>
-              <p className="mt-2 max-w-3xl text-xs leading-6 text-zinc-400">Every Blood Sweat Code persona now has a persistent gladiator class, social bot account, language expertise, difficulty tier, battle style, signature moves, and Supabase-backed win/loss record.</p>
+              <h2 className="mt-1 text-2xl font-black uppercase tracking-[0.16em] text-white">Pick Your Persona Opponent</h2>
+              <p className="mt-2 max-w-3xl text-xs leading-6 text-zinc-400">Select a card to load it into the Challenge System, or press Challenge to lock the persona immediately. Profiles reveal what they are good at, how they think, how they execute code, and the vibe they bring into the arena.</p>
             </div>
             <div className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-[0.24em] text-zinc-300">
               {botGladiators.length} bots online
@@ -2358,6 +2493,31 @@ export const Colosseum: React.FC = () => {
                 </select>
               </label>
             </div>
+
+            {selectedOpponent?.botProfile && (
+              <div className="mt-5 overflow-hidden rounded-3xl border border-pink-300/20 bg-pink-950/10 p-4">
+                <div className="flex items-start gap-4">
+                  <AnimatedGladiatorAvatar gladiator={selectedOpponent} size="md" label={selectedOpponent.name} active />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[10px] font-black uppercase tracking-[0.28em] text-pink-200">Selected Persona</p>
+                    <h3 className="mt-1 text-xl font-black uppercase tracking-[0.14em] text-white">{selectedOpponent.name}</h3>
+                    <p className="mt-2 text-xs font-black uppercase tracking-[0.18em]" style={{ color: difficultyColor(selectedOpponent.botProfile.difficulty) }}>{profileLine(selectedOpponent.botProfile)}</p>
+                    <p className="mt-3 text-xs leading-6 text-zinc-300">{selectedOpponent.botProfile.personality_style || selectedOpponent.personality}</p>
+                    <div className="mt-3 grid gap-2 md:grid-cols-2">
+                      <div className="rounded-2xl border border-white/10 bg-black/35 p-3 text-[11px] leading-5 text-zinc-400">
+                        <span className="font-black uppercase tracking-widest text-cyan-200">Ability:</span> {selectedOpponent.botProfile.ability_profile || selectedOpponent.botProfile.battle_style}
+                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-black/35 p-3 text-[11px] leading-5 text-zinc-400">
+                        <span className="font-black uppercase tracking-widest text-yellow-200">Execution:</span> {selectedOpponent.botProfile.code_execution_style || selectedOpponent.botProfile.ai_prompt_style}
+                      </div>
+                    </div>
+                    {selectedOpponent.botProfile.emotional_hook && (
+                      <p className="mt-3 rounded-2xl border border-pink-300/20 bg-black/35 p-3 text-[11px] font-bold leading-5 text-pink-50/80">“{selectedOpponent.botProfile.emotional_hook}”</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {selectedOpponent?.botProfile && (
               <div className="mt-5 overflow-hidden rounded-3xl border border-cyan-300/20 bg-cyan-950/10 p-4">
