@@ -390,7 +390,11 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
       return res.json({
         id: runway.payload?.id ?? runway.payload?.taskId ?? null,
         taskId: runway.payload?.id ?? runway.payload?.taskId ?? null,
-        status: normalizeRunwayStatus(runway.payload?.status),
+        status: normalizeRunwayStatus(
+          runway.payload?.status === null || runway.payload?.status === undefined || runway.payload?.status === ''
+            ? 'PENDING'
+            : runway.payload.status,
+        ),
         output: runway.payload?.output ?? [],
         assetUrl: extractOutputUrl(runway.payload),
         type,
