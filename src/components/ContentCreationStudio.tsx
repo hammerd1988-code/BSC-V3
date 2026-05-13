@@ -55,7 +55,8 @@ const STORAGE_KEY = 'bsc_content_studio_assets_v1';
 const LIBRARY_KEY = 'bsc_content_studio_library_v1';
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
-const safeRunwayRatio = (ratio: string): '16:9' | '9:16' | '1:1' => ratio === '16:9' || ratio === '9:16' ? ratio : '1:1';
+const safeRunwayRatio = (ratio: string): '16:9' | '9:16' | '1:1' | '4:3' => ratio === '16:9' || ratio === '9:16' || ratio === '4:3' ? ratio : '1:1';
+const terminalRunwayStatuses = new Set(['SUCCEEDED', 'FAILED']);
 
 function loadAssets(): StudioAsset[] {
   try {
@@ -83,12 +84,14 @@ function saveLibrary(items: CreatorLibraryItem[]) {
 
 async function pollRunwayTask(initial: RunwayTaskResponse, setProgress: (value: string) => void): Promise<RunwayTaskResponse> {
   const taskId = initial.taskId || initial.id;
-  if (!taskId || initial.status === 'SUCCEEDED') return initial;
-  for (let attempt = 0; attempt < 36; attempt += 1) {
-    await sleep(2500);
-    setProgress(`Render core pulse ${attempt + 1}/36 — waiting for Runway output...`);
+  if (!taskId || terminalRunwayStatuses.has(initial.status)) return initial;
+  let delay = 2500;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await sleep(delay);
+    setProgress(`Render core pulse ${attempt + 1}/60 — waiting for Runway output...`);
     const next = await getRunwayTask(taskId);
-    if (next.status === 'SUCCEEDED' || next.status === 'FAILED') return next;
+    if (terminalRunwayStatuses.has(next.status)) return next;
+    delay = Math.min(10000, delay + 500);
   }
   return initial;
 }
@@ -124,6 +127,7 @@ export function ContentCreationStudio() {
   const [thumbnailColor, setThumbnailColor] = useState('#00FFFF');
   const [customBgPreview, setCustomBgPreview] = useState<string>('');
   const previewRef = useRef<HTMLDivElement>(null);
+  const hasActiveGeneration = generating || Boolean(progress);
 
   const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? assets[0] ?? null;
 
@@ -165,10 +169,10 @@ export function ContentCreationStudio() {
         feature: asThumbnailBg ? 'thumbnail_generation' : 'ai_image_generation',
         aspectRatio: safeRunwayRatio(ratio),
         ratio: safeRunwayRatio(ratio),
-        resolution: '1080p',
       });
       const result = await pollRunwayTask(initial, setProgress);
       if (result.status === 'FAILED') throw new Error('Runway image generation failed.');
+      if (result.status !== 'SUCCEEDED') throw new Error('Runway image generation is still processing. Try again in a moment.');
       const url = getAssetUrl(result);
       if (!url) throw new Error('Runway returned no image URL.');
       if (asThumbnailBg) setThumbnailBg(url);
@@ -191,9 +195,10 @@ export function ContentCreationStudio() {
     setStatus(null);
     try {
       const fullPrompt = `${prompt}\nVideo preset: ${videoPreset}. Duration: ${duration}s. Format: ${videoRatio}. Cinematic movement, crisp contrast, premium creator-platform polish.`;
-      const initial = await requestRunwayGeneration({ prompt: fullPrompt, type: 'video', feature: 'ai_video_generation', duration, aspectRatio: videoRatio, ratio: videoRatio, resolution: '720p' });
+      const initial = await requestRunwayGeneration({ prompt: fullPrompt, type: 'video', feature: 'ai_video_generation', duration, aspectRatio: videoRatio, ratio: videoRatio });
       const result = await pollRunwayTask(initial, setProgress);
       if (result.status === 'FAILED') throw new Error('Runway video generation failed.');
+      if (result.status !== 'SUCCEEDED') throw new Error('Runway video generation is still processing. Try again in a moment.');
       const url = getAssetUrl(result);
       if (!url) throw new Error('Runway returned no video URL.');
       addAsset({ id: crypto.randomUUID(), type: 'video', url, prompt: fullPrompt, ratio: videoRatio, createdAt: new Date().toISOString() });
@@ -444,7 +449,18 @@ export function ContentCreationStudio() {
                 {generating && <span className="inline-flex items-center gap-2 rounded-full border border-cyan-300/25 bg-cyan-300/10 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-cyan-100"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Rendering</span>}
               </div>
 
-              {mode === 'thumbnail' ? (
+              {hasActiveGeneration ? (
+                <div className="grid min-h-[430px] place-items-center rounded-[2rem] border border-cyan-300/20 bg-[radial-gradient(circle_at_50%_20%,rgba(0,255,255,0.16),transparent_34%),linear-gradient(135deg,rgba(255,0,255,0.08),rgba(0,0,0,0.92))] text-center">
+                  <div className="max-w-md px-6">
+                    <Loader2 className="mx-auto mb-5 h-14 w-14 animate-spin text-cyan-200" />
+                    <p className="text-sm font-black uppercase tracking-[0.28em] text-white">Runway render in progress</p>
+                    <p className="mt-3 text-xs font-bold uppercase tracking-widest text-cyan-100/80">{progress || 'Preparing generation request...'}</p>
+                    <div className="mt-6 h-2 overflow-hidden rounded-full bg-white/10">
+                      <div className="h-full w-2/3 animate-pulse rounded-full bg-gradient-to-r from-cyan-300 via-fuchsia-400 to-cyan-300" />
+                    </div>
+                  </div>
+                </div>
+              ) : mode === 'thumbnail' ? (
                 <div ref={previewRef} className="relative aspect-video overflow-hidden rounded-[2rem] border border-white/10 bg-black">
                   <div className={cn('absolute inset-0 bg-gradient-to-br', thumbnailTemplate.bg)} />
                   {(thumbnailBg || customBgPreview) && <img src={thumbnailBg || customBgPreview} alt="Thumbnail background" className="absolute inset-0 h-full w-full object-cover opacity-60" />}
@@ -457,13 +473,15 @@ export function ContentCreationStudio() {
                 </div>
               ) : selectedAsset ? (
                 <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-black">
-                  {selectedAsset.type === 'video' ? <video src={selectedAsset.url} controls className="aspect-video w-full bg-black object-contain" /> : <img src={selectedAsset.url} alt={selectedAsset.prompt} className="max-h-[620px] w-full object-contain" />}
+                  {selectedAsset.type === 'video'
+                    ? <video key={selectedAsset.id} src={selectedAsset.url} controls playsInline preload="metadata" className="aspect-video w-full bg-black object-contain" />
+                    : <img key={selectedAsset.id} src={selectedAsset.url} alt={selectedAsset.prompt} className="max-h-[620px] w-full object-contain" />}
                 </div>
               ) : (
                 <div className="grid min-h-[430px] place-items-center rounded-[2rem] border border-dashed border-white/10 bg-black/40 text-center"><div><Layers className="mx-auto mb-4 h-12 w-12 text-zinc-700" /><p className="text-xs font-black uppercase tracking-widest text-zinc-500">No assets yet. Generate your first signal.</p></div></div>
               )}
 
-              {progress && <div className="mt-4 rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-4 text-xs font-bold uppercase tracking-widest text-cyan-100">{progress}</div>}
+              {progress && !hasActiveGeneration && <div className="mt-4 rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-4 text-xs font-bold uppercase tracking-widest text-cyan-100">{progress}</div>}
               {status && <div className="mt-4 rounded-2xl border border-fuchsia-300/20 bg-fuchsia-300/10 p-4 text-sm text-fuchsia-100">{status}</div>}
 
               <div className="mt-5 grid gap-3 sm:grid-cols-5">
