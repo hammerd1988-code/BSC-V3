@@ -64,6 +64,14 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
     }
   }, [callsign, currentUser?.display_name]);
 
+  useEffect(() => {
+    if (step !== 'intro') return;
+    const timeoutId = setTimeout(() => {
+      setStep((currentStep) => currentStep === 'intro' ? 'archetype' : currentStep);
+    }, 2500);
+    return () => clearTimeout(timeoutId);
+  }, [step]);
+
   const toggleInterest = (id: string) => {
     setInterests(prev => {
       const next = new Set(prev);
@@ -171,7 +179,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
             </h1>
 
             <p className="text-gray-400 text-sm leading-relaxed mb-8">
-              You've breached the perimeter. Before you enter the network, we need to establish your identity. This will take 60 seconds.
+              You've breached the perimeter. Your secure sign-in is complete. Identity setup starts now and only takes a few quick picks.
             </p>
 
             <motion.button
@@ -181,9 +189,12 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
               className="flex items-center gap-3 px-8 py-4 bg-accent text-white font-black uppercase tracking-widest text-sm rounded-xl shadow-[0_0_30px_rgba(255,0,0,0.4)] hover:shadow-[0_0_50px_rgba(255,0,0,0.6)] transition-all"
             >
               <Zap className="w-5 h-5" />
-              Initialize Identity
+              Start Identity Setup
               <ArrowRight className="w-5 h-5" />
             </motion.button>
+            <p className="mt-4 text-[10px] font-mono uppercase tracking-[0.25em] text-gray-600">
+              Auto-advancing if untouched...
+            </p>
           </motion.div>
         )}
 
