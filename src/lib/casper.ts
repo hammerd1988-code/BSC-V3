@@ -1,4 +1,5 @@
 import { supabase } from '../supabase';
+import { authHeaders, authedFetch } from './authSession';
 
 // Must stay in sync with SUBAGENT_MAX_PARALLEL in casperControlCenter.ts.
 // The server caps at the same number; if the client tried to send more,
@@ -8,21 +9,6 @@ export const CASPER_SUBAGENT_MAX_PARALLEL = 8;
 
 function apiBaseUrl() {
   return String(import.meta.env.VITE_API_URL || import.meta.env.VITE_SOCKET_URL || '').replace(/\/$/, '');
-}
-
-async function authHeaders(): Promise<Record<string, string>> {
-  let { data: { session } } = await supabase.auth.getSession();
-  if (!session?.access_token) {
-    const refreshed = await supabase.auth.refreshSession();
-    session = refreshed.data.session;
-  }
-  if (!session?.access_token) {
-    throw new Error('Sign in is required before invoking Casper.');
-  }
-  return {
-    Authorization: `Bearer ${session.access_token}`,
-    'Content-Type': 'application/json',
-  };
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {

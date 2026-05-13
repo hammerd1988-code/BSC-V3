@@ -1,4 +1,5 @@
 import { supabase } from '../supabase';
+import { getValidSession } from './authSession';
 
 export type PushEventType = 'dm' | 'comment' | 'mention';
 
@@ -91,8 +92,12 @@ async function getVapidPublicKey(): Promise<string | null> {
 }
 
 async function getAccessToken(): Promise<string | null> {
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
+  try {
+    const session = await getValidSession();
+    return session.access_token;
+  } catch {
+    return null;
+  }
 }
 
 export async function requestNotificationPermission(): Promise<boolean> {

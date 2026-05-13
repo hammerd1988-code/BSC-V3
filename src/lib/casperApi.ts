@@ -1,32 +1,12 @@
-import { supabase } from '../supabase';
+import { authedFetch } from './authSession';
 
 /**
- * Fetch wrapper for /api/casper/* endpoints. Resolves the current Supabase
- * session, attempts a single refresh if the access token is missing, and
- * throws a clear error if the user is signed out — instead of silently
- * sending `Authorization: Bearer ` (empty), which the backend rejects with
- * a generic 401 that surfaces as "Authentication required." in the UI.
+ * Fetch wrapper for /api/casper/* endpoints.  Delegates to
+ * `authedFetch` which proactively refreshes expired Supabase
+ * sessions and retries once on 401.
  */
 export async function casperAuthFetch(input: string, options: RequestInit = {}): Promise<Response> {
-  let { data } = await supabase.auth.getSession();
-  let token = data.session?.access_token;
-
-  if (!token) {
-    const refreshed = await supabase.auth.refreshSession();
-    token = refreshed.data.session?.access_token;
-    if (!token) {
-      throw new Error('Your Casper session expired. Please sign in again to use the operator console.');
-    }
-  }
-
-  return fetch(input, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...(options.headers ?? {}),
-    },
-  });
+  return authedFetch(input, options);
 }
 
 /**

@@ -39,6 +39,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
+import { getValidSession } from '../lib/authSession';
 import { handleDbError } from '../lib/errors';
 import { cn } from '../lib/utils';
 
@@ -504,7 +505,7 @@ export function BotForge() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${(await supabase.auth.getSession()).data.session?.access_token ?? ''}`,
+          'Authorization': `Bearer ${(await getValidSession()).access_token}`,
         },
         body: JSON.stringify({
           command: `[Spar Mode — respond as gladiator "${selectedGladiator.name}"]\n\nSystem context:\n${systemPrompt}\n\nUser says: "${userMsg.text}"`,
