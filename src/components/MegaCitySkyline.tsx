@@ -14,6 +14,7 @@ interface Building {
   windowCols: number;
   hasAntenna: boolean;
   hasSign: boolean;
+  hasChimney: boolean;
   signText?: string;
   layer: 'back' | 'mid' | 'front';
 }
@@ -41,6 +42,7 @@ function generateBuildings(count: number, layer: 'back' | 'mid' | 'front', seed:
       windowCols: Math.floor(width / 10),
       hasAntenna: pseudoRand > 0.6,
       hasSign: layer === 'front' && pseudoRand > 0.5,
+      hasChimney: layer !== 'back' && pseudoRand > 0.42,
       layer,
     });
     x += width + 2 + pseudoRand * 6;
@@ -70,18 +72,47 @@ function BuildingSVG({ b, index }: { b: Building; index: number }) {
       {Array.from({ length: b.windowRows }).map((_, row) =>
         Array.from({ length: b.windowCols }).map((_, col) => {
           const lit = Math.sin((index + 1) * (row + 1) * (col + 1) * 1.7) > -0.2;
+          const opening = lit && (row + col + index) % 7 === 0;
           return (
-            <rect
-              key={`${row}-${col}`}
-              x={3 + col * 9}
-              y={-b.height + 6 + row * 12}
-              width={5}
-              height={7}
-              fill={lit ? `hsla(${neonHue}, 70%, 60%, 0.6)` : 'rgba(0,0,0,0.3)'}
-              rx={0.5}
-            />
+            <g key={`${row}-${col}`}>
+              <rect
+                x={3 + col * 9}
+                y={-b.height + 6 + row * 12}
+                width={5}
+                height={7}
+                fill={lit ? `hsla(${neonHue}, 70%, 60%, 0.6)` : 'rgba(0,0,0,0.3)'}
+                rx={0.5}
+                style={opening ? { animation: `mega-window-open ${5 + ((row + col) % 4)}s ${index * 0.11}s ease-in-out infinite`, transformBox: 'fill-box', transformOrigin: 'left center' } : undefined}
+              />
+              {opening && (
+                <rect
+                  x={8 + col * 9}
+                  y={-b.height + 6 + row * 12}
+                  width={2}
+                  height={7}
+                  fill={`hsla(${neonHue}, 85%, 72%, 0.28)`}
+                  rx={0.5}
+                  style={{ animation: `mega-window-glow ${5 + ((row + col) % 4)}s ${index * 0.11}s ease-in-out infinite` }}
+                />
+              )}
+            </g>
           );
         })
+      )}
+      {b.hasChimney && (
+        <g transform={`translate(${b.width * 0.72}, ${-b.height - 1})`}>
+          <rect x={0} y={-9} width={5} height={9} rx={1} fill="rgba(8,8,12,0.9)" stroke={`hsla(${neonHue}, 70%, 55%, 0.24)`} />
+          {[0, 1, 2].map((puff) => (
+            <circle
+              key={puff}
+              cx={2.5 + puff * 2}
+              cy={-13 - puff * 4}
+              r={3 + puff}
+              fill="rgba(170,190,205,0.24)"
+              style={{ animation: `mega-smoke-rise ${6 + puff}s ${puff * 1.25 + index * 0.07}s ease-in-out infinite`, transformBox: 'fill-box', transformOrigin: 'center' }}
+            />
+          ))}
+        </g>
       )}
       {/* Antenna */}
       {b.hasAntenna && (
@@ -279,6 +310,46 @@ function Particles() {
   );
 }
 
+function ColosseumLandmark() {
+  return (
+    <g transform="translate(534, 210)" opacity={0.86}>
+      <ellipse cx={62} cy={0} rx={92} ry={11} fill="rgba(255,72,0,0.24)" />
+      <path d="M8 0 C16 -48 33 -66 62 -68 C91 -66 108 -48 116 0 Z" fill="rgba(18,10,8,0.92)" stroke="rgba(255,90,32,0.38)" strokeWidth={1.3} />
+      <path d="M18 0 C24 -35 38 -50 62 -51 C86 -50 100 -35 106 0" fill="none" stroke="rgba(255,181,94,0.3)" strokeWidth={1.1} />
+      {Array.from({ length: 7 }).map((_, i) => (
+        <rect
+          key={i}
+          x={24 + i * 11}
+          y={-35 - Math.sin(i) * 7}
+          width={5}
+          height={28 + Math.sin(i * 2) * 6}
+          rx={2.5}
+          fill="rgba(0,0,0,0.64)"
+          stroke="rgba(255,130,60,0.25)"
+        />
+      ))}
+      <path d="M18 -8 C40 -21 84 -21 106 -8" fill="none" stroke="rgba(255,70,24,0.65)" strokeWidth={2} style={{ filter: 'drop-shadow(0 0 8px rgba(255,70,24,0.55))' }} />
+      <text x={62} y={-75} textAnchor="middle" fill="rgba(255,150,95,0.9)" fontSize={9} fontWeight="900" fontFamily="monospace" letterSpacing="2" style={{ filter: 'drop-shadow(0 0 5px rgba(255,70,24,0.7))' }}>
+        ARENA
+      </text>
+    </g>
+  );
+}
+
+function StormLayer() {
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      <div className="absolute left-[7%] top-[6%] h-24 w-52 rounded-full bg-zinc-500/8 blur-3xl" style={{ animation: 'mega-smog-drift 18s ease-in-out infinite' }} />
+      <div className="absolute right-[10%] top-[16%] h-20 w-64 rounded-full bg-purple-400/7 blur-3xl" style={{ animation: 'mega-smog-drift 24s -6s ease-in-out infinite reverse' }} />
+      <div className="absolute bottom-[18%] left-0 h-28 w-[140%] -translate-x-24 bg-gradient-to-r from-transparent via-cyan-200/6 to-transparent blur-2xl" style={{ animation: 'mega-smog-drift 22s ease-in-out infinite' }} />
+      <div className="absolute inset-0 bg-cyan-100/0" style={{ animation: 'mega-lightning-flash 11s 2s ease-in-out infinite' }} />
+      <svg className="absolute right-[12%] top-[2%] h-36 w-40 opacity-0" viewBox="0 0 120 140" style={{ animation: 'mega-lightning-bolt 11s 2s ease-in-out infinite' }}>
+        <path d="M72 4 36 58 61 58 44 136 92 47 66 49 Z" fill="rgba(210,245,255,0.88)" stroke="rgba(103,232,249,0.9)" strokeWidth={2} />
+      </svg>
+    </div>
+  );
+}
+
 /* ── Main Mega City Skyline ── */
 interface MegaCitySkylineProps {
   liveBattleCount?: number;
@@ -328,6 +399,7 @@ export const MegaCitySkyline: React.FC<MegaCitySkylineProps> = ({
         ))}
       </div>
 
+      <StormLayer />
       <Particles />
 
       {/* City Skyline SVG */}
@@ -356,6 +428,7 @@ export const MegaCitySkyline: React.FC<MegaCitySkylineProps> = ({
           <g transform={`translate(80, ${svgHeight})`}>
             {frontBuildings.map((b, i) => <BuildingSVG key={`f-${i}`} b={b} index={i + 40} />)}
           </g>
+          <ColosseumLandmark />
 
           {/* Ground fog */}
           <rect y={svgHeight - 40} width={svgWidth} height={40} fill="url(#city-fog)" />
