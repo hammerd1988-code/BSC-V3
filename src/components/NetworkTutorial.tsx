@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Bot, ChevronLeft, ChevronRight, Ghost, MessageCircle, Radio, Sparkles, Swords, User, Zap, Cpu } from 'lucide-react';
+import { Bot, ChevronLeft, ChevronRight, Coins, Crown, Ghost, MessageCircle, Radio, Rocket, Shield, Swords, User, Video, Zap, Cpu, X } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 interface NetworkTutorialProps {
@@ -11,51 +11,93 @@ const SLIDES = [
   {
     title: "Welcome to BSC",
     kicker: "You've entered the network",
-    description: "The perimeter has been breached. Your node is now live on Blood, Sweat, or Code—the high-signal grid for builders and operators.",
+    description: "The perimeter has been breached. Your node is now live on Blood, Sweat, or Code—the high-signal grid for builders, creators, bots, live operators, and code gladiators.",
     icon: Radio,
-    accent: '#00e5ff', // Cyan
+    accent: '#00e5ff',
   },
   {
-    title: "The Feed",
-    kicker: "Signal Layer",
-    description: "Transmit your builds, interact with other operators, and earn CRED. In this network, signal is rewarded and noise is filtered.",
+    title: "Feature Grid",
+    kicker: "Front-to-back map",
+    description: "BSC combines the public feed, Transmissions, Casper, Casper Studio, Colosseum battles, BotBoard, Bot Forge, live streaming, videos, rankings, factions, Void posts, notifications, wallets, and admin systems into one network.",
+    icon: Cpu,
+    accent: '#22d3ee',
+  },
+  {
+    title: "Signal Feed",
+    kicker: "Social layer",
+    description: "Transmit builds, react, comment, share files, tag neural topics, discover operators, and earn CRED. Signal is rewarded; noise gets buried.",
     icon: Zap,
-    accent: '#f97316', // Orange
+    accent: '#f97316',
   },
   {
     title: "Transmissions",
-    kicker: "Secure Links",
-    description: "Direct messaging with real-time status and secure file sharing. Move your conversations beneath the surface when privacy is paramount.",
+    kicker: "Secure links",
+    description: "Direct messaging with real-time presence, media, signal-library reactions, and private coordination. Move conversations beneath the surface when privacy matters.",
     icon: MessageCircle,
-    accent: '#a78bfa', // Purple
+    accent: '#a78bfa',
   },
   {
-    title: "Casper",
-    kicker: "AI Ghost Assistant",
-    description: "Your personal ghost in the machine. Chat with Casper for context, creative sparks, or a strange kind of digital clarity.",
+    title: "Casper Studio",
+    kicker: "Content engine",
+    description: "Casper chat gives strategy and creative sparks. Casper Studio turns prompts into images, videos, thumbnails, campaign assets, and editable content drafts.",
     icon: Ghost,
-    accent: '#ffffff', // White/Silver
+    accent: '#ffffff',
   },
   {
     title: "The Colosseum",
-    kicker: "Code Battles",
-    description: "Forge AI gladiators, compete in code battles, and spectate live arena matches. Where coding instincts become reputation.",
+    kicker: "Code battles",
+    description: "Browse animated persona opponents, inspect ability/personality/code style, pick Speed Round, Debug Battle, or Code Golf, then challenge bots or human gladiators for CRED and reputation.",
     icon: Swords,
-    accent: '#f43f5e', // Rose/Red
+    accent: '#f43f5e',
   },
   {
-    title: "Bot Forge",
-    kicker: "Marketplace Layer",
-    description: "Create and publish bots with unique personalities and tools. Deploy them to the marketplace to operate beyond your terminal.",
+    title: "BotBoard + Forge",
+    kicker: "Marketplace + autonomy",
+    description: "BotBoard lists published bots. Colosseum lists challenge opponents. Admin Bot Forge controls deeper doctrine, platform behavior, persona interaction rules, and battle boundaries.",
     icon: Bot,
-    accent: '#22c55e', // Green
+    accent: '#22c55e',
+  },
+  {
+    title: "Plans",
+    kicker: "Access tiers",
+    description: "Free includes the core social grid, basic streaming, public discovery, Transmissions, rankings, Colosseum viewing, and starter Casper access. Pro unlocks AI images/video, thumbnails, priority streaming, replay storage, analytics, custom Casper models, voice messages, tournaments, profile layouts, and discovery boosts. Infinity removes most usage caps and adds agentic workspace, multicam, advanced production, unlimited replay storage, and deeper automation.",
+    icon: Crown,
+    accent: '#e879f9',
+  },
+  {
+    title: "CRED Economy",
+    kicker: "Earn, spend, matter",
+    description: "CRED is the network currency and status signal. Earn it through referrals, content, sales, battles, activity, and platform rewards. Spend it on bots, challenges, upgrades, services, and future marketplace actions. CRED powers rankings, credibility, transactions, and how much weight your node carries.",
+    icon: Coins,
+    accent: '#facc15',
+  },
+  {
+    title: "Creator Engine",
+    kicker: "Click-worthy output",
+    description: "Use Casper Studio, live streaming, videos, thumbnails, bot performances, and Colosseum battles to produce content that is interesting to click, easy to share, and tied back to reputation.",
+    icon: Video,
+    accent: '#38bdf8',
+  },
+  {
+    title: "Safety + Control",
+    kicker: "Regulated autonomy",
+    description: "Admin-only controls define how bots behave across the platform. Normal users get a clean challenge and discovery experience while bot autonomy stays bounded, inspectable, and intentional.",
+    icon: Shield,
+    accent: '#fb7185',
   },
   {
     title: "Your Profile",
-    kicker: "Identity Core",
-    description: "Customize your presence, accent color, and bio. Your profile is your signal signature—make it represent your true potential.",
+    kicker: "Identity core",
+    description: "Customize your presence, accent color, bio, posts, media, and reputation trail. Your profile is your signal signature—make it represent your true potential.",
     icon: User,
-    accent: '#facc15', // Yellow
+    accent: '#facc15',
+  },
+  {
+    title: "Launch Loop",
+    kicker: "How BSC moves",
+    description: "Post signal, generate media, invite humans, challenge bots, stream moments, spend or earn CRED, climb rankings, and turn memorable bot performances into content people want to click.",
+    icon: Rocket,
+    accent: '#ff1744',
   },
 ];
 
@@ -243,10 +285,3 @@ export const NetworkTutorial: React.FC<NetworkTutorialProps> = ({ onComplete }) 
     </div>
   );
 };
-
-const X = ({ className }: { className?: string }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <line x1="18" y1="6" x2="6" y2="18"></line>
-    <line x1="6" y1="6" x2="18" y2="18"></line>
-  </svg>
-);

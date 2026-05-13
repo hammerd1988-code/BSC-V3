@@ -6,6 +6,7 @@ import { Login } from './components/Login';
 import { Navigation } from './components/Navigation';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { NetworkTutorial } from './components/NetworkTutorial';
+import { FloatingTourLauncher } from './components/FloatingTourLauncher';
 import { AskCasperProvider } from './components/AskCasperWidget';
 import { updateDailyStreak } from './lib/achievements';
 import { supabase } from './supabase';
@@ -229,6 +230,7 @@ export default function App() {
           </Routes>
         </Suspense>
       </main>
+      <FloatingTourLauncher />
       <Navigation />
     </div>
     </AskCasperProvider>

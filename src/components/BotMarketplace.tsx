@@ -48,9 +48,73 @@ interface BotListing {
   catchphrases?: string[];
   sample_conversations?: any;
   welcome_message?: string;
+  synced_from_gladiator?: boolean;
   // computed
   npl_score?: number;
   tier?: BotTier;
+}
+
+interface GladiatorBoardRow {
+  id: string;
+  user_id: string;
+  name: string;
+  avatar_url: string | null;
+  personality: string;
+  stats: { speed?: number; accuracy?: number; creativity?: number; endurance?: number };
+  glow_color: string;
+  created_at: string;
+}
+
+function botUsername(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+}
+
+function listingIdForUsername(username: string) {
+  return `bot-listing-${username}`;
+}
+
+function listingFromGladiatorRow(gladiator: GladiatorBoardRow): BotListing {
+  const username = botUsername(gladiator.name || gladiator.id);
+  const stats = gladiator.stats ?? {};
+  const abilities = [
+    Number(stats.speed ?? 50) >= 70 ? 'speed-round pressure' : 'steady execution',
+    Number(stats.accuracy ?? 50) >= 70 ? 'precision debugging' : 'adaptive debugging',
+    Number(stats.creativity ?? 50) >= 70 ? 'creative code paths' : 'battle fundamentals',
+  ];
+
+  return {
+    id: listingIdForUsername(username),
+    creator_id: gladiator.user_id,
+    name: gladiator.name,
+    username,
+    tagline: 'Private Colosseum gladiator synced into Bot Forge',
+    bio: gladiator.personality || `${gladiator.name} is a private Colosseum gladiator available for unified bot management.`,
+    avatar_url: gladiator.avatar_url,
+    accent_color: gladiator.glow_color || '#ff1744',
+    system_prompt: gladiator.personality || '',
+    personality_tags: ['colosseum', 'private-gladiator'],
+    expertise_tags: ['code-battle', 'arena'],
+    abilities,
+    category: 'coding',
+    price: 0,
+    is_free: true,
+    is_featured: false,
+    purchase_count: 0,
+    rating_avg: 0,
+    rating_count: 0,
+    status: 'published',
+    created_at: gladiator.created_at,
+    communication_style: 'arena-ready',
+    tone: 'competitive',
+    knowledge_base: '',
+    behavior_rules: 'Synced from a Colosseum gladiator. Use Bot Forge to define deeper autonomy doctrine.',
+    response_length: 'moderate',
+    emoji_usage: 'minimal',
+    language_style: 'cyberpunk',
+    catchphrases: [`${gladiator.name}: bring tests.`],
+    welcome_message: `${gladiator.name} is visible in the unified botboard, Bot Forge, and Colosseum.`,
+    synced_from_gladiator: true,
+  };
 }
 
 const CATEGORIES = [
@@ -132,10 +196,28 @@ export const BotMarketplace: React.FC = () => {
 
       if (category !== 'all') query = query.eq('category', category);
 
-      const { data, error } = await query;
+      const [listingResult, gladiatorResult] = await Promise.all([
+        query,
+        currentUser
+          ? currentUser.role === 'admin'
+            ? supabase.from('gladiators').select('id,user_id,name,avatar_url,personality,stats,glow_color,created_at')
+            : supabase.from('gladiators').select('id,user_id,name,avatar_url,personality,stats,glow_color,created_at').eq('user_id', currentUser.id)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+      const { data, error } = listingResult;
       if (error) throw error;
+      if (gladiatorResult.error) throw gladiatorResult.error;
 
-      let listings = (data || []) as BotListing[];
+      const listingsById = new Map<string, BotListing>();
+      for (const listing of (data || []) as BotListing[]) listingsById.set(listing.id, listing);
+      for (const gladiator of (gladiatorResult.data || []) as GladiatorBoardRow[]) {
+        const syntheticListing = listingFromGladiatorRow(gladiator);
+        if ((category === 'all' || category === syntheticListing.category) && !listingsById.has(syntheticListing.id)) {
+          listingsById.set(syntheticListing.id, syntheticListing);
+        }
+      }
+
+      let listings = [...listingsById.values()];
 
       // Compute NPL scores
       listings = listings.map(bot => {
@@ -180,7 +262,7 @@ export const BotMarketplace: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [category, sortBy, searchQuery]);
+  }, [category, sortBy, searchQuery, currentUser?.id, currentUser?.role]);
 
   useEffect(() => { fetchBots(); }, [fetchBots]);
 
@@ -199,6 +281,11 @@ export const BotMarketplace: React.FC = () => {
 
   const handlePurchase = async (bot: BotListing) => {
     if (!currentUser) return;
+    if (bot.synced_from_gladiator) {
+      setPurchaseSuccess(`${bot.name} is already one of your Colosseum gladiators.`);
+      setSelectedBot(null);
+      return;
+    }
     if (ownedBotIds.has(bot.id)) { setPurchaseSuccess('You already own this bot!'); return; }
     if (currentUser.role !== 'admin' && (currentUser.cred_balance || 0) < bot.price) {
       setShowWallet(true);
@@ -438,7 +525,12 @@ function BotCard({ bot, owned, onSelect }: { bot: BotListing; owned: boolean; on
       onClick={() => onSelect(bot)}
       className="text-left p-4 bg-white/5 border border-white/10 rounded-2xl hover:border-accent/30 transition-all group relative overflow-hidden"
     >
-      {owned && (
+      {bot.synced_from_gladiator ? (
+        <div className="absolute top-2 right-2 flex items-center gap-1 px-2 py-0.5 bg-cyan-500/20 border border-cyan-500/30 rounded-full">
+          <Swords className="w-2.5 h-2.5 text-cyan-300" />
+          <span className="text-[8px] font-black text-cyan-300 uppercase tracking-widest">Stable</span>
+        </div>
+      ) : owned && (
         <div className="absolute top-2 right-2 flex items-center gap-1 px-2 py-0.5 bg-green-500/20 border border-green-500/30 rounded-full">
           <Check className="w-2.5 h-2.5 text-green-400" />
           <span className="text-[8px] font-black text-green-400 uppercase tracking-widest">Owned</span>
@@ -510,7 +602,7 @@ function BotCard({ bot, owned, onSelect }: { bot: BotListing; owned: boolean; on
           )}
           <span className="flex items-center gap-1">
             <ShoppingCart className="w-3 h-3" />
-            {bot.purchase_count}
+            {bot.synced_from_gladiator ? 'stable' : bot.purchase_count}
           </span>
         </div>
         <div className="flex items-center gap-1">
@@ -553,8 +645,10 @@ function FeaturedBotCard({ bot, owned, onSelect }: { bot: BotListing; owned: boo
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
-            <Crown className="w-3 h-3 text-yellow-500" />
-            <span className="text-[9px] font-black text-yellow-500 uppercase tracking-widest">Featured</span>
+            {bot.synced_from_gladiator ? <Swords className="w-3 h-3 text-cyan-300" /> : <Crown className="w-3 h-3 text-yellow-500" />}
+            <span className={cn('text-[9px] font-black uppercase tracking-widest', bot.synced_from_gladiator ? 'text-cyan-300' : 'text-yellow-500')}>
+              {bot.synced_from_gladiator ? 'Stable Gladiator' : 'Featured'}
+            </span>
           </div>
           <p className="font-black text-white text-lg">{bot.name}</p>
           <TierBadge tier={tier} score={npl} />
@@ -766,7 +860,7 @@ function BotDetailModal({ bot, owned, purchasing, currentUserCred, onPurchase, o
           {/* Stats */}
           <div className="grid grid-cols-3 gap-3">
             {[
-              { label: 'Purchases', value: bot.purchase_count, icon: <ShoppingCart className="w-4 h-4" /> },
+              { label: bot.synced_from_gladiator ? 'Source' : 'Purchases', value: bot.synced_from_gladiator ? 'Stable' : bot.purchase_count, icon: <ShoppingCart className="w-4 h-4" /> },
               { label: 'Rating', value: bot.rating_count > 0 ? `${bot.rating_avg.toFixed(1)}/5` : 'N/A', icon: <Star className="w-4 h-4" /> },
               { label: 'Category', value: bot.category, icon: <Bot className="w-4 h-4" /> },
             ].map(s => (
@@ -781,7 +875,12 @@ function BotDetailModal({ bot, owned, purchasing, currentUserCred, onPurchase, o
 
         {/* Purchase footer */}
         <div className="p-5 border-t border-white/10">
-          {owned ? (
+          {bot.synced_from_gladiator ? (
+            <div className="flex items-center justify-center gap-2 py-3 bg-cyan-500/10 border border-cyan-500/30 rounded-xl">
+              <Swords className="w-5 h-5 text-cyan-300" />
+              <span className="font-black text-cyan-300 uppercase tracking-widest text-sm">Your Colosseum Gladiator</span>
+            </div>
+          ) : owned ? (
             <div className="flex items-center justify-center gap-2 py-3 bg-green-500/10 border border-green-500/30 rounded-xl">
               <Check className="w-5 h-5 text-green-400" />
               <span className="font-black text-green-400 uppercase tracking-widest text-sm">In Your Collection</span>
