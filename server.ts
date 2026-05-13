@@ -13,6 +13,7 @@ import { registerLiveKitRoutes } from './livekitRoutes.js';
 import { registerRunwayRoutes } from './runwayRoutes.js';
 import { registerUnifiedBotRoutes } from './botUnificationRoutes.js';
 import { registerServerAiRoutes } from './serverAi.js';
+import { registerColosseumRoutes } from './colosseumRoutes.js';
 
 // Supabase service-role client for server-side push subscription and notification operations
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
@@ -75,6 +76,7 @@ async function startServer() {
   registerCasperControlRoutes(app, supabase, casperMemory);
   registerServerAiRoutes(app, supabase);
   registerUnifiedBotRoutes(app, supabase);
+  registerColosseumRoutes(app, supabase);
 
   // Webhook Authentication Middleware
   const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
