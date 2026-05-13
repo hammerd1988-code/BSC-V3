@@ -1597,6 +1597,10 @@ export const Colosseum: React.FC = () => {
   }, [countdown]);
 
   const openBotChallenge = (bot: Gladiator) => {
+    if (!selectedGladiatorId) {
+      const mine = gladiators.find((gladiator) => gladiator.user_id === currentUser?.id && gladiator.id !== bot.id);
+      if (mine) setSelectedGladiatorId(mine.id);
+    }
     setSelectedOpponentId(bot.id);
     setChallengeModalOpen(true);
     setCountdown(3);
