@@ -62,6 +62,11 @@ function normalizeRatio(value: unknown): RunwayAspectRatio {
   return typeof value === 'string' && VALID_RATIOS.has(value as RunwayAspectRatio) ? value as RunwayAspectRatio : '16:9';
 }
 
+function normalizeRequestRatio(type: RunwayGenerationType, value: unknown): RunwayAspectRatio {
+  const ratio = normalizeRatio(value);
+  return type === 'video' && ratio === '4:3' ? '16:9' : ratio;
+}
+
 function normalizeVideoRatio(value: RunwayAspectRatio): '1280:720' | '720:1280' | '960:960' {
   if (value === '9:16') return '720:1280';
   if (value === '1:1') return '960:960';
@@ -135,6 +140,13 @@ function createRunwayPromptImage() {
     pngChunk('IEND', Buffer.alloc(0)),
   ]);
   return `data:image/png;base64,${png.toString('base64')}`;
+}
+
+let cachedRunwayPromptImage: string | null = null;
+
+function getRunwayPromptImage() {
+  cachedRunwayPromptImage ??= createRunwayPromptImage();
+  return cachedRunwayPromptImage;
 }
 
 function normalizeFeature(type: RunwayGenerationType, value: unknown): PremiumRunwayFeature {
@@ -317,7 +329,7 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
       const type: RunwayGenerationType = body.type === 'image' ? 'image' : 'video';
       const promptText = normalizePrompt(body.promptText ?? body.prompt);
       const promptImage = normalizePrompt(body.promptImage);
-      const ratio = normalizeRatio(body.ratio ?? body.aspectRatio);
+      const ratio = normalizeRequestRatio(type, body.ratio ?? body.aspectRatio);
       const videoRatio = normalizeVideoRatio(ratio);
       const duration = normalizeDuration(body.duration ?? 5);
       const feature = normalizeFeature(type, body.feature);
@@ -343,7 +355,7 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
         ? '/image_to_video'
         : '/text_to_image';
       const videoPromptImage = type === 'video' && !promptImage
-        ? createRunwayPromptImage()
+        ? getRunwayPromptImage()
         : promptImage;
 
       const payload: Record<string, any> = type === 'video'
