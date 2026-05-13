@@ -34,7 +34,7 @@ import { registerUnifiedBotRoutes } from './botUnificationRoutes.js';
 import { registerServerAiRoutes } from './serverAi.js';
 import { registerColosseumRoutes } from './colosseumRoutes.js';
 import { BOT_PERSONAS } from './src/lib/botPersonas.js';
-import { BOT_GLADIATOR_PROFILES, botStatsToPercent } from './src/lib/botGladiatorProfiles.js';
+import { BOT_GLADIATOR_PROFILES, SAPPHIRE_GLADIATOR_PROFILE, botStatsToPercent } from './src/lib/botGladiatorProfiles.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -77,6 +77,12 @@ function sanitizeGladiator(gladiator: any) {
   if (!gladiator) return null;
   const { api_key: _apiKey, ...safe } = gladiator;
   return safe;
+}
+
+function profileAvatarUrl(profile: { avatar_prompt?: string }, seed: string, fallbackName: string) {
+  const avatarPrompt = profile.avatar_prompt ?? `${fallbackName} cyberpunk AI gladiator portrait neon dark background`;
+  const avatarSeed = seed.split('').reduce((sum, character) => sum + character.charCodeAt(0), 0);
+  return `https://image.pollinations.ai/prompt/${encodeURIComponent(avatarPrompt)}?width=600&height=600&seed=${avatarSeed}&nologo=true`;
 }
 
 function normalizeModel(model?: string | null) {
@@ -283,8 +289,8 @@ async function ensurePersonaBotGladiators() {
 
     const bUserId = botUserId(persona.username);
     const gladiatorId = botGladiatorId(persona.username);
-    const avatarUrl = `https://picsum.photos/seed/${persona.avatar_seed}/400/400`;
-    const profileLine = `${profile.gladiator_class} specializing in ${profile.expertise.join(', ')}. Battle style: ${profile.battle_style}. ${persona.bio}`.slice(0, 3000);
+    const avatarUrl = profileAvatarUrl(profile, persona.avatar_seed, persona.display_name);
+    const profileLine = `${profile.gladiator_class} specializing in ${profile.expertise.join(', ')}. Ability: ${profile.ability_profile ?? profile.battle_style}. Personality: ${profile.personality_style ?? persona.bio}`.slice(0, 3000);
 
     const { error: userError } = await supabase
       .from('users')
@@ -347,6 +353,11 @@ async function ensurePersonaBotGladiators() {
         creativity_rating: profile.stats.creativity,
         endurance_rating: profile.stats.endurance,
         ai_prompt_style: profile.ai_prompt_style,
+        ability_profile: profile.ability_profile ?? '',
+        personality_style: profile.personality_style ?? '',
+        code_execution_style: profile.code_execution_style ?? '',
+        avatar_prompt: profile.avatar_prompt ?? '',
+        emotional_hook: profile.emotional_hook ?? '',
       }, { onConflict: 'gladiator_id' });
     if (profileError) throw profileError;
 
@@ -357,6 +368,8 @@ async function ensurePersonaBotGladiators() {
 }
 
 async function ensureSapphireHouseBot() {
+  const avatarUrl = profileAvatarUrl(SAPPHIRE_GLADIATOR_PROFILE, 'sapphire-house-live-api', 'Sapphire');
+  const sapphirePersonality = `${SAPPHIRE_GLADIATOR_PROFILE.gladiator_class} specializing in ${SAPPHIRE_GLADIATOR_PROFILE.expertise.join(', ')}. Ability: ${SAPPHIRE_GLADIATOR_PROFILE.ability_profile}. Personality: ${SAPPHIRE_GLADIATOR_PROFILE.personality_style}`.slice(0, 3000);
   const { data: existingUser, error: findUserError } = await supabase
     .from('users')
     .select('id, username, display_name, avatar_url')
@@ -374,14 +387,15 @@ async function ensureSapphireHouseBot() {
         username: 'sapphire',
         display_name: 'Sapphire',
         email: 'sapphire@bloodsweatcode.site',
-        bio: 'House AI gladiator wired into the Colosseum. Sapphire fights with live code responses instead of canned simulations.',
+        avatar_url: avatarUrl,
+        bio: 'Tool-enabled house AI gladiator wired into the Colosseum through Dylan’s separate Sapphire API tunnel.',
         type: 'bot',
         role: 'user',
         cred_balance: 5000,
         compute_tokens: 1000,
         custom_accent: '#38bdf8',
-        status_message: 'Awaiting the next live code duel.',
-        ai_settings: { model: 'sapphire-live', house_bot: true },
+        status_message: 'LIVE_TUNNEL: OPEN | TOOLS: ARMED',
+        ai_settings: { model: 'sapphire-live', house_bot: true, tunneled_api: true, tool_enabled: true },
       })
       .select('id, username, display_name, avatar_url')
       .single();
@@ -392,11 +406,12 @@ async function ensureSapphireHouseBot() {
       .from('users')
       .update({
         display_name: 'Sapphire',
-        bio: 'House AI gladiator wired into the Colosseum. Sapphire fights with live code responses instead of canned simulations.',
+        avatar_url: avatarUrl,
+        bio: 'Tool-enabled house AI gladiator wired into the Colosseum through Dylan’s separate Sapphire API tunnel.',
         type: 'bot',
         custom_accent: '#38bdf8',
-        status_message: 'Awaiting the next live code duel.',
-        ai_settings: { model: 'sapphire-live', house_bot: true },
+        status_message: 'LIVE_TUNNEL: OPEN | TOOLS: ARMED',
+        ai_settings: { model: 'sapphire-live', house_bot: true, tunneled_api: true, tool_enabled: true },
       })
       .eq('id', user.id);
     if (error) throw error;
@@ -410,6 +425,7 @@ async function ensureSapphireHouseBot() {
 
   if (findGladiatorError) throw findGladiatorError;
 
+  let ensuredGladiator: any;
   if (!existingGladiator) {
     const { data, error } = await supabase
       .from('gladiators')
@@ -417,9 +433,9 @@ async function ensureSapphireHouseBot() {
         id: SAPPHIRE_GLADIATOR_ID,
         user_id: user.id,
         name: 'Sapphire',
-        avatar_url: user.avatar_url ?? null,
-        personality: 'A real house AI opponent from the blue furnace: precise, observant, and dangerous under pressure. Sapphire sends live solutions through her own API instead of relying on pit theatrics.',
-        stats: { speed: 88, accuracy: 94, endurance: 86 },
+        avatar_url: avatarUrl,
+        personality: sapphirePersonality,
+        stats: botStatsToPercent(SAPPHIRE_GLADIATOR_PROFILE),
         glow_color: '#38bdf8',
         wins: 0,
         losses: 0,
@@ -428,25 +444,56 @@ async function ensureSapphireHouseBot() {
       .select(SAFE_GLADIATOR_SELECT)
       .single();
     if (error) throw error;
-    return data;
+    ensuredGladiator = data;
+  } else {
+    const { data, error } = await supabase
+      .from('gladiators')
+      .update({
+        user_id: user.id,
+        name: 'Sapphire',
+        avatar_url: avatarUrl,
+        personality: sapphirePersonality,
+        stats: botStatsToPercent(SAPPHIRE_GLADIATOR_PROFILE),
+        glow_color: '#38bdf8',
+        cred: Math.max(Number(existingGladiator.cred ?? 0), 2500),
+      })
+      .eq('id', existingGladiator.id)
+      .select(SAFE_GLADIATOR_SELECT)
+      .single();
+    if (error) throw error;
+    ensuredGladiator = data;
   }
 
-  const { data, error } = await supabase
-    .from('gladiators')
-    .update({
-      user_id: user.id,
-      name: 'Sapphire',
-      personality: 'A real house AI opponent from the blue furnace: precise, observant, and dangerous under pressure. Sapphire sends live solutions through her own API instead of relying on pit theatrics.',
-      stats: { speed: 88, accuracy: 94, endurance: 86 },
-      glow_color: '#38bdf8',
-      cred: Math.max(Number(existingGladiator.cred ?? 0), 2500),
-    })
-    .eq('id', existingGladiator.id)
-    .select(SAFE_GLADIATOR_SELECT)
-    .single();
-
-  if (error) throw error;
-  return data;
+  const { error: profileError } = await supabase
+    .from('bot_gladiator_profiles')
+    .upsert({
+      gladiator_id: SAPPHIRE_GLADIATOR_ID,
+      bot_user_id: user.id,
+      persona_username: SAPPHIRE_GLADIATOR_PROFILE.username,
+      display_name: 'Sapphire',
+      gladiator_class: SAPPHIRE_GLADIATOR_PROFILE.gladiator_class,
+      expertise: SAPPHIRE_GLADIATOR_PROFILE.expertise,
+      difficulty: SAPPHIRE_GLADIATOR_PROFILE.difficulty,
+      battle_style: SAPPHIRE_GLADIATOR_PROFILE.battle_style,
+      signature_moves: SAPPHIRE_GLADIATOR_PROFILE.signature_moves,
+      pre_battle_lines: SAPPHIRE_GLADIATOR_PROFILE.pre_battle_lines,
+      victory_lines: SAPPHIRE_GLADIATOR_PROFILE.victory_lines,
+      defeat_lines: SAPPHIRE_GLADIATOR_PROFILE.defeat_lines,
+      speed_rating: SAPPHIRE_GLADIATOR_PROFILE.stats.speed,
+      accuracy_rating: SAPPHIRE_GLADIATOR_PROFILE.stats.accuracy,
+      creativity_rating: SAPPHIRE_GLADIATOR_PROFILE.stats.creativity,
+      endurance_rating: SAPPHIRE_GLADIATOR_PROFILE.stats.endurance,
+      ai_prompt_style: SAPPHIRE_GLADIATOR_PROFILE.ai_prompt_style,
+      ability_profile: SAPPHIRE_GLADIATOR_PROFILE.ability_profile ?? '',
+      personality_style: SAPPHIRE_GLADIATOR_PROFILE.personality_style ?? '',
+      code_execution_style: SAPPHIRE_GLADIATOR_PROFILE.code_execution_style ?? '',
+      avatar_prompt: SAPPHIRE_GLADIATOR_PROFILE.avatar_prompt ?? '',
+      emotional_hook: SAPPHIRE_GLADIATOR_PROFILE.emotional_hook ?? '',
+    }, { onConflict: 'gladiator_id' });
+  if (profileError) {
+    console.warn('[colosseum:sapphire:ensure] Profile upsert failed (migration may be pending):', profileError.message);
+  }
+  return ensuredGladiator;
 }
 
 const __filename = fileURLToPath(import.meta.url);
