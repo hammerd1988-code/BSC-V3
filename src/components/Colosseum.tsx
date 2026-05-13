@@ -798,8 +798,8 @@ function avatarUrlForGladiator(gladiator: Gladiator) {
 function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active }: { gladiator?: Gladiator; size?: 'sm' | 'md' | 'lg' | 'xl'; label?: string; active?: boolean }) {
   const glow = gladiator?.glow_color ?? '#ff1744';
   const avatarUrl = gladiator ? avatarUrlForGladiator(gladiator) : '';
-  const sizeClass = size === 'xl' ? 'h-32 w-32' : size === 'lg' ? 'h-24 w-24' : size === 'sm' ? 'h-16 w-16' : 'h-20 w-20';
-  const iconClass = size === 'xl' ? 'h-14 w-14' : size === 'lg' ? 'h-10 w-10' : 'h-8 w-8';
+  const sizeClass = size === 'xl' ? 'h-40 w-40' : size === 'lg' ? 'h-28 w-28' : size === 'sm' ? 'h-20 w-20' : 'h-24 w-24';
+  const iconClass = size === 'xl' ? 'h-16 w-16' : size === 'lg' ? 'h-12 w-12' : 'h-9 w-9';
   const duration = active ? 2.35 : 2.85;
 
   return (
@@ -814,11 +814,17 @@ function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active }: { gl
         className={cn('relative grid place-items-center overflow-hidden rounded-[1.65rem] border border-white/15 bg-zinc-950', sizeClass)}
         style={{ boxShadow: `0 0 34px ${glow}55`, transformStyle: 'preserve-3d' }}
       >
+        <div className="absolute inset-0 opacity-45" style={{ background: `radial-gradient(circle at 50% 0%, ${glow}55, transparent 52%)` }} />
         {avatarUrl ? (
-          <img src={avatarUrl} alt={gladiator ? `${gladiator.name} avatar` : ''} className="h-full w-full object-cover contrast-125 saturate-125" />
+          <img
+            src={avatarUrl}
+            alt={gladiator ? `${gladiator.name} avatar` : ''}
+            className="relative h-full w-full object-cover object-center contrast-125 saturate-125 transition duration-500 group-hover:scale-110"
+          />
         ) : (
           <Bot className={iconClass} style={{ color: glow }} />
         )}
+        <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px)] bg-[length:12px_12px] opacity-20" />
         <motion.div
           aria-hidden
           animate={{ x: ['-130%', '140%'], opacity: [0, 0.55, 0] }}
@@ -865,8 +871,17 @@ function GladiatorCard({ gladiator, active, onSelect, actionLabel, onAction }: {
     >
       <div className="absolute inset-0 opacity-30" style={{ background: `radial-gradient(circle at 20% 20%, ${gladiator.glow_color}55, transparent 32%), linear-gradient(135deg, transparent, ${gladiator.glow_color}16)` }} />
       <div className="absolute -right-12 -top-16 h-32 w-32 rounded-full blur-3xl" style={{ backgroundColor: gladiator.glow_color }} />
-      <div className="relative flex items-start gap-3">
-        <AnimatedGladiatorAvatar gladiator={gladiator} size="sm" active={active} />
+      <div className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/55 p-3">
+        <div className="absolute inset-0 opacity-35" style={{ background: `linear-gradient(135deg, ${gladiator.glow_color}33, transparent 45%, rgba(255,255,255,0.08))` }} />
+        <div className="relative flex flex-col items-center gap-3">
+          <AnimatedGladiatorAvatar gladiator={gladiator} size="xl" label={gladiator.name} active={active} />
+          <div className="flex flex-wrap justify-center gap-2 pt-3">
+            <span className="rounded-full border px-2 py-1 text-[8px] font-black uppercase tracking-widest" style={{ borderColor: `${diffColor}55`, color: diffColor, backgroundColor: `${diffColor}12` }}>{profile?.difficulty ?? 'Human'}</span>
+            <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[8px] font-black uppercase tracking-widest text-zinc-400">3D Motion Avatar</span>
+          </div>
+        </div>
+      </div>
+      <div className="relative mt-4 flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <div>
