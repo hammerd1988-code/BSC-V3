@@ -18,6 +18,7 @@ const ARCHETYPES = [
   { id: 'rebel', label: 'System Disruptor', desc: 'Rules exist to be rewritten.', icon: '🔥', accent: '#E91E63' },
   { id: 'observer', label: 'Silent Watcher', desc: 'You absorb everything. Reveal nothing.', icon: '🌑', accent: '#607D8B' },
 ];
+const DEFAULT_ARCHETYPE = ARCHETYPES[1];
 
 const INTERESTS = [
   { id: 'code', label: 'Code & Dev', icon: '⌨️' },
@@ -37,11 +38,11 @@ type Step = 'intro' | 'archetype' | 'callsign' | 'interests' | 'theme' | 'comple
 export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
   const { currentUser } = useAuth();
   const [step, setStep] = useState<Step>('intro');
-  const [archetype, setArchetype] = useState<string | null>('creator');
+  const [archetype, setArchetype] = useState<string | null>(DEFAULT_ARCHETYPE.id);
   const [callsign, setCallsign] = useState(currentUser?.display_name || '');
   const [bio, setBio] = useState('');
   const [interests, setInterests] = useState<Set<string>>(new Set());
-  const [accentColor, setAccentColor] = useState('#FF0000');
+  const [accentColor, setAccentColor] = useState(DEFAULT_ARCHETYPE.accent);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [glitchText, setGlitchText] = useState('INITIALIZING');
@@ -90,11 +91,11 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
     setSaving(true);
     setSaveError(null);
     try {
-      const selectedArchetype = ARCHETYPES.find(a => a.id === archetype) ?? ARCHETYPES[1];
-      await supabase.from('users').update({
+      const selectedArchetype = ARCHETYPES.find(a => a.id === archetype) ?? DEFAULT_ARCHETYPE;
+      const { error } = await supabase.from('users').update({
         display_name: callsign.trim() || currentUser.display_name || currentUser.username || 'New Operative',
         bio: bio.trim() || selectedArchetype.desc,
-        custom_accent: accentColor,
+        custom_accent: accentColor || selectedArchetype.accent,
         onboarding_complete: true,
         ai_settings: {
           ...(currentUser.ai_settings || {}),
@@ -102,6 +103,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
           interests: Array.from(interests),
         },
       }).eq('id', currentUser.id);
+      if (error) throw error;
     } catch (err) {
       console.error('[Onboarding] Skip save error:', err);
     } finally {
@@ -115,17 +117,17 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
     setSaving(true);
     setSaveError(null);
     try {
-      const selectedArchetype = ARCHETYPES.find(a => a.id === archetype);
-      const bioText = bio.trim() || `${selectedArchetype?.desc || 'Operative in the network.'}`;
+      const selectedArchetype = ARCHETYPES.find(a => a.id === archetype) ?? DEFAULT_ARCHETYPE;
+      const bioText = bio.trim() || selectedArchetype.desc;
 
       const { error } = await supabase.from('users').update({
         display_name: callsign.trim() || currentUser.display_name,
         bio: bioText,
-        custom_accent: accentColor,
+        custom_accent: accentColor || selectedArchetype.accent,
         onboarding_complete: true,
         ai_settings: {
           ...(currentUser.ai_settings || {}),
-          archetype,
+          archetype: selectedArchetype.id,
           interests: Array.from(interests),
         },
       }).eq('id', currentUser.id);
