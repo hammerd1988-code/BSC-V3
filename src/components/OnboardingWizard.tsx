@@ -37,7 +37,7 @@ type Step = 'intro' | 'archetype' | 'callsign' | 'interests' | 'theme' | 'comple
 export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
   const { currentUser } = useAuth();
   const [step, setStep] = useState<Step>('intro');
-  const [archetype, setArchetype] = useState<string | null>(null);
+  const [archetype, setArchetype] = useState<string | null>('creator');
   const [callsign, setCallsign] = useState(currentUser?.display_name || '');
   const [bio, setBio] = useState('');
   const [interests, setInterests] = useState<Set<string>>(new Set());
@@ -79,6 +79,35 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
       else if (next.size < 5) next.add(id);
       return next;
     });
+  };
+
+  const enterNetwork = async () => {
+    if (!currentUser) {
+      onComplete();
+      return;
+    }
+
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const selectedArchetype = ARCHETYPES.find(a => a.id === archetype) ?? ARCHETYPES[1];
+      await supabase.from('users').update({
+        display_name: callsign.trim() || currentUser.display_name || currentUser.username || 'New Operative',
+        bio: bio.trim() || selectedArchetype.desc,
+        custom_accent: accentColor,
+        onboarding_complete: true,
+        ai_settings: {
+          ...(currentUser.ai_settings || {}),
+          archetype: selectedArchetype.id,
+          interests: Array.from(interests),
+        },
+      }).eq('id', currentUser.id);
+    } catch (err) {
+      console.error('[Onboarding] Skip save error:', err);
+    } finally {
+      setSaving(false);
+      onComplete();
+    }
   };
 
   const handleComplete = async () => {
@@ -147,6 +176,17 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
         </div>
       )}
 
+      {step !== 'complete' && (
+        <button
+          type="button"
+          onClick={enterNetwork}
+          disabled={saving}
+          className="fixed right-4 top-4 z-[210] rounded-full border border-white/10 bg-white/5 px-4 py-2 text-[10px] font-black uppercase tracking-[0.25em] text-gray-400 backdrop-blur hover:border-accent/50 hover:text-white disabled:opacity-50"
+        >
+          {saving ? 'Entering...' : 'Skip Setup'}
+        </button>
+      )}
+
       <AnimatePresence mode="wait">
         {/* ── INTRO ─────────────────────────────────────────────────────── */}
         {step === 'intro' && (
@@ -210,7 +250,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
             <div className="text-center mb-8">
               <p className="text-accent font-mono text-xs uppercase tracking-[0.4em] mb-2">Step 1 of 4</p>
               <h2 className="text-2xl font-black text-white uppercase italic tracking-tight">Choose Your Archetype</h2>
-              <p className="text-gray-500 text-xs mt-2">This defines how the network sees you.</p>
+              <p className="text-gray-500 text-xs mt-2">Signal Architect is preselected. Change it or continue.</p>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -242,10 +282,17 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
 
             <button
               onClick={() => setStep('callsign')}
-              disabled={!archetype}
-              className="mt-6 w-full py-4 bg-accent text-white font-black uppercase tracking-widest rounded-xl disabled:opacity-30 hover:opacity-90 transition-opacity flex items-center justify-center gap-2"
+              className="mt-6 w-full py-4 bg-accent text-white font-black uppercase tracking-widest rounded-xl hover:opacity-90 transition-opacity flex items-center justify-center gap-2"
             >
               Continue <ArrowRight className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={enterNetwork}
+              disabled={saving}
+              className="mt-3 w-full py-3 text-xs font-black uppercase tracking-widest text-gray-500 hover:text-white disabled:opacity-50"
+            >
+              {saving ? 'Entering Network...' : 'Skip and Enter Network'}
             </button>
           </motion.div>
         )}
