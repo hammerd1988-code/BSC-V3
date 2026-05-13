@@ -31,7 +31,11 @@ import {
   Check,
   CheckCheck,
   Download,
-  FileText
+  FileText,
+  Smile,
+  Film,
+  Sticker,
+  Sparkles
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { useCall } from '../CallContext';
@@ -45,6 +49,14 @@ import { notifyNewMessage, sendPushEvent } from '../lib/notifications';
 import { encryptText, decryptText } from '../lib/crypto';
 import { generateText } from '../lib/ai';
 import { BOT_PERSONAS } from '../lib/botPersonas';
+import {
+  TRANSMISSION_GIF_SIGNALS,
+  TRANSMISSION_SIGNAL_TABS,
+  TRANSMISSION_TEXT_SIGNALS,
+  TransmissionGifSignal,
+  TransmissionSignalTab,
+  TransmissionTextSignal,
+} from '../lib/transmissionSignalPacks';
 
 type SpeechRecognitionResultListLike = {
   length: number;
@@ -70,6 +82,10 @@ type SpeechRecognitionInstance = {
 };
 
 type SpeechRecognitionConstructor = new () => SpeechRecognitionInstance;
+
+type SignalSelection =
+  | { type: 'gif'; signal: TransmissionGifSignal }
+  | { type: 'text'; signal: TransmissionTextSignal };
 
 declare global {
   interface Window {
@@ -98,6 +114,9 @@ export const Transmissions: React.FC = () => {
   const [speechStatus, setSpeechStatus] = useState<string | null>(null);
   const [burnDuration, setBurnDuration] = useState<number | null>(null);
   const [encryptionEnabled, setEncryptionEnabled] = useState(true);
+  const [showSignalPicker, setShowSignalPicker] = useState(false);
+  const [signalTab, setSignalTab] = useState<TransmissionSignalTab>('gifs');
+  const [signalSearch, setSignalSearch] = useState('');
   // Map of transmit id -> decrypted plaintext (populated after decryption)
   const [decryptedCache, setDecryptedCache] = useState<Record<string, string>>({});
   // Map of transmit id -> remaining burn seconds
@@ -110,6 +129,7 @@ export const Transmissions: React.FC = () => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const userCache = useRef<Record<string, UserType>>({});
   const transmissionsRef = useRef<Transmission[]>([]);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -138,6 +158,27 @@ export const Transmissions: React.FC = () => {
     }
     return content;
   };
+
+  const signalSearchQuery = signalSearch.trim().toLowerCase();
+
+  const filteredGifSignals = useMemo(() => {
+    if (!signalSearchQuery) return TRANSMISSION_GIF_SIGNALS;
+    return TRANSMISSION_GIF_SIGNALS.filter(signal =>
+      [signal.label, signal.mood, signal.emoji, ...signal.tags].some(value =>
+        value.toLowerCase().includes(signalSearchQuery)
+      )
+    );
+  }, [signalSearchQuery]);
+
+  const filteredTextSignals = useMemo(() => {
+    return TRANSMISSION_TEXT_SIGNALS.filter(signal => {
+      if (signal.type !== signalTab) return false;
+      if (!signalSearchQuery) return true;
+      return [signal.label, signal.value, signal.tone, signal.category].some(value =>
+        value.toLowerCase().includes(signalSearchQuery)
+      );
+    });
+  }, [signalSearchQuery, signalTab]);
 
   const deliveryStatusFor = (t: Transmit): 'sent' | 'delivered' | 'seen' => {
     if (t.seen_at || t.read_at || t.status === 'seen') return 'seen';
@@ -1014,6 +1055,38 @@ export const Transmissions: React.FC = () => {
     }, 3000);
   };
 
+  const appendTextSignal = (value: string) => {
+    setMessage(prev => {
+      const spacer = prev && !/\s$/.test(prev) ? ' ' : '';
+      return `${prev}${spacer}${value}`;
+    });
+    handleTyping();
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  const sendGifSignal = async (signal: TransmissionGifSignal) => {
+    await sendTransmit({
+      text: `${signal.emoji} ${signal.label}`,
+      attachment: {
+        url: signal.url,
+        name: `${signal.label}.gif`,
+        size: 0,
+        mime: 'image/gif',
+        kind: 'image',
+      },
+    });
+  };
+
+  const selectSignal = (selection: SignalSelection) => {
+    if (selection.type === 'gif') {
+      setShowSignalPicker(false);
+      void sendGifSignal(selection.signal);
+      return;
+    }
+
+    appendTextSignal(selection.signal.value);
+  };
+
   const filteredTransmissions = useMemo(() => {
     return transmissions.filter(t => {
       const otherUserId = t.participant_ids?.find(id => id !== currentUser?.id);
@@ -1431,6 +1504,7 @@ export const Transmissions: React.FC = () => {
                 className="relative bg-white/5 border border-white/10 rounded-2xl p-2 transition-all focus-within:border-accent/50 focus-within:bg-white/[0.07]"
               >
                 <textarea 
+                  ref={textareaRef}
                   value={message}
                   onChange={(e) => {
                     setMessage(e.target.value);
@@ -1447,6 +1521,115 @@ export const Transmissions: React.FC = () => {
                 />
                 <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
                 <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileUpload} />
+                <AnimatePresence>
+                  {showSignalPicker && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                      className="absolute bottom-[68px] left-0 right-0 z-40 overflow-hidden rounded-3xl border border-accent/20 bg-[#030607]/95 shadow-[0_0_50px_rgba(0,243,255,0.16)] backdrop-blur-xl"
+                    >
+                      <div className="border-b border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(0,243,255,0.18),transparent_45%)] p-4">
+                        <div className="mb-3 flex items-start justify-between gap-4">
+                          <div>
+                            <p className="text-[8px] font-black uppercase tracking-[0.45em] text-accent">Signal Library</p>
+                            <h4 className="mt-1 text-sm font-black uppercase tracking-[0.2em] text-white">GIF / Emoji Matrix</h4>
+                          </div>
+                          <button type="button" onClick={() => setShowSignalPicker(false)} className="rounded-xl border border-white/10 p-2 text-gray-500 transition hover:border-accent/30 hover:text-accent">
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                          <div className="grid grid-cols-4 gap-1 rounded-2xl border border-white/10 bg-black/40 p-1">
+                            {TRANSMISSION_SIGNAL_TABS.map(tab => (
+                              <button
+                                key={tab.id}
+                                type="button"
+                                onClick={() => setSignalTab(tab.id)}
+                                className={`flex flex-col items-center gap-1 rounded-xl px-2 py-2 text-[8px] font-black uppercase tracking-widest transition ${
+                                  signalTab === tab.id
+                                    ? 'bg-accent text-black shadow-[0_0_18px_rgba(0,243,255,0.25)]'
+                                    : 'text-gray-500 hover:bg-white/5 hover:text-white'
+                                }`}
+                              >
+                                {tab.id === 'gifs' ? <Film className="h-3.5 w-3.5" /> : tab.id === 'emoji' ? <Smile className="h-3.5 w-3.5" /> : tab.id === 'stickers' ? <Sticker className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />}
+                                <span>{tab.label}</span>
+                                <span className="hidden text-[6px] opacity-60 sm:block">{tab.kicker}</span>
+                              </button>
+                            ))}
+                          </div>
+                          <div className="relative min-w-0 flex-1">
+                            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-accent/60" />
+                            <input
+                              value={signalSearch}
+                              onChange={(e) => setSignalSearch(e.target.value)}
+                              placeholder="SEARCH MOOD, SIGNAL, GLYPH..."
+                              className="w-full rounded-2xl border border-white/10 bg-black/50 py-3 pl-9 pr-3 text-[9px] font-black uppercase tracking-[0.25em] text-white outline-none placeholder:text-gray-700 focus:border-accent/50"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <div className="max-h-80 overflow-y-auto p-4 custom-scrollbar">
+                        {signalTab === 'gifs' ? (
+                          filteredGifSignals.length > 0 ? (
+                            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                              {filteredGifSignals.map(signal => (
+                                <motion.button
+                                  key={signal.id}
+                                  type="button"
+                                  whileHover={{ y: -3 }}
+                                  whileTap={{ scale: 0.98 }}
+                                  onClick={() => selectSignal({ type: 'gif', signal })}
+                                  disabled={sending || uploadingAttachment}
+                                  className="group overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] text-left transition hover:border-accent/40 hover:bg-accent/5 disabled:cursor-not-allowed disabled:opacity-40"
+                                  title={`Send ${signal.label} GIF`}
+                                >
+                                  <div className="aspect-video overflow-hidden bg-black">
+                                    <img src={signal.url} alt={signal.label} loading="lazy" className="h-full w-full object-cover opacity-80 transition duration-300 group-hover:scale-105 group-hover:opacity-100" />
+                                  </div>
+                                  <div className="p-3">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="truncate text-[9px] font-black uppercase tracking-[0.2em] text-white">{signal.label}</span>
+                                      <span className="text-sm">{signal.emoji}</span>
+                                    </div>
+                                    <p className="mt-1 truncate text-[8px] font-bold uppercase tracking-widest text-accent/70">{signal.mood}</p>
+                                  </div>
+                                </motion.button>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-8 text-center text-[9px] font-black uppercase tracking-[0.3em] text-gray-600">No motion signals found</div>
+                          )
+                        ) : filteredTextSignals.length > 0 ? (
+                          <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4">
+                            {filteredTextSignals.map(signal => (
+                              <motion.button
+                                key={signal.id}
+                                type="button"
+                                whileHover={{ y: -2 }}
+                                whileTap={{ scale: 0.98 }}
+                                onClick={() => selectSignal({ type: 'text', signal })}
+                                className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-left transition hover:border-accent/40 hover:bg-accent/5"
+                                title={`Add ${signal.label}`}
+                              >
+                                <div className="mb-3 flex h-12 items-center justify-center rounded-xl border border-white/10 bg-black/40 px-2 text-center text-lg font-black text-white">
+                                  <span className="truncate">{signal.value}</span>
+                                </div>
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="truncate text-[9px] font-black uppercase tracking-[0.2em] text-white">{signal.label}</span>
+                                  <span className="rounded-full border border-accent/20 px-2 py-0.5 text-[7px] font-black uppercase tracking-widest text-accent/70">{signal.category}</span>
+                                </div>
+                                <p className="mt-1 truncate text-[8px] font-bold uppercase tracking-widest text-gray-600">{signal.tone}</p>
+                              </motion.button>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-8 text-center text-[9px] font-black uppercase tracking-[0.3em] text-gray-600">No glyph signals found</div>
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
                 <AnimatePresence>
                   {(isRecording || speechStatus) && (
                     <motion.div
@@ -1470,6 +1653,16 @@ export const Transmissions: React.FC = () => {
                     </button>
                     <button type="button" onClick={() => fileInputRef.current?.click()} disabled={sending || uploadingAttachment} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-gray-600 hover:text-accent disabled:opacity-40" title="Attach file">
                       <Paperclip className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowSignalPicker(open => !open)}
+                      disabled={sending || uploadingAttachment}
+                      className={`p-2 rounded-lg transition-all flex items-center gap-2 disabled:opacity-40 ${showSignalPicker ? 'bg-accent/10 text-accent border border-accent/20' : 'text-gray-600 hover:bg-accent/5 hover:text-accent'}`}
+                      title="Open GIF, emoji, sticker, and kaomoji signal library"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      {showSignalPicker && <span className="text-[8px] font-black uppercase tracking-widest">Signals</span>}
                     </button>
                     <motion.button
                       type="button"
