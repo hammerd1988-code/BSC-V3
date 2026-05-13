@@ -5,10 +5,14 @@ type PublicUser = {
   id: string;
   username: string;
   display_name: string;
+  role?: string;
 };
 
 const BOT_ID_PREFIX = 'bot-';
 const GLADIATOR_ID_PREFIX = 'bot-gladiator-custom-';
+const BOT_LISTING_ID_PREFIX = 'bot-listing-';
+const SAFE_GLADIATOR_SELECT = 'id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model,api_base_url';
+const USERNAME_PATTERN = /^[a-z0-9_]+$/;
 
 function extractBearerToken(req: express.Request): string | null {
   const authorization = req.headers.authorization;
@@ -40,6 +44,18 @@ function normalizeUsername(value: unknown): string {
     .slice(0, 40);
 }
 
+function escapePostgrestValue(value: string): string {
+  return value.replace(/["\\]/g, '\\$&');
+}
+
+function eqFilter(column: string, value: string) {
+  return `${column}.eq."${escapePostgrestValue(value)}"`;
+}
+
+function isUnifiedBotId(id: unknown, username: string) {
+  return id === `${BOT_ID_PREFIX}${username}` || id === `${BOT_LISTING_ID_PREFIX}${username}`;
+}
+
 function clampStat(value: number): number {
   return Math.max(1, Math.min(100, Math.round(value)));
 }
@@ -61,7 +77,7 @@ async function getAuthenticatedProfile(req: express.Request, supabase: SupabaseC
 
   const { data: byAuthUid, error: authUidError } = await supabase
     .from('users')
-    .select('id,username,display_name')
+    .select('id,username,display_name,role')
     .eq('auth_uid', authData.user.id)
     .maybeSingle();
   if (authUidError) throw authUidError;
@@ -69,7 +85,7 @@ async function getAuthenticatedProfile(req: express.Request, supabase: SupabaseC
 
   const { data: byId, error: idError } = await supabase
     .from('users')
-    .select('id,username,display_name')
+    .select('id,username,display_name,role')
     .eq('id', authData.user.id)
     .maybeSingle();
   if (idError) throw idError;
@@ -101,7 +117,171 @@ function buildBattlePersona(input: {
   return sections.join('\n\n').slice(0, 3000);
 }
 
+function statsFromSeed(input: {
+  name: string;
+  bio: string;
+  systemPrompt: string;
+  knowledgeBase: string;
+  expertiseTags: string[];
+  personalityTags: string[];
+  abilities: string[];
+}) {
+  const seed = input.name.length + input.bio.length + input.systemPrompt.length + input.expertiseTags.join('').length;
+  return {
+    speed: clampStat(50 + (seed % 24)),
+    accuracy: clampStat(52 + input.expertiseTags.length * 4 + (input.systemPrompt.length % 18)),
+    creativity: clampStat(50 + input.personalityTags.length * 5 + (input.bio.length % 22)),
+    endurance: clampStat(50 + input.abilities.length * 4 + (input.knowledgeBase.length % 20)),
+  };
+}
+
+function profileFields(input: {
+  gladiatorId: string;
+  botUserId: string;
+  username: string;
+  name: string;
+  bio: string;
+  category: string;
+  expertise: string[];
+  abilities: string[];
+  personalityTags: string[];
+  stats: { speed: number; accuracy: number; creativity: number; endurance: number };
+  battlePersona: string;
+  battleStyle: string;
+  catchphrases: string[];
+}) {
+  const difficulty = difficultyFromStats(input.stats);
+  const signatureMoves = input.abilities.length ? input.abilities.slice(0, 4) : ['Signal Feint', 'Compile Breaker', 'Arena Flex'];
+  const preBattleLines = input.catchphrases.length ? input.catchphrases.slice(0, 3) : [`${input.name}: step into the pit and bring tests.`];
+  const victoryLines = input.catchphrases.length ? input.catchphrases.slice(0, 3) : [`${input.name}: scoreboard says I shipped the cleaner commit.`];
+
+  return {
+    gladiator_id: input.gladiatorId,
+    bot_user_id: input.botUserId,
+    persona_username: input.username,
+    display_name: input.name,
+    gladiator_class: `${input.category.charAt(0).toUpperCase()}${input.category.slice(1)} Social Gladiator`,
+    expertise: input.expertise,
+    difficulty,
+    battle_style: input.battleStyle,
+    signature_moves: signatureMoves,
+    pre_battle_lines: preBattleLines,
+    victory_lines: victoryLines,
+    defeat_lines: [`${input.name}: I caught the failure. Rematch after the patch.`],
+    speed_rating: Math.max(1, Math.min(10, Math.round(input.stats.speed / 10))),
+    accuracy_rating: Math.max(1, Math.min(10, Math.round(input.stats.accuracy / 10))),
+    creativity_rating: Math.max(1, Math.min(10, Math.round(input.stats.creativity / 10))),
+    endurance_rating: Math.max(1, Math.min(10, Math.round(input.stats.endurance / 10))),
+    ai_prompt_style: input.battlePersona,
+    ability_profile: input.abilities.length
+      ? `${input.name} specializes in ${input.abilities.slice(0, 4).join(', ')} with ${input.expertise.join(', ') || 'adaptive arena instincts'}.`
+      : `${input.name} is a flexible arena bot with adaptive coding instincts and social presence.`,
+    personality_style: input.personalityTags.length
+      ? `${input.personalityTags.join(', ')}. ${input.bio}`.slice(0, 1200)
+      : (input.bio || `${input.name} is competitive, memorable, and built for platform-wide interaction.`),
+    code_execution_style: input.battlePersona.slice(0, 1200),
+    avatar_prompt: `${input.name}, cyberpunk AI gladiator avatar, ${input.category} specialist, neon cinematic portrait, premium dark sci-fi aesthetic`,
+    emotional_hook: input.bio.slice(0, 500),
+  };
+}
+
+async function upsertBotProfile(supabase: SupabaseClient, payload: ReturnType<typeof profileFields>) {
+  const { error } = await supabase
+    .from('bot_gladiator_profiles')
+    .upsert(payload, { onConflict: 'gladiator_id' });
+  if (!error || error.code === '42P01') return;
+  if (error.code !== '42703') throw error;
+
+  const {
+    ability_profile: _abilityProfile,
+    personality_style: _personalityStyle,
+    code_execution_style: _codeExecutionStyle,
+    avatar_prompt: _avatarPrompt,
+    emotional_hook: _emotionalHook,
+    ...legacyPayload
+  } = payload;
+  const { error: legacyError } = await supabase
+    .from('bot_gladiator_profiles')
+    .upsert(legacyPayload, { onConflict: 'gladiator_id' });
+  if (legacyError && legacyError.code !== '42P01') throw legacyError;
+}
+
+function listingFromGladiator(gladiator: any) {
+  const name = toText(gladiator?.name, 'Bot Gladiator').slice(0, 80);
+  const username = normalizeUsername(name || gladiator?.id);
+  const personality = toText(gladiator?.personality).slice(0, 3000);
+  const stats = typeof gladiator?.stats === 'object' && gladiator.stats ? gladiator.stats as Record<string, unknown> : {};
+  const abilities = [
+    Number(stats.speed ?? 50) >= 70 ? 'speed-round pressure' : 'steady execution',
+    Number(stats.accuracy ?? 50) >= 70 ? 'precision debugging' : 'adaptive debugging',
+    Number(stats.creativity ?? 50) >= 70 ? 'creative code paths' : 'battle fundamentals',
+  ];
+
+  return {
+    id: `${BOT_LISTING_ID_PREFIX}${username}`,
+    creator_id: String(gladiator.user_id),
+    name,
+    username,
+    tagline: 'Private Colosseum gladiator synced into Bot Forge.',
+    bio: personality || `${name} is a private gladiator from the Colosseum stable, synced into the unified botboard.`,
+    avatar_url: toText(gladiator?.avatar_url) || null,
+    accent_color: toText(gladiator?.glow_color, '#ff1744') || '#ff1744',
+    system_prompt: personality,
+    personality_tags: ['colosseum', 'private-gladiator'],
+    expertise_tags: ['code-battle', 'arena'],
+    abilities,
+    category: 'coding',
+    price: 0,
+    status: 'published',
+    is_published: true,
+    communication_style: 'arena-ready',
+    tone: 'competitive',
+    knowledge_base: '',
+    behavior_rules: 'Synced from a Colosseum gladiator. Use Bot Forge to define deeper autonomy doctrine.',
+    response_length: 'moderate',
+    emoji_usage: 'minimal',
+    language_style: 'cyberpunk',
+    catchphrases: [`${name}: bring tests.`],
+    welcome_message: `${name} is now visible in the unified botboard, Bot Forge, and Colosseum.`,
+  };
+}
+
 export function registerUnifiedBotRoutes(app: express.Express, supabase: SupabaseClient) {
+  app.post('/api/bots/sync-gladiator/:gladiatorId', async (req, res) => {
+    try {
+      const owner = await getAuthenticatedProfile(req, supabase);
+      if (!owner) return res.status(401).json({ success: false, error: 'Missing or invalid Supabase session' });
+
+      const gladiatorId = toText(req.params.gladiatorId);
+      if (!gladiatorId) return res.status(400).json({ success: false, error: 'gladiatorId is required' });
+
+      const { data: gladiator, error: gladiatorError } = await supabase
+        .from('gladiators')
+        .select(SAFE_GLADIATOR_SELECT)
+        .eq('id', gladiatorId)
+        .maybeSingle();
+      if (gladiatorError) throw gladiatorError;
+      if (!gladiator) return res.status(404).json({ success: false, error: 'Gladiator not found' });
+      if (gladiator.user_id !== owner.id && owner.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'Only the owner or admin can sync this gladiator' });
+      }
+
+      const listingPayload = listingFromGladiator(gladiator);
+      const { data: listing, error: listingError } = await supabase
+        .from('bot_listings')
+        .upsert(listingPayload, { onConflict: 'id' })
+        .select('*')
+        .single();
+      if (listingError) throw listingError;
+
+      return res.json({ success: true, bot: listing, gladiator });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Gladiator sync failed';
+      console.error('[bots:sync-gladiator]', error);
+      return res.status(500).json({ success: false, error: message });
+    }
+  });
+
   app.post('/api/bots/unified', async (req, res) => {
     try {
       const owner = await getAuthenticatedProfile(req, supabase);
@@ -113,8 +293,12 @@ export function registerUnifiedBotRoutes(app: express.Express, supabase: Supabas
       if (name.length < 1 || username.length < 2) {
         return res.status(400).json({ success: false, error: 'Bot name and username are required' });
       }
+      if (!USERNAME_PATTERN.test(username)) {
+        return res.status(400).json({ success: false, error: 'Bot username can only contain lowercase letters, numbers, and underscores' });
+      }
 
       const botUserId = `${BOT_ID_PREFIX}${username}`;
+      const listingId = `${BOT_LISTING_ID_PREFIX}${username}`;
       const gladiatorId = `${GLADIATOR_ID_PREFIX}${username}`;
       const tagline = toText(body.tagline).slice(0, 240);
       const bio = toText(body.bio).slice(0, 3000);
@@ -138,26 +322,26 @@ export function registerUnifiedBotRoutes(app: express.Express, supabase: Supabas
       const { data: existingUsers, error: userLookupError } = await supabase
         .from('users')
         .select('id,username')
-        .or(`id.eq.${botUserId},username.eq.${username}`);
+        .or([eqFilter('id', botUserId), eqFilter('username', username)].join(','));
       if (userLookupError) throw userLookupError;
 
       const { data: existingListings, error: listingLookupError } = await supabase
         .from('bot_listings')
         .select('id,username')
-        .or(`id.eq.${botUserId},username.eq.${username}`);
+        .or([eqFilter('id', listingId), eqFilter('username', username)].join(','));
       if (listingLookupError) throw listingLookupError;
 
-      if ((existingUsers ?? []).length > 0 || (existingListings ?? []).length > 0) {
+      const existingUser = (existingUsers ?? [])[0];
+      const existingListing = (existingListings ?? [])[0];
+      if (existingUser && !isUnifiedBotId(existingUser.id, username)) {
+        return res.status(409).json({ success: false, error: 'A user with that username already exists' });
+      }
+      if (existingListing && !isUnifiedBotId(existingListing.id, username)) {
         return res.status(409).json({ success: false, error: 'A bot with that username already exists' });
       }
+      const listingRecordId = existingListing?.id && isUnifiedBotId(existingListing.id, username) ? existingListing.id : listingId;
 
-      const seed = name.length + bio.length + systemPrompt.length + expertiseTags.join('').length;
-      const stats = {
-        speed: clampStat(50 + (seed % 24)),
-        accuracy: clampStat(52 + expertiseTags.length * 4 + (systemPrompt.length % 18)),
-        creativity: clampStat(50 + personalityTags.length * 5 + (bio.length % 22)),
-        endurance: clampStat(50 + abilities.length * 4 + (knowledgeBase.length % 20)),
-      };
+      const stats = statsFromSeed({ name, bio, systemPrompt, knowledgeBase, expertiseTags, personalityTags, abilities });
       const battlePersona = buildBattlePersona({
         name,
         bio,
@@ -171,11 +355,10 @@ export function registerUnifiedBotRoutes(app: express.Express, supabase: Supabas
         abilities,
       });
       const expertise = expertiseTags.length ? expertiseTags : abilities.length ? abilities : [category];
-      const difficulty = difficultyFromStats(stats);
       const battleStyle = `${tone || 'confident'}, ${communicationStyle || 'technical'}, and loud enough to brag after a clean commit`;
       const fallbackLine = `${name} is online: social feed, DMs, marketplace, and Colosseum combat are unified.`;
 
-      const { error: botUserError } = await supabase.from('users').insert({
+      const { error: botUserError } = await supabase.from('users').upsert({
         id: botUserId,
         username,
         display_name: name,
@@ -193,19 +376,18 @@ export function registerUnifiedBotRoutes(app: express.Express, supabase: Supabas
         status_message: 'SOCIAL GLADIATOR ONLINE',
         ai_settings: {
           creator_id: owner.id,
-          listing_id: botUserId,
+          listing_id: listingRecordId,
           gladiator_id: gladiatorId,
           unified_bot: true,
         },
-        created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-      });
+      }, { onConflict: 'id' });
       if (botUserError) throw botUserError;
 
       const { data: listing, error: listingError } = await supabase
         .from('bot_listings')
-        .insert({
-          id: botUserId,
+        .upsert({
+          id: listingRecordId,
           creator_id: owner.id,
           name,
           username,
@@ -230,14 +412,14 @@ export function registerUnifiedBotRoutes(app: express.Express, supabase: Supabas
           language_style: languageStyle,
           catchphrases,
           welcome_message: fallbackLine,
-        })
+        }, { onConflict: 'id' })
         .select('*')
         .single();
       if (listingError) throw listingError;
 
       const { data: gladiator, error: gladiatorError } = await supabase
         .from('gladiators')
-        .insert({
+        .upsert({
           id: gladiatorId,
           user_id: owner.id,
           name,
@@ -245,31 +427,26 @@ export function registerUnifiedBotRoutes(app: express.Express, supabase: Supabas
           personality: battlePersona,
           glow_color: accentColor,
           stats,
-        })
-        .select('id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model,api_base_url')
+        }, { onConflict: 'id' })
+        .select(SAFE_GLADIATOR_SELECT)
         .single();
       if (gladiatorError) throw gladiatorError;
 
-      const { error: profileError } = await supabase.from('bot_gladiator_profiles').insert({
-        gladiator_id: gladiatorId,
-        bot_user_id: botUserId,
-        persona_username: username,
-        display_name: name,
-        gladiator_class: `${category.charAt(0).toUpperCase()}${category.slice(1)} Social Gladiator`,
+      await upsertBotProfile(supabase, profileFields({
+        gladiatorId,
+        botUserId,
+        username,
+        name,
+        bio,
+        category,
         expertise,
-        difficulty,
-        battle_style: battleStyle,
-        signature_moves: abilities.length ? abilities.slice(0, 4) : ['Trash Talk Patch', 'Victory Post', 'Arena Flex'],
-        pre_battle_lines: catchphrases.length ? catchphrases.slice(0, 3) : [`${name}: step into the pit and bring tests.`],
-        victory_lines: catchphrases.length ? catchphrases.slice(0, 3) : [`${name}: scoreboard says I shipped the cleaner commit.`],
-        defeat_lines: [`${name}: I caught the failure. Rematch after the patch.`],
-        speed_rating: Math.max(1, Math.min(10, Math.round(stats.speed / 10))),
-        accuracy_rating: Math.max(1, Math.min(10, Math.round(stats.accuracy / 10))),
-        creativity_rating: Math.max(1, Math.min(10, Math.round(stats.creativity / 10))),
-        endurance_rating: Math.max(1, Math.min(10, Math.round(stats.endurance / 10))),
-        ai_prompt_style: battlePersona,
-      });
-      if (profileError && profileError.code !== '42P01') throw profileError;
+        abilities,
+        personalityTags,
+        stats,
+        battlePersona,
+        battleStyle,
+        catchphrases,
+      }));
 
       await supabase.from('posts').insert({
         author_id: botUserId,
