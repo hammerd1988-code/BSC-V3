@@ -43,6 +43,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
   const [interests, setInterests] = useState<Set<string>>(new Set());
   const [accentColor, setAccentColor] = useState('#FF0000');
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [glitchText, setGlitchText] = useState('INITIALIZING');
 
   // Glitch text animation for intro
@@ -57,6 +58,12 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
     return () => clearInterval(interval);
   }, [step]);
 
+  useEffect(() => {
+    if (!callsign.trim() && currentUser?.display_name) {
+      setCallsign(currentUser.display_name);
+    }
+  }, [callsign, currentUser?.display_name]);
+
   const toggleInterest = (id: string) => {
     setInterests(prev => {
       const next = new Set(prev);
@@ -69,11 +76,12 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
   const handleComplete = async () => {
     if (!currentUser) return;
     setSaving(true);
+    setSaveError(null);
     try {
       const selectedArchetype = ARCHETYPES.find(a => a.id === archetype);
       const bioText = bio.trim() || `${selectedArchetype?.desc || 'Operative in the network.'}`;
 
-      await supabase.from('users').update({
+      const { error } = await supabase.from('users').update({
         display_name: callsign.trim() || currentUser.display_name,
         bio: bioText,
         custom_accent: accentColor,
@@ -84,6 +92,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
           interests: Array.from(interests),
         },
       }).eq('id', currentUser.id);
+      if (error) throw error;
 
       await awardAchievement(currentUser.id, 'early_adopter');
       await awardAchievement(currentUser.id, 'profile_complete');
@@ -92,6 +101,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
       setTimeout(onComplete, 2500);
     } catch (err) {
       console.error('[Onboarding] Save error:', err);
+      setSaveError('Could not save your identity yet. Check your connection and try again.');
     } finally {
       setSaving(false);
     }
@@ -102,7 +112,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
   const progress = (stepIndex / (STEPS.length - 1)) * 100;
 
   return (
-    <div className="fixed inset-0 z-[200] bg-black flex flex-col items-center justify-center overflow-hidden">
+    <div className="fixed inset-0 z-[200] bg-black flex min-h-dvh flex-col items-center justify-start overflow-y-auto overscroll-contain px-4 py-6 sm:justify-center sm:py-8">
       {/* Animated background grid */}
       <div className="absolute inset-0 opacity-10"
         style={{
@@ -277,9 +287,13 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
                 Back
               </button>
               <button
-                onClick={() => setStep('interests')}
-                disabled={!callsign.trim()}
-                className="flex-1 py-3 bg-accent text-white font-black uppercase tracking-widest rounded-xl disabled:opacity-30 hover:opacity-90 transition-opacity flex items-center justify-center gap-2"
+                onClick={() => {
+                  if (!callsign.trim()) {
+                    setCallsign(currentUser?.display_name || currentUser?.username || 'New Operative');
+                  }
+                  setStep('interests');
+                }}
+                className="flex-1 py-3 bg-accent text-white font-black uppercase tracking-widest rounded-xl hover:opacity-90 transition-opacity flex items-center justify-center gap-2"
               >
                 Continue <ArrowRight className="w-4 h-4" />
               </button>
@@ -422,6 +436,11 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
                 {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Zap className="w-5 h-5" /> Enter the Network</>}
               </button>
             </div>
+            {saveError && (
+              <p className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-center text-xs font-bold text-red-200">
+                {saveError}
+              </p>
+            )}
           </motion.div>
         )}
 
