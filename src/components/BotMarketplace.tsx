@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
+import { getValidSession } from '../lib/authSession';
 import { handleDbError } from '../lib/errors';
 import { cn } from '../lib/utils';
 import { WalletModal } from './WalletModal';
@@ -866,12 +867,12 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
     setSaving(true);
     setErrorMsg(null);
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
+      const session = await getValidSession();
       const response = await fetch('/api/bots/unified', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${sessionData.session?.access_token ?? ''}`,
+          Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
         creator_id: currentUser.id,

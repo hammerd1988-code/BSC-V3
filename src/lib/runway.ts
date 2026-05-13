@@ -1,4 +1,4 @@
-import { supabase } from '../supabase';
+import { authedFetch } from './authSession';
 
 export type RunwayAssetType = 'image' | 'video';
 export type RunwayStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN';
@@ -37,22 +37,6 @@ function apiBaseUrl() {
   return String(import.meta.env.VITE_API_URL || import.meta.env.VITE_SOCKET_URL || '').replace(/\/$/, '');
 }
 
-async function authHeaders() {
-  let { data: { session } } = await supabase.auth.getSession();
-  if (!session?.access_token) {
-    const refreshed = await supabase.auth.refreshSession();
-    session = refreshed.data.session;
-  }
-  if (!session?.access_token) {
-    throw new Error('Sign in is required before using Visual Forge.');
-  }
-
-  return {
-    Authorization: `Bearer ${session.access_token}`,
-    'Content-Type': 'application/json',
-  };
-}
-
 async function parseResponse(response: Response) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -62,9 +46,8 @@ async function parseResponse(response: Response) {
 }
 
 export async function requestRunwayGeneration(input: RunwayGenerateRequest): Promise<RunwayTaskResponse> {
-  const response = await fetch(`${apiBaseUrl()}/api/runway/generate`, {
+  const response = await authedFetch(`${apiBaseUrl()}/api/runway/generate`, {
     method: 'POST',
-    headers: await authHeaders(),
     body: JSON.stringify(input),
   });
 
@@ -72,9 +55,8 @@ export async function requestRunwayGeneration(input: RunwayGenerateRequest): Pro
 }
 
 export async function getRunwayTask(taskId: string): Promise<RunwayTaskResponse> {
-  const response = await fetch(`${apiBaseUrl()}/api/runway/tasks/${encodeURIComponent(taskId)}`, {
+  const response = await authedFetch(`${apiBaseUrl()}/api/runway/tasks/${encodeURIComponent(taskId)}`, {
     method: 'GET',
-    headers: await authHeaders(),
   });
 
   return parseResponse(response);
