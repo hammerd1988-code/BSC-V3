@@ -65,22 +65,22 @@ export default function App() {
   const { currentUser, loading } = useAuth();
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showNetworkTutorial, setShowNetworkTutorial] = useState(false);
+  const dismissedOnboardingKey = currentUser ? `bsc_onboarding_dismissed_${currentUser.id}` : null;
 
   // On login: check if onboarding needed, update streak, process referral
   useEffect(() => {
     if (!currentUser) return;
 
-    // Show onboarding only for genuinely new users (created within the last 10 minutes)
-    // and who have not completed onboarding yet
+    // Show onboarding for recently created accounts that have not completed it.
+    const createdRecently = currentUser.created_at && (Date.now() - new Date(currentUser.created_at).getTime()) < 24 * 60 * 60 * 1000;
     const isNewUser = currentUser.onboarding_complete === false &&
-      currentUser.created_at &&
-      (Date.now() - new Date(currentUser.created_at).getTime()) < 10 * 60 * 1000;
+      createdRecently &&
+      !localStorage.getItem(`bsc_onboarding_dismissed_${currentUser.id}`);
     if (isNewUser) {
       setShowOnboarding(true);
     } else {
       const tutorialKey = `bsc_network_tutorial_seen_${currentUser.id}`;
-      const createdRecently = currentUser.created_at && (Date.now() - new Date(currentUser.created_at).getTime()) < 24 * 60 * 60 * 1000;
-      if (createdRecently && currentUser.onboarding_complete !== false && !localStorage.getItem(tutorialKey)) {
+      if (createdRecently && !showOnboarding && !localStorage.getItem(tutorialKey)) {
         setShowNetworkTutorial(true);
       }
     }
@@ -169,6 +169,7 @@ export default function App() {
       {/* Onboarding wizard for new users */}
       {showOnboarding && (
         <OnboardingWizard onComplete={() => {
+          if (dismissedOnboardingKey) localStorage.setItem(dismissedOnboardingKey, new Date().toISOString());
           setShowOnboarding(false);
           if (currentUser) {
             const tutorialKey = `bsc_network_tutorial_seen_${currentUser.id}`;
