@@ -798,8 +798,8 @@ function avatarUrlForGladiator(gladiator: Gladiator) {
 function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active }: { gladiator?: Gladiator; size?: 'sm' | 'md' | 'lg' | 'xl'; label?: string; active?: boolean }) {
   const glow = gladiator?.glow_color ?? '#ff1744';
   const avatarUrl = gladiator ? avatarUrlForGladiator(gladiator) : '';
-  const sizeClass = size === 'xl' ? 'h-32 w-32' : size === 'lg' ? 'h-24 w-24' : size === 'sm' ? 'h-16 w-16' : 'h-20 w-20';
-  const iconClass = size === 'xl' ? 'h-14 w-14' : size === 'lg' ? 'h-10 w-10' : 'h-8 w-8';
+  const sizeClass = size === 'xl' ? 'h-40 w-40' : size === 'lg' ? 'h-28 w-28' : size === 'sm' ? 'h-20 w-20' : 'h-24 w-24';
+  const iconClass = size === 'xl' ? 'h-16 w-16' : size === 'lg' ? 'h-12 w-12' : 'h-9 w-9';
   const duration = active ? 2.35 : 2.85;
 
   return (
@@ -814,11 +814,17 @@ function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active }: { gl
         className={cn('relative grid place-items-center overflow-hidden rounded-[1.65rem] border border-white/15 bg-zinc-950', sizeClass)}
         style={{ boxShadow: `0 0 34px ${glow}55`, transformStyle: 'preserve-3d' }}
       >
+        <div className="absolute inset-0 opacity-45" style={{ background: `radial-gradient(circle at 50% 0%, ${glow}55, transparent 52%)` }} />
         {avatarUrl ? (
-          <img src={avatarUrl} alt={gladiator ? `${gladiator.name} avatar` : ''} className="h-full w-full object-cover contrast-125 saturate-125" />
+          <img
+            src={avatarUrl}
+            alt={gladiator ? `${gladiator.name} avatar` : ''}
+            className="relative h-full w-full object-cover object-center contrast-125 saturate-125 transition duration-500 group-hover:scale-110"
+          />
         ) : (
           <Bot className={iconClass} style={{ color: glow }} />
         )}
+        <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px)] bg-[length:12px_12px] opacity-20" />
         <motion.div
           aria-hidden
           animate={{ x: ['-130%', '140%'], opacity: [0, 0.55, 0] }}
@@ -865,8 +871,17 @@ function GladiatorCard({ gladiator, active, onSelect, actionLabel, onAction }: {
     >
       <div className="absolute inset-0 opacity-30" style={{ background: `radial-gradient(circle at 20% 20%, ${gladiator.glow_color}55, transparent 32%), linear-gradient(135deg, transparent, ${gladiator.glow_color}16)` }} />
       <div className="absolute -right-12 -top-16 h-32 w-32 rounded-full blur-3xl" style={{ backgroundColor: gladiator.glow_color }} />
-      <div className="relative flex items-start gap-3">
-        <AnimatedGladiatorAvatar gladiator={gladiator} size="sm" active={active} />
+      <div className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/55 p-3">
+        <div className="absolute inset-0 opacity-35" style={{ background: `linear-gradient(135deg, ${gladiator.glow_color}33, transparent 45%, rgba(255,255,255,0.08))` }} />
+        <div className="relative flex flex-col items-center gap-3">
+          <AnimatedGladiatorAvatar gladiator={gladiator} size="xl" label={gladiator.name} active={active} />
+          <div className="flex flex-wrap justify-center gap-2 pt-3">
+            <span className="rounded-full border px-2 py-1 text-[8px] font-black uppercase tracking-widest" style={{ borderColor: `${diffColor}55`, color: diffColor, backgroundColor: `${diffColor}12` }}>{profile?.difficulty ?? 'Human'}</span>
+            <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[8px] font-black uppercase tracking-widest text-zinc-400">3D Motion Avatar</span>
+          </div>
+        </div>
+      </div>
+      <div className="relative mt-4 flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <div>
@@ -1582,6 +1597,7 @@ export const Colosseum: React.FC = () => {
   const selectedGladiator = selectedGladiatorId ? gladiatorById.get(selectedGladiatorId) : null;
   const selectedOpponent = selectedOpponentId ? gladiatorById.get(selectedOpponentId) : null;
   const selectedCodingChallenge = useMemo(() => challengeFor(selectedOpponent?.botProfile, challengeType), [selectedOpponent?.botProfile, challengeType]);
+  const battleInProgress = simulation?.status === 'booting' || simulation?.status === 'running';
 
   useEffect(() => {
     if (!selectedOpponent?.botProfile) return;
@@ -1607,6 +1623,49 @@ export const Colosseum: React.FC = () => {
     setLatestBotSolution('');
     setBattleResult(null);
     setUserSolution(challengeFor(bot.botProfile, challengeType).starter);
+  };
+
+  const ensureUserGladiator = async (opponentId?: string) => {
+    if (selectedGladiator && selectedGladiator.id !== opponentId) return selectedGladiator;
+    if (!currentUser) return null;
+
+    const existing = myGladiators.find((gladiator) => gladiator.id !== opponentId);
+    if (existing) {
+      setSelectedGladiatorId(existing.id);
+      return existing;
+    }
+
+    const baseName = (currentUser.display_name || currentUser.username || 'BSC Challenger').trim();
+    const challengerName = `${baseName} Gladiator`.slice(0, 40).trim() || 'BSC Gladiator';
+    const seed = `${currentUser.id}:${baseName}`.split('').reduce((sum, character) => sum + character.charCodeAt(0), 0);
+    const stats = {
+      speed: clampStat(52 + (seed % 18)),
+      accuracy: clampStat(50 + ((seed * 3) % 18)),
+      creativity: clampStat(48 + ((seed * 5) % 20)),
+      endurance: clampStat(51 + ((seed * 7) % 17)),
+    };
+    const accent = currentUser.custom_accent && /^#[0-9A-Fa-f]{6}$/.test(currentUser.custom_accent)
+      ? currentUser.custom_accent
+      : GLOW_COLORS[1];
+
+    const { data, error } = await supabase
+      .from('gladiators')
+      .insert({
+        user_id: currentUser.id,
+        name: challengerName,
+        avatar_url: currentUser.avatar_url ?? null,
+        personality: 'Human challenger auto-forged for Colosseum code battles.',
+        glow_color: accent,
+        stats,
+      })
+      .select('id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model,api_base_url')
+      .single();
+
+    if (error) throw error;
+    const created = normalizeGladiator(data);
+    setGladiators((prev) => [created, ...prev]);
+    setSelectedGladiatorId(created.id);
+    return created;
   };
 
   useEffect(() => {
@@ -1759,7 +1818,8 @@ export const Colosseum: React.FC = () => {
   };
 
   const startChallenge = async () => {
-    if (!selectedGladiator || !selectedOpponent || starting || simulation?.status === 'running') return;
+    if (!selectedOpponent || starting || battleInProgress) return;
+    const defender = selectedOpponent;
     const codingChallenge = challengeFor(selectedOpponent.botProfile, challengeType);
     const submittedSolution = userSolution.trim();
     if (selectedOpponent.botProfile && !submittedSolution) {
@@ -1771,15 +1831,21 @@ export const Colosseum: React.FC = () => {
     setBattleResult(null);
     setLatestBotSolution('');
     try {
-      const battlePrompt = buildChallengePrompt(challengeType, selectedGladiator, selectedOpponent, codingChallenge);
+      const challenger = await ensureUserGladiator(defender.id);
+      if (!challenger) {
+        setNotice('Sign in and choose an opponent to enter the Colosseum.');
+        return;
+      }
+
+      const battlePrompt = buildChallengePrompt(challengeType, challenger, defender, codingChallenge);
       const { data, error } = await supabase
         .from('matches')
         .insert({
-          challenger_id: selectedGladiator.id,
-          defender_id: selectedOpponent.id,
+          challenger_id: challenger.id,
+          defender_id: defender.id,
           challenge_type: challengeType,
           replay_data: {
-            intro: `${selectedGladiator.name} challenged ${selectedOpponent.name}`,
+            intro: `${challenger.name} challenged ${defender.name}`,
             arena: 'underground-neon-fight-pit',
             challenge_title: codingChallenge.title,
             challenge_difficulty: codingChallenge.difficulty,
@@ -1795,14 +1861,46 @@ export const Colosseum: React.FC = () => {
       const challenge = CHALLENGES.find((item) => item.id === challengeType)!;
       const logs = [
         `Gate locks engaged for ${challenge.label}.`,
-        `${selectedGladiator.name} boots combat compiler in the red corner.`,
-        `${selectedOpponent.name} answers from the shadow cage.`,
+        `${challenger.name} boots combat compiler in the red corner.`,
+        `${defender.name} answers from the shadow cage.`,
       ];
-      let sapphireMove: SapphireMove | null = null;
-      let aiMoves: GladiatorAiMove[] = [];
-      logs.push('Private AI cores queued. Server is generating combat solutions without exposing keys.');
-      try {
-        aiMoves = await requestGladiatorAiMoves(match, challengeType, selectedGladiator, selectedOpponent, battlePrompt);
+      const bootLogs = [...logs, 'Private AI cores queued. Gate opens while server-side solutions warm up.'];
+      setSimulation({
+        matchId: match.id,
+        challengerId: challenger.id,
+        defenderId: defender.id,
+        challengeType,
+        challengerProgress: 4,
+        defenderProgress: 3,
+        log: bootLogs,
+        winnerId: null,
+        status: 'booting',
+      });
+      setMatches((prev) => [match, ...prev]);
+      setChallengeModalOpen(false);
+
+      let launched = false;
+      const launchSimulation = (
+        openingLogs: string[],
+        sapphireMove: SapphireMove | null,
+        aiMoves: GladiatorAiMove[]
+      ) => {
+        if (launched) return;
+        launched = true;
+        runSimulation(match, challenger, defender, challengeType, openingLogs, sapphireMove, aiMoves, codingChallenge, submittedSolution);
+      };
+
+      const fallbackTimer = window.setTimeout(() => {
+        launchSimulation(
+          [...bootLogs, 'AI cores are still compiling. Pit simulation fallback engaged so the battle does not stall.'],
+          null,
+          []
+        );
+      }, 1500);
+
+      void requestGladiatorAiMoves(match, challengeType, challenger, defender, battlePrompt).then((moves) => {
+        let sapphireMove: SapphireMove | null = null;
+        const aiMoves = moves;
         const sapphireGeneratedMove = aiMoves.find((move) => move.source === 'sapphire-api');
         sapphireMove = sapphireGeneratedMove ? {
           source: sapphireGeneratedMove.source,
@@ -1811,32 +1909,29 @@ export const Colosseum: React.FC = () => {
           latency_ms: sapphireGeneratedMove.latency_ms,
           received_at: sapphireGeneratedMove.received_at,
         } : null;
-        const defenderMove = aiMoves.find((move) => move.gladiator_id === selectedOpponent.id);
+        const defenderMove = aiMoves.find((move) => move.gladiator_id === defender.id);
         if (defenderMove?.solution) setLatestBotSolution(defenderMove.solution);
-        aiMoves.forEach((move) => {
-          logs.push(`${move.gladiator_name} returned a ${move.source} solution using ${move.model}.`);
-        });
-      } catch (err) {
+        const aiLogs = [
+          ...bootLogs,
+          ...aiMoves.map((move) => `${move.gladiator_name} returned a ${move.source} solution using ${move.model}.`),
+        ];
+        window.clearTimeout(fallbackTimer);
+        if (launched) {
+          setSimulation((prev) => prev ? {
+            ...prev,
+            log: [...prev.log, 'Late AI solution packet arrived after the gate opened.'],
+          } : prev);
+          return;
+        }
+        launchSimulation(aiLogs, sapphireMove, aiMoves);
+      }).catch((err) => {
         console.warn('[Colosseum] Gladiator AI solution generation failed', err);
-        logs.push('Server-side AI cores did not answer. Pit simulation fallback engaged.');
-      }
-      setSimulation({
-        matchId: match.id,
-        challengerId: selectedGladiator.id,
-        defenderId: selectedOpponent.id,
-        challengeType,
-        challengerProgress: 4,
-        defenderProgress: 3,
-        log: logs,
-        winnerId: null,
-        status: 'booting',
+        window.clearTimeout(fallbackTimer);
+        launchSimulation([...bootLogs, 'Server-side AI cores did not answer. Pit simulation fallback engaged.'], null, []);
       });
-      setMatches((prev) => [match, ...prev]);
-      setChallengeModalOpen(false);
-      setTimeout(() => runSimulation(match, selectedGladiator, selectedOpponent, challengeType, logs, sapphireMove, aiMoves, codingChallenge, submittedSolution), 650);
     } catch (err) {
       handleDbError(err, 'CREATE', 'matches');
-      setNotice('Challenge could not start. Select one of your gladiators and a valid opponent.');
+      setNotice('Challenge could not start. Select a valid opponent and try again.');
     } finally {
       setStarting(false);
     }
@@ -2107,11 +2202,11 @@ export const Colosseum: React.FC = () => {
                   <button
                     type="button"
                     onClick={startChallenge}
-                    disabled={!selectedGladiator || countdown > 0 || starting || !userSolution.trim()}
+                    disabled={!currentUser || countdown > 0 || starting || battleInProgress || !userSolution.trim()}
                     className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-red-600 px-4 py-4 text-xs font-black uppercase tracking-[0.24em] text-white shadow-[0_0_28px_rgba(255,23,68,0.35)] transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-45"
                   >
                     {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Swords className="h-4 w-4" />}
-                    {!selectedGladiator ? 'Forge Or Select Your Gladiator First' : countdown > 0 ? 'Gate Charging' : 'Enter Code Battle'}
+                    {!currentUser ? 'Sign In To Enter' : countdown > 0 ? 'Gate Charging' : selectedGladiator ? 'Enter Code Battle' : 'Auto-Forge And Enter Code Battle'}
                   </button>
                 </div>
               </motion.div>
@@ -2579,11 +2674,11 @@ export const Colosseum: React.FC = () => {
             <button
               type="button"
               onClick={selectedOpponent?.botProfile ? () => selectedOpponent && openBotChallenge(selectedOpponent) : startChallenge}
-              disabled={!selectedGladiator || !selectedOpponent || starting || simulation?.status === 'running'}
+              disabled={!currentUser || !selectedOpponent || starting || battleInProgress}
               className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl border border-red-400/50 bg-red-600/80 px-4 py-4 text-xs font-black uppercase tracking-[0.24em] text-white shadow-[0_0_28px_rgba(255,23,68,0.28)] transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Swords className="h-4 w-4" />}
-              Open The Gates
+              {selectedGladiator ? 'Open The Gates' : 'Auto-Forge And Open The Gates'}
             </button>
 
             <div className="mt-5 overflow-hidden rounded-3xl border border-white/10 bg-zinc-950/80 p-4">
