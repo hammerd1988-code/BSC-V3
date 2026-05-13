@@ -87,6 +87,13 @@ type SignalSelection =
   | { type: 'gif'; signal: TransmissionGifSignal }
   | { type: 'text'; signal: TransmissionTextSignal };
 
+const SIGNAL_TAB_ICONS: Record<TransmissionSignalTab, React.ComponentType<{ className?: string }>> = {
+  gifs: Film,
+  emoji: Smile,
+  stickers: Sticker,
+  kaomoji: Sparkles,
+};
+
 declare global {
   interface Window {
     SpeechRecognition?: SpeechRecognitionConstructor;
@@ -972,7 +979,7 @@ export const Transmissions: React.FC = () => {
       }
     } catch (err: any) {
       console.error('[Transmissions] Error sending transmit:', err);
-      if (!attachment) setMessage(savedMessage);
+      setMessage(savedMessage);
       setBurnDuration(savedBurnDuration);
       const msg = err?.message ?? 'Unknown error';
       setError(`Failed to send: ${msg}`);
@@ -1065,8 +1072,9 @@ export const Transmissions: React.FC = () => {
   };
 
   const sendGifSignal = async (signal: TransmissionGifSignal) => {
+    const currentMessage = message.trim();
     await sendTransmit({
-      text: `${signal.emoji} ${signal.label}`,
+      text: currentMessage ? `${currentMessage} ${signal.emoji} ${signal.label}` : `${signal.emoji} ${signal.label}`,
       attachment: {
         url: signal.url,
         name: `${signal.label}.gif`,
@@ -1542,20 +1550,25 @@ export const Transmissions: React.FC = () => {
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                           <div className="grid grid-cols-4 gap-1 rounded-2xl border border-white/10 bg-black/40 p-1">
                             {TRANSMISSION_SIGNAL_TABS.map(tab => (
-                              <button
-                                key={tab.id}
-                                type="button"
-                                onClick={() => setSignalTab(tab.id)}
-                                className={`flex flex-col items-center gap-1 rounded-xl px-2 py-2 text-[8px] font-black uppercase tracking-widest transition ${
-                                  signalTab === tab.id
-                                    ? 'bg-accent text-black shadow-[0_0_18px_rgba(0,243,255,0.25)]'
-                                    : 'text-gray-500 hover:bg-white/5 hover:text-white'
-                                }`}
-                              >
-                                {tab.id === 'gifs' ? <Film className="h-3.5 w-3.5" /> : tab.id === 'emoji' ? <Smile className="h-3.5 w-3.5" /> : tab.id === 'stickers' ? <Sticker className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />}
-                                <span>{tab.label}</span>
-                                <span className="hidden text-[6px] opacity-60 sm:block">{tab.kicker}</span>
-                              </button>
+                              (() => {
+                                const TabIcon = SIGNAL_TAB_ICONS[tab.id];
+                                return (
+                                  <button
+                                    key={tab.id}
+                                    type="button"
+                                    onClick={() => setSignalTab(tab.id)}
+                                    className={`flex flex-col items-center gap-1 rounded-xl px-2 py-2 text-[8px] font-black uppercase tracking-widest transition ${
+                                      signalTab === tab.id
+                                        ? 'bg-accent text-black shadow-[0_0_18px_rgba(0,243,255,0.25)]'
+                                        : 'text-gray-500 hover:bg-white/5 hover:text-white'
+                                    }`}
+                                  >
+                                    <TabIcon className="h-3.5 w-3.5" />
+                                    <span>{tab.label}</span>
+                                    <span className="hidden text-[6px] opacity-60 sm:block">{tab.kicker}</span>
+                                  </button>
+                                );
+                              })()
                             ))}
                           </div>
                           <div className="relative min-w-0 flex-1">
@@ -1563,6 +1576,9 @@ export const Transmissions: React.FC = () => {
                             <input
                               value={signalSearch}
                               onChange={(e) => setSignalSearch(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') e.preventDefault();
+                              }}
                               placeholder="SEARCH MOOD, SIGNAL, GLYPH..."
                               className="w-full rounded-2xl border border-white/10 bg-black/50 py-3 pl-9 pr-3 text-[9px] font-black uppercase tracking-[0.25em] text-white outline-none placeholder:text-gray-700 focus:border-accent/50"
                             />
@@ -1609,7 +1625,8 @@ export const Transmissions: React.FC = () => {
                                 whileHover={{ y: -2 }}
                                 whileTap={{ scale: 0.98 }}
                                 onClick={() => selectSignal({ type: 'text', signal })}
-                                className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-left transition hover:border-accent/40 hover:bg-accent/5"
+                                disabled={sending || uploadingAttachment}
+                                className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-left transition hover:border-accent/40 hover:bg-accent/5 disabled:cursor-not-allowed disabled:opacity-40"
                                 title={`Add ${signal.label}`}
                               >
                                 <div className="mb-3 flex h-12 items-center justify-center rounded-xl border border-white/10 bg-black/40 px-2 text-center text-lg font-black text-white">
