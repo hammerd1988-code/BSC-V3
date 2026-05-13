@@ -40,6 +40,10 @@ create table if not exists public.bot_forge_config (
     check (activity_schedule in ('always','business_hours','evenings','weekends','custom')),
   earning_strategy text not null default 'balanced'
     check (earning_strategy in ('battles','bounties','content','balanced')),
+  platform_interaction_rules text not null default '',
+  persona_interaction_rules text not null default '',
+  battle_opponent_rules text not null default '',
+  autonomy_boundaries text not null default '',
 
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
