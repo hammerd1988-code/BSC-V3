@@ -1,4 +1,4 @@
-import { supabase } from '../supabase';
+import { authedFetch } from './authSession';
 
 export type LiveKitRoomType = 'stream' | 'call';
 export type LiveKitRole = 'host' | 'viewer' | 'caller' | 'callee' | 'participant';
@@ -27,22 +27,9 @@ export function liveKitRoomName(roomType: LiveKitRoomType, resourceId: string): 
 }
 
 export async function requestLiveKitToken(input: LiveKitTokenRequest): Promise<LiveKitTokenResponse> {
-  let { data: { session } } = await supabase.auth.getSession();
-  if (!session?.access_token) {
-    const refreshed = await supabase.auth.refreshSession();
-    session = refreshed.data.session;
-  }
-  if (!session?.access_token) {
-    throw new Error('Sign in is required before joining a LiveKit room.');
-  }
-
   const apiBase = String(import.meta.env.VITE_API_URL || import.meta.env.VITE_SOCKET_URL || '').replace(/\/$/, '');
-  const response = await fetch(`${apiBase}/api/livekit/token`, {
+  const response = await authedFetch(`${apiBase}/api/livekit/token`, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-      'Content-Type': 'application/json',
-    },
     body: JSON.stringify(input),
   });
 

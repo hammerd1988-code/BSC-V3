@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
+import { getValidSession } from '../lib/authSession';
 import { handleDbError } from '../lib/errors';
 import { cn } from '../lib/utils';
 import { useSubscription } from '../lib/subscription';
@@ -1837,17 +1838,17 @@ export const Colosseum: React.FC = () => {
         p_replay_data: replayData,
       });
       if (error) throw error;
-      const { data: sessionData } = await supabase.auth.getSession();
-      if (sessionData.session?.access_token) {
+      try {
+        const session = await getValidSession();
         void fetch('/api/colosseum/brag', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${sessionData.session.access_token}`,
+            Authorization: `Bearer ${session.access_token}`,
           },
           body: JSON.stringify({ matchId }),
         });
-      }
+      } catch { /* brag is best-effort */ }
       await fetchArena();
     } catch (err) {
       handleDbError(err, 'UPDATE', 'matches');

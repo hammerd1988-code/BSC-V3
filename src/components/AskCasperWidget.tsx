@@ -119,6 +119,12 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsUrlRef = useRef<string | null>(null);
+  // Persistent Audio element reused across TTS calls. Mobile browsers
+  // require .play() to originate from a user gesture. We "unlock" this
+  // element once on the first gesture (send / toggle) so subsequent
+  // programmatic .play() calls succeed.
+  const persistentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUnlockedRef = useRef(false);
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
 
@@ -197,14 +203,32 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
 
   // TTS: speak Casper responses with the server's male voice (OpenAI Ash)
   const stopTts = useCallback(() => {
-    if (ttsAudioRef.current) {
-      ttsAudioRef.current.pause();
-      ttsAudioRef.current = null;
+    const audio = persistentAudioRef.current ?? ttsAudioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
     }
+    ttsAudioRef.current = null;
     if (ttsUrlRef.current) {
       URL.revokeObjectURL(ttsUrlRef.current);
       ttsUrlRef.current = null;
     }
+  }, []);
+
+  // Unlock a persistent Audio element so mobile browsers allow later
+  // programmatic .play() calls.  Must be called inside a click/tap handler.
+  const unlockAudio = useCallback(() => {
+    if (audioUnlockedRef.current) return;
+    if (!persistentAudioRef.current) {
+      persistentAudioRef.current = new Audio();
+      persistentAudioRef.current.volume = 1;
+    }
+    // Play a tiny silent WAV to satisfy the user-gesture requirement.
+    persistentAudioRef.current.src =
+      'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
+    persistentAudioRef.current.play().catch(() => {});
+    audioUnlockedRef.current = true;
   }, []);
 
   const speakText = useCallback(async (text: string) => {
@@ -220,10 +244,13 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       ttsUrlRef.current = url;
-      const audio = new Audio(url);
+      // Reuse the gesture-unlocked Audio element on mobile; fall back to a
+      // new one on desktop where autoplay is unrestricted.
+      const audio = persistentAudioRef.current ?? new Audio();
       ttsAudioRef.current = audio;
       audio.onended = () => { stopTts(); };
       audio.onerror = () => { stopTts(); };
+      audio.src = url;
       await audio.play();
     } catch {
       // TTS unavailable — fail silently
@@ -231,7 +258,11 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
   }, [stopTts]);
 
   // Cleanup TTS on unmount
-  useEffect(() => () => { stopTts(); }, [stopTts]);
+  useEffect(() => () => {
+    stopTts();
+    persistentAudioRef.current = null;
+    audioUnlockedRef.current = false;
+  }, [stopTts]);
 
   // Greeting that introduces Casper *and* announces the current page he's
   // helping on. We update the greeting if the route changes while the
@@ -264,6 +295,7 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
   const send = async () => {
     const text = draft.trim();
     if (!text || busy) return;
+    if (ttsEnabled) unlockAudio();
     setDraft('');
     const userTurn: ChatTurn = { role: 'user', text, ts: Date.now() };
     const pendingCasperTurn: ChatTurn = { role: 'casper', text: 'Thinking…', ts: Date.now() + 1, pending: true };
@@ -293,7 +325,9 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
             : turn,
         ),
       );
-      if (ttsEnabled && casperText) void speakText(casperText);
+      if (ttsEnabled && casperText) {
+        void speakText(casperText);
+      }
     } catch (error: any) {
       setTurns((prev) =>
         prev.map((turn) =>
@@ -352,6 +386,7 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
                 onClick={() => {
                   const next = !ttsEnabled;
                   setTtsEnabled(next);
+                  if (next) unlockAudio();
                   if (!next) stopTts();
                 }}
                 className={cn(

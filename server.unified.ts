@@ -32,6 +32,7 @@ import { registerLiveKitRoutes } from './livekitRoutes.js';
 import { registerRunwayRoutes } from './runwayRoutes.js';
 import { registerUnifiedBotRoutes } from './botUnificationRoutes.js';
 import { registerServerAiRoutes } from './serverAi.js';
+import { registerColosseumRoutes } from './colosseumRoutes.js';
 import { BOT_PERSONAS } from './src/lib/botPersonas.js';
 import { BOT_GLADIATOR_PROFILES, botStatsToPercent } from './src/lib/botGladiatorProfiles.js';
 
@@ -517,27 +518,7 @@ async function startServer() {
   registerCasperControlRoutes(app, supabase, casperMemory);
   registerServerAiRoutes(app, supabase);
   registerUnifiedBotRoutes(app, supabase);
-
-
-  app.post('/api/colosseum/persona-bots/ensure', async (_req, res) => {
-    try {
-      const gladiators = await ensurePersonaBotGladiators();
-      return res.json({ success: true, gladiators });
-    } catch (error: any) {
-      console.error('[colosseum:persona-bots:ensure]', error);
-      return res.status(500).json({ success: false, error: error.message || 'Unable to ensure persona bot gladiators' });
-    }
-  });
-
-  app.post('/api/colosseum/sapphire/ensure', async (_req, res) => {
-    try {
-      const gladiator = await ensureSapphireHouseBot();
-      return res.json({ success: true, gladiator: sanitizeGladiator(gladiator) });
-    } catch (error: any) {
-      console.error('[colosseum:sapphire:ensure]', error);
-      return res.status(500).json({ success: false, error: error.message || 'Unable to ensure Sapphire house bot' });
-    }
-  });
+  registerColosseumRoutes(app, supabase);
 
 
   app.post('/api/colosseum/gladiator-solutions', async (req, res) => {

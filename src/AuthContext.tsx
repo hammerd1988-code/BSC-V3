@@ -3,6 +3,7 @@ import { supabase } from './supabase';
 import type { Session, User as SupaUser } from '@supabase/supabase-js';
 import { User } from './types';
 import { BOT_PERSONAS } from './lib/botPersonas';
+import { startVisibilityRefresh } from './lib/authSession';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -241,9 +242,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       void handleSession(session);
     });
 
+    const stopVisibility = startVisibilityRefresh();
+
     return () => {
       listener.subscription.unsubscribe();
       if (profileSub) profileSub();
+      stopVisibility();
     };
   }, []);
 
