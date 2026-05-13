@@ -1,9 +1,10 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { deflateSync } from 'node:zlib';
 
 type RunwayGenerationType = 'image' | 'video';
 type RunwayVideoDuration = 4 | 5 | 10;
-type RunwayAspectRatio = '16:9' | '9:16' | '1:1';
+type RunwayAspectRatio = '16:9' | '9:16' | '1:1' | '4:3';
 type SubscriptionTier = 'free' | 'pro' | 'infinity';
 type PremiumRunwayFeature = 'ai_image_generation' | 'ai_video_generation' | 'thumbnail_generation';
 
@@ -19,6 +20,8 @@ type RunwayGenerateRequest = {
   resolution?: string;
   model?: string;
 };
+
+type RunwayTaskStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN';
 
 type FeatureAccess = {
   userId: string;
@@ -37,7 +40,7 @@ const RUNWAY_API_BASE_URL = 'https://api.dev.runwayml.com/v1';
 const RUNWAY_VERSION = '2024-11-06';
 const VIDEO_MODEL = process.env.RUNWAY_VIDEO_MODEL || 'gen4.5';
 const IMAGE_MODEL = process.env.RUNWAY_IMAGE_MODEL || 'gen4_image';
-const VALID_RATIOS = new Set<RunwayAspectRatio>(['16:9', '9:16', '1:1']);
+const VALID_RATIOS = new Set<RunwayAspectRatio>(['16:9', '9:16', '1:1', '4:3']);
 const TIER_RANK: Record<SubscriptionTier, number> = { free: 0, pro: 1, infinity: 2 };
 const RUNWAY_FEATURES: Record<PremiumRunwayFeature, {
   requiredTier: SubscriptionTier;
@@ -65,9 +68,10 @@ function normalizeVideoRatio(value: RunwayAspectRatio): '1280:720' | '720:1280' 
   return '1280:720';
 }
 
-function normalizeImageRatio(value: RunwayAspectRatio): '1920:1080' | '1080:1920' | '1024:1024' {
+function normalizeImageRatio(value: RunwayAspectRatio): '1920:1080' | '1080:1920' | '1024:1024' | '960:720' {
   if (value === '9:16') return '1080:1920';
   if (value === '1:1') return '1024:1024';
+  if (value === '4:3') return '960:720';
   return '1920:1080';
 }
 
@@ -81,6 +85,56 @@ function normalizeDuration(value: unknown): 5 | 10 {
 
 function normalizePrompt(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function crc32(buffer: Buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type: string, data: Buffer) {
+  const typeBuffer = Buffer.from(type);
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
+  const checksum = Buffer.alloc(4);
+  checksum.writeUInt32BE(crc32(Buffer.concat([typeBuffer, data])));
+  return Buffer.concat([length, typeBuffer, data, checksum]);
+}
+
+function createRunwayPromptImage() {
+  const width = 1280;
+  const height = 720;
+  const raw = Buffer.alloc((width * 3 + 1) * height);
+  for (let y = 0; y < height; y += 1) {
+    const row = y * (width * 3 + 1);
+    raw[row] = 0;
+    for (let x = 0; x < width; x += 1) {
+      const offset = row + 1 + x * 3;
+      const glow = Math.max(0, 1 - Math.hypot((x - 1010) / 390, (y - 120) / 310));
+      const cyan = Math.max(0, 1 - Math.hypot((x - 120) / 450, (y - 640) / 360));
+      raw[offset] = Math.min(255, 2 + Math.round(42 * (x / width)) + Math.round(110 * glow));
+      raw[offset + 1] = Math.min(255, 6 + Math.round(24 * (y / height)) + Math.round(95 * cyan));
+      raw[offset + 2] = Math.min(255, 23 + Math.round(92 * (x / width)) + Math.round(92 * glow) + Math.round(80 * cyan));
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+  return `data:image/png;base64,${png.toString('base64')}`;
 }
 
 function normalizeFeature(type: RunwayGenerationType, value: unknown): PremiumRunwayFeature {
@@ -244,6 +298,15 @@ function extractOutputUrl(payload: any): string | null {
   return null;
 }
 
+function normalizeRunwayStatus(status: unknown): RunwayTaskStatus {
+  const normalized = typeof status === 'string' ? status.toUpperCase() : '';
+  if (normalized === 'SUCCEEDED') return 'SUCCEEDED';
+  if (normalized === 'FAILED') return 'FAILED';
+  if (normalized === 'RUNNING' || normalized === 'THROTTLED') return 'RUNNING';
+  if (normalized === 'PENDING' || normalized === 'QUEUED' || normalized === 'CREATED') return 'PENDING';
+  return 'UNKNOWN';
+}
+
 export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
   app.post('/api/runway/generate', async (req: Request, res: Response) => {
     try {
@@ -279,9 +342,13 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
       const runwayPath = type === 'video'
         ? '/image_to_video'
         : '/text_to_image';
+      const videoPromptImage = type === 'video' && !promptImage
+        ? createRunwayPromptImage()
+        : promptImage;
 
       const payload: Record<string, any> = type === 'video'
         ? {
+            promptImage: videoPromptImage,
             promptText,
             model: body.model || VIDEO_MODEL,
             duration,
@@ -311,7 +378,7 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
       return res.json({
         id: runway.payload?.id ?? runway.payload?.taskId ?? null,
         taskId: runway.payload?.id ?? runway.payload?.taskId ?? null,
-        status: runway.payload?.status ?? 'PENDING',
+        status: normalizeRunwayStatus(runway.payload?.status),
         output: runway.payload?.output ?? [],
         assetUrl: extractOutputUrl(runway.payload),
         type,
@@ -350,7 +417,7 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
       return res.json({
         id: runway.payload?.id ?? taskId,
         taskId: runway.payload?.id ?? taskId,
-        status: runway.payload?.status ?? 'UNKNOWN',
+        status: normalizeRunwayStatus(runway.payload?.status),
         output: runway.payload?.output ?? [],
         assetUrl: extractOutputUrl(runway.payload),
         userId: authUser.id,
