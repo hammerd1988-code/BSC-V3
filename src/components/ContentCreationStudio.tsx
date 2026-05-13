@@ -479,7 +479,7 @@ export function ContentCreationStudio() {
               <div className="rounded-[2rem] border border-white/10 bg-zinc-950/70 p-5">
                 <div className="mb-4 flex items-center gap-3"><Zap className="h-5 w-5 text-cyan-200" /><h2 className="text-sm font-black uppercase tracking-widest">Casper Unified Composer</h2></div>
                 <textarea value={composer} onChange={(e) => setComposer(e.target.value)} placeholder="Caption, post copy, project notes, or scheduled content body..." className="min-h-36 w-full resize-y rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm leading-6 text-white outline-none focus:border-cyan-300" />
-                <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+                <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto_auto_auto_auto]">
                   <input value={scheduleAt} onChange={(e) => setScheduleAt(e.target.value)} type="datetime-local" className="rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-xs text-white outline-none focus:border-fuchsia-300" />
                   <button onClick={() => saveLibraryItem('draft')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white"><Scissors className="h-4 w-4" /> Save Draft</button>
                   <button onClick={() => saveLibraryItem('finished')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-300/30 bg-emerald-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-emerald-100"><Layers className="h-4 w-4" /> Finished</button>
