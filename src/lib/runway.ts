@@ -21,6 +21,7 @@ export interface RunwayTaskResponse {
   status: RunwayStatus;
   output?: string[];
   assetUrl?: string | null;
+  provider?: 'runway' | 'zimage';
   type?: RunwayAssetType;
   ratio?: RunwayAspectRatio;
   duration?: number;
