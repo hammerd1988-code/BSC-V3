@@ -104,11 +104,15 @@ function sanitizeFilename(value: unknown, fallback: string) {
 }
 
 function dataUrlToBuffer(dataUrl: string) {
-  const match = dataUrl.match(/^data:([^;,]+)(;base64)?,(.*)$/);
-  if (!match) return null;
-  const contentType = match[1];
-  const encoded = match[3];
-  const buffer = match[2] ? Buffer.from(encoded, 'base64') : Buffer.from(decodeURIComponent(encoded));
+  if (!dataUrl.startsWith('data:')) return null;
+  const commaIndex = dataUrl.indexOf(',');
+  if (commaIndex < 0) return null;
+  const metadata = dataUrl.slice(5, commaIndex);
+  const encoded = dataUrl.slice(commaIndex + 1);
+  const parts = metadata.split(';').filter(Boolean);
+  const contentType = parts[0] || 'application/octet-stream';
+  const isBase64 = parts.slice(1).some((part) => part.toLowerCase() === 'base64');
+  const buffer = isBase64 ? Buffer.from(encoded, 'base64') : Buffer.from(decodeURIComponent(encoded));
   return { buffer, contentType };
 }
 
