@@ -90,7 +90,7 @@ async function startServer() {
   });
 
   // Middleware
-  app.use(express.json());
+  app.use(express.json({ limit: '12mb' }));
 
   // CORS middleware for REST endpoints, including Bot API Bearer-token calls.
   app.use((req, res, next) => {
