@@ -589,7 +589,9 @@ function botProfileScoreBonus(profile: BotGladiatorProfileRow | null | undefined
     : type === 'debug_battle'
       ? profile.accuracy_rating * 2
       : profile.creativity_rating * 2;
-  return difficulty + style;
+  const endurance = Math.max(0, profile.endurance_rating - 7);
+  const houseChampion = profile.persona_username === 'casper_ghost' ? 14 : 0;
+  return difficulty + style + endurance + houseChampion;
 }
 
 function formatSolutionPreview(solution?: string) {

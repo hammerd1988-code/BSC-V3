@@ -14,6 +14,7 @@ import { cn } from '../lib/utils';
 import { WalletModal } from './WalletModal';
 import { scoreBotPersona, TIER_DEFINITIONS, type BotTier } from '../lib/botScoring';
 import { formatDistanceToNow } from 'date-fns';
+import { BOT_PERSONAS } from '../lib/botPersonas';
 
 interface BotListing {
   id: string;
@@ -63,6 +64,7 @@ interface GladiatorBoardRow {
   stats: { speed?: number; accuracy?: number; creativity?: number; endurance?: number };
   glow_color: string;
   created_at: string;
+  bot_profile?: { persona_username?: string | null; expertise?: string[] | null; difficulty?: string | null; battle_style?: string | null; signature_moves?: string[] | null } | null;
 }
 
 function botUsername(value: string) {
@@ -74,9 +76,11 @@ function listingIdForUsername(username: string) {
 }
 
 function listingFromGladiatorRow(gladiator: GladiatorBoardRow): BotListing {
-  const username = botUsername(gladiator.name || gladiator.id);
+  const profile = gladiator.bot_profile;
+  const persona = BOT_PERSONAS.find((bot) => bot.username === profile?.persona_username || bot.display_name === gladiator.name);
+  const username = profile?.persona_username || persona?.username || botUsername(gladiator.name || gladiator.id);
   const stats = gladiator.stats ?? {};
-  const abilities = [
+  const abilities = profile?.signature_moves?.length ? profile.signature_moves : [
     Number(stats.speed ?? 50) >= 70 ? 'speed-round pressure' : 'steady execution',
     Number(stats.accuracy ?? 50) >= 70 ? 'precision debugging' : 'adaptive debugging',
     Number(stats.creativity ?? 50) >= 70 ? 'creative code paths' : 'battle fundamentals',
@@ -87,15 +91,15 @@ function listingFromGladiatorRow(gladiator: GladiatorBoardRow): BotListing {
     creator_id: gladiator.user_id,
     name: gladiator.name,
     username,
-    tagline: 'Private Colosseum gladiator synced into Bot Forge',
-    bio: gladiator.personality || `${gladiator.name} is a private Colosseum gladiator available for unified bot management.`,
+    tagline: profile ? `${profile.difficulty ?? 'Arena'} ${profile.battle_style ?? 'Colosseum'} bot` : 'Private Colosseum gladiator synced into Bot Forge',
+    bio: persona?.bio || gladiator.personality || `${gladiator.name} is a private Colosseum gladiator available for unified bot management.`,
     avatar_url: gladiator.avatar_url,
     accent_color: gladiator.glow_color || '#ff1744',
-    system_prompt: gladiator.personality || '',
-    personality_tags: ['colosseum', 'private-gladiator'],
-    expertise_tags: ['code-battle', 'arena'],
+    system_prompt: persona?.system_prompt || gladiator.personality || '',
+    personality_tags: ['colosseum', persona?.category || 'private-gladiator'].filter(Boolean),
+    expertise_tags: profile?.expertise?.length ? profile.expertise : ['code-battle', 'arena'],
     abilities,
-    category: 'coding',
+    category: persona?.category || 'coding',
     price: 0,
     is_free: true,
     is_featured: false,
@@ -111,7 +115,7 @@ function listingFromGladiatorRow(gladiator: GladiatorBoardRow): BotListing {
     response_length: 'moderate',
     emoji_usage: 'minimal',
     language_style: 'cyberpunk',
-    catchphrases: [`${gladiator.name}: bring tests.`],
+    catchphrases: abilities.slice(0, 3).map((move) => `${gladiator.name}: ${move}.`),
     welcome_message: `${gladiator.name} is visible in the unified botboard, Bot Forge, and Colosseum.`,
     synced_from_gladiator: true,
   };
@@ -200,8 +204,8 @@ export const BotMarketplace: React.FC = () => {
         query,
         currentUser
           ? currentUser.role === 'admin'
-            ? supabase.from('gladiators').select('id,user_id,name,avatar_url,personality,stats,glow_color,created_at')
-            : supabase.from('gladiators').select('id,user_id,name,avatar_url,personality,stats,glow_color,created_at').eq('user_id', currentUser.id)
+            ? supabase.from('gladiators').select('id,user_id,name,avatar_url,personality,stats,glow_color,created_at,bot_profile:bot_gladiator_profiles(persona_username,expertise,difficulty,battle_style,signature_moves)')
+            : supabase.from('gladiators').select('id,user_id,name,avatar_url,personality,stats,glow_color,created_at,bot_profile:bot_gladiator_profiles(persona_username,expertise,difficulty,battle_style,signature_moves)').eq('user_id', currentUser.id)
           : Promise.resolve({ data: [], error: null }),
       ]);
       const { data, error } = listingResult;
