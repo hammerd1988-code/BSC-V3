@@ -261,8 +261,16 @@ export function ContentCreationStudio() {
     a.click();
   };
 
+  const isStoredStudioAssetUrl = (assetUrl: string) => {
+    try {
+      return new URL(assetUrl).pathname.includes('/storage/v1/object/public/media/casper-studio/');
+    } catch {
+      return false;
+    }
+  };
+
   const getPublishableAssetUrl = async (asset: StudioAsset) => {
-    if (!asset.url.startsWith('data:') && !asset.url.startsWith('blob:')) return asset.url;
+    if (isStoredStudioAssetUrl(asset.url)) return asset.url;
     setUploading(true);
     try {
       const uploaded = await uploadStudioAsset({
