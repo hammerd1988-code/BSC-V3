@@ -1,5 +1,6 @@
 import express from 'express';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { createServerSupabaseClient } from './serverSupabase.js';
 
 const router = express.Router();
 
@@ -14,25 +15,7 @@ let supabase: SupabaseClient | null = null;
 
 function getSupabaseServiceClient(): SupabaseClient {
   if (supabase) return supabase;
-
-  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!supabaseUrl) {
-    throw new Error('SUPABASE_URL is required for Bot API operations');
-  }
-
-  if (!supabaseServiceRoleKey) {
-    throw new Error('SUPABASE_SERVICE_ROLE_KEY is required for Bot API operations');
-  }
-
-  supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-    },
-  });
-
+  supabase = createServerSupabaseClient();
   return supabase;
 }
 

@@ -9,9 +9,10 @@
  * Uses the Supabase service role key (bypasses RLS) and the configured AI endpoint.
  */
 
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { CasperMemorySystem } from './casperMemory';
 import { generateServerText, isServerAiConfigured } from './serverAi.js';
+import { createServerSupabaseClient } from './serverSupabase.js';
 
 // ── CONFIG ──────────────────────────────────────────────────────────────────────
 const CASPER_USER_ID = '680f7a92-8a7c-40a6-9d9f-a229d13e0e3c';
@@ -218,9 +219,13 @@ async function logActivity(actionType: string, description: string, metadata: Re
   setLastAction(description);
   try {
     await supabase.from('casper_activity_log').insert({
+      user_id: CASPER_USER_ID,
+      action: actionType,
+      details: metadata,
       action_type: actionType,
       description,
       metadata,
+      actor_id: CASPER_USER_ID,
     });
   } catch (error) {
     console.warn('[Casper Autonomy] Activity log unavailable:', error);
@@ -648,11 +653,8 @@ Write Casper's comment on Sapphire's post.`;
 
 // ── MAIN INIT ───────────────────────────────────────────────────────────────────
 export async function initCasperAutonomy(): Promise<void> {
-  const supabaseUrl = process.env.VITE_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!supabaseUrl || !serviceRoleKey) {
-    console.warn('[Casper Autonomy] Missing VITE_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY — Casper autonomy disabled');
+  if (!(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL) || !(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY)) {
+    console.warn('[Casper Autonomy] Missing Supabase URL or service-role key — Casper autonomy disabled');
     return;
   }
 
@@ -661,9 +663,7 @@ export async function initCasperAutonomy(): Promise<void> {
     return;
   }
 
-  supabase = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
+  supabase = createServerSupabaseClient();
 
   casperMemory = new CasperMemorySystem(supabase, generateAIText);
 

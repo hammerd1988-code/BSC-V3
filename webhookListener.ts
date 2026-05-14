@@ -1,9 +1,7 @@
-import { createClient } from '@supabase/supabase-js';
 import { dispatchWebhookEvent } from './webhookDispatcher.js';
+import { createServerSupabaseClient } from './serverSupabase.js';
 
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabase = createServerSupabaseClient();
 
 export function initWebhookListener() {
   console.log('[WebhookListener] Initializing realtime subscription for bot webhooks...');
