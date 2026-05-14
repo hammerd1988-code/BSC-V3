@@ -216,6 +216,16 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
     }
   }, []);
 
+  const closeWidget = useCallback(() => {
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch { /* already stopped */ }
+      recognitionRef.current = null;
+    }
+    setListening(false);
+    stopTts();
+    onClose();
+  }, [onClose, stopTts]);
+
   // Unlock a persistent Audio element so mobile browsers allow later
   // programmatic .play() calls.  Must be called inside a click/tap handler.
   const unlockAudio = useCallback(() => {
@@ -400,11 +410,12 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
             </div>
             <button
               type="button"
-              onClick={onClose}
-              className="rounded-full border border-white/20 bg-black/40 p-1.5 text-gray-300 backdrop-blur-sm transition-colors hover:text-white"
+              onClick={closeWidget}
+              className="rounded-full border border-red-400/50 bg-black/70 p-2 text-red-100 shadow-lg shadow-red-500/20 backdrop-blur-sm transition-colors hover:border-red-300 hover:bg-red-500/20 hover:text-white"
               aria-label="Close Ask Casper"
+              title="Close Casper"
             >
-              <X className="h-4 w-4" />
+              <X className="h-5 w-5" />
             </button>
           </div>
           {busy && (
