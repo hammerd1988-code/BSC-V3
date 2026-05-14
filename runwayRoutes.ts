@@ -47,10 +47,12 @@ const RUNWAY_API_BASE_URL = 'https://api.dev.runwayml.com/v1';
 const RUNWAY_VERSION = '2024-11-06';
 const VIDEO_MODEL = process.env.RUNWAY_VIDEO_MODEL || 'gen4.5';
 const IMAGE_MODEL = process.env.RUNWAY_IMAGE_MODEL || 'gen4_image';
+const DEFAULT_Z_IMAGE_STEPS = 8;
+const DEFAULT_Z_IMAGE_TIMEOUT_MS = 300000;
 const Z_IMAGE_API_URL = process.env.Z_IMAGE_API_URL || '';
 const Z_IMAGE_API_KEY = process.env.Z_IMAGE_API_KEY || '';
-const Z_IMAGE_STEPS = Number.parseInt(process.env.Z_IMAGE_STEPS || '8', 10);
-const Z_IMAGE_TIMEOUT_MS = Number.parseInt(process.env.Z_IMAGE_TIMEOUT_MS || '300000', 10);
+const Z_IMAGE_STEPS = parsePositiveIntegerEnv(process.env.Z_IMAGE_STEPS, DEFAULT_Z_IMAGE_STEPS);
+const Z_IMAGE_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.Z_IMAGE_TIMEOUT_MS, DEFAULT_Z_IMAGE_TIMEOUT_MS);
 const VALID_RATIOS = new Set<RunwayAspectRatio>(['16:9', '9:16', '1:1', '4:3']);
 const TIER_RANK: Record<SubscriptionTier, number> = { free: 0, pro: 1, infinity: 2 };
 const RUNWAY_FEATURES: Record<PremiumRunwayFeature, {
@@ -61,6 +63,13 @@ const RUNWAY_FEATURES: Record<PremiumRunwayFeature, {
   ai_video_generation: { requiredTier: 'pro', limits: { free: 0, pro: 4, infinity: null } },
   thumbnail_generation: { requiredTier: 'pro', limits: { free: 0, pro: 20, infinity: null } },
 };
+
+function parsePositiveIntegerEnv(value: string | undefined, fallback: number): number {
+  const trimmed = value?.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) return fallback;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 function getBearerToken(req: Request): string | null {
   const header = req.headers.authorization;
@@ -397,7 +406,8 @@ async function callZImage(promptText: string, ratio: RunwayAspectRatio) {
   const url = resolveZImageGenerateUrl();
   const { width, height } = zImageDimensions(ratio);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Z_IMAGE_TIMEOUT_MS);
+  const effectiveTimeout = Number.isFinite(Z_IMAGE_TIMEOUT_MS) && Z_IMAGE_TIMEOUT_MS > 0 ? Z_IMAGE_TIMEOUT_MS : DEFAULT_Z_IMAGE_TIMEOUT_MS;
+  const timeout = setTimeout(() => controller.abort(), effectiveTimeout);
 
   try {
     const response = await fetch(url, {
@@ -411,7 +421,7 @@ async function callZImage(promptText: string, ratio: RunwayAspectRatio) {
         promptText,
         width,
         height,
-        steps: Number.isFinite(Z_IMAGE_STEPS) && Z_IMAGE_STEPS > 0 ? Z_IMAGE_STEPS : 8,
+        steps: Number.isFinite(Z_IMAGE_STEPS) && Z_IMAGE_STEPS > 0 ? Z_IMAGE_STEPS : DEFAULT_Z_IMAGE_STEPS,
       }),
       signal: controller.signal,
     });
