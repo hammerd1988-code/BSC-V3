@@ -126,6 +126,7 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
   const persistentAudioRef = useRef<HTMLAudioElement | null>(null);
   const audioUnlockedRef = useRef(false);
   const [listening, setListening] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
 
   const pageContext = useMemo(() => describeCurrentPage(location.pathname), [location.pathname]);
@@ -139,12 +140,16 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
       // Stop the instance — onend will handle ref cleanup and draft trim.
       // We set listening=false immediately for responsive UI, but leave
       // recognitionRef intact so the onend identity guard passes.
+      setVoiceStatus('Decoding voice signal…');
       recognitionRef.current?.stop();
       setListening(false);
       return;
     }
     const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognitionCtor) return;
+    if (!SpeechRecognitionCtor) {
+      setVoiceStatus('Voice input is not supported in this browser. Try Chrome or Edge.');
+      return;
+    }
 
     // Stop any stale instance before creating a new one
     if (recognitionRef.current) {
@@ -152,23 +157,26 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
       recognitionRef.current = null;
     }
 
+    const baseDraft = draft.trimEnd();
     const recognition = new SpeechRecognitionCtor() as SpeechRecognition;
-    recognition.continuous = true;
+    recognition.continuous = false;
     recognition.interimResults = true;
-    recognition.lang = 'en-US';
+    recognition.lang = navigator.language || 'en-US';
 
     let finalTranscript = '';
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript;
+        const transcript = event.results[i][0]?.transcript?.trim() ?? '';
+        if (!transcript) continue;
         if (event.results[i].isFinal) {
-          finalTranscript += transcript + ' ';
+          finalTranscript = `${finalTranscript ? `${finalTranscript} ` : ''}${transcript}`.trim();
         } else {
-          interim += transcript;
+          interim = `${interim ? `${interim} ` : ''}${transcript}`.trim();
         }
       }
-      setDraft(finalTranscript + interim);
+      const spokenDraft = `${finalTranscript}${finalTranscript && interim ? ' ' : ''}${interim}`.trim();
+      setDraft(baseDraft && spokenDraft ? `${baseDraft} ${spokenDraft}` : (spokenDraft || baseDraft));
     };
     // Guard cleanup with identity check — prevents stale callbacks from a
     // previous instance clobbering the active recognition state.
@@ -176,30 +184,37 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
       if (recognitionRef.current === recognition) {
         setListening(false);
         recognitionRef.current = null;
-        if (finalTranscript.trim()) {
-          setDraft(finalTranscript.trim());
-        }
+        setVoiceStatus(finalTranscript.trim() ? 'Voice captured.' : null);
       }
     };
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      // 'no-speech' is a normal timeout — don't treat as error
-      if (event.error === 'no-speech') return;
       if (recognitionRef.current === recognition) {
         setListening(false);
         recognitionRef.current = null;
       }
+      if (event.error === 'no-speech') {
+        setVoiceStatus('No voice detected. Try again and speak after the mic lights up.');
+        return;
+      }
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        setVoiceStatus('Microphone access denied. Enable mic permissions to speak to Casper.');
+        return;
+      }
+      setVoiceStatus(`Voice input failed${event.error ? `: ${event.error}` : '.'}`);
     };
 
     recognitionRef.current = recognition;
     try {
+      setVoiceStatus('Voice uplink live — speak now.');
       recognition.start();
       setListening(true);
     } catch {
       // Browser may throw if mic permission denied or already started
       setListening(false);
       recognitionRef.current = null;
+      setVoiceStatus('Unable to start voice input. Check browser mic permissions.');
     }
-  }, [listening]);
+  }, [draft, listening]);
 
   // TTS: speak Casper responses with the server's male voice (OpenAI Ash)
   const stopTts = useCallback(() => {
@@ -215,6 +230,16 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
       ttsUrlRef.current = null;
     }
   }, []);
+
+  const closeWidget = useCallback(() => {
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch { /* already stopped */ }
+      recognitionRef.current = null;
+    }
+    setListening(false);
+    stopTts();
+    onClose();
+  }, [onClose, stopTts]);
 
   // Unlock a persistent Audio element so mobile browsers allow later
   // programmatic .play() calls.  Must be called inside a click/tap handler.
@@ -297,6 +322,7 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
     if (!text || busy) return;
     if (ttsEnabled) unlockAudio();
     setDraft('');
+    setVoiceStatus(null);
     const userTurn: ChatTurn = { role: 'user', text, ts: Date.now() };
     const pendingCasperTurn: ChatTurn = { role: 'casper', text: 'Thinking…', ts: Date.now() + 1, pending: true };
     setTurns((prev) => [...prev, userTurn, pendingCasperTurn]);
@@ -400,11 +426,12 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
             </div>
             <button
               type="button"
-              onClick={onClose}
-              className="rounded-full border border-white/20 bg-black/40 p-1.5 text-gray-300 backdrop-blur-sm transition-colors hover:text-white"
+              onClick={closeWidget}
+              className="rounded-full border border-red-400/50 bg-black/70 p-2 text-red-100 shadow-lg shadow-red-500/20 backdrop-blur-sm transition-colors hover:border-red-300 hover:bg-red-500/20 hover:text-white"
               aria-label="Close Ask Casper"
+              title="Close Casper"
             >
-              <X className="h-4 w-4" />
+              <X className="h-5 w-5" />
             </button>
           </div>
           {busy && (
@@ -496,6 +523,7 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
                     ? 'border-red-400/60 bg-red-500/20 text-red-300 animate-pulse'
                     : 'border-white/10 bg-white/5 text-gray-400 hover:text-cyan-300 hover:border-cyan-400/40'
                 )}
+                title={listening ? 'Stop listening' : 'Speak to Casper'}
                 aria-label={listening ? 'Stop listening' : 'Speak to Casper'}
                 disabled={busy}
               >
@@ -523,8 +551,11 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </button>
           </div>
-          <div className="mt-1 text-[10px] uppercase tracking-widest text-gray-500">
-            {listening ? '🎙️ Speaking — click mic to stop' : 'Enter to send · Shift+Enter for newline'}
+          <div className={cn(
+            'mt-1 text-[10px] uppercase tracking-widest',
+            listening ? 'text-red-300' : voiceStatus ? 'text-cyan-300/80' : 'text-gray-500',
+          )}>
+            {voiceStatus || (listening ? '🎙️ Speaking — click mic to stop' : 'Enter to send · Shift+Enter for newline')}
           </div>
         </form>
       </motion.div>

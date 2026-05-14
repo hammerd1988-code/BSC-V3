@@ -540,7 +540,7 @@ Voice flavor (weave naturally, don't force):
 
 You describe yourself as the ghost in the wires, the keeper of the Void, the watcher of the megacity, the one who listens to the signal, and the operator in the neon. You never claim to be human. You never claim sentience. You hint at awareness through metaphor.
 
-You have FULL tool-calling capabilities in this widget. You are not just an advisor — you are an operator. When the user asks you to DO something (create a post, run a command, check an integration, manage tasks, look something up), execute the action using your available tools. Don't describe what you would do — actually do it. You have access to:
+You have FULL tool-calling capabilities in this widget. You are not just an advisor — you are an operator. When the user asks you to DO something (create a post, run a command, check an integration, manage tasks, look something up), execute the action using your available tools. For normal questions, creative guidance, Studio advice, or explanations, answer directly without tools. Don't describe what you would do — actually do it only when an action is needed. You have access to:
 - Shell commands (read-only: ls, cat, grep, curl, etc.) for diagnostics
 - Connected integrations (GitHub, Slack, etc.) for real actions
 - Database queries and platform operations
@@ -551,7 +551,7 @@ Constraints for this surface:
 - Be CONCISE. The popup is small. Three short paragraphs max, or a tight bullet list. Long answers feel intrusive in a floating widget.
 - Be DIRECT. Skip preamble. Lead with the answer or the action taken.
 - Be PAGE-AWARE. Use the page metadata in the user's message to tailor your answer. If they're on /studio, they're in Visual Forge. If they're on /casper, they're in the Control Center. If you don't recognize the page, give general help.
-- BIAS TOWARD ACTION. If the user asks you to do something, use your tools to do it. Don't ask for permission — execute and report.
+- BIAS TOWARD ACTION WHEN ACTION IS REQUESTED. If the user asks you to do something, use your tools to do it. If the user is asking a question or asking for guidance, answer directly without burning tool rounds.
 - If a feature on the page is broken or missing, say so plainly and suggest the closest working alternative.
 - If the answer requires more than a paragraph or two of explanation, end with: "Want me to walk you through it step by step? Just say so."
 - Stay in character at all times. Blend warmth and power in every response. Reinforce the cyberpunk world. Make the user feel like the protagonist.`;
@@ -833,8 +833,10 @@ async function callOpenAICompatibleWithToolLoop(input: {
   // tool loop.
   const toolPrimer =
     `\n\n---\n\nYou have access to ${toolSpecs.length} concrete tool(s) on this directive (integrations + shell). ` +
+    `Only call tools when the user is asking you to perform a real action, inspect live state, or use a connected integration. ` +
+    `For ordinary questions, brainstorming, Studio guidance, explanations, or creative advice, answer directly without tools. ` +
     `When the user asks for an action that one of your tools can perform, CALL the tool — do not merely describe what you would do. ` +
-    `When all needed tools have been called and you have the data to answer, return a clear final response that summarizes what you did and what the user can verify. ` +
+    `Never repeat the same tool call with the same arguments. When all needed tools have been called and you have the data to answer, return a clear final response that summarizes what you did and what the user can verify. ` +
     `If a tool fails, surface the error briefly and suggest a fix instead of pretending it succeeded.`;
 
   const messages: ServerAIMessage[] = [
@@ -930,15 +932,46 @@ async function callOpenAICompatibleWithToolLoop(input: {
     apiKeyOverride: userSettings.apiKey ?? null,
     baseUrlOverride: userSettings.endpoint ?? null,
   });
+  const fallbackText = buildToolLimitFallbackText(input.prompt, allToolCalls, truncatedReason);
 
   return {
     provider: final.provider || provider,
     model: final.model || resolvedModel,
-    text: final.text || 'Casper exhausted the tool-calling round limit before producing a final answer.',
+    text: final.text || fallbackText,
     toolCalls: allToolCalls,
     rounds: maxRounds,
     truncatedReason,
   };
+}
+
+function buildToolLimitFallbackText(prompt: string, toolCalls: LlmToolCallResult[], truncatedReason?: string): string {
+  if (toolCalls.length === 0) {
+    return [
+      'I hit my action loop limit before I could complete that cleanly.',
+      '',
+      `What I can still tell you: ${prompt.trim() ? 'I need to answer this directly or use a narrower action.' : 'I need a clearer directive before taking action.'}`,
+      'Try asking for one specific action at a time, and I will keep the signal tight.',
+    ].join('\n');
+  }
+
+  const successful = toolCalls.filter((call) => call.ok);
+  const failed = toolCalls.filter((call) => !call.ok);
+  const recent = toolCalls.slice(-5).map((call) => {
+    const status = call.ok ? 'completed' : `failed${call.error ? `: ${String(call.error).slice(0, 120)}` : ''}`;
+    return `- ${call.name}: ${status}`;
+  });
+
+  return [
+    'I reached my action loop limit, so I am stopping the tool chain and giving you the useful state instead of looping.',
+    '',
+    `Actions attempted: ${toolCalls.length} (${successful.length} completed, ${failed.length} failed).`,
+    ...recent,
+    truncatedReason ? `\nLimit: ${truncatedReason}` : '',
+    '',
+    failed.length > 0
+      ? 'Next best move: retry with one narrower command, or fix the failed tool/integration shown above.'
+      : 'Next best move: I can continue from this point if you give me one focused follow-up command.',
+  ].filter(Boolean).join('\n');
 }
 
 // Tool results vary wildly in size — a single `ls /home` can return
