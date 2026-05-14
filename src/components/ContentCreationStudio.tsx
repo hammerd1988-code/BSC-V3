@@ -82,6 +82,33 @@ function saveLibrary(items: CreatorLibraryItem[]) {
   localStorage.setItem(LIBRARY_KEY, JSON.stringify(items.slice(0, 120)));
 }
 
+function renderSvgToPngDataUrl(svg: string, width = 1280, height = 720) {
+  return new Promise<string>((resolve, reject) => {
+    const image = new Image();
+    const objectUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
+    image.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Unable to prepare thumbnail renderer.');
+        context.drawImage(image, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/png'));
+      } catch (error) {
+        reject(error);
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Unable to render thumbnail export.'));
+    };
+    image.src = objectUrl;
+  });
+}
+
 async function pollRunwayTask(initial: RunwayTaskResponse, setProgress: (value: string) => void): Promise<RunwayTaskResponse> {
   const taskId = initial.taskId || initial.id;
   if (!taskId || terminalRunwayStatuses.has(initial.status)) return initial;
@@ -216,7 +243,7 @@ export function ContentCreationStudio() {
   const exportThumbnail = async () => {
     if (!openGate('thumbnail_generation')) return null;
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#020617"/><stop offset="0.45" stop-color="#09090b"/><stop offset="1" stop-color="${thumbnailColor}" stop-opacity="0.55"/></linearGradient></defs><rect width="1280" height="720" fill="url(#g)"/><circle cx="1060" cy="90" r="260" fill="#FF00FF" opacity="0.28"/><circle cx="160" cy="620" r="260" fill="#00FFFF" opacity="0.22"/><path d="M0 560 L1280 420 L1280 720 L0 720 Z" fill="#000" opacity="0.55"/><text x="70" y="330" font-family="Arial Black, Impact, sans-serif" font-size="96" fill="#fff" stroke="#000" stroke-width="8">${thumbnailTitle.replace(/[<>&]/g, '')}</text><text x="74" y="430" font-family="Arial, sans-serif" font-size="42" fill="${thumbnailColor}">${thumbnailSubtitle.replace(/[<>&]/g, '')}</text><text x="75" y="640" font-family="Arial Black, sans-serif" font-size="28" fill="#fff" opacity="0.82">BLOOD SWEAT CODE // CREATOR SIGNAL</text></svg>`;
-    const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+    const url = await renderSvgToPngDataUrl(svg);
     const asset: StudioAsset = { id: crypto.randomUUID(), type: 'thumbnail', url, prompt: `${thumbnailTitle} — ${thumbnailSubtitle}`, title: thumbnailTitle, ratio: '16:9', createdAt: new Date().toISOString() };
     addAsset(asset);
     await recordUsage('thumbnail_generation');
