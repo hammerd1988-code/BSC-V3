@@ -77,7 +77,8 @@ function listingIdForUsername(username: string) {
 
 function listingFromGladiatorRow(gladiator: GladiatorBoardRow): BotListing {
   const profile = gladiator.bot_profile;
-  const persona = BOT_PERSONAS.find((bot) => bot.username === profile?.persona_username || bot.display_name === gladiator.name);
+  const persona = BOT_PERSONAS.find((bot) => bot.username === profile?.persona_username)
+    || BOT_PERSONAS.find((bot) => bot.display_name === gladiator.name);
   const username = profile?.persona_username || persona?.username || botUsername(gladiator.name || gladiator.id);
   const stats = gladiator.stats ?? {};
   const abilities = profile?.signature_moves?.length ? profile.signature_moves : [
