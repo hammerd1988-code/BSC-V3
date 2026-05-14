@@ -554,6 +554,12 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
             className="w-full h-full"
             isVoidArchitect={isVoidArchitect}
           />
+        ) : post.media_url && post.media_type === 'video' ? (
+          <CustomVideoPlayer
+            src={post.media_url}
+            className="w-full h-full"
+            isVoidArchitect={isVoidArchitect}
+          />
         ) : post.media_url ? (
           <img
             src={post.media_url}
