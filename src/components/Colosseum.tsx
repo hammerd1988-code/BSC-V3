@@ -1148,14 +1148,14 @@ function LiveArena({ activeMatches, gladiatorById }: { activeMatches: MatchRow[]
   useEffect(() => {
     if (!replayPlaying || !lines.length) return undefined;
     if (replayIndex >= lines.length - 1) {
-      setReplayPlaying(false);
+      if (visibleMatch?.completed_at) setReplayPlaying(false);
       return undefined;
     }
     const interval = window.setInterval(() => {
       setReplayIndex((current) => clampReplayIndex(current + 1, lines.length));
     }, 1200);
     return () => window.clearInterval(interval);
-  }, [lines.length, replayIndex, replayPlaying]);
+  }, [lines.length, replayIndex, replayPlaying, visibleMatch?.completed_at]);
 
   return (
     <section className="mt-6 overflow-hidden rounded-[2rem] border border-red-500/20 bg-black/65 p-5 shadow-[0_0_54px_rgba(255,23,68,0.14)] backdrop-blur-xl">
