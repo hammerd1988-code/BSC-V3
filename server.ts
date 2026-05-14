@@ -63,7 +63,7 @@ async function startServer() {
   });
 
   // Middleware for parsing JSON bodies
-  app.use(express.json());
+  app.use(express.json({ limit: '12mb' }));
 
   // Bot API routes for external agents such as Sapphire.
   app.use('/api/bot', botApi);

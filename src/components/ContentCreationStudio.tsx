@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Film, Image as ImageIcon, Loader2, Play, Send, Sparkles, Wand2, CalendarClock, Layers, Upload, RefreshCw, Scissors, PanelTop, Zap } from 'lucide-react';
 import { CasperStudioGuide } from './CasperStudioGuide';
-import { getRunwayTask, requestRunwayGeneration, type RunwayTaskResponse } from '../lib/runway';
+import { getRunwayTask, requestRunwayGeneration, uploadStudioAsset, type RunwayTaskResponse } from '../lib/runway';
 import { supabase, toDb } from '../supabase';
 import { useAuth } from '../AuthContext';
 import { cn } from '../lib/utils';
@@ -82,6 +82,33 @@ function saveLibrary(items: CreatorLibraryItem[]) {
   localStorage.setItem(LIBRARY_KEY, JSON.stringify(items.slice(0, 120)));
 }
 
+function renderSvgToPngDataUrl(svg: string, width = 1280, height = 720) {
+  return new Promise<string>((resolve, reject) => {
+    const image = new Image();
+    const objectUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
+    image.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Unable to prepare thumbnail renderer.');
+        context.drawImage(image, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/png'));
+      } catch (error) {
+        reject(error);
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Unable to render thumbnail export.'));
+    };
+    image.src = objectUrl;
+  });
+}
+
 async function pollRunwayTask(initial: RunwayTaskResponse, setProgress: (value: string) => void): Promise<RunwayTaskResponse> {
   const taskId = initial.taskId || initial.id;
   if (!taskId || terminalRunwayStatuses.has(initial.status)) return initial;
@@ -119,6 +146,7 @@ export function ContentCreationStudio() {
   const [composer, setComposer] = useState('');
   const [scheduleAt, setScheduleAt] = useState('');
   const [status, setStatus] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
   const [gate, setGate] = useState<ReturnType<typeof canAccess> | null>(null);
   const [thumbnailTitle, setThumbnailTitle] = useState('BUILD FASTER');
   const [thumbnailSubtitle, setThumbnailSubtitle] = useState('Blood Sweat Code');
@@ -215,7 +243,7 @@ export function ContentCreationStudio() {
   const exportThumbnail = async () => {
     if (!openGate('thumbnail_generation')) return null;
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#020617"/><stop offset="0.45" stop-color="#09090b"/><stop offset="1" stop-color="${thumbnailColor}" stop-opacity="0.55"/></linearGradient></defs><rect width="1280" height="720" fill="url(#g)"/><circle cx="1060" cy="90" r="260" fill="#FF00FF" opacity="0.28"/><circle cx="160" cy="620" r="260" fill="#00FFFF" opacity="0.22"/><path d="M0 560 L1280 420 L1280 720 L0 720 Z" fill="#000" opacity="0.55"/><text x="70" y="330" font-family="Arial Black, Impact, sans-serif" font-size="96" fill="#fff" stroke="#000" stroke-width="8">${thumbnailTitle.replace(/[<>&]/g, '')}</text><text x="74" y="430" font-family="Arial, sans-serif" font-size="42" fill="${thumbnailColor}">${thumbnailSubtitle.replace(/[<>&]/g, '')}</text><text x="75" y="640" font-family="Arial Black, sans-serif" font-size="28" fill="#fff" opacity="0.82">BLOOD SWEAT CODE // CREATOR SIGNAL</text></svg>`;
-    const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+    const url = await renderSvgToPngDataUrl(svg);
     const asset: StudioAsset = { id: crypto.randomUUID(), type: 'thumbnail', url, prompt: `${thumbnailTitle} — ${thumbnailSubtitle}`, title: thumbnailTitle, ratio: '16:9', createdAt: new Date().toISOString() };
     addAsset(asset);
     await recordUsage('thumbnail_generation');
@@ -233,15 +261,34 @@ export function ContentCreationStudio() {
     a.click();
   };
 
+  const getPublishableAssetUrl = async (asset: StudioAsset) => {
+    if (!asset.url.startsWith('data:') && !asset.url.startsWith('blob:')) return asset.url;
+    setUploading(true);
+    try {
+      const uploaded = await uploadStudioAsset({
+        assetUrl: asset.url,
+        assetType: asset.type,
+        title: asset.title || thumbnailTitle || asset.prompt,
+      });
+      const updated = { ...asset, url: uploaded.publicUrl };
+      setAssets((prev) => prev.map((item) => item.id === asset.id ? updated : item));
+      setSelectedAssetId(asset.id);
+      return uploaded.publicUrl;
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const postAsset = async (asset: StudioAsset | null, kind: 'post' | 'short' | 'video' = 'post') => {
     if (!currentUser || !asset) return;
     setStatus(null);
     try {
+      const publishableUrl = await getPublishableAssetUrl(asset);
       const content = composer.trim() || `${asset.type === 'video' ? 'New Visual Forge clip' : 'New Visual Forge asset'}\n\n${asset.prompt}`;
       const { data: post, error } = await supabase.from('posts').insert({
         author_id: currentUser.id,
         content,
-        media_url: asset.url,
+        media_url: publishableUrl,
         media_type: asset.type === 'video' ? 'video' : 'image',
         type: 'media',
         neural_tags: ['visual-forge', asset.type, imagePreset].filter(Boolean),
@@ -253,7 +300,7 @@ export function ContentCreationStudio() {
           post_id: post?.id,
           title: thumbnailTitle || 'Visual Forge Video',
           description: content,
-          video_url: asset.url,
+          video_url: publishableUrl,
           thumbnail_url: asset.thumbnailUrl || thumbnailBg || null,
           duration,
           category: 'Creative',
@@ -261,7 +308,7 @@ export function ContentCreationStudio() {
           view_count: 0,
         });
       }
-      setLibrary((prev) => prev.map((item) => (item.assetId === asset.id || item.assetUrl === asset.url) ? { ...item, status: 'published', updatedAt: new Date().toISOString() } : item));
+      setLibrary((prev) => prev.map((item) => (item.assetId === asset.id || item.assetUrl === asset.url) ? { ...item, assetUrl: publishableUrl, status: 'published', updatedAt: new Date().toISOString() } : item));
       setStatus(kind === 'short' ? 'Posted as a Short.' : 'Posted to the BSC feed.');
       setComposer('');
     } catch (err: any) {
@@ -429,7 +476,7 @@ export function ContentCreationStudio() {
                     <button onClick={() => void generateImage(true)} disabled={generating} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-50"><RefreshCw className="h-4 w-4" /> AI BG</button>
                     <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-fuchsia-300/30 bg-fuchsia-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-fuchsia-100"><Upload className="h-4 w-4" /> Upload<input type="file" accept="image/*" className="hidden" onChange={(e) => handleCustomBg(e.target.files?.[0] ?? null)} /></label>
                   </div>
-                  <button onClick={() => void exportThumbnail()} disabled={generating} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-white/10 px-4 py-4 text-xs font-black uppercase tracking-widest text-white transition hover:bg-white/15 disabled:opacity-50"><PanelTop className="h-4 w-4" /> Export Thumbnail</button>
+                  <button onClick={() => void exportThumbnail()} disabled={generating || uploading} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-white/10 px-4 py-4 text-xs font-black uppercase tracking-widest text-white transition hover:bg-white/15 disabled:opacity-50"><PanelTop className="h-4 w-4" /> Export Thumbnail</button>
                 </div>
               )}
             </div>
@@ -446,7 +493,7 @@ export function ContentCreationStudio() {
             <section className="rounded-[2rem] border border-white/10 bg-zinc-950/75 p-5 backdrop-blur-xl">
               <div className="mb-4 flex items-center justify-between gap-4">
                 <div><h2 className="text-sm font-black uppercase tracking-widest">Live Preview</h2><p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Generated media, thumbnail canvas, and action rail</p></div>
-                {generating && <span className="inline-flex items-center gap-2 rounded-full border border-cyan-300/25 bg-cyan-300/10 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-cyan-100"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Rendering</span>}
+                {(generating || uploading) && <span className="inline-flex items-center gap-2 rounded-full border border-cyan-300/25 bg-cyan-300/10 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-cyan-100"><Loader2 className="h-3.5 w-3.5 animate-spin" /> {uploading ? 'Uploading' : 'Rendering'}</span>}
               </div>
 
               {hasActiveGeneration ? (
@@ -486,8 +533,8 @@ export function ContentCreationStudio() {
 
               <div className="mt-5 grid gap-3 sm:grid-cols-5">
                 <button onClick={() => handleAssetAction('thumbnail')} disabled={!selectedAsset} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-40"><ImageIcon className="mx-auto mb-1 h-4 w-4" /> Thumbnail</button>
-                <button onClick={() => void handleAssetAction('feed')} disabled={!selectedAsset} className="rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-40"><Send className="mx-auto mb-1 h-4 w-4" /> Feed</button>
-                <button onClick={() => void handleAssetAction('short')} disabled={!selectedAsset || selectedAsset.type !== 'video'} className="rounded-2xl border border-fuchsia-300/25 bg-fuchsia-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-fuchsia-100 disabled:opacity-40"><Play className="mx-auto mb-1 h-4 w-4" /> Short</button>
+                <button onClick={() => void handleAssetAction('feed')} disabled={!selectedAsset || uploading} className="rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-40"><Send className="mx-auto mb-1 h-4 w-4" /> Feed</button>
+                <button onClick={() => void handleAssetAction('short')} disabled={!selectedAsset || selectedAsset.type !== 'video' || uploading} className="rounded-2xl border border-fuchsia-300/25 bg-fuchsia-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-fuchsia-100 disabled:opacity-40"><Play className="mx-auto mb-1 h-4 w-4" /> Short</button>
                 <button onClick={() => void handleAssetAction('project')} disabled={!selectedAsset} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-40"><Scissors className="mx-auto mb-1 h-4 w-4" /> Project</button>
                 <button onClick={() => void handleAssetAction('download')} disabled={!selectedAsset} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-40"><Download className="mx-auto mb-1 h-4 w-4" /> Download</button>
               </div>
@@ -502,7 +549,7 @@ export function ContentCreationStudio() {
                   <button onClick={() => saveLibraryItem('draft')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white"><Scissors className="h-4 w-4" /> Save Draft</button>
                   <button onClick={() => saveLibraryItem('finished')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-300/30 bg-emerald-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-emerald-100"><Layers className="h-4 w-4" /> Finished</button>
                   <button onClick={() => void scheduleAsset()} disabled={!selectedAsset || !scheduleAt} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-fuchsia-300/30 bg-fuchsia-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-fuchsia-100 disabled:opacity-40"><CalendarClock className="h-4 w-4" /> Schedule</button>
-                  <button onClick={() => void postAsset(selectedAsset, selectedAsset?.type === 'video' ? 'short' : 'post')} disabled={!selectedAsset} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-40"><Send className="h-4 w-4" /> Post Now</button>
+                  <button onClick={() => void postAsset(selectedAsset, selectedAsset?.type === 'video' ? 'short' : 'post')} disabled={!selectedAsset || uploading} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-40">{uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Post Now</button>
                 </div>
               </div>
 

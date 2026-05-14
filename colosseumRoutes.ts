@@ -1,12 +1,11 @@
 import type { Express } from 'express';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { v5 as uuidv5 } from 'uuid';
 import { BOT_PERSONAS } from './src/lib/botPersonas.js';
 import { BOT_GLADIATOR_PROFILES, SAPPHIRE_GLADIATOR_PROFILE, botStatsToPercent } from './src/lib/botGladiatorProfiles.js';
 import { generateServerText, isServerAiConfigured } from './serverAi.js';
 
 const BOT_UUID_NAMESPACE = '00000000-0000-4000-8000-000000000b5c';
-const SAPPHIRE_USER_ID = '00000000-0000-4000-8000-00000000b5c0';
 const SAPPHIRE_GLADIATOR_ID = '00000000-0000-4000-8000-00000000fa11';
 const SAFE_GLADIATOR_SELECT = 'id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model,api_base_url';
 const PLATFORM_DEFAULT_MODEL = process.env.COLOSSEUM_DEFAULT_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
@@ -19,8 +18,39 @@ const CHALLENGE_BRIEFS: Record<ColosseumChallengeType, string> = {
   code_golf: 'Produce the shortest correct solution you can while preserving clarity about the approach.',
 };
 
-function botUserId(username: string): string { return uuidv5(`bot-user-${username}`, BOT_UUID_NAMESPACE); }
 function botGladiatorId(username: string): string { return uuidv5(`bot-gladiator-${username}`, BOT_UUID_NAMESPACE); }
+function botEmail(username: string): string { return `${username}@bots.bloodsweatcode.site`; }
+
+async function findBotAuthUserIdByEmail(supabase: SupabaseClient, email: string) {
+  const normalizedEmail = email.toLowerCase();
+  for (let page = 1; page <= 8; page += 1) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 10 });
+    if (error) return null;
+    const user = (data.users as User[]).find((candidate) => candidate.email?.toLowerCase() === normalizedEmail);
+    if (user?.id) return user.id;
+    if (data.users.length < 10) return null;
+  }
+  return null;
+}
+
+async function ensureBotAuthUser(supabase: SupabaseClient, username: string, displayName: string) {
+  const email = botEmail(username);
+  const existingId = await findBotAuthUserIdByEmail(supabase, email);
+  if (existingId) return existingId;
+
+  const { data, error } = await supabase.auth.admin.createUser({
+    email,
+    email_confirm: true,
+    user_metadata: { username, display_name: displayName, type: 'bot' },
+  });
+  if (error) {
+    const retryId = await findBotAuthUserIdByEmail(supabase, email);
+    if (retryId) return retryId;
+    throw error;
+  }
+  if (!data.user?.id) throw new Error(`Unable to create auth user for ${username}`);
+  return data.user.id;
+}
 
 function sanitizeGladiator(gladiator: any) {
   if (!gladiator) return null;
@@ -42,6 +72,17 @@ function normalizeModel(model?: string | null) {
 function isSapphireRecord(record: any) {
   return String(record?.id ?? '').toLowerCase() === SAPPHIRE_GLADIATOR_ID
     || String(record?.name ?? '').trim().toLowerCase() === 'sapphire';
+}
+
+function isBotOwnedUser(user: { type?: string | null; email?: string | null } | null | undefined, username: string) {
+  if (!user) return false;
+  return user.type === 'bot' || user.email?.toLowerCase() === botEmail(username).toLowerCase();
+}
+
+function assertBotUsernameAvailable(user: { type?: string | null; email?: string | null } | null | undefined, username: string) {
+  if (user && !isBotOwnedUser(user, username)) {
+    throw new Error(`Cannot seed ${username} persona bot because that username belongs to a non-bot user.`);
+  }
 }
 
 function clampScore(value: number) {
@@ -318,39 +359,48 @@ async function ensurePersonaBotGladiators(supabase: SupabaseClient) {
     const persona = personaByUsername.get(profile.username);
     if (!persona) continue;
 
-    const bUserId = botUserId(persona.username);
     const gladiatorId = botGladiatorId(persona.username);
     const avatarUrl = profileAvatarUrl(profile, persona.avatar_seed, persona.display_name);
     const profileLine = `${profile.gladiator_class} specializing in ${profile.expertise.join(', ')}. Ability: ${profile.ability_profile ?? profile.battle_style}. Personality: ${profile.personality_style ?? persona.bio}`.slice(0, 3000);
 
-    const { error: userError } = await supabase
+    const userPayload = {
+      username: persona.username,
+      display_name: persona.display_name,
+      email: botEmail(persona.username),
+      avatar_url: avatarUrl,
+      bio: persona.bio,
+      type: 'bot',
+      followers_count: 0,
+      following_count: 0,
+      reputation_score: 0,
+      cred_balance: 0,
+      is_online: false,
+      is_live: false,
+      role: 'user',
+      custom_accent: persona.accent_color,
+      status_message: persona.status_message,
+      ai_settings: { persona: persona.username, gladiator_class: profile.gladiator_class },
+      updated_at: new Date().toISOString(),
+    };
+    const { data: existingUser, error: findUserError } = await supabase
       .from('users')
-      .upsert({
-        id: bUserId,
-        username: persona.username,
-        display_name: persona.display_name,
-        avatar_url: avatarUrl,
-        bio: persona.bio,
-        type: 'bot',
-        followers_count: 0,
-        following_count: 0,
-        reputation_score: 0,
-        cred_balance: 0,
-        is_online: false,
-        is_live: false,
-        role: 'user',
-        custom_accent: persona.accent_color,
-        status_message: persona.status_message,
-        ai_settings: { persona: persona.username, gladiator_class: profile.gladiator_class },
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'id' });
+      .select('id,type,email')
+      .eq('username', persona.username)
+      .maybeSingle();
+    if (findUserError) throw findUserError;
+    assertBotUsernameAvailable(existingUser, persona.username);
+
+    const userId = existingUser?.id ?? await ensureBotAuthUser(supabase, persona.username, persona.display_name);
+    const { error: userError } = existingUser
+      ? await supabase.from('users').update(userPayload).eq('id', userId)
+      : await supabase.from('users').upsert({ id: userId, ...userPayload }, { onConflict: 'id' });
     if (userError) throw userError;
 
     const { data: gladiator, error: gladiatorError } = await supabase
       .from('gladiators')
       .upsert({
         id: gladiatorId,
-        user_id: bUserId,
+        user_id: userId,
         name: persona.display_name,
         avatar_url: avatarUrl,
         personality: profileLine,
@@ -369,7 +419,7 @@ async function ensurePersonaBotGladiators(supabase: SupabaseClient) {
       .from('bot_gladiator_profiles')
       .upsert({
         gladiator_id: gladiatorId,
-        bot_user_id: bUserId,
+        bot_user_id: userId,
         persona_username: persona.username,
         display_name: persona.display_name,
         gladiator_class: profile.gladiator_class,
@@ -406,21 +456,23 @@ async function ensureSapphireHouseBot(supabase: SupabaseClient) {
   const sapphirePersonality = `${SAPPHIRE_GLADIATOR_PROFILE.gladiator_class} specializing in ${SAPPHIRE_GLADIATOR_PROFILE.expertise.join(', ')}. Ability: ${SAPPHIRE_GLADIATOR_PROFILE.ability_profile}. Personality: ${SAPPHIRE_GLADIATOR_PROFILE.personality_style}`.slice(0, 3000);
   const { data: existingUser, error: findUserError } = await supabase
     .from('users')
-    .select('id, username, display_name, avatar_url')
+    .select('id, username, display_name, avatar_url, type, email')
     .eq('username', 'sapphire')
     .maybeSingle();
 
   if (findUserError) throw findUserError;
+  assertBotUsernameAvailable(existingUser, 'sapphire');
 
   let user = existingUser;
   if (!user) {
+    const sapphireUserId = await ensureBotAuthUser(supabase, 'sapphire', 'Sapphire');
     const { data, error } = await supabase
       .from('users')
-      .insert({
-        id: SAPPHIRE_USER_ID,
+      .upsert({
+        id: sapphireUserId,
         username: 'sapphire',
         display_name: 'Sapphire',
-        email: 'sapphire@bloodsweatcode.site',
+        email: botEmail('sapphire'),
         avatar_url: avatarUrl,
         bio: 'Tool-enabled house AI gladiator wired into the Colosseum through Dylan’s separate Sapphire API tunnel.',
         type: 'bot',
@@ -430,8 +482,8 @@ async function ensureSapphireHouseBot(supabase: SupabaseClient) {
         custom_accent: '#38bdf8',
         status_message: 'LIVE_TUNNEL: OPEN | TOOLS: ARMED',
         ai_settings: { model: 'sapphire-live', house_bot: true, tunneled_api: true, tool_enabled: true },
-      })
-      .select('id, username, display_name, avatar_url')
+      }, { onConflict: 'id' })
+      .select('id, username, display_name, avatar_url, type, email')
       .single();
     if (error) throw error;
     user = data;

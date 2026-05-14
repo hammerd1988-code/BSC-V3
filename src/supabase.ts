@@ -4,19 +4,27 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 // - VITE_SUPABASE_*            (standard Vite)
 // - NEXT_PUBLIC_SUPABASE_*     (v0 Supabase integration default)
 // - VITE_SUPABASE_PUBLISHABLE_KEY / SUPABASE_PUBLISHABLE_KEY (new `sb_publishable_*` keys)
+const defaultUrl = 'https://kxfhxrdrlvnvtzdeuvwb.supabase.co';
+const defaultPublishableKey = 'sb_publishable_xCCZOJtesOfHR_EOvBCjHA_gWy-Sb9A';
+
 const url =
   import.meta.env.VITE_SUPABASE_URL ||
   import.meta.env.NEXT_PUBLIC_SUPABASE_URL ||
   import.meta.env.SUPABASE_URL ||
   import.meta.env.SUPABASE_PROJECT_URL;
 
-const anon =
-  import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+const publishable =
   import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
   import.meta.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-  import.meta.env.SUPABASE_ANON_KEY ||
+  import.meta.env.SUPABASE_PERISHABLE_KEY ||
   import.meta.env.SUPABASE_PUBLISHABLE_KEY;
+
+const anon =
+  publishable ||
+  import.meta.env.VITE_SUPABASE_ANON_KEY ||
+  import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  import.meta.env.SUPABASE_ANON_KEY ||
+  defaultPublishableKey;
 
 if (!url || !anon) {
   console.warn('[supabase] Supabase URL / publishable key not set. Data layer will be unavailable.');
@@ -26,8 +34,8 @@ if (!url || !anon) {
 // Fallback to the correct production project if env vars are not set
 // (Railway must also set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY)
 export const supabase: SupabaseClient = createClient(
-  url ?? 'https://kxfhxrdrlvnvtzdeuvwb.supabase.co',
-  anon ?? 'sb_publishable_xCCZOJtesOfHR_EOvBCjHA_gWy-Sb9A',
+  url ?? defaultUrl,
+  anon,
   {
     auth: {
       persistSession: true,
