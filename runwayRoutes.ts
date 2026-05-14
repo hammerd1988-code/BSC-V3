@@ -28,6 +28,7 @@ type StudioAssetUploadRequest = {
 };
 
 type RunwayTaskStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN';
+type ImageGenerationProvider = 'runway' | 'zimage';
 
 type FeatureAccess = {
   userId: string;
@@ -46,6 +47,12 @@ const RUNWAY_API_BASE_URL = 'https://api.dev.runwayml.com/v1';
 const RUNWAY_VERSION = '2024-11-06';
 const VIDEO_MODEL = process.env.RUNWAY_VIDEO_MODEL || 'gen4.5';
 const IMAGE_MODEL = process.env.RUNWAY_IMAGE_MODEL || 'gen4_image';
+const DEFAULT_Z_IMAGE_STEPS = 8;
+const DEFAULT_Z_IMAGE_TIMEOUT_MS = 300000;
+const Z_IMAGE_API_URL = process.env.Z_IMAGE_API_URL || '';
+const Z_IMAGE_API_KEY = process.env.Z_IMAGE_API_KEY || '';
+const Z_IMAGE_STEPS = parsePositiveIntegerEnv(process.env.Z_IMAGE_STEPS, DEFAULT_Z_IMAGE_STEPS);
+const Z_IMAGE_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.Z_IMAGE_TIMEOUT_MS, DEFAULT_Z_IMAGE_TIMEOUT_MS);
 const VALID_RATIOS = new Set<RunwayAspectRatio>(['16:9', '9:16', '1:1', '4:3']);
 const TIER_RANK: Record<SubscriptionTier, number> = { free: 0, pro: 1, infinity: 2 };
 const RUNWAY_FEATURES: Record<PremiumRunwayFeature, {
@@ -56,6 +63,13 @@ const RUNWAY_FEATURES: Record<PremiumRunwayFeature, {
   ai_video_generation: { requiredTier: 'pro', limits: { free: 0, pro: 4, infinity: null } },
   thumbnail_generation: { requiredTier: 'pro', limits: { free: 0, pro: 20, infinity: null } },
 };
+
+function parsePositiveIntegerEnv(value: string | undefined, fallback: number): number {
+  const trimmed = value?.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) return fallback;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 function getBearerToken(req: Request): string | null {
   const header = req.headers.authorization;
@@ -84,6 +98,20 @@ function normalizeImageRatio(value: RunwayAspectRatio): '1920:1080' | '1080:1920
   if (value === '1:1') return '1024:1024';
   if (value === '4:3') return '960:720';
   return '1920:1080';
+}
+
+function normalizeImageProvider(): ImageGenerationProvider {
+  const configured = String(process.env.CASPER_IMAGE_PROVIDER || process.env.IMAGE_GENERATION_PROVIDER || '').toLowerCase();
+  if (configured === 'zimage' || configured === 'z-image' || configured === 'local') return 'zimage';
+  if (configured === 'runway') return 'runway';
+  return Z_IMAGE_API_URL ? 'zimage' : 'runway';
+}
+
+function zImageDimensions(value: RunwayAspectRatio) {
+  if (value === '9:16') return { width: 720, height: 1280 };
+  if (value === '1:1') return { width: 1024, height: 1024 };
+  if (value === '4:3') return { width: 960, height: 720 };
+  return { width: 1280, height: 720 };
 }
 
 function normalizeDuration(value: unknown): 5 | 10 {
@@ -116,12 +144,14 @@ function dataUrlToBuffer(dataUrl: string) {
   return { buffer, contentType };
 }
 
-async function loadAssetBody(assetUrl: string) {
+async function loadAssetBody(assetUrl: string, allowedHttpHosts: ReadonlySet<string> = new Set()) {
   const dataUrl = dataUrlToBuffer(assetUrl);
   if (dataUrl) return dataUrl;
 
   const parsed = new URL(assetUrl);
-  if (parsed.protocol !== 'https:') throw new Error('Studio assets must be HTTPS URLs or local Studio data URLs.');
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && allowedHttpHosts.has(parsed.host))) {
+    throw new Error('Studio assets must be HTTPS URLs or local Studio data URLs.');
+  }
 
   const response = await fetch(parsed, { signal: AbortSignal.timeout(60000) });
   if (!response.ok) throw new Error(`Unable to fetch Studio asset (${response.status}).`);
@@ -195,6 +225,30 @@ let cachedRunwayPromptImage: string | null = null;
 function getRunwayPromptImage() {
   cachedRunwayPromptImage ??= createRunwayPromptImage();
   return cachedRunwayPromptImage;
+}
+
+function resolveZImageGenerateUrl() {
+  const rawUrl = Z_IMAGE_API_URL.trim();
+  if (!rawUrl) throw new Error('Z_IMAGE_API_URL is required when CASPER_IMAGE_PROVIDER is zimage.');
+  const url = new URL(rawUrl);
+  if (!url.pathname || url.pathname === '/') url.pathname = '/generate';
+  return url;
+}
+
+function normalizeZImageOutputUrl(value: unknown, baseUrl: URL): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const output = value.trim();
+  if (output.startsWith('data:')) return output;
+  return new URL(output, baseUrl).toString();
+}
+
+function extractZImageOutputUrl(payload: any, baseUrl: URL): string | null {
+  return normalizeZImageOutputUrl(payload?.image_url, baseUrl)
+    ?? normalizeZImageOutputUrl(payload?.imageUrl, baseUrl)
+    ?? normalizeZImageOutputUrl(payload?.url, baseUrl)
+    ?? normalizeZImageOutputUrl(payload?.assetUrl, baseUrl)
+    ?? normalizeZImageOutputUrl(payload?.output?.[0], baseUrl)
+    ?? normalizeZImageOutputUrl(payload?.images?.[0], baseUrl);
 }
 
 function normalizeFeature(type: RunwayGenerationType, value: unknown): PremiumRunwayFeature {
@@ -348,6 +402,61 @@ async function callRunway(path: string, init: RequestInit) {
   }
 }
 
+async function callZImage(promptText: string, ratio: RunwayAspectRatio) {
+  const url = resolveZImageGenerateUrl();
+  const { width, height } = zImageDimensions(ratio);
+  const controller = new AbortController();
+  const effectiveTimeout = Number.isFinite(Z_IMAGE_TIMEOUT_MS) && Z_IMAGE_TIMEOUT_MS > 0 ? Z_IMAGE_TIMEOUT_MS : DEFAULT_Z_IMAGE_TIMEOUT_MS;
+  const timeout = setTimeout(() => controller.abort(), effectiveTimeout);
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(Z_IMAGE_API_KEY ? { Authorization: `Bearer ${Z_IMAGE_API_KEY}` } : {}),
+      },
+      body: JSON.stringify({
+        prompt: promptText,
+        promptText,
+        width,
+        height,
+        steps: Number.isFinite(Z_IMAGE_STEPS) && Z_IMAGE_STEPS > 0 ? Z_IMAGE_STEPS : DEFAULT_Z_IMAGE_STEPS,
+      }),
+      signal: controller.signal,
+    });
+
+    const text = await response.text();
+    let payload: any = text;
+    try { payload = text ? JSON.parse(text) : {}; } catch { /* tolerate non-JSON provider errors */ }
+    if (!response.ok) return { ok: false, status: response.status, payload };
+
+    const outputUrl = extractZImageOutputUrl(payload, url);
+    if (!outputUrl) {
+      return {
+        ok: false,
+        status: 502,
+        payload: { error: 'Z-Image generation returned no image URL.', details: payload },
+      };
+    }
+
+    return {
+      ok: true,
+      status: 200,
+      payload: {
+        id: payload?.id ?? `zimage-${Date.now()}`,
+        status: 'SUCCEEDED',
+        output: [outputUrl],
+        assetUrl: outputUrl,
+        generationTime: payload?.generation_time ?? payload?.generationTime ?? null,
+        raw: payload,
+      },
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function extractOutputUrl(payload: any): string | null {
   const output = payload?.output;
   if (Array.isArray(output) && typeof output[0] === 'string') return output[0];
@@ -381,7 +490,8 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
 
       if (!assetUrl) return res.status(400).json({ error: 'A Studio asset URL is required.' });
 
-      const { buffer, contentType } = await loadAssetBody(assetUrl);
+      const zImageHost = Z_IMAGE_API_URL ? new URL(Z_IMAGE_API_URL).host : '';
+      const { buffer, contentType } = await loadAssetBody(assetUrl, zImageHost ? new Set([zImageHost]) : new Set());
       const maxBytes = assetType === 'video' ? 120 * 1024 * 1024 : 16 * 1024 * 1024;
       if (buffer.length > maxBytes) return res.status(413).json({ error: 'Studio asset is too large to upload.' });
 
@@ -431,6 +541,7 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
         });
       }
 
+      const provider: ImageGenerationProvider = type === 'image' ? normalizeImageProvider() : 'runway';
       const runwayPath = type === 'video'
         ? '/image_to_video'
         : '/text_to_image';
@@ -453,10 +564,12 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
             ...(promptImage ? { promptImage } : {}),
           };
 
-      const runway = await callRunway(runwayPath, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
+      const runway = provider === 'zimage'
+        ? await callZImage(promptText, ratio)
+        : await callRunway(runwayPath, {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          });
 
       if (!runway.ok) {
         return res.status(runway.status).json({
@@ -479,10 +592,11 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
         assetUrl: extractOutputUrl(runway.payload),
         type,
         ratio,
+        provider,
         feature,
         usage: { used, limit: access.limit, tier: access.tier },
         duration: type === 'video' ? duration : undefined,
-        model: payload.model,
+        model: provider === 'zimage' ? 'z-image-turbo' : payload.model,
         userId: access.userId,
         raw: runway.payload,
       });
