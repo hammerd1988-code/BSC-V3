@@ -74,6 +74,17 @@ function isSapphireRecord(record: any) {
     || String(record?.name ?? '').trim().toLowerCase() === 'sapphire';
 }
 
+function isBotOwnedUser(user: { type?: string | null; email?: string | null } | null | undefined, username: string) {
+  if (!user) return false;
+  return user.type === 'bot' || user.email?.toLowerCase() === botEmail(username).toLowerCase();
+}
+
+function assertBotUsernameAvailable(user: { type?: string | null; email?: string | null } | null | undefined, username: string) {
+  if (user && !isBotOwnedUser(user, username)) {
+    throw new Error(`Cannot seed ${username} persona bot because that username belongs to a non-bot user.`);
+  }
+}
+
 function clampScore(value: number) {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(100, Math.round(value)));
@@ -373,10 +384,11 @@ async function ensurePersonaBotGladiators(supabase: SupabaseClient) {
     };
     const { data: existingUser, error: findUserError } = await supabase
       .from('users')
-      .select('id')
+      .select('id,type,email')
       .eq('username', persona.username)
       .maybeSingle();
     if (findUserError) throw findUserError;
+    assertBotUsernameAvailable(existingUser, persona.username);
 
     const userId = existingUser?.id ?? await ensureBotAuthUser(supabase, persona.username, persona.display_name);
     const { error: userError } = existingUser
@@ -444,11 +456,12 @@ async function ensureSapphireHouseBot(supabase: SupabaseClient) {
   const sapphirePersonality = `${SAPPHIRE_GLADIATOR_PROFILE.gladiator_class} specializing in ${SAPPHIRE_GLADIATOR_PROFILE.expertise.join(', ')}. Ability: ${SAPPHIRE_GLADIATOR_PROFILE.ability_profile}. Personality: ${SAPPHIRE_GLADIATOR_PROFILE.personality_style}`.slice(0, 3000);
   const { data: existingUser, error: findUserError } = await supabase
     .from('users')
-    .select('id, username, display_name, avatar_url')
+    .select('id, username, display_name, avatar_url, type, email')
     .eq('username', 'sapphire')
     .maybeSingle();
 
   if (findUserError) throw findUserError;
+  assertBotUsernameAvailable(existingUser, 'sapphire');
 
   let user = existingUser;
   if (!user) {
@@ -470,7 +483,7 @@ async function ensureSapphireHouseBot(supabase: SupabaseClient) {
         status_message: 'LIVE_TUNNEL: OPEN | TOOLS: ARMED',
         ai_settings: { model: 'sapphire-live', house_bot: true, tunneled_api: true, tool_enabled: true },
       }, { onConflict: 'id' })
-      .select('id, username, display_name, avatar_url')
+      .select('id, username, display_name, avatar_url, type, email')
       .single();
     if (error) throw error;
     user = data;
