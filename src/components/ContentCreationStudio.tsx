@@ -243,7 +243,7 @@ export function ContentCreationStudio() {
         content,
         media_url: asset.url,
         media_type: asset.type === 'video' ? 'video' : 'image',
-        type: kind,
+        type: 'media',
         neural_tags: ['visual-forge', asset.type, imagePreset].filter(Boolean),
       }).select('*').maybeSingle();
       if (error) throw error;

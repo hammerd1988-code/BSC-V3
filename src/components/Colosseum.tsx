@@ -16,6 +16,7 @@ import {
   Gauge,
   Loader2,
   Lock,
+  LogIn,
   Radio,
   Pause,
   Play,
@@ -123,6 +124,8 @@ interface SapphireMove {
   latency_ms?: number;
   received_at?: string;
 }
+
+const WAITING_BATTLE_SAPPHIRE_STUB_SOLUTION = 'Sapphire intercept request queued for this waiting battle.';
 
 interface BattleJudgeResult {
   winner_id: string;
@@ -790,7 +793,10 @@ function clientFallbackBattleJudge(input: {
     28 + userSolutionBonus(input.userSolution, input.challenge, input.type) + aiMoveBonus(challengerMove, input.type)
   );
   const defenderScore = clampBattleScore(
-    28 + aiMoveBonus(defenderMove, input.type) + botProfileScoreBonus(input.defender.botProfile, input.type)
+    28
+      + aiMoveBonus(defenderMove, input.type)
+      + userSolutionBonus(input.botSolution, input.challenge, input.type)
+      + botProfileScoreBonus(input.defender.botProfile, input.type)
   );
   return {
     winner_id: challengerScore >= defenderScore ? input.challenger.id : input.defender.id,
@@ -1162,7 +1168,7 @@ function LiveBattleCard({ match, challenger, defender, now, onSelect }: { match:
   );
 }
 
-function LiveArena({ activeMatches, gladiatorById }: { activeMatches: MatchRow[]; gladiatorById: Map<string, Gladiator> }) {
+function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorById: Map<string, Gladiator> }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedMatchId = searchParams.get('match');
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(requestedMatchId);
@@ -1171,10 +1177,11 @@ function LiveArena({ activeMatches, gladiatorById }: { activeMatches: MatchRow[]
   const [viewerJitter, setViewerJitter] = useState(0);
   const [replayPlaying, setReplayPlaying] = useState(true);
   const [replayIndex, setReplayIndex] = useState(0);
+  const activeMatches = useMemo(() => matches.filter((match) => !match.completed_at), [matches]);
 
   const selectedFromList = useMemo(
-    () => activeMatches.find((match) => match.id === selectedMatchId) ?? null,
-    [activeMatches, selectedMatchId]
+    () => matches.find((match) => match.id === selectedMatchId) ?? null,
+    [matches, selectedMatchId]
   );
 
   useEffect(() => {
@@ -1222,6 +1229,9 @@ function LiveArena({ activeMatches, gladiatorById }: { activeMatches: MatchRow[]
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'matches', filter: `id=eq.${selectedMatchId}` }, (payload) => {
         setLiveMatch(payload.new as MatchRow);
       })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'matches', filter: `id=eq.${selectedMatchId}` }, (payload) => {
+        setLiveMatch(payload.new as MatchRow);
+      })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'matches', filter: `id=eq.${selectedMatchId}` }, () => {
         setLiveMatch(null);
       })
@@ -1229,6 +1239,20 @@ function LiveArena({ activeMatches, gladiatorById }: { activeMatches: MatchRow[]
 
     return () => { supabase.removeChannel(channel); };
   }, [selectedMatchId]);
+
+  useEffect(() => {
+    if (!selectedMatchId || selectedFromList || liveMatch?.id === selectedMatchId) return undefined;
+    let cancelled = false;
+    supabase
+      .from('matches')
+      .select('*')
+      .eq('id', selectedMatchId)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (!cancelled && !error && data) setLiveMatch(data as MatchRow);
+      });
+    return () => { cancelled = true; };
+  }, [liveMatch?.id, selectedFromList, selectedMatchId]);
 
   const visibleMatch = liveMatch ?? selectedFromList;
   const challenger = visibleMatch ? gladiatorById.get(visibleMatch.challenger_id) : undefined;
@@ -1607,7 +1631,7 @@ function TournamentPanel({
 export const Colosseum: React.FC = () => {
   const { currentUser } = useAuth();
   const { canAccess } = useSubscription();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const requestedGladiatorId = searchParams.get('gladiator');
   const customBotGate = canAccess('colosseum_custom_bot_api_keys');
   const [gladiators, setGladiators] = useState<Gladiator[]>([]);
@@ -1781,6 +1805,11 @@ export const Colosseum: React.FC = () => {
   const leaderboard = useMemo(() => [...gladiators].sort((a, b) => b.wins - a.wins || b.cred - a.cred || winRate(b) - winRate(a)).slice(0, 10), [gladiators]);
   const activeMatches = useMemo(() => matches.filter((match) => !match.completed_at), [matches]);
   const recentMatches = useMemo(() => matches.filter((match) => match.completed_at).slice(0, 6), [matches]);
+  const sapphireWaitingBattles = useMemo(() => {
+    const sapphire = gladiators.find(isSapphireGladiator);
+    if (!sapphire) return [];
+    return activeMatches.filter((match) => match.challenger_id !== sapphire.id && match.defender_id !== sapphire.id);
+  }, [activeMatches, gladiators]);
   const selectedGladiator = selectedGladiatorId ? gladiatorById.get(selectedGladiatorId) : null;
   const selectedOpponent = selectedOpponentId ? gladiatorById.get(selectedOpponentId) : null;
   const selectedCodingChallenge = useMemo(() => challengeFor(selectedOpponent?.botProfile, challengeType), [selectedOpponent?.botProfile, challengeType]);
@@ -2007,15 +2036,17 @@ export const Colosseum: React.FC = () => {
     }
   };
 
-  const startChallenge = async () => {
-    if (!selectedOpponent || starting || battleInProgress) return;
-    const defender = selectedOpponent;
-    const codingChallenge = challengeFor(selectedOpponent.botProfile, challengeType);
-    const submittedSolution = userSolution.trim();
-    if (selectedOpponent.botProfile && !submittedSolution) {
+  const startChallenge = async (opponentOverride?: Gladiator, challengeTypeOverride = challengeType, solutionOverride?: string) => {
+    const defender = opponentOverride ?? selectedOpponent;
+    if (!defender || starting || battleInProgress) return;
+    const activeChallengeType = challengeTypeOverride;
+    const codingChallenge = challengeFor(defender.botProfile, activeChallengeType);
+    const submittedSolution = (solutionOverride ?? userSolution).trim();
+    if (defender.botProfile && !submittedSolution) {
       setNotice('Write your code in the arena editor before challenging a persona bot. The bot will answer with its own AI-generated solution.');
       return;
     }
+    setSelectedOpponentId(defender.id);
     setStarting(true);
     setNotice(null);
     setBattleResult(null);
@@ -2034,13 +2065,13 @@ export const Colosseum: React.FC = () => {
         return;
       }
 
-      const battlePrompt = buildChallengePrompt(challengeType, challenger, defender, codingChallenge);
+      const battlePrompt = buildChallengePrompt(activeChallengeType, challenger, defender, codingChallenge);
       const { data, error } = await supabase
         .from('matches')
         .insert({
           challenger_id: challenger.id,
           defender_id: defender.id,
-          challenge_type: challengeType,
+          challenge_type: activeChallengeType,
           replay_data: {
             intro: `${challenger.name} challenged ${defender.name}`,
             arena: 'underground-neon-fight-pit',
@@ -2055,7 +2086,7 @@ export const Colosseum: React.FC = () => {
       if (error) throw error;
 
       const match = data as MatchRow;
-      const challenge = CHALLENGES.find((item) => item.id === challengeType)!;
+      const challenge = CHALLENGES.find((item) => item.id === activeChallengeType)!;
       const logs = [
         `Gate locks engaged for ${challenge.label}.`,
         `${challenger.name} boots combat compiler in the red corner.`,
@@ -2066,7 +2097,7 @@ export const Colosseum: React.FC = () => {
         matchId: match.id,
         challengerId: challenger.id,
         defenderId: defender.id,
-        challengeType,
+        challengeType: activeChallengeType,
         challengerProgress: 4,
         defenderProgress: 3,
         log: bootLogs,
@@ -2075,6 +2106,9 @@ export const Colosseum: React.FC = () => {
       });
       setMatches((prev) => [match, ...prev]);
       setChallengeModalOpen(false);
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.set('match', match.id);
+      setSearchParams(nextParams);
 
       let launched = false;
       const launchSimulation = (
@@ -2084,7 +2118,7 @@ export const Colosseum: React.FC = () => {
       ) => {
         if (launched) return;
         launched = true;
-        runSimulation(match, challenger, defender, challengeType, openingLogs, sapphireMove, aiMoves, codingChallenge, submittedSolution);
+        runSimulation(match, challenger, defender, activeChallengeType, openingLogs, sapphireMove, aiMoves, codingChallenge, submittedSolution);
       };
 
       const fallbackTimer = window.setTimeout(() => {
@@ -2095,7 +2129,7 @@ export const Colosseum: React.FC = () => {
         );
       }, 1500);
 
-      void requestGladiatorAiMoves(match, challengeType, challenger, defender, battlePrompt).then((moves) => {
+      void requestGladiatorAiMoves(match, activeChallengeType, challenger, defender, battlePrompt).then((moves) => {
         let sapphireMove: SapphireMove | null = null;
         const aiMoves = moves;
         const sapphireGeneratedMove = aiMoves.find((move) => move.source === 'sapphire-api');
@@ -2265,6 +2299,111 @@ export const Colosseum: React.FC = () => {
     }, 720);
   };
 
+  const letSapphireEnterWaitingBattle = async (match: MatchRow) => {
+    const challenger = gladiatorById.get(match.challenger_id);
+    const sapphire = gladiators.find(isSapphireGladiator);
+    if (!challenger || !sapphire || starting || battleInProgress) return;
+    const existingDefender = gladiatorById.get(match.defender_id);
+    const codingChallenge = challengeFor(sapphire.botProfile, match.challenge_type);
+    const submittedSolution = WAITING_BATTLE_SAPPHIRE_STUB_SOLUTION;
+    setChallengeType(match.challenge_type);
+    setSelectedGladiatorId(sapphire.id);
+    setSelectedOpponentId(challenger.id);
+    setUserSolution(codingChallenge.starter);
+    setNotice(`Sapphire is answering ${challenger.name}'s waiting ${formatChallenge(match.challenge_type)} battle.`);
+    setStarting(true);
+    setBattleResult(null);
+    setLatestBotSolution('');
+    setChallengeModalOpen(false);
+    try {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.set('match', match.id);
+      setSearchParams(nextParams);
+      const baseReplay = (match.replay_data && typeof match.replay_data === 'object') ? match.replay_data : {};
+      const previousLog = Array.isArray(baseReplay.log) ? baseReplay.log : [];
+      const bootLogs = [
+        ...previousLog,
+        `Sapphire intercepts ${challenger.name}'s open pit instead of creating a duplicate match.`,
+        'Sapphire live tunnel packet requested for the waiting battle.',
+      ];
+      setSimulation({
+        matchId: match.id,
+        challengerId: challenger.id,
+        defenderId: sapphire.id,
+        challengeType: match.challenge_type,
+        challengerProgress: 8,
+        defenderProgress: 8,
+        log: bootLogs,
+        winnerId: null,
+        status: 'booting',
+      });
+      const sapphireMove = await requestSapphireMove(match, match.challenge_type, challenger, sapphire);
+      if (sapphireMove?.solution) setLatestBotSolution(sapphireMove.solution);
+      const interceptLogs = [
+        ...bootLogs,
+        sapphireMove?.source === 'sapphire-api'
+          ? 'Sapphire live API returned an intercept solution for the waiting battle.'
+          : 'Sapphire tunnel is unavailable; the waiting battle remains selectable with a persisted tunnel status.',
+      ];
+      runSimulation(
+        match,
+        challenger,
+        sapphire,
+        match.challenge_type,
+        interceptLogs,
+        sapphireMove,
+        [{
+          gladiator_id: sapphire.id,
+          gladiator_name: sapphire.name,
+          source: sapphireMove?.source ?? 'sapphire-intercept',
+          model: sapphireMove?.source === 'sapphire-api' ? 'sapphire-live' : 'sapphire-tunnel-status',
+          uses_custom_key: false,
+          prompt: sapphireMove?.prompt ?? '',
+          solution: sapphireMove?.solution ?? 'Sapphire intercept did not return a solution packet.',
+          latency_ms: sapphireMove?.latency_ms ?? 0,
+          received_at: sapphireMove?.received_at ?? new Date().toISOString(),
+        }],
+        codingChallenge,
+        submittedSolution
+      );
+    } catch (err: any) {
+      console.warn('[Colosseum] Sapphire waiting-battle intercept failed', err);
+      const fallbackMove: SapphireMove = {
+        source: 'sapphire-intercept-error',
+        prompt: '',
+        solution: `Sapphire intercept failed: ${err?.message ?? 'unknown error'}`,
+        latency_ms: 0,
+        received_at: new Date().toISOString(),
+      };
+      runSimulation(
+        match,
+        challenger,
+        sapphire,
+        match.challenge_type,
+        [
+          `Sapphire intercepts ${challenger.name}'s open pit instead of creating a duplicate match.`,
+          'Sapphire intercept failed, so the local rubric will resolve the waiting battle without hanging.',
+        ],
+        fallbackMove,
+        [{
+          gladiator_id: sapphire.id,
+          gladiator_name: sapphire.name,
+          source: fallbackMove.source,
+          model: 'sapphire-intercept-error',
+          uses_custom_key: false,
+          prompt: '',
+          solution: fallbackMove.solution,
+          latency_ms: 0,
+          received_at: fallbackMove.received_at ?? new Date().toISOString(),
+        }],
+        codingChallenge,
+        submittedSolution
+      );
+    } finally {
+      setStarting(false);
+    }
+  };
+
   const completeMatch = async (matchId: string, winnerId: string, replayData: Record<string, any>) => {
     try {
       const { error } = await supabase.rpc('complete_colosseum_match', {
@@ -2422,7 +2561,7 @@ export const Colosseum: React.FC = () => {
 
                   <button
                     type="button"
-                    onClick={startChallenge}
+                    onClick={() => void startChallenge()}
                     disabled={!currentUser || countdown > 0 || starting || battleInProgress || !userSolution.trim()}
                     className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-red-600 px-4 py-4 text-xs font-black uppercase tracking-[0.24em] text-white shadow-[0_0_28px_rgba(255,23,68,0.35)] transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-45"
                   >
@@ -2695,7 +2834,40 @@ export const Colosseum: React.FC = () => {
           </form>
         </section>
 
-        <LiveArena activeMatches={activeMatches} gladiatorById={gladiatorById} />
+        <LiveArena matches={matches} gladiatorById={gladiatorById} />
+
+        {sapphireWaitingBattles.length > 0 && (
+          <section className="mt-6 overflow-hidden rounded-[2rem] border border-sky-300/25 bg-sky-950/10 p-5 shadow-[0_0_54px_rgba(56,189,248,0.12)] backdrop-blur-xl">
+            <div className="mb-4 flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.34em] text-sky-200">Sapphire Intercept</p>
+                <h2 className="mt-1 text-xl font-black uppercase tracking-[0.14em] text-white">Waiting Gladiators Need An Answer</h2>
+                <p className="mt-2 max-w-2xl text-xs leading-6 text-zinc-400">Let Sapphire enter any open pit that already has a waiting gladiator, then watch the same persisted replay/judge flow.</p>
+              </div>
+              <Sparkles className="h-5 w-5 text-sky-200" />
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              {sapphireWaitingBattles.slice(0, 4).map((match) => {
+                const challenger = gladiatorById.get(match.challenger_id);
+                return (
+                  <div key={match.id} className="rounded-3xl border border-white/10 bg-black/45 p-4">
+                    <p className="text-xs font-black uppercase tracking-[0.18em] text-white">{challenger?.name ?? 'Waiting Gladiator'}</p>
+                    <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-sky-200">{formatChallenge(match.challenge_type)} · waiting for Sapphire</p>
+                    <button
+                      type="button"
+                      onClick={() => void letSapphireEnterWaitingBattle(match)}
+                      disabled={!currentUser || starting || battleInProgress}
+                      className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl border border-sky-300/35 bg-sky-400/10 px-4 py-3 text-[10px] font-black uppercase tracking-[0.2em] text-sky-100 transition hover:border-sky-200 hover:bg-sky-300/15 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
+                      Let Sapphire Enter
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         <section className="mt-6 overflow-hidden rounded-[2rem] border border-cyan-300/20 bg-black/65 p-5 shadow-[0_0_54px_rgba(0,229,255,0.12)] backdrop-blur-xl">
           <div className="mb-5 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
@@ -2915,7 +3087,7 @@ export const Colosseum: React.FC = () => {
 
             <button
               type="button"
-              onClick={selectedOpponent?.botProfile ? () => selectedOpponent && openBotChallenge(selectedOpponent) : startChallenge}
+              onClick={selectedOpponent?.botProfile ? () => selectedOpponent && openBotChallenge(selectedOpponent) : () => void startChallenge()}
               disabled={!currentUser || !selectedOpponent || starting || battleInProgress}
               className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl border border-red-400/50 bg-red-600/80 px-4 py-4 text-xs font-black uppercase tracking-[0.24em] text-white shadow-[0_0_28px_rgba(255,23,68,0.28)] transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
