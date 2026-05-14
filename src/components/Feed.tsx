@@ -879,7 +879,7 @@ export const Feed: React.FC = () => {
       <TrendingSidebar onFilterChange={setTrendFilter} activeFilter={trendFilter} />
 
       {/* Feed Content — desktop uses sidebar layout */}
-      <main className="mx-auto w-full max-w-6xl px-3 pt-4 sm:px-4 lg:flex lg:items-start lg:gap-6">
+      <main className="mx-auto w-full max-w-6xl px-3 pt-4 sm:px-4 lg:flex lg:flex-wrap lg:items-start lg:gap-6">
         {/* Desktop sidebar */}
         <TrendingSidebar onFilterChange={setTrendFilter} activeFilter={trendFilter} />
 
