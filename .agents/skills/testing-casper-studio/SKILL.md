@@ -1,66 +1,72 @@
 ---
 name: testing-casper-studio
-description: Test the Casper Studio (Visual Forge) image and video generation features. Use when verifying Runway API integration, image/video generation UI, or content creation studio changes.
+description: Test the Casper Studio (Visual Forge) image, thumbnail, upload, and publishing features. Use when verifying Runway API integration, Studio asset upload, or feed publishing changes.
 ---
 
 # Testing Casper Studio (Visual Forge)
 
 ## Overview
-Casper Studio is the content creation cockpit at `/casper/studio`. It supports image generation, video generation, and thumbnail creation via the Runway ML API.
+Casper Studio is the content creation cockpit at `/casper/studio`. It supports image generation, video generation, thumbnail creation, and publishing Studio assets to the BSC feed.
 
 ## Devin Secrets Needed
-- `SUPABASE_SERVICE_ROLE_KEY` — for server-side Supabase operations
-- `SUPABASE_URL` or `VITE_SUPABASE_URL` — Supabase project URL (not currently provisioned)
-- `RUNWAY_API_KEY` — Runway ML API key for image/video generation (not currently provisioned)
-- A user login for `bloodsweatcode.org` if testing against production
+- `VITE_SUPABASE_URL` or `SUPABASE_URL` — Supabase project URL.
+- `VITE_SUPABASE_ANON_KEY` or `SUPABASE_PERISHABLE_KEY` — browser-safe Supabase key. Prefer publishable-key aliases when testing browser inserts.
+- `SUPABASE_SERVICE_ROLE_KEY` — for admin magic-link auth and DB verification queries.
+- `RUNWAY_API_KEY` — Runway ML API key for image/video generation smoke tests.
 
 ## Architecture
-- **Frontend:** `src/components/ContentCreationStudio.tsx` — React UI with image/video/thumbnail modes
-- **Frontend API lib:** `src/lib/runway.ts` — `requestRunwayGeneration()` calls `/api/runway/generate`
-- **Backend route:** `runwayRoutes.ts` — Express route that validates, checks subscription tier, then calls Runway API
-- **Server entry:** `server.unified.ts` — registers runway routes via `registerRunwayRoutes()`
+- **Route:** `src/App.tsx` registers `/casper/studio`.
+- **Frontend:** `src/components/ContentCreationStudio.tsx` — image/video/thumbnail modes, export, upload-before-post, and composer actions.
+- **Frontend API lib:** `src/lib/runway.ts` — `requestRunwayGeneration()` and `uploadStudioAsset()` call the Express API.
+- **Backend route:** `runwayRoutes.ts` — validates Runway generation and Studio asset upload requests, uploads Studio assets into Supabase Storage.
+- **Server entries:** `server.ts`, `server.prod.ts`, and `server.unified.ts` register Runway routes and must allow large Studio upload JSON bodies.
+- **Feed rendering:** `src/components/Feed.tsx` and `src/components/PostCard.tsx` render published media posts.
 
-## Key API Details
-- Runway API base: `https://api.dev.runwayml.com/v1`
-- Image endpoint: `POST /v1/text_to_image`
-- Video endpoint: `POST /v1/image_to_video`
-- **IMPORTANT:** Runway API requires pixel-based ratios (e.g. `1920:1080`), NOT simple ratios (e.g. `16:9`). The backend has `normalizeImageRatio()` and `normalizeVideoRatio()` functions to handle conversion.
-- Valid image ratios for `gen4_image` model: `1024:1024`, `1080:1080`, `1168:880`, `1360:768`, `1440:1080`, `1080:1440`, `1808:768`, `1920:1080`, `1080:1920`, `2112:912`, `1280:720`, `720:1280`, `720:720`, `960:720`, `720:960`, `1680:720`
-- Valid video ratios: `1280:720`, `720:1280`, `960:960`
-- Header required: `X-Runway-Version: 2024-11-06`
-
-## Running Locally
+## Local Setup
 ```bash
-# Full server (frontend + backend)
 npm run dev:full
-# or
-npm run start:unified
 ```
-Requires `.env` with at minimum: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and `RUNWAY_API_KEY`.
+Use `http://localhost:3001/casper/studio` for full-stack testing. `npm run dev` is Vite-only and does not serve the Express API routes.
 
-## Testing Without Runway API Key
-If `RUNWAY_API_KEY` is not set, `callRunway()` returns a 503 immediately. You can still test:
-1. Payload construction logic by inspecting `normalizeImageRatio()` and `normalizeVideoRatio()`
-2. TypeScript compilation: `npx tsc --noEmit` (aliased as `npm run lint`)
-3. Frontend build: `npm run build`
+For admin browser auth, use the approved Supabase service-role magic-link flow and inject the resulting session into `localStorage` key `sb-<project-ref>-auth-token`. When verifying magic links, Supabase expects `token_hash`, not `token`.
 
-## Testing With Runway API Key
-1. Navigate to `/casper/studio` on the live site or local dev server
-2. Select "IMAGE" mode
-3. Enter a prompt (the default prompt is pre-filled)
-4. Select a ratio (1:1, 16:9, 9:16, or 4:3)
-5. Click the generate button
-6. Verify no "Validation of body failed" error appears
-7. Poll should show progress, then display the generated image
+When starting local dev for tests, ensure the browser receives a valid publishable/anon key. If both stale anon keys and newer publishable keys are present, prefer the publishable key aliases (`VITE_SUPABASE_PUBLISHABLE_KEY` or `SUPABASE_PERISHABLE_KEY`) for the browser env.
 
-## Subscription/Tier Gating
-Image and video generation require `pro` or `infinity` subscription tier. Free tier users get 0 uses. The backend checks `feature_usage` and `subscriptions` tables.
+## Primary E2E Test: Thumbnail Export → Upload → Feed Post
+1. Navigate to `/casper/studio` and select `thumbnail` mode.
+2. Set title to `BLOOD SWEAT CODE` and subtitle to `Test Thumbnail`.
+3. Click `Export Thumbnail`.
+   - Pass: Generation History shows `thumbnail // 16:9` and the preview shows the exact title/subtitle.
+   - Fail: no history item appears or the exported asset remains unusable.
+4. Enter feed copy in the composer and click `Post Now`.
+   - Pass: UI shows `Uploading`, then `Posted to the BSC feed.` within 60 seconds.
+   - Fail: status shows `Invalid API key`, `Posting failed`, SVG MIME rejection, HTTP 413, or `Uploading` remains longer than 60 seconds.
+5. Query the newest matching `posts` row.
+   - Pass: `type = media`, `media_type = image`, `content` matches the composer text, and `media_url` contains `/storage/v1/object/public/media/casper-studio/` and ends with `.png`.
+   - Fail: `media_url` is `data:`/`blob:`, ends in `.svg`, or type/media_type are wrong.
+6. Navigate to `/` and scroll the matching feed post into view.
+   - Pass: card text is visible and the image has `naturalWidth = 1280`, `naturalHeight = 720`, rendered width > 100 px, rendered height > 50 px.
+   - Fail: card is missing, image is broken, or rendered dimensions are 0.
+
+## Runway Smoke Test
+1. Return to `/casper/studio`, select `image` mode, choose `16:9`, enter a prompt, and click `Generate Image`.
+2. Pass if generation starts or the provider returns an account/credit limitation that does **not** contain `Validation of body failed`, `ratio`, or `resolution` schema errors.
+3. Fail if the UI immediately reports a Runway request schema validation error.
+
+## Evidence to Capture
+- Recording of the UI flow with annotations for export, upload/post, DB evidence, feed rendering, and Runway smoke.
+- Screenshot of Studio preview before posting.
+- Screenshot of `Posted to the BSC feed.` state.
+- DB evidence showing `type`, `media_type`, and Storage `.png` URL.
+- Feed screenshot showing the posted thumbnail visibly rendered.
 
 ## Common Issues
-- "Validation of body failed" — usually means the Runway API payload has an invalid field (e.g., wrong ratio format, unsupported `resolution` field)
-- 503 from `/api/runway/generate` — `RUNWAY_API_KEY` is not set on the backend
-- 401/402 from generation — user's subscription tier is insufficient or Supabase auth token is expired
+- `Uploading` might last tens of seconds locally because the PNG is sent as a data URL; use a concrete 60-second timeout before marking it failed.
+- `PayloadTooLargeError` means the Express JSON body limit is too small for Studio uploads.
+- `mime type image/svg+xml is not supported` means the thumbnail export/upload path is sending SVG instead of PNG.
+- `Invalid API key` during feed insert usually means the browser used a stale anon key instead of a valid publishable key.
+- Feed image natural size can be correct while rendered size is 0 if the feed layout collapses; always verify rendered dimensions.
+- Runway credit/account limits are not schema failures. Only treat `Validation of body failed` or ratio/resolution payload errors as Runway schema failures.
 
 ## Deployment
-- Production deploys via **Railway** (not Vercel). Vercel is only the original domain registrar.
-- After merging backend changes, Railway auto-deploys. Check Railway dashboard for deployment status.
+- Production deploys via **Railway** (not Vercel). Vercel is only the original domain registrar and its failures should not block this repo's Railway deployment decisions.
