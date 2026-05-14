@@ -81,6 +81,17 @@ Directive: ${providedPrompt}
 Return the gladiator's best coding solution or patch in character. Include concise reasoning, but prioritize useful code, correctness, and the stated battle style.`;
 }
 
+function buildSapphireChallengePrompt(input: { challengeType?: ColosseumChallengeType; challenger?: any; defender?: any; prompt?: string }) {
+  const challengeType = input.challengeType ?? 'speed_round';
+  const challengerName = input.challenger?.name ?? 'Red Corner';
+  const defenderName = input.defender?.name ?? 'Shadow Cage';
+  const providedPrompt = typeof input.prompt === 'string' && input.prompt.trim().length > 0
+    ? input.prompt.trim()
+    : CHALLENGE_BRIEFS[challengeType];
+
+  return `[BLOOD_SWEAT_CODE_COLOSSEUM]\nChallenge Type: ${challengeType}\nOpponent: ${isSapphireRecord(input.challenger) ? defenderName : challengerName}\nDirective: ${providedPrompt}\n\nReturn your best solution as concise JSON or plain text. Include code when useful, and avoid meta-commentary.`;
+}
+
 async function postToOpenAiCompatible(input: { apiKey?: string | null; model?: string | null; apiBaseUrl?: string | null; prompt: string }) {
   const apiKey = input.apiKey || process.env.OPENAI_API_KEY || process.env.VITE_AI_API_KEY;
   if (!apiKey) throw new Error('No platform or gladiator API key is configured');
@@ -539,6 +550,89 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
     }
   });
 
+  app.post('/api/colosseum/sapphire-move', async (req, res) => {
+    const startedAt = Date.now();
+    try {
+      const { matchId, challengeType, challengerId, defenderId, prompt } = req.body ?? {};
+      const sapphire = await ensureSapphireHouseBot(supabase);
+
+      let match: any = null;
+      if (matchId) {
+        const { data, error } = await supabase.from('matches').select('*').eq('id', matchId).maybeSingle();
+        if (error) throw error;
+        match = data;
+      }
+
+      const challengerLookup = match?.challenger_id ?? challengerId;
+      const defenderLookup = match?.defender_id ?? defenderId;
+      if (!challengerLookup || !defenderLookup) {
+        return res.status(400).json({ success: false, error: 'matchId or both challengerId and defenderId are required' });
+      }
+
+      const { data: combatants, error: combatantError } = await supabase
+        .from('gladiators')
+        .select('*')
+        .in('id', [challengerLookup, defenderLookup]);
+      if (combatantError) throw combatantError;
+
+      const challenger = (combatants ?? []).find((gladiator: any) => String(gladiator.id) === String(challengerLookup));
+      const defender = (combatants ?? []).find((gladiator: any) => String(gladiator.id) === String(defenderLookup));
+      const sapphireInMatch = [challenger, defender].some(isSapphireRecord)
+        || [challengerLookup, defenderLookup].map(String).includes(String(sapphire.id));
+
+      if (!sapphireInMatch) {
+        return res.status(400).json({ success: false, error: 'Sapphire is not a combatant in this match' });
+      }
+
+      const normalizedChallengeType = (match?.challenge_type ?? challengeType ?? 'speed_round') as ColosseumChallengeType;
+      const sapphirePrompt = buildSapphireChallengePrompt({
+        challengeType: normalizedChallengeType,
+        challenger,
+        defender,
+        prompt,
+      });
+      const { payload, solution } = await postToSapphire(sapphirePrompt, {
+        matchId,
+        challengeType: normalizedChallengeType,
+        challenger: challenger ? { id: challenger.id, name: challenger.name } : null,
+        defender: defender ? { id: defender.id, name: defender.name } : null,
+      });
+
+      const move = {
+        source: 'sapphire-api',
+        prompt: sapphirePrompt,
+        solution: solution || 'Sapphire returned an empty solution packet.',
+        raw: payload,
+        latency_ms: Date.now() - startedAt,
+        received_at: new Date().toISOString(),
+      };
+
+      if (match?.id) {
+        const existingReplay = (match.replay_data && typeof match.replay_data === 'object') ? match.replay_data : {};
+        const existingLog = Array.isArray(existingReplay.log) ? existingReplay.log : [];
+        await supabase
+          .from('matches')
+          .update({
+            replay_data: {
+              ...existingReplay,
+              sapphire_move: move,
+              log: [
+                ...existingLog,
+                `Sapphire live API returned a solution packet in ${move.latency_ms}ms.`,
+              ],
+              updated_client_at: new Date().toISOString(),
+            },
+          })
+          .eq('id', match.id);
+      }
+
+      return res.json({ success: true, move });
+    } catch (error: any) {
+      console.error('[colosseum:sapphire:move]', error);
+      return res.status(502).json({ success: false, error: error.message || 'Sapphire combat move failed' });
+    }
+  });
+
   app.post('/api/colosseum/gladiator-solutions', async (req, res) => {
     try {
       const { matchId, challengeType, challengerId, defenderId, prompt } = req.body ?? {};
@@ -585,6 +679,25 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
           received_at: new Date().toISOString(),
         };
       });
+
+      if (match?.id) {
+        const existingReplay = (match.replay_data && typeof match.replay_data === 'object') ? match.replay_data : {};
+        const existingLog = Array.isArray(existingReplay.log) ? existingReplay.log : [];
+        await supabase
+          .from('matches')
+          .update({
+            replay_data: {
+              ...existingReplay,
+              ai_moves: moves,
+              log: [
+                ...existingLog,
+                ...moves.map((move: any) => `${move.gladiator_name} generated a ${move.source} solution with ${move.model}.`),
+              ],
+              updated_client_at: new Date().toISOString(),
+            },
+          })
+          .eq('id', match.id);
+      }
 
       return res.json({ success: true, moves });
     } catch (error: any) {
