@@ -70,7 +70,7 @@ async function startServer() {
   });
 
   // Middleware
-  app.use(express.json());
+  app.use(express.json({ limit: '12mb' }));
 
   // CORS middleware for REST endpoints
   app.use((req, res, next) => {

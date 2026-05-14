@@ -21,6 +21,12 @@ type RunwayGenerateRequest = {
   model?: string;
 };
 
+type StudioAssetUploadRequest = {
+  assetUrl?: string;
+  assetType?: RunwayGenerationType | 'thumbnail';
+  title?: string;
+};
+
 type RunwayTaskStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN';
 
 type FeatureAccess = {
@@ -90,6 +96,48 @@ function normalizeDuration(value: unknown): 5 | 10 {
 
 function normalizePrompt(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function sanitizeFilename(value: unknown, fallback: string) {
+  const base = typeof value === 'string' && value.trim() ? value.trim() : fallback;
+  return base.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 70) || fallback;
+}
+
+function dataUrlToBuffer(dataUrl: string) {
+  if (!dataUrl.startsWith('data:')) return null;
+  const commaIndex = dataUrl.indexOf(',');
+  if (commaIndex < 0) return null;
+  const metadata = dataUrl.slice(5, commaIndex);
+  const encoded = dataUrl.slice(commaIndex + 1);
+  const parts = metadata.split(';').filter(Boolean);
+  const contentType = parts[0] || 'application/octet-stream';
+  const isBase64 = parts.slice(1).some((part) => part.toLowerCase() === 'base64');
+  const buffer = isBase64 ? Buffer.from(encoded, 'base64') : Buffer.from(decodeURIComponent(encoded));
+  return { buffer, contentType };
+}
+
+async function loadAssetBody(assetUrl: string) {
+  const dataUrl = dataUrlToBuffer(assetUrl);
+  if (dataUrl) return dataUrl;
+
+  const parsed = new URL(assetUrl);
+  if (parsed.protocol !== 'https:') throw new Error('Studio assets must be HTTPS URLs or local Studio data URLs.');
+
+  const response = await fetch(parsed, { signal: AbortSignal.timeout(60000) });
+  if (!response.ok) throw new Error(`Unable to fetch Studio asset (${response.status}).`);
+  const contentType = response.headers.get('content-type') || 'application/octet-stream';
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return { buffer, contentType };
+}
+
+function extensionFor(contentType: string, assetType: RunwayGenerationType | 'thumbnail') {
+  if (contentType.includes('svg')) return 'svg';
+  if (contentType.includes('png')) return 'png';
+  if (contentType.includes('webp')) return 'webp';
+  if (contentType.includes('jpeg') || contentType.includes('jpg')) return 'jpg';
+  if (contentType.includes('mp4')) return 'mp4';
+  if (contentType.includes('quicktime')) return 'mov';
+  return assetType === 'video' ? 'mp4' : 'png';
 }
 
 function crc32(buffer: Buffer) {
@@ -320,6 +368,38 @@ function normalizeRunwayStatus(status: unknown): RunwayTaskStatus {
 }
 
 export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
+  app.post('/api/runway/studio-assets', async (req: Request, res: Response) => {
+    try {
+      const authUser = await requireSupabaseUser(req, res, supabase);
+      if (!authUser) return;
+
+      const profile = await resolveProfile(supabase, authUser);
+      const userId = String(profile.id ?? authUser.id);
+      const body = (req.body ?? {}) as StudioAssetUploadRequest;
+      const assetUrl = normalizePrompt(body.assetUrl);
+      const assetType = body.assetType === 'video' ? 'video' : body.assetType === 'thumbnail' ? 'thumbnail' : 'image';
+
+      if (!assetUrl) return res.status(400).json({ error: 'A Studio asset URL is required.' });
+
+      const { buffer, contentType } = await loadAssetBody(assetUrl);
+      const maxBytes = assetType === 'video' ? 120 * 1024 * 1024 : 16 * 1024 * 1024;
+      if (buffer.length > maxBytes) return res.status(413).json({ error: 'Studio asset is too large to upload.' });
+
+      const extension = extensionFor(contentType, assetType);
+      const path = `casper-studio/${userId}/${Date.now()}-${sanitizeFilename(body.title, assetType)}.${extension}`;
+      const { error: uploadError } = await supabase.storage
+        .from('media')
+        .upload(path, buffer, { contentType, upsert: true });
+      if (uploadError) throw uploadError;
+
+      const { data } = supabase.storage.from('media').getPublicUrl(path);
+      return res.json({ publicUrl: data.publicUrl, path, contentType });
+    } catch (error: any) {
+      console.error('[Runway] Studio asset upload failed:', error);
+      return res.status(error?.name === 'TimeoutError' ? 504 : 500).json({ error: error?.message || 'Failed to upload Studio asset.' });
+    }
+  });
+
   app.post('/api/runway/generate', async (req: Request, res: Response) => {
     try {
       const authUser = await requireSupabaseUser(req, res, supabase);
