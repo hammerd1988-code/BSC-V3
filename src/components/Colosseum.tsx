@@ -124,6 +124,17 @@ interface SapphireMove {
   received_at?: string;
 }
 
+interface BattleJudgeResult {
+  winner_id: string;
+  challenger_score: number;
+  defender_score: number;
+  summary: string;
+  reasoning: string[];
+  provider: string;
+  model: string;
+  used_ai: boolean;
+}
+
 interface TournamentRow {
   id: string;
   name: string;
@@ -178,6 +189,11 @@ interface BattleResultState {
   rankingPoints: number;
   userWon: boolean;
   reaction: string;
+  judgeSummary: string;
+  judgeReasoning: string[];
+  judgeProvider: string;
+  judgeModel: string;
+  judgeUsedAi: boolean;
 }
 
 interface CodingChallenge {
@@ -522,6 +538,11 @@ function scoreFor(gladiator: Gladiator, type: ChallengeType) {
   return weighted + gladiator.wins * 2 + Math.random() * 38;
 }
 
+function clampBattleScore(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
 function badgeFor(gladiator: Gladiator) {
   if (gladiator.wins >= 25) return { label: 'Warlord', color: '#f9ff6b', icon: Crown };
   if (gladiator.wins >= 10) return { label: 'Pit Champion', color: '#ff2bd6', icon: Trophy };
@@ -722,6 +743,72 @@ async function requestGladiatorAiMoves(match: MatchRow, type: ChallengeType, cha
   return (payload?.moves ?? []) as GladiatorAiMove[];
 }
 
+async function requestBattleJudge(input: {
+  match: MatchRow;
+  type: ChallengeType;
+  challenge: CodingChallenge;
+  userSolution: string;
+  botSolution: string;
+  moves: GladiatorAiMove[];
+}): Promise<BattleJudgeResult> {
+  const response = await fetch('/api/colosseum/judge-battle', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      matchId: input.match.id,
+      challengeType: input.type,
+      challengePrompt: `${input.challenge.title}\n${input.challenge.prompt}`,
+      expectedSignals: input.challenge.expected,
+      userSolution: input.userSolution,
+      botSolution: input.botSolution,
+      moves: input.moves,
+    }),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(payload?.error || 'Colosseum judge failed');
+  }
+
+  return payload?.judge as BattleJudgeResult;
+}
+
+function clientFallbackBattleJudge(input: {
+  match: MatchRow;
+  type: ChallengeType;
+  challenge: CodingChallenge;
+  challenger: Gladiator;
+  defender: Gladiator;
+  userSolution: string;
+  botSolution: string;
+  moves: GladiatorAiMove[];
+  error?: string;
+}): BattleJudgeResult {
+  const challengerMove = input.moves.find((move) => move.gladiator_id === input.challenger.id);
+  const defenderMove = input.moves.find((move) => move.gladiator_id === input.defender.id);
+  const challengerScore = clampBattleScore(
+    28 + userSolutionBonus(input.userSolution, input.challenge, input.type) + aiMoveBonus(challengerMove, input.type)
+  );
+  const defenderScore = clampBattleScore(
+    28 + aiMoveBonus(defenderMove, input.type) + botProfileScoreBonus(input.defender.botProfile, input.type)
+  );
+  return {
+    winner_id: challengerScore >= defenderScore ? input.challenger.id : input.defender.id,
+    challenger_score: challengerScore,
+    defender_score: defenderScore,
+    summary: input.error
+      ? `Local rubric used because the judge endpoint failed: ${input.error}`
+      : 'Local rubric scored submitted code signals and bot answer quality.',
+    reasoning: [
+      `${input.challenger.name}: submitted code scored against ${input.challenge.expected}.`,
+      `${input.defender.name}: generated bot answer and persona profile were scored.`,
+    ],
+    provider: 'client-rubric',
+    model: 'deterministic-colosseum-rubric',
+    used_ai: false,
+  };
+}
+
 async function requestSapphireMove(match: MatchRow, type: ChallengeType, challenger: Gladiator, defender: Gladiator): Promise<SapphireMove | null> {
   const response = await fetch('/api/colosseum/sapphire-move', {
     method: 'POST',
@@ -840,6 +927,19 @@ function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active }: { gl
           transition={{ duration: Math.max(2, duration - 0.25), repeat: Infinity, ease: 'easeInOut' }}
           className="absolute inset-y-0 w-1/2 -skew-x-12 bg-white/20 blur-sm"
         />
+        <motion.div
+          aria-hidden
+          animate={{
+            opacity: active ? [0.12, 0.38, 0.12] : [0.08, 0.22, 0.08],
+            backgroundPosition: ['0% 0%', '100% 100%'],
+          }}
+          transition={{ duration: 2.35, repeat: Infinity, ease: 'easeInOut' }}
+          className="absolute inset-0 mix-blend-screen"
+          style={{
+            backgroundImage: `linear-gradient(180deg, transparent 0%, ${glow}44 48%, transparent 52%)`,
+            backgroundSize: '100% 240%',
+          }}
+        />
         <div className="absolute inset-0 opacity-40" style={{ boxShadow: `inset 0 0 28px ${glow}` }} />
         <div className="absolute inset-x-2 bottom-2 h-1 rounded-full bg-white/35 blur-[1px]" />
       </motion.div>
@@ -884,6 +984,9 @@ function GladiatorCard({ gladiator, active, onSelect, actionLabel, onAction }: {
         <div className="absolute inset-0 opacity-35" style={{ background: `linear-gradient(135deg, ${gladiator.glow_color}33, transparent 45%, rgba(255,255,255,0.08))` }} />
         <div className="relative flex flex-col items-center gap-3">
           <AnimatedGladiatorAvatar gladiator={gladiator} size="xl" label={gladiator.name} active={active} />
+          <div className="rounded-full border border-white/10 bg-black/70 px-3 py-1 text-[8px] font-black uppercase tracking-[0.22em] text-cyan-100">
+            Browseable 2.5s animated persona avatar
+          </div>
           <div className="flex flex-wrap justify-center gap-2 pt-3">
             <span className="rounded-full border px-2 py-1 text-[8px] font-black uppercase tracking-widest" style={{ borderColor: `${diffColor}55`, color: diffColor, backgroundColor: `${diffColor}12` }}>{profile?.difficulty ?? 'Human'}</span>
             <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[8px] font-black uppercase tracking-widest text-zinc-400">3D Motion Avatar</span>
@@ -1986,7 +2089,7 @@ export const Colosseum: React.FC = () => {
 
       const fallbackTimer = window.setTimeout(() => {
         launchSimulation(
-          [...bootLogs, 'AI cores are still compiling. Pit simulation fallback engaged so the battle does not stall.'],
+          [...bootLogs, 'AI cores are still compiling. Gate opens now; judging will still score real submitted code and any late bot packet.'],
           null,
           []
         );
@@ -2013,7 +2116,7 @@ export const Colosseum: React.FC = () => {
         if (launched) {
           setSimulation((prev) => prev ? {
             ...prev,
-            log: [...prev.log, 'Late AI solution packet arrived after the gate opened.'],
+            log: [...prev.log, 'Late AI solution packet arrived after the gate opened and was stored in the solution feed.'],
           } : prev);
           return;
         }
@@ -2021,7 +2124,7 @@ export const Colosseum: React.FC = () => {
       }).catch((err) => {
         console.warn('[Colosseum] Gladiator AI solution generation failed', err);
         window.clearTimeout(fallbackTimer);
-        launchSimulation([...bootLogs, 'Server-side AI cores did not answer. Pit simulation fallback engaged.'], null, []);
+        launchSimulation([...bootLogs, 'Server-side AI cores did not answer. Local judge will score the submitted code instead of stalling.'], null, []);
       });
     } catch (err) {
       handleDbError(err, 'CREATE', 'matches');
@@ -2032,17 +2135,8 @@ export const Colosseum: React.FC = () => {
   };
 
   const runSimulation = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, openingLogs: string[], sapphireMove?: SapphireMove | null, aiMoves: GladiatorAiMove[] = [], codingChallenge = challengeFor(defender.botProfile, type), submittedSolution = '') => {
-    let challengerScore = scoreFor(challenger, type);
-    let defenderScore = scoreFor(defender, type);
     const challengerMove = aiMoves.find((move) => move.gladiator_id === challenger.id);
     const defenderMove = aiMoves.find((move) => move.gladiator_id === defender.id);
-    challengerScore += aiMoveBonus(challengerMove, type);
-    defenderScore += aiMoveBonus(defenderMove, type);
-    if (submittedSolution.trim()) challengerScore += userSolutionBonus(submittedSolution, codingChallenge, type);
-    defenderScore += botProfileScoreBonus(defender.botProfile, type);
-    if (isSapphireGladiator(challenger)) challengerScore += sapphireSolutionBonus(sapphireMove, type);
-    if (isSapphireGladiator(defender)) defenderScore += sapphireSolutionBonus(sapphireMove, type);
-    const winner = challengerScore >= defenderScore ? challenger : defender;
     const finalLogs = [...openingLogs];
     const replayBase = {
       intro: `${challenger.name} challenged ${defender.name}`,
@@ -2060,6 +2154,8 @@ export const Colosseum: React.FC = () => {
       user_solution: submittedSolution,
       bot_solution: defenderMove?.solution ?? '',
     };
+    const initialChallengerScore = clampBattleScore(42 + userSolutionBonus(submittedSolution, codingChallenge, type) + aiMoveBonus(challengerMove, type));
+    const initialDefenderScore = clampBattleScore(42 + aiMoveBonus(defenderMove, type) + botProfileScoreBonus(defender.botProfile, type) + (isSapphireGladiator(defender) ? sapphireSolutionBonus(sapphireMove, type) : 0));
     const combatLines = type === 'speed_round'
       ? ['Clock pressure spikes. Syntax sparks across the pit wall.', 'Both bots deploy hot paths through the runtime maze.', 'The crowd holograms slam the rail as latency drops.']
       : type === 'debug_battle'
@@ -2069,8 +2165,8 @@ export const Colosseum: React.FC = () => {
     let tick = 0;
     const interval = window.setInterval(() => {
       tick += 1;
-      const challengerProgress = Math.min(100, Math.round((tick / 7) * 100 + (challengerScore > defenderScore ? tick * 1.4 : 0)));
-      const defenderProgress = Math.min(100, Math.round((tick / 7) * 100 + (defenderScore > challengerScore ? tick * 1.4 : 0)));
+      const challengerProgress = Math.min(100, Math.round((tick / 7) * 100 + (initialChallengerScore > initialDefenderScore ? tick * 1.4 : 0)));
+      const defenderProgress = Math.min(100, Math.round((tick / 7) * 100 + (initialDefenderScore > initialChallengerScore ? tick * 1.4 : 0)));
       if (combatLines[tick - 1]) finalLogs.push(combatLines[tick - 1]);
 
       setSimulation((prev) => prev ? {
@@ -2091,49 +2187,80 @@ export const Colosseum: React.FC = () => {
 
       if (tick >= 7) {
         window.clearInterval(interval);
-        const userWon = winner.id === challenger.id;
-        const xpAwarded = (codingChallenge.difficulty === 'Diamond' ? 180 : codingChallenge.difficulty === 'Gold' ? 130 : codingChallenge.difficulty === 'Silver' ? 85 : 50) + (userWon ? 40 : 15);
-        const rankingPoints = (codingChallenge.difficulty === 'Diamond' ? 55 : codingChallenge.difficulty === 'Gold' ? 38 : codingChallenge.difficulty === 'Silver' ? 24 : 14) * (userWon ? 1 : -1);
-        const reaction = userWon ? pickDialogue(defender.botProfile?.defeat_lines) : pickDialogue(defender.botProfile?.victory_lines);
-        finalLogs.push(`${winner.name} lands the final commit and claims the purse.`);
-        finalLogs.push(userWon ? `${defender.name}: ${reaction}` : `${defender.name}: ${reaction}`);
-        setSimulation((prev) => prev ? {
-          ...prev,
-          challengerProgress: 100,
-          defenderProgress: 100,
-          winnerId: winner.id,
-          status: 'complete',
-          log: [...finalLogs],
-        } : prev);
-        void completeMatch(match.id, winner.id, {
-          ...replayBase,
-          status: 'complete',
-          victor: winner.name,
-          winner_id: winner.id,
-          challenger_score: Math.round(challengerScore),
-          defender_score: Math.round(defenderScore),
-          challenger_progress: 100,
-          defender_progress: 100,
-          judge: {
-            correctness_signal: submittedSolution.trim() ? 'user submission inspected for expected challenge signals' : 'bot-vs-bot simulation fallback',
-            user_solution_bonus: userSolutionBonus(submittedSolution, codingChallenge, type),
-            bot_profile_bonus: botProfileScoreBonus(defender.botProfile, type),
-          },
-          log: finalLogs,
-          completed_client_at: new Date().toISOString(),
-        });
-        setBattleResult({
-          matchId: match.id,
-          winnerName: winner.name,
-          loserName: winner.id === challenger.id ? defender.name : challenger.name,
-          challengeTitle: codingChallenge.title,
-          userScore: Math.round(challengerScore),
-          botScore: Math.round(defenderScore),
-          xpAwarded,
-          rankingPoints,
-          userWon,
-          reaction,
-        });
+        void (async () => {
+          let judge: BattleJudgeResult;
+          try {
+            judge = await requestBattleJudge({
+              match,
+              type,
+              challenge: codingChallenge,
+              userSolution: submittedSolution,
+              botSolution: defenderMove?.solution ?? '',
+              moves: aiMoves,
+            });
+          } catch (error: any) {
+            judge = clientFallbackBattleJudge({
+              match,
+              type,
+              challenge: codingChallenge,
+              challenger,
+              defender,
+              userSolution: submittedSolution,
+              botSolution: defenderMove?.solution ?? '',
+              moves: aiMoves,
+              error: error?.message ?? 'unknown judge error',
+            });
+          }
+
+          const winner = judge.winner_id === challenger.id ? challenger : defender;
+          const userWon = winner.id === challenger.id;
+          const challengerScore = clampBattleScore(judge.challenger_score);
+          const defenderScore = clampBattleScore(judge.defender_score);
+          const xpAwarded = (codingChallenge.difficulty === 'Diamond' ? 180 : codingChallenge.difficulty === 'Gold' ? 130 : codingChallenge.difficulty === 'Silver' ? 85 : 50) + (userWon ? 40 : 15);
+          const rankingPoints = (codingChallenge.difficulty === 'Diamond' ? 55 : codingChallenge.difficulty === 'Gold' ? 38 : codingChallenge.difficulty === 'Silver' ? 24 : 14) * (userWon ? 1 : -1);
+          const reaction = userWon ? pickDialogue(defender.botProfile?.defeat_lines) : pickDialogue(defender.botProfile?.victory_lines);
+          finalLogs.push(`${judge.used_ai ? 'AI judge' : 'Rubric judge'} scored the submitted code and bot answer.`);
+          finalLogs.push(`${winner.name} lands the final commit and claims the purse.`);
+          finalLogs.push(userWon ? `${defender.name}: ${reaction}` : `${defender.name}: ${reaction}`);
+          setSimulation((prev) => prev ? {
+            ...prev,
+            challengerProgress: 100,
+            defenderProgress: 100,
+            winnerId: winner.id,
+            status: 'complete',
+            log: [...finalLogs],
+          } : prev);
+          void completeMatch(match.id, winner.id, {
+            ...replayBase,
+            status: 'complete',
+            victor: winner.name,
+            winner_id: winner.id,
+            challenger_score: challengerScore,
+            defender_score: defenderScore,
+            challenger_progress: 100,
+            defender_progress: 100,
+            judge,
+            log: finalLogs,
+            completed_client_at: new Date().toISOString(),
+          });
+          setBattleResult({
+            matchId: match.id,
+            winnerName: winner.name,
+            loserName: winner.id === challenger.id ? defender.name : challenger.name,
+            challengeTitle: codingChallenge.title,
+            userScore: challengerScore,
+            botScore: defenderScore,
+            xpAwarded,
+            rankingPoints,
+            userWon,
+            reaction,
+            judgeSummary: judge.summary,
+            judgeReasoning: judge.reasoning,
+            judgeProvider: judge.provider,
+            judgeModel: judge.model,
+            judgeUsedAi: judge.used_ai,
+          });
+        })();
       }
     }, 720);
   };
@@ -2575,10 +2702,15 @@ export const Colosseum: React.FC = () => {
             <div>
               <p className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-200">Platform Gladiator Bot Roster</p>
               <h2 className="mt-1 text-2xl font-black uppercase tracking-[0.16em] text-white">Pick Your Persona Opponent</h2>
-              <p className="mt-2 max-w-3xl text-xs leading-6 text-zinc-400">Select a card to load it into the Challenge System, or press Challenge to lock the persona immediately. Profiles reveal what they are good at, how they think, how they execute code, and the vibe they bring into the arena.</p>
+              <p className="mt-2 max-w-3xl text-xs leading-6 text-zinc-400">Browse cinematic 3D-style bot avatars, stats, ability profiles, code style, and signature moves. Challenge starts a real coding match: your submitted solution is judged against the bot’s generated answer and the result is archived.</p>
             </div>
-            <div className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-[0.24em] text-zinc-300">
-              {botGladiators.length} bots online
+            <div className="flex flex-wrap gap-2">
+              <div className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-[0.24em] text-zinc-300">
+                {botGladiators.length} bots online
+              </div>
+              <div className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-4 py-2 text-[10px] font-black uppercase tracking-[0.24em] text-cyan-100">
+                2–3s avatar loops
+              </div>
             </div>
           </div>
           {botGladiators.length ? (
@@ -2757,6 +2889,22 @@ export const Colosseum: React.FC = () => {
                       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-white">{battleResult.botScore}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Bot Score</p></div>
                       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-yellow-200">+{battleResult.xpAwarded}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">XP</p></div>
                       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className={cn('text-lg font-black', battleResult.rankingPoints >= 0 ? 'text-green-200' : 'text-red-200')}>{battleResult.rankingPoints >= 0 ? '+' : ''}{battleResult.rankingPoints}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Rank</p></div>
+                    </div>
+                    <div className="mt-3 rounded-2xl border border-cyan-300/20 bg-cyan-950/10 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-[8px] font-black uppercase tracking-[0.24em] text-cyan-200">
+                          {battleResult.judgeUsedAi ? 'AI Judge Verdict' : 'Rubric Judge Verdict'}
+                        </p>
+                        <p className="rounded-full border border-white/10 px-2 py-1 text-[7px] font-black uppercase tracking-widest text-zinc-400">
+                          {battleResult.judgeProvider} · {battleResult.judgeModel}
+                        </p>
+                      </div>
+                      <p className="mt-2 text-xs font-bold leading-5 text-zinc-300">{battleResult.judgeSummary}</p>
+                      {battleResult.judgeReasoning.length > 0 && (
+                        <ul className="mt-2 space-y-1 text-[10px] font-bold leading-4 text-zinc-500">
+                          {battleResult.judgeReasoning.map((line) => <li key={line}>• {line}</li>)}
+                        </ul>
+                      )}
                     </div>
                     <p className="mt-3 rounded-2xl border border-white/10 bg-black/50 p-3 text-xs font-bold leading-6 text-zinc-300">{selectedOpponent.name}: “{battleResult.reaction}”</p>
                     <p className="mt-3 text-[10px] font-black uppercase tracking-widest text-yellow-100/70">If the winner is a bot persona, it now posts a Colosseum brag to the social feed automatically.</p>
