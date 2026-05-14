@@ -17,6 +17,9 @@ import {
   Loader2,
   Lock,
   Radio,
+  Pause,
+  Play,
+  Rewind,
   Shield,
   Skull,
   Sparkles,
@@ -26,6 +29,7 @@ import {
   Trophy,
   Users,
   Zap,
+  FastForward,
   Hammer,
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
@@ -624,6 +628,11 @@ function replayLines(replayData: Record<string, any> | null) {
   return [...intro, ...status];
 }
 
+function clampReplayIndex(index: number, total: number) {
+  if (total <= 0) return 0;
+  return Math.min(Math.max(index, 0), total - 1);
+}
+
 function stringifyReplayData(replayData: Record<string, any> | null) {
   if (!replayData || Object.keys(replayData).length === 0) {
     return 'No replay telemetry emitted yet. Waiting for the pit crew to push combat data.';
@@ -1057,6 +1066,8 @@ function LiveArena({ activeMatches, gladiatorById }: { activeMatches: MatchRow[]
   const [liveMatch, setLiveMatch] = useState<MatchRow | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [viewerJitter, setViewerJitter] = useState(0);
+  const [replayPlaying, setReplayPlaying] = useState(true);
+  const [replayIndex, setReplayIndex] = useState(0);
 
   const selectedFromList = useMemo(
     () => activeMatches.find((match) => match.id === selectedMatchId) ?? null,
@@ -1120,7 +1131,31 @@ function LiveArena({ activeMatches, gladiatorById }: { activeMatches: MatchRow[]
   const challenger = visibleMatch ? gladiatorById.get(visibleMatch.challenger_id) : undefined;
   const defender = visibleMatch ? gladiatorById.get(visibleMatch.defender_id) : undefined;
   const lines = replayLines(visibleMatch?.replay_data ?? null);
+  const currentReplayIndex = clampReplayIndex(replayIndex, lines.length);
+  const visibleReplayLines = lines.length ? lines.slice(0, currentReplayIndex + 1) : [];
+  const replayProgress = lines.length > 1 ? Math.round((currentReplayIndex / (lines.length - 1)) * 100) : lines.length ? 100 : 0;
   const viewerCount = visibleMatch ? Math.max(1, simulatedViewerBase(visibleMatch.id) + viewerJitter) : 0;
+
+  useEffect(() => {
+    setReplayIndex(0);
+    setReplayPlaying(true);
+  }, [visibleMatch?.id]);
+
+  useEffect(() => {
+    setReplayIndex((current) => clampReplayIndex(current, lines.length));
+  }, [lines.length]);
+
+  useEffect(() => {
+    if (!replayPlaying || !lines.length) return undefined;
+    if (replayIndex >= lines.length - 1) {
+      if (visibleMatch?.completed_at) setReplayPlaying(false);
+      return undefined;
+    }
+    const interval = window.setInterval(() => {
+      setReplayIndex((current) => clampReplayIndex(current + 1, lines.length));
+    }, 1200);
+    return () => window.clearInterval(interval);
+  }, [lines.length, replayIndex, replayPlaying, visibleMatch?.completed_at]);
 
   return (
     <section className="mt-6 overflow-hidden rounded-[2rem] border border-red-500/20 bg-black/65 p-5 shadow-[0_0_54px_rgba(255,23,68,0.14)] backdrop-blur-xl">
@@ -1189,8 +1224,57 @@ function LiveArena({ activeMatches, gladiatorById }: { activeMatches: MatchRow[]
                     <Eye className="h-4 w-4 text-green-200" />
                   </div>
 
+                  <div className="border-b border-white/10 bg-zinc-950/70 p-3">
+                    <div className="mb-3 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setReplayIndex((current) => clampReplayIndex(current - 3, lines.length))}
+                        disabled={!lines.length}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.18em] text-zinc-300 transition hover:border-green-300/40 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Rewind className="h-3.5 w-3.5" /> Rew
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setReplayPlaying((current) => !current)}
+                        disabled={!lines.length}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-green-300/35 bg-green-400/10 px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.18em] text-green-100 transition hover:border-green-200 hover:bg-green-300/15 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {replayPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                        {replayPlaying ? 'Pause' : 'Play'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setReplayIndex((current) => clampReplayIndex(current + 3, lines.length))}
+                        disabled={!lines.length}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.18em] text-zinc-300 transition hover:border-green-300/40 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        FFwd <FastForward className="h-3.5 w-3.5" />
+                      </button>
+                      <span className="ml-auto text-[9px] font-black uppercase tracking-[0.22em] text-zinc-500">
+                        Frame {lines.length ? currentReplayIndex + 1 : 0}/{lines.length}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={Math.max(lines.length - 1, 0)}
+                      value={currentReplayIndex}
+                      disabled={!lines.length}
+                      onChange={(event) => {
+                        setReplayPlaying(false);
+                        setReplayIndex(Number(event.target.value));
+                      }}
+                      className="h-1 w-full accent-green-300"
+                      aria-label="Replay timeline"
+                    />
+                    <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/10">
+                      <div className="h-full bg-gradient-to-r from-green-300 via-cyan-300 to-red-300" style={{ width: `${replayProgress}%` }} />
+                    </div>
+                  </div>
+
                   <div className="max-h-72 space-y-2 overflow-y-auto p-4 font-mono text-[11px] leading-5 text-green-200">
-                    {lines.length ? lines.map((line, index) => (
+                    {visibleReplayLines.length ? visibleReplayLines.map((line, index) => (
                       <motion.p key={`${line}-${index}`} initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }}>
                         <span className="text-red-300">&gt;</span> {line}
                       </motion.p>

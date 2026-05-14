@@ -493,7 +493,7 @@ export const CasperDashboard: React.FC = () => {
     try {
       const { error } = await supabase.from('casper_config').upsert({ key: 'schedule', value: nextConfig }, { onConflict: 'key' });
       if (error) throw error;
-      await supabase.from('casper_activity_log').insert({ action_type: 'config_update', description: 'Admin updated Casper schedule configuration', metadata: { config: nextConfig }, actor_id: userUuid });
+      await supabase.from('casper_activity_log').insert({ user_id: userUuid, action: 'config_update', details: { config: nextConfig }, action_type: 'config_update', description: 'Admin updated Casper schedule configuration', metadata: { config: nextConfig }, actor_id: userUuid });
       setNotice('Routine matrix base configuration saved.');
     } catch (error: any) { setNotice(error?.message || 'Failed to save schedule configuration.'); }
     finally { setSaving(false); }
@@ -504,7 +504,7 @@ export const CasperDashboard: React.FC = () => {
     try {
       const { error } = await supabase.from('casper_config').upsert({ key: 'cognitive_core', value: core }, { onConflict: 'key' });
       if (error) throw error;
-      await supabase.from('casper_activity_log').insert({ action_type: 'core_update', description: 'Admin updated Casper cognitive core.', metadata: { core }, actor_id: userUuid });
+      await supabase.from('casper_activity_log').insert({ user_id: userUuid, action: 'core_update', details: { core }, action_type: 'core_update', description: 'Admin updated Casper cognitive core.', metadata: { core }, actor_id: userUuid });
       setNotice('Cognitive Core persisted. Casper command context now uses these settings.');
     } catch (error: any) { setNotice(error?.message || 'Failed to save Cognitive Core.'); }
     finally { setSaving(false); }
@@ -546,7 +546,7 @@ export const CasperDashboard: React.FC = () => {
       const payload = { title: taskForm.title.trim(), description: taskForm.description.trim() || null, priority: taskForm.priority, status: 'pending', task_type: 'mission', progress: 0, created_by: userUuid };
       const { error } = editingTaskId ? await supabase.from('casper_tasks').update(payload).eq('id', editingTaskId) : await supabase.from('casper_tasks').insert(payload);
       if (error) throw error;
-      await supabase.from('casper_activity_log').insert({ action_type: editingTaskId ? 'task_updated' : 'task_created', description: `Admin ${editingTaskId ? 'updated' : 'queued'} Casper mission: ${payload.title}`, metadata: { priority: payload.priority }, actor_id: userUuid });
+      await supabase.from('casper_activity_log').insert({ user_id: userUuid, action: editingTaskId ? 'task_updated' : 'task_created', details: { priority: payload.priority }, action_type: editingTaskId ? 'task_updated' : 'task_created', description: `Admin ${editingTaskId ? 'updated' : 'queued'} Casper mission: ${payload.title}`, metadata: { priority: payload.priority }, actor_id: userUuid });
       setTaskForm({ title: '', description: '', priority: 'medium' }); setEditingTaskId(null); await fetchDashboard();
     } catch (error: any) { setNotice(error?.message || 'Failed to save mission.'); }
     finally { setSaving(false); }
@@ -572,7 +572,7 @@ export const CasperDashboard: React.FC = () => {
       const payload = toDb({ name: routineForm.name.trim(), directive: routineForm.directive.trim(), frequency: routineForm.frequency, cron_expression: routineForm.frequency === 'cron' || routineForm.frequency === 'custom' ? routineForm.cron_expression : null, scheduled_time: routineForm.scheduled_time, scheduled_days: routineForm.scheduled_days, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', enabled: true, next_run_at: nextRun(routineForm.frequency, routineForm.scheduled_time), created_by: userUuid, metadata: { owner_id: userUuid } });
       const { error } = editingRoutineId ? await supabase.from('casper_routines').update(payload).eq('id', editingRoutineId) : await supabase.from('casper_routines').insert(payload);
       if (error) throw error;
-      await supabase.from('casper_activity_log').insert({ action_type: editingRoutineId ? 'routine_updated' : 'routine_created', description: `Casper routine saved: ${payload.name}`, metadata: payload, actor_id: userUuid });
+      await supabase.from('casper_activity_log').insert({ user_id: userUuid, action: editingRoutineId ? 'routine_updated' : 'routine_created', details: payload, action_type: editingRoutineId ? 'routine_updated' : 'routine_created', description: `Casper routine saved: ${payload.name}`, metadata: payload, actor_id: userUuid });
       setRoutineForm({ name: '', directive: '', frequency: 'daily', scheduled_time: '09:00', cron_expression: '0 9 * * *', scheduled_days: [] }); setEditingRoutineId(null); await fetchDashboard();
     } catch (error: any) { setNotice(error?.message || 'Failed to save routine.'); }
     finally { setSaving(false); }
@@ -582,7 +582,7 @@ export const CasperDashboard: React.FC = () => {
   const deleteRoutine = async (routine: CasperRoutineRow) => { const { error } = await supabase.from('casper_routines').delete().eq('id', routine.id); if (error) setNotice(error.message); else setRoutines(prev => prev.filter(item => item.id !== routine.id)); };
   const runDueRoutines = async () => { setSaving(true); try { const res = await authFetch('/api/casper/routines/run-due', { method: 'POST', body: '{}' }); const payload = await res.json(); if (!res.ok || !payload.success) throw new Error(payload.error); setNotice(`Routine runner executed ${payload.executed ?? 0} due routine(s).`); await fetchDashboard(); } catch (error: any) { setNotice(error?.message || 'Routine runner failed.'); } finally { setSaving(false); } };
 
-  const openMemory = async (memory: CasperMemoryRow) => { setExpandedMemory(prev => prev === memory.id ? null : memory.id); await supabase.rpc('increment_memory_access', { memory_ids: [memory.id] }); await supabase.from('casper_activity_log').insert({ action_type: 'memory_viewed', description: `Admin inspected Casper memory ${memory.id.slice(0, 8)}`, metadata: { memory_id: memory.id }, actor_id: userUuid }); };
+  const openMemory = async (memory: CasperMemoryRow) => { setExpandedMemory(prev => prev === memory.id ? null : memory.id); await supabase.rpc('increment_memory_access', { memory_ids: [memory.id] }); await supabase.from('casper_activity_log').insert({ user_id: userUuid, action: 'memory_viewed', details: { memory_id: memory.id }, action_type: 'memory_viewed', description: `Admin inspected Casper memory ${memory.id.slice(0, 8)}`, metadata: { memory_id: memory.id }, actor_id: userUuid }); };
   const deleteMemory = async (memory: CasperMemoryRow) => { const { error } = await supabase.from('casper_memories').delete().eq('id', memory.id); if (error) setNotice(error.message); else setMemories(prev => prev.filter(item => item.id !== memory.id)); };
   const cancelSubagent = async (agent: CasperSubagentRow) => { const { error } = await supabase.from('casper_subagents').update({ status: 'failed', result: 'Cancelled from GhostOps admin dashboard.', completed_at: new Date().toISOString() }).eq('id', agent.id); if (error) setNotice(error.message); else await fetchDashboard(); };
   const toggleSkill = async (skill: CasperSkillRow) => { const { error } = await supabase.from('casper_skills').update({ is_enabled: !skill.is_enabled }).eq('id', skill.id); if (error) setNotice(error.message); else await fetchDashboard(); };
