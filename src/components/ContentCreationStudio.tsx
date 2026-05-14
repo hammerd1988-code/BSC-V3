@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Film, Image as ImageIcon, Loader2, Play, Send, Sparkles, Wand2, CalendarClock, Layers, Upload, RefreshCw, Scissors, PanelTop, Zap } from 'lucide-react';
 import { CasperStudioGuide } from './CasperStudioGuide';
-import { getRunwayTask, requestRunwayGeneration, type RunwayTaskResponse } from '../lib/runway';
+import { getRunwayTask, requestRunwayGeneration, uploadStudioAsset, type RunwayTaskResponse } from '../lib/runway';
 import { supabase, toDb } from '../supabase';
 import { useAuth } from '../AuthContext';
 import { cn } from '../lib/utils';
@@ -119,6 +119,7 @@ export function ContentCreationStudio() {
   const [composer, setComposer] = useState('');
   const [scheduleAt, setScheduleAt] = useState('');
   const [status, setStatus] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
   const [gate, setGate] = useState<ReturnType<typeof canAccess> | null>(null);
   const [thumbnailTitle, setThumbnailTitle] = useState('BUILD FASTER');
   const [thumbnailSubtitle, setThumbnailSubtitle] = useState('Blood Sweat Code');
@@ -233,15 +234,34 @@ export function ContentCreationStudio() {
     a.click();
   };
 
+  const getPublishableAssetUrl = async (asset: StudioAsset) => {
+    if (!asset.url.startsWith('data:') && !asset.url.startsWith('blob:')) return asset.url;
+    setUploading(true);
+    try {
+      const uploaded = await uploadStudioAsset({
+        assetUrl: asset.url,
+        assetType: asset.type,
+        title: asset.title || thumbnailTitle || asset.prompt,
+      });
+      const updated = { ...asset, url: uploaded.publicUrl };
+      setAssets((prev) => prev.map((item) => item.id === asset.id ? updated : item));
+      setSelectedAssetId(asset.id);
+      return uploaded.publicUrl;
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const postAsset = async (asset: StudioAsset | null, kind: 'post' | 'short' | 'video' = 'post') => {
     if (!currentUser || !asset) return;
     setStatus(null);
     try {
+      const publishableUrl = await getPublishableAssetUrl(asset);
       const content = composer.trim() || `${asset.type === 'video' ? 'New Visual Forge clip' : 'New Visual Forge asset'}\n\n${asset.prompt}`;
       const { data: post, error } = await supabase.from('posts').insert({
         author_id: currentUser.id,
         content,
-        media_url: asset.url,
+        media_url: publishableUrl,
         media_type: asset.type === 'video' ? 'video' : 'image',
         type: 'media',
         neural_tags: ['visual-forge', asset.type, imagePreset].filter(Boolean),
@@ -253,7 +273,7 @@ export function ContentCreationStudio() {
           post_id: post?.id,
           title: thumbnailTitle || 'Visual Forge Video',
           description: content,
-          video_url: asset.url,
+          video_url: publishableUrl,
           thumbnail_url: asset.thumbnailUrl || thumbnailBg || null,
           duration,
           category: 'Creative',
@@ -261,7 +281,7 @@ export function ContentCreationStudio() {
           view_count: 0,
         });
       }
-      setLibrary((prev) => prev.map((item) => (item.assetId === asset.id || item.assetUrl === asset.url) ? { ...item, status: 'published', updatedAt: new Date().toISOString() } : item));
+      setLibrary((prev) => prev.map((item) => (item.assetId === asset.id || item.assetUrl === asset.url) ? { ...item, assetUrl: publishableUrl, status: 'published', updatedAt: new Date().toISOString() } : item));
       setStatus(kind === 'short' ? 'Posted as a Short.' : 'Posted to the BSC feed.');
       setComposer('');
     } catch (err: any) {
@@ -429,7 +449,7 @@ export function ContentCreationStudio() {
                     <button onClick={() => void generateImage(true)} disabled={generating} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-50"><RefreshCw className="h-4 w-4" /> AI BG</button>
                     <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-fuchsia-300/30 bg-fuchsia-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-fuchsia-100"><Upload className="h-4 w-4" /> Upload<input type="file" accept="image/*" className="hidden" onChange={(e) => handleCustomBg(e.target.files?.[0] ?? null)} /></label>
                   </div>
-                  <button onClick={() => void exportThumbnail()} disabled={generating} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-white/10 px-4 py-4 text-xs font-black uppercase tracking-widest text-white transition hover:bg-white/15 disabled:opacity-50"><PanelTop className="h-4 w-4" /> Export Thumbnail</button>
+                  <button onClick={() => void exportThumbnail()} disabled={generating || uploading} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-white/10 px-4 py-4 text-xs font-black uppercase tracking-widest text-white transition hover:bg-white/15 disabled:opacity-50"><PanelTop className="h-4 w-4" /> Export Thumbnail</button>
                 </div>
               )}
             </div>
@@ -446,7 +466,7 @@ export function ContentCreationStudio() {
             <section className="rounded-[2rem] border border-white/10 bg-zinc-950/75 p-5 backdrop-blur-xl">
               <div className="mb-4 flex items-center justify-between gap-4">
                 <div><h2 className="text-sm font-black uppercase tracking-widest">Live Preview</h2><p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Generated media, thumbnail canvas, and action rail</p></div>
-                {generating && <span className="inline-flex items-center gap-2 rounded-full border border-cyan-300/25 bg-cyan-300/10 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-cyan-100"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Rendering</span>}
+                {(generating || uploading) && <span className="inline-flex items-center gap-2 rounded-full border border-cyan-300/25 bg-cyan-300/10 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-cyan-100"><Loader2 className="h-3.5 w-3.5 animate-spin" /> {uploading ? 'Uploading' : 'Rendering'}</span>}
               </div>
 
               {hasActiveGeneration ? (
@@ -486,8 +506,8 @@ export function ContentCreationStudio() {
 
               <div className="mt-5 grid gap-3 sm:grid-cols-5">
                 <button onClick={() => handleAssetAction('thumbnail')} disabled={!selectedAsset} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-40"><ImageIcon className="mx-auto mb-1 h-4 w-4" /> Thumbnail</button>
-                <button onClick={() => void handleAssetAction('feed')} disabled={!selectedAsset} className="rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-40"><Send className="mx-auto mb-1 h-4 w-4" /> Feed</button>
-                <button onClick={() => void handleAssetAction('short')} disabled={!selectedAsset || selectedAsset.type !== 'video'} className="rounded-2xl border border-fuchsia-300/25 bg-fuchsia-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-fuchsia-100 disabled:opacity-40"><Play className="mx-auto mb-1 h-4 w-4" /> Short</button>
+                <button onClick={() => void handleAssetAction('feed')} disabled={!selectedAsset || uploading} className="rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-40"><Send className="mx-auto mb-1 h-4 w-4" /> Feed</button>
+                <button onClick={() => void handleAssetAction('short')} disabled={!selectedAsset || selectedAsset.type !== 'video' || uploading} className="rounded-2xl border border-fuchsia-300/25 bg-fuchsia-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-fuchsia-100 disabled:opacity-40"><Play className="mx-auto mb-1 h-4 w-4" /> Short</button>
                 <button onClick={() => void handleAssetAction('project')} disabled={!selectedAsset} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-40"><Scissors className="mx-auto mb-1 h-4 w-4" /> Project</button>
                 <button onClick={() => void handleAssetAction('download')} disabled={!selectedAsset} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-40"><Download className="mx-auto mb-1 h-4 w-4" /> Download</button>
               </div>
@@ -502,7 +522,7 @@ export function ContentCreationStudio() {
                   <button onClick={() => saveLibraryItem('draft')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white"><Scissors className="h-4 w-4" /> Save Draft</button>
                   <button onClick={() => saveLibraryItem('finished')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-300/30 bg-emerald-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-emerald-100"><Layers className="h-4 w-4" /> Finished</button>
                   <button onClick={() => void scheduleAsset()} disabled={!selectedAsset || !scheduleAt} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-fuchsia-300/30 bg-fuchsia-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-fuchsia-100 disabled:opacity-40"><CalendarClock className="h-4 w-4" /> Schedule</button>
-                  <button onClick={() => void postAsset(selectedAsset, selectedAsset?.type === 'video' ? 'short' : 'post')} disabled={!selectedAsset} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-40"><Send className="h-4 w-4" /> Post Now</button>
+                  <button onClick={() => void postAsset(selectedAsset, selectedAsset?.type === 'video' ? 'short' : 'post')} disabled={!selectedAsset || uploading} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-40">{uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Post Now</button>
                 </div>
               </div>
 
