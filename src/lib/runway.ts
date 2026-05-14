@@ -33,6 +33,18 @@ export interface RunwayTaskResponse {
   raw?: unknown;
 }
 
+export interface StudioAssetUploadRequest {
+  assetUrl: string;
+  assetType: RunwayAssetType | 'thumbnail';
+  title?: string;
+}
+
+export interface StudioAssetUploadResponse {
+  publicUrl: string;
+  path: string;
+  contentType: string;
+}
+
 function apiBaseUrl() {
   return String(import.meta.env.VITE_API_URL || import.meta.env.VITE_SOCKET_URL || '').replace(/\/$/, '');
 }
@@ -60,4 +72,13 @@ export async function getRunwayTask(taskId: string): Promise<RunwayTaskResponse>
   });
 
   return parseResponse(response);
+}
+
+export async function uploadStudioAsset(input: StudioAssetUploadRequest): Promise<StudioAssetUploadResponse> {
+  const response = await authedFetch(`${apiBaseUrl()}/api/runway/studio-assets`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+
+  return parseResponse(response) as unknown as Promise<StudioAssetUploadResponse>;
 }
