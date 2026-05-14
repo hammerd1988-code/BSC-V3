@@ -291,7 +291,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
         boosts: 0,
         comments_count: 0,
         is_boosted: false,
-        type: uploadedVideoUrl ? (isShort ? 'short' : 'video') : selectedGif ? 'gif' : 'text' as const,
+        type: uploadedVideoUrl || selectedGif ? 'media' as const : 'text' as const,
         view_count: 0,
       };
 
