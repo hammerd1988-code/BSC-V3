@@ -30,7 +30,7 @@ import { registerPushRoutes } from './pushNotifications.js';
 import { registerLiveKitRoutes } from './livekitRoutes.js';
 import { registerRunwayRoutes } from './runwayRoutes.js';
 import { registerUnifiedBotRoutes } from './botUnificationRoutes.js';
-import { registerServerAiRoutes } from './serverAi.js';
+import { generateServerText, isServerAiConfigured, registerServerAiRoutes } from './serverAi.js';
 import { registerColosseumRoutes } from './colosseumRoutes.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
 import { BOT_PERSONAS } from './src/lib/botPersonas.js';
@@ -85,6 +85,93 @@ function profileAvatarUrl(profile: { avatar_prompt?: string }, seed: string, fal
 function normalizeModel(model?: string | null) {
   if (!model || model === 'platform_default') return PLATFORM_DEFAULT_MODEL;
   return model;
+}
+
+function clampScore(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function solutionSignalScore(solution: string, challengeType: ColosseumChallengeType, expectedSignals = '') {
+  const normalized = solution.trim().toLowerCase();
+  if (!normalized) return 0;
+
+  const codeSignals = ['function', 'const ', 'let ', 'return', 'class ', 'def ', '=>', '{', ';', 'async', 'await', 'try', 'catch']
+    .filter((token) => normalized.includes(token)).length;
+  const expectedHits = expectedSignals
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 4)
+    .filter((token) => normalized.includes(token)).length;
+  const styleBonus = challengeType === 'speed_round'
+    ? Number(/\bo\(n\)|set|map|heap|bucket|batch|cache/.test(normalized)) * 12
+    : challengeType === 'debug_battle'
+      ? Number(/fix|bug|root|abort|transaction|idempot|cleanup|rollback|race/.test(normalized)) * 12
+      : Number(solution.length > 0 && solution.length < 900) * 12;
+
+  return clampScore(18 + codeSignals * 4 + expectedHits * 6 + styleBonus + Math.min(16, Math.floor(solution.length / 180)));
+}
+
+function gladiatorBaseScore(gladiator: any, challengeType: ColosseumChallengeType) {
+  const stats = gladiator?.stats && typeof gladiator.stats === 'object' ? gladiator.stats : {};
+  const speed = Number(stats.speed ?? 50);
+  const accuracy = Number(stats.accuracy ?? 50);
+  const creativity = Number(stats.creativity ?? 50);
+  const endurance = Number(stats.endurance ?? 50);
+  const weighted = challengeType === 'speed_round'
+    ? speed * 0.28 + accuracy * 0.18 + creativity * 0.08 + endurance * 0.1
+    : challengeType === 'debug_battle'
+      ? accuracy * 0.3 + endurance * 0.16 + creativity * 0.1 + speed * 0.08
+      : creativity * 0.26 + accuracy * 0.18 + endurance * 0.14 + speed * 0.06;
+  return clampScore(weighted);
+}
+
+function fallbackColosseumJudge(input: {
+  challengeType: ColosseumChallengeType;
+  challenger: any;
+  defender: any;
+  expectedSignals?: string;
+  userSolution?: string;
+  botSolution?: string;
+  providerError?: string;
+}) {
+  const challengerSolutionScore = solutionSignalScore(input.userSolution ?? '', input.challengeType, input.expectedSignals);
+  const defenderSolutionScore = solutionSignalScore(input.botSolution ?? '', input.challengeType, input.expectedSignals);
+  const challengerScore = clampScore(challengerSolutionScore * 0.72 + gladiatorBaseScore(input.challenger, input.challengeType) * 0.28);
+  const defenderScore = clampScore(defenderSolutionScore * 0.72 + gladiatorBaseScore(input.defender, input.challengeType) * 0.28);
+  const winnerId = challengerScore >= defenderScore ? input.challenger.id : input.defender.id;
+
+  return {
+    winner_id: winnerId,
+    challenger_score: challengerScore,
+    defender_score: defenderScore,
+    summary: input.providerError
+      ? `Rule judge used because AI judge was unavailable: ${input.providerError}`
+      : 'Rule judge scored code signals, expected requirements, and combat stats.',
+    reasoning: [
+      `${input.challenger.name}: solution signal ${challengerSolutionScore}/100 plus stat pressure.`,
+      `${input.defender.name}: solution signal ${defenderSolutionScore}/100 plus stat pressure.`,
+    ],
+    provider: 'rule-judge',
+    model: 'deterministic-colosseum-rubric',
+    used_ai: false,
+  };
+}
+
+function extractJsonObject(text: string) {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
+  const candidate = fenced || trimmed;
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    const start = candidate.indexOf('{');
+    const end = candidate.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      return JSON.parse(candidate.slice(start, end + 1));
+    }
+    throw new Error('AI judge did not return parseable JSON');
+  }
 }
 
 function isSapphireRecord(record: any) {
@@ -248,6 +335,99 @@ async function generateGladiatorMove(input: {
     latency_ms: Date.now() - startedAt,
     received_at: new Date().toISOString(),
   };
+}
+
+async function judgeColosseumBattle(input: {
+  matchId?: string;
+  challengeType: ColosseumChallengeType;
+  challengePrompt?: string;
+  expectedSignals?: string;
+  challenger: any;
+  defender: any;
+  userSolution?: string;
+  botSolution?: string;
+  moves: any[];
+}) {
+  const systemPrompt = 'You are the Blood Sweat Code Colosseum judge. Score actual submitted code and bot solution quality. Return only JSON.';
+  const prompt = `Judge this coding battle. Pick the winner from the two gladiator ids and score both 0-100.
+
+Challenge type: ${input.challengeType}
+Challenge:
+${input.challengePrompt || CHALLENGE_BRIEFS[input.challengeType]}
+Expected signals: ${input.expectedSignals || 'Correct, practical, complete solution.'}
+
+Challenger:
+id=${input.challenger.id}
+name=${input.challenger.name}
+solution:
+${input.userSolution || '(no challenger solution submitted)'}
+
+Defender:
+id=${input.defender.id}
+name=${input.defender.name}
+solution:
+${input.botSolution || '(no defender solution returned)'}
+
+Return JSON with keys: winner_id, challenger_score, defender_score, summary, reasoning (array of short strings).`;
+
+  if (!isServerAiConfigured()) {
+    return fallbackColosseumJudge({
+      challengeType: input.challengeType,
+      challenger: input.challenger,
+      defender: input.defender,
+      expectedSignals: input.expectedSignals,
+      userSolution: input.userSolution,
+      botSolution: input.botSolution,
+      providerError: 'No GEMINI_API_KEY or OPENAI_API_KEY configured.',
+    });
+  }
+
+  const result = await generateServerText(prompt, {
+    systemPrompt,
+    temperature: 0.2,
+    maxTokens: 700,
+    jsonResponse: true,
+  });
+
+  if (!result.text) {
+    return fallbackColosseumJudge({
+      challengeType: input.challengeType,
+      challenger: input.challenger,
+      defender: input.defender,
+      expectedSignals: input.expectedSignals,
+      userSolution: input.userSolution,
+      botSolution: input.botSolution,
+      providerError: result.lastError || 'AI judge returned no text.',
+    });
+  }
+
+  try {
+    const parsed = extractJsonObject(result.text);
+    const winnerId = [input.challenger.id, input.defender.id].map(String).includes(String(parsed.winner_id))
+      ? String(parsed.winner_id)
+      : (Number(parsed.challenger_score ?? 0) >= Number(parsed.defender_score ?? 0) ? input.challenger.id : input.defender.id);
+
+    return {
+      winner_id: winnerId,
+      challenger_score: clampScore(Number(parsed.challenger_score ?? 0)),
+      defender_score: clampScore(Number(parsed.defender_score ?? 0)),
+      summary: String(parsed.summary ?? 'AI judge scored the submitted solutions.'),
+      reasoning: Array.isArray(parsed.reasoning) ? parsed.reasoning.map((line: any) => String(line)).slice(0, 5) : [],
+      provider: result.provider,
+      model: result.model,
+      used_ai: true,
+    };
+  } catch (error: any) {
+    return fallbackColosseumJudge({
+      challengeType: input.challengeType,
+      challenger: input.challenger,
+      defender: input.defender,
+      expectedSignals: input.expectedSignals,
+      userSolution: input.userSolution,
+      botSolution: input.botSolution,
+      providerError: error?.message ?? 'AI judge parse failed.',
+    });
+  }
 }
 
 async function postToSapphire(prompt: string, context: Record<string, any>) {
@@ -652,6 +832,57 @@ async function startServer() {
     } catch (error: any) {
       console.error('[colosseum:gladiator-solutions]', error);
       return res.status(502).json({ success: false, error: error.message || 'Gladiator solution generation failed' });
+    }
+  });
+
+  app.post('/api/colosseum/judge-battle', async (req, res) => {
+    try {
+      const { matchId, challengeType, challengePrompt, expectedSignals, userSolution, botSolution, moves } = req.body ?? {};
+      let match: any = null;
+
+      if (matchId) {
+        const { data, error } = await supabase
+          .from('matches')
+          .select('*')
+          .eq('id', matchId)
+          .maybeSingle();
+        if (error) throw error;
+        match = data;
+      }
+
+      if (!match?.challenger_id || !match?.defender_id) {
+        return res.status(400).json({ success: false, error: 'matchId is required for battle judging' });
+      }
+
+      const normalizedChallengeType = (match.challenge_type ?? challengeType ?? 'speed_round') as ColosseumChallengeType;
+      const { data: combatants, error: combatantError } = await supabase
+        .from('gladiators')
+        .select(SAFE_GLADIATOR_SELECT)
+        .in('id', [match.challenger_id, match.defender_id]);
+      if (combatantError) throw combatantError;
+
+      const challenger = (combatants ?? []).find((gladiator: any) => String(gladiator.id) === String(match.challenger_id));
+      const defender = (combatants ?? []).find((gladiator: any) => String(gladiator.id) === String(match.defender_id));
+      if (!challenger || !defender) {
+        return res.status(404).json({ success: false, error: 'Combatants not found' });
+      }
+
+      const judge = await judgeColosseumBattle({
+        matchId,
+        challengeType: normalizedChallengeType,
+        challengePrompt,
+        expectedSignals,
+        challenger,
+        defender,
+        userSolution,
+        botSolution,
+        moves: Array.isArray(moves) ? moves : [],
+      });
+
+      return res.json({ success: true, judge });
+    } catch (error: any) {
+      console.error('[colosseum:judge-battle]', error);
+      return res.status(502).json({ success: false, error: error.message || 'Colosseum judge failed' });
     }
   });
 

@@ -1,11 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Send, Loader2, Image as ImageIcon, CheckCircle, AlertCircle, Bold, Italic, Link as LinkIcon, Video, Clapperboard } from 'lucide-react';
+import { X, Send, Loader2, Image as ImageIcon, CheckCircle, AlertCircle, Bold, Italic, Link as LinkIcon, Video, Clapperboard, Film, Smile, Sticker, Sparkles } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
 import { socket } from '../lib/socket';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  TRANSMISSION_GIF_SIGNALS,
+  TRANSMISSION_SIGNAL_TABS,
+  TRANSMISSION_TEXT_SIGNALS,
+  TransmissionGifSignal,
+  TransmissionSignalTab,
+  TransmissionTextSignal,
+} from '../lib/transmissionSignalPacks';
 
 // Lazy-load TipTap to avoid SSR/init issues
 let useEditor: any = null;
@@ -52,6 +60,26 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
   const [videoThumbnailUrl, setVideoThumbnailUrl] = useState('');
   const [videoCategory, setVideoCategory] = useState('Coding');
   const [isShort, setIsShort] = useState(false);
+  const [showSignalPicker, setShowSignalPicker] = useState(false);
+  const [signalTab, setSignalTab] = useState<TransmissionSignalTab>('gifs');
+  const [signalSearch, setSignalSearch] = useState('');
+  const [selectedGif, setSelectedGif] = useState<TransmissionGifSignal | null>(null);
+  const signalSearchQuery = signalSearch.trim().toLowerCase();
+  const filteredGifSignals = TRANSMISSION_GIF_SIGNALS.filter(signal => {
+    if (!signalSearchQuery) return true;
+    return [signal.label, signal.mood, signal.emoji, ...signal.tags].some(value => value.toLowerCase().includes(signalSearchQuery));
+  });
+  const filteredTextSignals = TRANSMISSION_TEXT_SIGNALS.filter(signal => {
+    if (signal.type !== signalTab) return false;
+    if (!signalSearchQuery) return true;
+    return [signal.label, signal.value, signal.tone, signal.category].some(value => value.toLowerCase().includes(signalSearchQuery));
+  });
+  const signalIcons: Record<TransmissionSignalTab, React.ComponentType<{ className?: string }>> = {
+    gifs: Film,
+    emoji: Smile,
+    stickers: Sticker,
+    kaomoji: Sparkles,
+  };
 
   // TipTap editor — only used when TipTap is available
   const editor = useEditor && !useFallback ? useEditor({
@@ -95,6 +123,9 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
       setError(null);
       setSuccess(false);
       setFallbackContent('');
+      setSelectedGif(null);
+      setShowSignalPicker(false);
+      setSignalSearch('');
       clearVideo();
       if (editor) editor.commands.setContent('');
     }
@@ -115,10 +146,34 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
 
   const isEmpty = (): boolean => {
     if (videoFile) return false;
+    if (selectedGif) return false;
     if (useFallback || !editor) return !fallbackContent.trim();
     const text = editor.getText().trim();
     const html = editor.getHTML();
     return !text && !html.includes('<img');
+  };
+
+  const appendTextSignal = (signal: TransmissionTextSignal) => {
+    if (useFallback || !editor) {
+      setFallbackContent((prev) => `${prev}${prev.trim() ? ' ' : ''}${signal.value}`);
+    } else {
+      editor.chain().focus().insertContent(` ${signal.value} `).run();
+    }
+    setShowSignalPicker(false);
+  };
+
+  const selectGifSignal = (signal: TransmissionGifSignal) => {
+    setSelectedGif(signal);
+    if (useFallback || !editor) {
+      setFallbackContent((prev) => prev.trim() ? prev : `${signal.label} ${signal.emoji}`);
+    } else if (!editor.getText().trim()) {
+      editor.commands.setContent(`<p>${signal.label} ${signal.emoji}</p>`);
+    }
+    setShowSignalPicker(false);
+  };
+
+  const clearSelectedGif = () => {
+    setSelectedGif(null);
   };
 
   const setLink = () => {
@@ -201,8 +256,8 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
 
     const { html: htmlContent, text: textContent } = getContent();
 
-    if (!textContent && !htmlContent.includes('<img') && !videoFile) {
-      setError('Write something or attach a video before posting.');
+    if (!textContent && !htmlContent.includes('<img') && !videoFile && !selectedGif) {
+      setError('Write something or attach a video/GIF before posting.');
       return;
     }
 
@@ -229,14 +284,14 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
       // created_at, updated_at, view_count, poll_data
       const newPost = {
         author_id: currentUser.id,
-        content: htmlContent || `<p>${videoTitle || 'New video transmission'}</p>`,
-        media_url: uploadedVideoUrl,
-        media_type: uploadedVideoUrl ? 'video' as const : null,
+        content: htmlContent || `<p>${videoTitle || selectedGif?.label || 'New signal transmission'}</p>`,
+        media_url: uploadedVideoUrl || selectedGif?.url || null,
+        media_type: uploadedVideoUrl ? 'video' as const : selectedGif ? 'image' as const : null,
         likes: 0,
         boosts: 0,
         comments_count: 0,
         is_boosted: false,
-        type: uploadedVideoUrl ? (isShort ? 'short' : 'video') : 'text' as const,
+        type: uploadedVideoUrl ? (isShort ? 'short' : 'video') : selectedGif ? 'gif' : 'text' as const,
         view_count: 0,
       };
 
@@ -283,6 +338,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
 
       setSuccess(true);
       setFallbackContent('');
+      setSelectedGif(null);
       clearVideo();
       if (editor) editor.commands.setContent('');
 
@@ -315,6 +371,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
       setError(null);
       setSuccess(false);
       setFallbackContent('');
+      setSelectedGif(null);
       clearVideo();
       if (editor) editor.commands.setContent('');
       onClose();
@@ -409,7 +466,146 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({ isOpen, onClos
                   <Video className="w-3.5 h-3.5" />
                   <input type="file" accept="video/*" className="hidden" onChange={handleVideoSelect} disabled={isSubmitting} />
                 </label>
+                <button
+                  type="button"
+                  onClick={() => setShowSignalPicker((value) => !value)}
+                  className={cn(
+                    "p-2 rounded-lg hover:bg-white/10 transition-colors",
+                    showSignalPicker ? "bg-accent/20 text-accent" : "text-pink-300"
+                  )}
+                  title="Add GIF, reaction, sticker, or kaomoji"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                </button>
               </div>
+            )}
+
+            {useFallback && (
+              <div className="mb-3 flex flex-wrap gap-2 rounded-xl border border-white/5 bg-white/[0.03] p-2">
+                <label className="p-2 rounded-lg hover:bg-white/10 transition-colors text-zinc-500 cursor-pointer" title="Add image">
+                  <ImageIcon className="w-3.5 h-3.5" />
+                  <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} disabled={isSubmitting} />
+                </label>
+                <label className="p-2 rounded-lg hover:bg-white/10 transition-colors text-cyan-400 cursor-pointer" title="Add video or short">
+                  <Video className="w-3.5 h-3.5" />
+                  <input type="file" accept="video/*" className="hidden" onChange={handleVideoSelect} disabled={isSubmitting} />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowSignalPicker((value) => !value)}
+                  className={cn(
+                    "p-2 rounded-lg hover:bg-white/10 transition-colors",
+                    showSignalPicker ? "bg-accent/20 text-accent" : "text-pink-300"
+                  )}
+                  title="Add GIF, reaction, sticker, or kaomoji"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {selectedGif && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mt-4 overflow-hidden rounded-2xl border border-pink-300/20 bg-pink-300/[0.04]"
+              >
+                <div className="relative aspect-video bg-black">
+                  <img src={selectedGif.url} alt={selectedGif.label} className="h-full w-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={clearSelectedGif}
+                    className="absolute right-3 top-3 rounded-full bg-black/70 p-2 text-white hover:bg-red-500"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                  <div className="absolute left-3 top-3 rounded-full bg-black/70 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-pink-100">
+                    GIF Signal · {selectedGif.emoji} {selectedGif.mood}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {showSignalPicker && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mb-4 overflow-hidden rounded-2xl border border-pink-300/20 bg-black/70"
+              >
+                <div className="border-b border-white/10 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[8px] font-black uppercase tracking-[0.28em] text-pink-200">Fun Signal Picker</p>
+                      <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500">GIFs, reactions, stickers, kaomoji</p>
+                    </div>
+                    <button type="button" onClick={() => setShowSignalPicker(false)} className="rounded-full border border-white/10 p-1.5 text-zinc-500 hover:text-white">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                  <div className="mt-3 grid grid-cols-4 gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-1">
+                    {TRANSMISSION_SIGNAL_TABS.map(tab => {
+                      const Icon = signalIcons[tab.id];
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setSignalTab(tab.id)}
+                          className={cn(
+                            "flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[8px] font-black uppercase tracking-widest transition",
+                            signalTab === tab.id ? "bg-accent text-black" : "text-zinc-500 hover:bg-white/10 hover:text-white"
+                          )}
+                        >
+                          <Icon className="h-3.5 w-3.5" />
+                          {tab.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <input
+                    value={signalSearch}
+                    onChange={(event) => setSignalSearch(event.target.value)}
+                    placeholder="Search vibe, reaction, city, bot lore..."
+                    className="mt-3 w-full rounded-xl border border-white/10 bg-black/60 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white outline-none placeholder:text-zinc-700 focus:border-accent/50"
+                  />
+                </div>
+                <div className="max-h-64 overflow-y-auto p-3 custom-scrollbar">
+                  {signalTab === 'gifs' ? (
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {filteredGifSignals.map(signal => (
+                        <button
+                          key={signal.id}
+                          type="button"
+                          onClick={() => selectGifSignal(signal)}
+                          className="group overflow-hidden rounded-xl border border-white/10 bg-white/[0.03] text-left hover:border-accent/40"
+                        >
+                          <div className="aspect-video overflow-hidden bg-black">
+                            <img src={signal.url} alt={signal.label} loading="lazy" className="h-full w-full object-cover opacity-80 transition group-hover:scale-105 group-hover:opacity-100" />
+                          </div>
+                          <div className="p-2">
+                            <p className="truncate text-[9px] font-black uppercase tracking-widest text-white">{signal.emoji} {signal.label}</p>
+                            <p className="truncate text-[8px] font-bold uppercase tracking-widest text-accent/70">{signal.mood}</p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {filteredTextSignals.map(signal => (
+                        <button
+                          key={signal.id}
+                          type="button"
+                          onClick={() => appendTextSignal(signal)}
+                          className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-left hover:border-accent/40"
+                        >
+                          <div className="mb-2 flex h-10 items-center justify-center rounded-lg bg-black/50 text-lg font-black text-white">{signal.value}</div>
+                          <p className="truncate text-[9px] font-black uppercase tracking-widest text-white">{signal.label}</p>
+                          <p className="truncate text-[8px] font-bold uppercase tracking-widest text-zinc-500">{signal.category} · {signal.tone}</p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </motion.div>
             )}
 
             {/* Editor / Fallback textarea */}
