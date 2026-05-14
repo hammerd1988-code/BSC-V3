@@ -147,6 +147,7 @@ export function ContentCreationStudio() {
   const [scheduleAt, setScheduleAt] = useState('');
   const [status, setStatus] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [actionLoading, setActionLoading] = useState<AssetAction | null>(null);
   const [gate, setGate] = useState<ReturnType<typeof canAccess> | null>(null);
   const [thumbnailTitle, setThumbnailTitle] = useState('BUILD FASTER');
   const [thumbnailSubtitle, setThumbnailSubtitle] = useState('Blood Sweat Code');
@@ -287,6 +288,13 @@ export function ContentCreationStudio() {
     }
   };
 
+  const ensureThumbnailAsset = async () => {
+    if (mode !== 'thumbnail') return selectedAsset;
+    if (selectedAsset?.type === 'thumbnail') return selectedAsset;
+    setStatus('Exporting current thumbnail before action...');
+    return exportThumbnail();
+  };
+
   const postAsset = async (asset: StudioAsset | null, kind: 'post' | 'short' | 'video' = 'post') => {
     if (!currentUser || !asset) return;
     setStatus(null);
@@ -351,9 +359,9 @@ export function ContentCreationStudio() {
     setStatus('Asset loaded into Thumbnail Creator background.');
   };
 
-  const saveLibraryItem = (status: LibraryStatus) => {
+  const saveLibraryItem = (status: LibraryStatus, assetOverride?: StudioAsset | null) => {
     const now = new Date().toISOString();
-    const asset = selectedAsset;
+    const asset = assetOverride ?? selectedAsset;
     const title = (thumbnailTitle || composer.split('\n')[0] || prompt.slice(0, 48) || 'Untitled Studio Project').trim();
     const item: CreatorLibraryItem = {
       id: crypto.randomUUID(),
@@ -404,15 +412,33 @@ export function ContentCreationStudio() {
   };
 
   const handleAssetAction = async (action: AssetAction, asset: StudioAsset | null = selectedAsset) => {
-    if (!asset) return;
-    if (action === 'thumbnail') useAsThumbnail(asset);
-    if (action === 'feed') await postAsset(asset, 'post');
-    if (action === 'short') await postAsset(asset, 'short');
-    if (action === 'project') {
-      setComposer(`Project asset staged:\n${asset.url}\n\nPrompt:\n${asset.prompt}`);
-      setStatus('Asset staged in the unified composer.');
+    setActionLoading(action);
+    try {
+      const activeAsset = mode === 'thumbnail' ? await ensureThumbnailAsset() : asset;
+      if (!activeAsset) {
+        setStatus(mode === 'thumbnail' ? 'Export a thumbnail first, then try that action again.' : 'Generate or select an asset first.');
+        return;
+      }
+      if (action === 'thumbnail') useAsThumbnail(activeAsset);
+      if (action === 'feed') await postAsset(activeAsset, 'post');
+      if (action === 'short') {
+        if (activeAsset.type !== 'video') {
+          setStatus('Short publishing needs a video asset. Use Generate Video, then Short.');
+          return;
+        }
+        await postAsset(activeAsset, 'short');
+      }
+      if (action === 'project') {
+        setComposer(`Project asset staged:\n${activeAsset.url}\n\nPrompt:\n${activeAsset.prompt}`);
+        saveLibraryItem('finished', activeAsset);
+        setStatus('Asset staged and saved as a finished project.');
+      }
+      if (action === 'download') await downloadAsset(activeAsset);
+    } catch (err: any) {
+      setStatus(err?.message || 'Studio action failed.');
+    } finally {
+      setActionLoading(null);
     }
-    if (action === 'download') await downloadAsset(asset);
   };
 
   const handleCustomBg = (file: File | null) => {
@@ -540,11 +566,11 @@ export function ContentCreationStudio() {
               {status && <div className="mt-4 rounded-2xl border border-fuchsia-300/20 bg-fuchsia-300/10 p-4 text-sm text-fuchsia-100">{status}</div>}
 
               <div className="mt-5 grid gap-3 sm:grid-cols-5">
-                <button onClick={() => handleAssetAction('thumbnail')} disabled={!selectedAsset} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-40"><ImageIcon className="mx-auto mb-1 h-4 w-4" /> Thumbnail</button>
-                <button onClick={() => void handleAssetAction('feed')} disabled={!selectedAsset || uploading} className="rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-40"><Send className="mx-auto mb-1 h-4 w-4" /> Feed</button>
-                <button onClick={() => void handleAssetAction('short')} disabled={!selectedAsset || selectedAsset.type !== 'video' || uploading} className="rounded-2xl border border-fuchsia-300/25 bg-fuchsia-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-fuchsia-100 disabled:opacity-40"><Play className="mx-auto mb-1 h-4 w-4" /> Short</button>
-                <button onClick={() => void handleAssetAction('project')} disabled={!selectedAsset} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-40"><Scissors className="mx-auto mb-1 h-4 w-4" /> Project</button>
-                <button onClick={() => void handleAssetAction('download')} disabled={!selectedAsset} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-40"><Download className="mx-auto mb-1 h-4 w-4" /> Download</button>
+                <button onClick={() => void handleAssetAction('thumbnail')} disabled={actionLoading !== null || (mode !== 'thumbnail' && !selectedAsset)} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-40">{actionLoading === 'thumbnail' ? <Loader2 className="mx-auto mb-1 h-4 w-4 animate-spin" /> : <ImageIcon className="mx-auto mb-1 h-4 w-4" />} Thumbnail</button>
+                <button onClick={() => void handleAssetAction('feed')} disabled={uploading || actionLoading !== null || (mode !== 'thumbnail' && !selectedAsset)} className="rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-40">{actionLoading === 'feed' ? <Loader2 className="mx-auto mb-1 h-4 w-4 animate-spin" /> : <Send className="mx-auto mb-1 h-4 w-4" />} Feed</button>
+                <button onClick={() => void handleAssetAction('short')} disabled={uploading || actionLoading !== null || (mode !== 'thumbnail' && !selectedAsset)} className="rounded-2xl border border-fuchsia-300/25 bg-fuchsia-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-fuchsia-100 disabled:opacity-40">{actionLoading === 'short' ? <Loader2 className="mx-auto mb-1 h-4 w-4 animate-spin" /> : <Play className="mx-auto mb-1 h-4 w-4" />} Short</button>
+                <button onClick={() => void handleAssetAction('project')} disabled={actionLoading !== null || (mode !== 'thumbnail' && !selectedAsset)} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-40">{actionLoading === 'project' ? <Loader2 className="mx-auto mb-1 h-4 w-4 animate-spin" /> : <Scissors className="mx-auto mb-1 h-4 w-4" />} Project</button>
+                <button onClick={() => void handleAssetAction('download')} disabled={actionLoading !== null || (mode !== 'thumbnail' && !selectedAsset)} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-40">{actionLoading === 'download' ? <Loader2 className="mx-auto mb-1 h-4 w-4 animate-spin" /> : <Download className="mx-auto mb-1 h-4 w-4" />} Download</button>
               </div>
             </section>
 
@@ -557,7 +583,7 @@ export function ContentCreationStudio() {
                   <button onClick={() => saveLibraryItem('draft')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white"><Scissors className="h-4 w-4" /> Save Draft</button>
                   <button onClick={() => saveLibraryItem('finished')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-300/30 bg-emerald-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-emerald-100"><Layers className="h-4 w-4" /> Finished</button>
                   <button onClick={() => void scheduleAsset()} disabled={!selectedAsset || !scheduleAt} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-fuchsia-300/30 bg-fuchsia-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-fuchsia-100 disabled:opacity-40"><CalendarClock className="h-4 w-4" /> Schedule</button>
-                  <button onClick={() => void postAsset(selectedAsset, selectedAsset?.type === 'video' ? 'short' : 'post')} disabled={!selectedAsset || uploading} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-40">{uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Post Now</button>
+                  <button onClick={() => void handleAssetAction('feed')} disabled={uploading || actionLoading !== null || (mode !== 'thumbnail' && !selectedAsset)} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-40">{uploading || actionLoading === 'feed' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Post Now</button>
                 </div>
               </div>
 
