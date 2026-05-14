@@ -11,7 +11,6 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { SquareClient, SquareEnvironment } from 'square';
-import { createClient } from '@supabase/supabase-js';
 import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
 const BOT_UUID_NAMESPACE = '00000000-0000-4000-8000-000000000b5c';
 
@@ -33,15 +32,13 @@ import { registerRunwayRoutes } from './runwayRoutes.js';
 import { registerUnifiedBotRoutes } from './botUnificationRoutes.js';
 import { registerServerAiRoutes } from './serverAi.js';
 import { registerColosseumRoutes } from './colosseumRoutes.js';
+import { createServerSupabaseClient } from './serverSupabase.js';
 import { BOT_PERSONAS } from './src/lib/botPersonas.js';
 import { BOT_GLADIATOR_PROFILES, SAPPHIRE_GLADIATOR_PROFILE, botStatsToPercent } from './src/lib/botGladiatorProfiles.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
-// Supabase service-role client for server-side operations
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+const supabase = createServerSupabaseClient();
 
 function readWorkspaceResourceSnapshot() {
   const cpuLoad = os.loadavg()[0] || 0;
@@ -1158,6 +1155,16 @@ app.post("/api/cred/exchange", async (req, res) => {
 
       try {
         await supabase.from('casper_activity_log').insert({
+          user_id: profile.id,
+          action: 'terminal_execute',
+          details: {
+            mode,
+            exit_code: result.exitCode,
+            duration_ms: result.durationMs,
+            truncated: result.truncated,
+            ok: result.ok,
+            reason: result.reason ?? null,
+          },
           action_type: 'terminal_execute',
           description: `Casper terminal: ${command.slice(0, 200)}`,
           metadata: {
@@ -1308,6 +1315,16 @@ app.post("/api/cred/exchange", async (req, res) => {
 
       try {
         await supabase.from('casper_activity_log').insert({
+          user_id: profile.id,
+          action: 'integration_execute',
+          details: {
+            integration_key: integrationKey,
+            tool_name: toolName,
+            ok: result.ok,
+            status: result.status ?? null,
+            duration_ms: result.durationMs ?? null,
+            error: result.error ?? null,
+          },
           action_type: 'integration_execute',
           description: `Casper integration ${integrationKey}.${toolName}`,
           metadata: {

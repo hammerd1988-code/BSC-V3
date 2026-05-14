@@ -1,7 +1,6 @@
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import { createClient } from '@supabase/supabase-js';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import os from 'os';
@@ -14,11 +13,9 @@ import { registerRunwayRoutes } from './runwayRoutes.js';
 import { registerUnifiedBotRoutes } from './botUnificationRoutes.js';
 import { registerServerAiRoutes } from './serverAi.js';
 import { registerColosseumRoutes } from './colosseumRoutes.js';
+import { createServerSupabaseClient } from './serverSupabase.js';
 
-// Supabase service-role client for server-side push subscription and notification operations
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+const supabase = createServerSupabaseClient();
 
 function readWorkspaceResourceSnapshot() {
   const cpuLoad = os.loadavg()[0] || 0;

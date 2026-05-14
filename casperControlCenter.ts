@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { getServerSupabaseHost } from './serverSupabase.js';
 import { randomUUID } from 'crypto';
 import {
   generateServerText,
@@ -226,16 +227,6 @@ function decodeJwtIssuer(token: string): { issuerHost: string | null; projectRef
   }
 }
 
-function getServerSupabaseHost(): string | null {
-  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
-  if (!url) return null;
-  try {
-    return new URL(url).host;
-  } catch {
-    return null;
-  }
-}
-
 export type CasperAuthFailureReason =
   | 'no_token'
   | 'invalid_token'
@@ -285,7 +276,7 @@ export async function resolveCasperAuth(req: Request, supabase: SupabaseClient):
         message:
           'This server is configured for a different Supabase project than the one that issued your sign-in token. ' +
           'Re-signing in will not fix this — the server admin needs to set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY ' +
-          'on Railway to match the frontend project.',
+          'to match the frontend project.',
         diagnostic: {
           serverSupabaseHost: serverHost,
           tokenIssuerHost: issuerHost,
@@ -983,6 +974,9 @@ async function logActivity(supabase: SupabaseClient, input: {
   metadata?: Record<string, any>;
 }) {
   const row: Record<string, any> = {
+    user_id: input.actor_id,
+    action: input.action_type,
+    details: input.metadata ?? {},
     action_type: input.action_type,
     description: input.description,
     metadata: input.metadata ?? {},
