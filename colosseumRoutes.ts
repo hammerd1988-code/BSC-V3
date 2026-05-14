@@ -580,10 +580,6 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
       const sapphireInMatch = [challenger, defender].some(isSapphireRecord)
         || [challengerLookup, defenderLookup].map(String).includes(String(sapphire.id));
 
-      if (!sapphireInMatch) {
-        return res.status(400).json({ success: false, error: 'Sapphire is not a combatant in this match' });
-      }
-
       const normalizedChallengeType = (match?.challenge_type ?? challengeType ?? 'speed_round') as ColosseumChallengeType;
       const sapphirePrompt = buildSapphireChallengePrompt({
         challengeType: normalizedChallengeType,
@@ -591,34 +587,54 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
         defender,
         prompt,
       });
-      const { payload, solution } = await postToSapphire(sapphirePrompt, {
-        matchId,
-        challengeType: normalizedChallengeType,
-        challenger: challenger ? { id: challenger.id, name: challenger.name } : null,
-        defender: defender ? { id: defender.id, name: defender.name } : null,
-      });
-
-      const move = {
-        source: 'sapphire-api',
-        prompt: sapphirePrompt,
-        solution: solution || 'Sapphire returned an empty solution packet.',
-        raw: payload,
-        latency_ms: Date.now() - startedAt,
-        received_at: new Date().toISOString(),
-      };
+      let move;
+      try {
+        const { payload, solution } = await postToSapphire(sapphirePrompt, {
+          matchId,
+          challengeType: normalizedChallengeType,
+          challenger: challenger ? { id: challenger.id, name: challenger.name } : null,
+          defender: defender ? { id: defender.id, name: defender.name } : null,
+        });
+        move = {
+          source: 'sapphire-api',
+          prompt: sapphirePrompt,
+          solution: solution || 'Sapphire returned an empty solution packet.',
+          raw: payload,
+          latency_ms: Date.now() - startedAt,
+          received_at: new Date().toISOString(),
+        };
+      } catch (error: any) {
+        move = {
+          source: 'sapphire-tunnel-unavailable',
+          prompt: sapphirePrompt,
+          solution: `Sapphire tunnel unavailable: ${error?.message ?? 'unknown error'}`,
+          raw: { error: error?.message ?? 'unknown error', configured_url: SAPPHIRE_API_URL },
+          latency_ms: Date.now() - startedAt,
+          received_at: new Date().toISOString(),
+        };
+      }
 
       if (match?.id) {
         const existingReplay = (match.replay_data && typeof match.replay_data === 'object') ? match.replay_data : {};
         const existingLog = Array.isArray(existingReplay.log) ? existingReplay.log : [];
+        const waitingIntercept = !sapphireInMatch;
         await supabase
           .from('matches')
           .update({
             replay_data: {
               ...existingReplay,
               sapphire_move: move,
+              sapphire_intercept: waitingIntercept ? {
+                gladiator_id: sapphire.id,
+                gladiator_name: sapphire.name,
+                move,
+                received_at: move.received_at,
+              } : existingReplay.sapphire_intercept,
               log: [
                 ...existingLog,
-                `Sapphire live API returned a solution packet in ${move.latency_ms}ms.`,
+                waitingIntercept
+                  ? `Sapphire intercepted the waiting battle with a live API solution packet in ${move.latency_ms}ms.`
+                  : `Sapphire live API returned a solution packet in ${move.latency_ms}ms.`,
               ],
               updated_client_at: new Date().toISOString(),
             },

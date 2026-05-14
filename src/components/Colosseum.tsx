@@ -125,6 +125,8 @@ interface SapphireMove {
   received_at?: string;
 }
 
+const WAITING_BATTLE_SAPPHIRE_STUB_SOLUTION = 'Sapphire intercept request queued for this waiting battle.';
+
 interface BattleJudgeResult {
   winner_id: string;
   challenger_score: number;
@@ -791,7 +793,10 @@ function clientFallbackBattleJudge(input: {
     28 + userSolutionBonus(input.userSolution, input.challenge, input.type) + aiMoveBonus(challengerMove, input.type)
   );
   const defenderScore = clampBattleScore(
-    28 + aiMoveBonus(defenderMove, input.type) + botProfileScoreBonus(input.defender.botProfile, input.type)
+    28
+      + aiMoveBonus(defenderMove, input.type)
+      + userSolutionBonus(input.botSolution, input.challenge, input.type)
+      + botProfileScoreBonus(input.defender.botProfile, input.type)
   );
   return {
     winner_id: challengerScore >= defenderScore ? input.challenger.id : input.defender.id,
@@ -2298,10 +2303,105 @@ export const Colosseum: React.FC = () => {
     const challenger = gladiatorById.get(match.challenger_id);
     const sapphire = gladiators.find(isSapphireGladiator);
     if (!challenger || !sapphire || starting || battleInProgress) return;
+    const existingDefender = gladiatorById.get(match.defender_id);
+    const codingChallenge = challengeFor(sapphire.botProfile, match.challenge_type);
+    const submittedSolution = WAITING_BATTLE_SAPPHIRE_STUB_SOLUTION;
     setChallengeType(match.challenge_type);
-    setUserSolution(challengeFor(sapphire.botProfile, match.challenge_type).starter);
+    setSelectedGladiatorId(sapphire.id);
+    setSelectedOpponentId(challenger.id);
+    setUserSolution(codingChallenge.starter);
     setNotice(`Sapphire is answering ${challenger.name}'s waiting ${formatChallenge(match.challenge_type)} battle.`);
-    await startChallenge(sapphire, match.challenge_type, challengeFor(sapphire.botProfile, match.challenge_type).starter);
+    setStarting(true);
+    setBattleResult(null);
+    setLatestBotSolution('');
+    setChallengeModalOpen(false);
+    try {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.set('match', match.id);
+      setSearchParams(nextParams);
+      const baseReplay = (match.replay_data && typeof match.replay_data === 'object') ? match.replay_data : {};
+      const previousLog = Array.isArray(baseReplay.log) ? baseReplay.log : [];
+      const bootLogs = [
+        ...previousLog,
+        `Sapphire intercepts ${challenger.name}'s open pit instead of creating a duplicate match.`,
+        'Sapphire live tunnel packet requested for the waiting battle.',
+      ];
+      setSimulation({
+        matchId: match.id,
+        challengerId: challenger.id,
+        defenderId: sapphire.id,
+        challengeType: match.challenge_type,
+        challengerProgress: 8,
+        defenderProgress: 8,
+        log: bootLogs,
+        winnerId: null,
+        status: 'booting',
+      });
+      const sapphireMove = await requestSapphireMove(match, match.challenge_type, challenger, sapphire);
+      if (sapphireMove?.solution) setLatestBotSolution(sapphireMove.solution);
+      const interceptLogs = [
+        ...bootLogs,
+        sapphireMove?.source === 'sapphire-api'
+          ? 'Sapphire live API returned an intercept solution for the waiting battle.'
+          : 'Sapphire tunnel is unavailable; the waiting battle remains selectable with a persisted tunnel status.',
+      ];
+      runSimulation(
+        match,
+        challenger,
+        sapphire,
+        match.challenge_type,
+        interceptLogs,
+        sapphireMove,
+        [{
+          gladiator_id: sapphire.id,
+          gladiator_name: sapphire.name,
+          source: sapphireMove?.source ?? 'sapphire-intercept',
+          model: sapphireMove?.source === 'sapphire-api' ? 'sapphire-live' : 'sapphire-tunnel-status',
+          uses_custom_key: false,
+          prompt: sapphireMove?.prompt ?? '',
+          solution: sapphireMove?.solution ?? 'Sapphire intercept did not return a solution packet.',
+          latency_ms: sapphireMove?.latency_ms ?? 0,
+          received_at: sapphireMove?.received_at ?? new Date().toISOString(),
+        }],
+        codingChallenge,
+        submittedSolution
+      );
+    } catch (err: any) {
+      console.warn('[Colosseum] Sapphire waiting-battle intercept failed', err);
+      const fallbackMove: SapphireMove = {
+        source: 'sapphire-intercept-error',
+        prompt: '',
+        solution: `Sapphire intercept failed: ${err?.message ?? 'unknown error'}`,
+        latency_ms: 0,
+        received_at: new Date().toISOString(),
+      };
+      runSimulation(
+        match,
+        challenger,
+        sapphire,
+        match.challenge_type,
+        [
+          `Sapphire intercepts ${challenger.name}'s open pit instead of creating a duplicate match.`,
+          'Sapphire intercept failed, so the local rubric will resolve the waiting battle without hanging.',
+        ],
+        fallbackMove,
+        [{
+          gladiator_id: sapphire.id,
+          gladiator_name: sapphire.name,
+          source: fallbackMove.source,
+          model: 'sapphire-intercept-error',
+          uses_custom_key: false,
+          prompt: '',
+          solution: fallbackMove.solution,
+          latency_ms: 0,
+          received_at: fallbackMove.received_at ?? new Date().toISOString(),
+        }],
+        codingChallenge,
+        submittedSolution
+      );
+    } finally {
+      setStarting(false);
+    }
   };
 
   const completeMatch = async (matchId: string, winnerId: string, replayData: Record<string, any>) => {
