@@ -1626,8 +1626,11 @@ export const Colosseum: React.FC = () => {
   };
 
   const ensureUserGladiator = async (opponentId?: string) => {
-    if (selectedGladiator && selectedGladiator.id !== opponentId) return selectedGladiator;
     if (!currentUser) return null;
+    if (selectedGladiator && selectedGladiator.user_id === currentUser.id && selectedGladiator.id !== opponentId) return selectedGladiator;
+    if (selectedGladiator && selectedGladiator.user_id !== currentUser.id) {
+      setSelectedGladiatorId('');
+    }
 
     const existing = myGladiators.find((gladiator) => gladiator.id !== opponentId);
     if (existing) {
@@ -1831,7 +1834,14 @@ export const Colosseum: React.FC = () => {
     setBattleResult(null);
     setLatestBotSolution('');
     try {
-      const challenger = await ensureUserGladiator(defender.id);
+      let challenger: Gladiator | null = null;
+      try {
+        challenger = await ensureUserGladiator(defender.id);
+      } catch (err) {
+        handleDbError(err, 'CREATE', 'gladiators');
+        setNotice('Could not auto-forge your Colosseum gladiator. Confirm your profile is loaded, then try again.');
+        return;
+      }
       if (!challenger) {
         setNotice('Sign in and choose an opponent to enter the Colosseum.');
         return;
