@@ -9,6 +9,7 @@ export type PremiumFeature =
   | 'ai_image_generation'
   | 'ai_video_generation'
   | 'thumbnail_generation'
+  | 'casper_studio_packages'
   | 'casper_extended_chat'
   | 'casper_custom_model'
   | 'casper_agentic_workspace'
@@ -111,6 +112,12 @@ export const FEATURE_CONFIG: Record<PremiumFeature, {
     requiredTier: 'pro',
     limits: { free: 0, pro: 20, infinity: null },
     upgradeMessage: 'Build reusable high-conversion thumbnails with AI backgrounds and branded templates.',
+  },
+  casper_studio_packages: {
+    label: 'Casper Studio packages',
+    requiredTier: 'pro',
+    limits: { free: 1, pro: 20, infinity: null },
+    upgradeMessage: 'Turn one idea into a publish-ready short video package with script, captions, thumbnail direction, title variants, and platform copy.',
   },
   casper_extended_chat: {
     label: 'Extended Casper chat',
@@ -249,6 +256,7 @@ export const SUBSCRIPTION_PLANS = [
     badge: 'Intermediate',
     features: [
       'Limited AI images and videos',
+      'Casper Studio package generator',
       'Advanced Casper chat and custom model settings',
       'Tournament entry in the Colosseum',
       'Voice Transmissions',
@@ -266,6 +274,7 @@ export const SUBSCRIPTION_PLANS = [
     badge: 'Full Access',
     features: [
       'Unlimited AI images, videos, and thumbnails',
+      'Unlimited Casper Studio content packages',
       'Full Visual Forge access',
       'Casper Agentic Workspace and mission control',
       'Custom Colosseum bot API keys',
