@@ -115,7 +115,7 @@ export const FEATURE_CONFIG: Record<PremiumFeature, {
   },
   casper_studio_packages: {
     label: 'Casper Studio packages',
-    requiredTier: 'pro',
+    requiredTier: 'free',
     limits: { free: 1, pro: 20, infinity: null },
     upgradeMessage: 'Turn one idea into a publish-ready short video package with script, captions, thumbnail direction, title variants, and platform copy.',
   },
