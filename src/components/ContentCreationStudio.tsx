@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Download, Film, Image as ImageIcon, Loader2, Play, Send, Sparkles, Wand2, CalendarClock, Layers, Upload, RefreshCw, Scissors, PanelTop, Zap } from 'lucide-react';
+import { Download, Film, Image as ImageIcon, Loader2, Play, Send, Sparkles, Wand2, CalendarClock, Layers, Upload, RefreshCw, Scissors, PanelTop, Zap, PackageCheck, Copy, CheckCircle2 } from 'lucide-react';
 import { CasperStudioGuide } from './CasperStudioGuide';
 import { getRunwayTask, requestRunwayGeneration, uploadStudioAsset, type RunwayTaskResponse } from '../lib/runway';
 import { supabase, toDb } from '../supabase';
@@ -7,6 +7,7 @@ import { useAuth } from '../AuthContext';
 import { cn } from '../lib/utils';
 import { useSubscription, type PremiumFeature } from '../lib/subscription';
 import { UpgradePromptModal } from './UpgradePrompt';
+import { sendCasperCommand } from '../lib/casper';
 
 interface StudioAsset {
   id: string;
@@ -22,6 +23,7 @@ interface StudioAsset {
 type StudioMode = 'image' | 'video' | 'thumbnail';
 type AssetAction = 'thumbnail' | 'feed' | 'short' | 'project' | 'download';
 type LibraryStatus = 'draft' | 'finished' | 'published';
+type PackagePlatform = 'TikTok' | 'Instagram Reels' | 'YouTube Shorts' | 'BSC Feed' | 'X';
 
 interface CreatorLibraryItem {
   id: string;
@@ -37,6 +39,23 @@ interface CreatorLibraryItem {
   ratio: string;
   createdAt: string;
   updatedAt: string;
+  packageId?: string;
+}
+
+interface StudioContentPackage {
+  id: string;
+  brief: string;
+  platform: PackagePlatform;
+  assetId?: string;
+  assetUrl?: string;
+  assetType?: StudioAsset['type'];
+  assetLabel?: string;
+  blueprint: string;
+  thumbnailPrompt: string;
+  videoPrompt: string;
+  titleVariants: string[];
+  captionVariants: string[];
+  createdAt: string;
 }
 
 const IMAGE_PRESETS = ['cyberpunk', 'minimal', 'cinematic', 'abstract', 'product hero', 'neon portrait', 'editorial', 'dark terminal'];
@@ -53,6 +72,7 @@ const THUMBNAIL_TEMPLATES = [
 
 const STORAGE_KEY = 'bsc_content_studio_assets_v1';
 const LIBRARY_KEY = 'bsc_content_studio_library_v1';
+const PACKAGE_KEY = 'bsc_content_studio_packages_v1';
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 const safeRunwayRatio = (ratio: string): '16:9' | '9:16' | '1:1' | '4:3' => ratio === '16:9' || ratio === '9:16' || ratio === '4:3' ? ratio : '1:1';
@@ -80,6 +100,70 @@ function loadLibrary(): CreatorLibraryItem[] {
 
 function saveLibrary(items: CreatorLibraryItem[]) {
   localStorage.setItem(LIBRARY_KEY, JSON.stringify(items.slice(0, 120)));
+}
+
+function loadPackages(): StudioContentPackage[] {
+  try {
+    return JSON.parse(localStorage.getItem(PACKAGE_KEY) || '[]') as StudioContentPackage[];
+  } catch {
+    return [];
+  }
+}
+
+function savePackages(items: StudioContentPackage[]) {
+  localStorage.setItem(PACKAGE_KEY, JSON.stringify(items.slice(0, 40)));
+}
+
+function isDurableAssetUrl(assetUrl: string | undefined) {
+  if (!assetUrl) return false;
+  return /^https?:\/\//i.test(assetUrl) || assetUrl.startsWith('/');
+}
+
+function getAssetContext(asset: StudioAsset | null) {
+  if (!asset) return 'No selected media asset yet. Create a package that can be executed from an idea alone.';
+  const durableUrl = isDurableAssetUrl(asset.url) ? `, durable URL ${asset.url}` : ', local unsaved preview only';
+  return `Selected asset: ${asset.type}, ratio ${asset.ratio}, prompt "${asset.prompt.slice(0, 300)}"${durableUrl}.`;
+}
+
+function parseNumberedList(section: string) {
+  return section
+    .split('\n')
+    .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, '').trim())
+    .filter(Boolean)
+    .slice(0, 6);
+}
+
+function extractPackageSection(text: string, label: string) {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = text.match(new RegExp(`(?:^|\\n)#{0,3}\\s*${escaped}\\s*:?\\s*\\n([\\s\\S]*?)(?=\\n#{0,3}\\s*(?:Blueprint|Video Prompt|Thumbnail Prompt|Title Variants|Caption Variants)\\s*:?\\s*\\n|$)`, 'i'));
+  return match?.[1]?.trim() ?? '';
+}
+
+function buildPackageFromResponse(input: {
+  brief: string;
+  platform: PackagePlatform;
+  response: string;
+  asset?: StudioAsset | null;
+}): StudioContentPackage {
+  const thumbnailPrompt = extractPackageSection(input.response, 'Thumbnail Prompt');
+  const videoPrompt = extractPackageSection(input.response, 'Video Prompt');
+  const titleVariants = parseNumberedList(extractPackageSection(input.response, 'Title Variants'));
+  const captionVariants = parseNumberedList(extractPackageSection(input.response, 'Caption Variants'));
+  return {
+    id: crypto.randomUUID(),
+    brief: input.brief,
+    platform: input.platform,
+    assetId: input.asset?.id,
+    assetUrl: isDurableAssetUrl(input.asset?.url) ? input.asset?.url : undefined,
+    assetType: input.asset?.type,
+    assetLabel: input.asset ? `${input.asset.type} // ${input.asset.ratio}` : undefined,
+    blueprint: input.response.trim(),
+    thumbnailPrompt: thumbnailPrompt || input.brief,
+    videoPrompt: videoPrompt || input.brief,
+    titleVariants: titleVariants.length ? titleVariants : [input.brief.slice(0, 70)],
+    captionVariants: captionVariants.length ? captionVariants : [`${input.brief}\n\n#BloodSweatCode #CreatorStudio`],
+    createdAt: new Date().toISOString(),
+  };
 }
 
 function renderSvgToPngDataUrl(svg: string, width = 1280, height = 720) {
@@ -133,8 +217,11 @@ export function ContentCreationStudio() {
   const [mode, setMode] = useState<StudioMode>('image');
   const [assets, setAssets] = useState<StudioAsset[]>(() => loadAssets());
   const [library, setLibrary] = useState<CreatorLibraryItem[]>(() => loadLibrary());
+  const [packages, setPackages] = useState<StudioContentPackage[]>(() => loadPackages());
   const [selectedAssetId, setSelectedAssetId] = useState<string>('');
   const [prompt, setPrompt] = useState('Create a high-impact Blood Sweat Code creator asset with neon cyan and magenta glassmorphism energy.');
+  const [packageBrief, setPackageBrief] = useState('Turn my idea into a punchy short about building faster with AI agents.');
+  const [packagePlatform, setPackagePlatform] = useState<PackagePlatform>('YouTube Shorts');
   const [imagePreset, setImagePreset] = useState(IMAGE_PRESETS[0]);
   const [videoPreset, setVideoPreset] = useState(VIDEO_PRESETS[0]);
   const [ratio, setRatio] = useState<typeof RATIOS[number]>('16:9');
@@ -146,11 +233,15 @@ export function ContentCreationStudio() {
   const [composer, setComposer] = useState('');
   const [scheduleAt, setScheduleAt] = useState('');
   const [status, setStatus] = useState<string | null>(null);
+  const [packageStatus, setPackageStatus] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [packaging, setPackaging] = useState(false);
   const [actionLoading, setActionLoading] = useState<AssetAction | null>(null);
+  const [copiedPackageId, setCopiedPackageId] = useState<string | null>(null);
   const [gate, setGate] = useState<ReturnType<typeof canAccess> | null>(null);
   const [thumbnailTitle, setThumbnailTitle] = useState('BUILD FASTER');
   const [thumbnailSubtitle, setThumbnailSubtitle] = useState('Blood Sweat Code');
+  const [thumbnailPrompt, setThumbnailPrompt] = useState('');
   const [thumbnailTemplate, setThumbnailTemplate] = useState(THUMBNAIL_TEMPLATES[0]);
   const [thumbnailBg, setThumbnailBg] = useState<string>('');
   const [thumbnailColor, setThumbnailColor] = useState('#00FFFF');
@@ -158,10 +249,11 @@ export function ContentCreationStudio() {
   const previewRef = useRef<HTMLDivElement>(null);
   const hasActiveGeneration = generating || Boolean(progress);
 
-  const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? assets[0] ?? null;
+  const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? null;
 
   useEffect(() => saveAssets(assets), [assets]);
   useEffect(() => saveLibrary(library), [library]);
+  useEffect(() => savePackages(packages), [packages]);
 
   const libraryCounts = useMemo(() => ({
     draft: library.filter((item) => item.status === 'draft').length,
@@ -169,7 +261,7 @@ export function ContentCreationStudio() {
     published: library.filter((item) => item.status === 'published').length,
   }), [library]);
 
-  const metered = useMemo(() => usageMeters.filter((meter) => ['ai_image_generation', 'ai_video_generation', 'thumbnail_generation'].includes(meter.feature)), [usageMeters]);
+  const metered = useMemo(() => usageMeters.filter((meter) => ['ai_image_generation', 'ai_video_generation', 'thumbnail_generation', 'casper_studio_packages'].includes(meter.feature)), [usageMeters]);
 
   const addAsset = (asset: StudioAsset) => {
     setAssets((prev) => [asset, ...prev]);
@@ -191,7 +283,8 @@ export function ContentCreationStudio() {
     setProgress('Igniting Visual Forge image core...');
     setStatus(null);
     try {
-      const fullPrompt = `${prompt}\nStyle preset: ${imagePreset}. Guidance strength: ${guidance}/100. Aspect ratio target: ${ratio}.`;
+      const sourcePrompt = asThumbnailBg && thumbnailPrompt.trim() ? thumbnailPrompt : prompt;
+      const fullPrompt = `${sourcePrompt}\nStyle preset: ${imagePreset}. Guidance strength: ${guidance}/100. Aspect ratio target: ${ratio}.`;
       const initial = await requestRunwayGeneration({
         prompt: fullPrompt,
         type: 'image',
@@ -250,6 +343,115 @@ export function ContentCreationStudio() {
     await recordUsage('thumbnail_generation');
     setStatus('Thumbnail exported to your reusable studio library.');
     return asset;
+  };
+
+  const generateContentPackage = async () => {
+    if (!packageBrief.trim()) {
+      setPackageStatus('Describe the idea, clip, image, or campaign Casper should package.');
+      return;
+    }
+    if (!openGate('casper_studio_packages')) return;
+    setPackaging(true);
+    setPackageStatus('Casper is building a publish-ready content package...');
+    try {
+      const assetContext = getAssetContext(selectedAsset);
+      const result = await sendCasperCommand({
+        surface: 'studio',
+        source: 'user',
+        metadata: { studio_package: true, platform: packagePlatform, asset_id: selectedAsset?.id ?? null },
+        pageContext: {
+          path: '/casper/studio',
+          feature: 'Casper Studio package generator',
+          description: 'The user wants a marketable, publish-ready content package from one idea or asset.',
+        },
+        command: `Create a monetizable Casper Studio content package for ${packagePlatform}.
+
+Brief:
+${packageBrief.trim()}
+
+${assetContext}
+
+Return concise Markdown with EXACTLY these headings:
+Blueprint
+Video Prompt
+Thumbnail Prompt
+Title Variants
+Caption Variants
+
+Requirements:
+- The Blueprint must include a 20-45 second short-video structure, opening hook, scene/cut plan, captions/on-screen text, CTA, and export specs.
+- Video Prompt must be ready for an AI video generator.
+- Thumbnail Prompt must be ready for Visual Forge.
+- Title Variants must include 5 clickable titles.
+- Caption Variants must include 3 platform-ready captions with hashtags.
+- No preamble. Make it usable immediately.`,
+      });
+      const nextPackage = buildPackageFromResponse({
+        brief: packageBrief.trim(),
+        platform: packagePlatform,
+        response: result.response,
+        asset: selectedAsset,
+      });
+      setPackages((prev) => [nextPackage, ...prev]);
+      setPrompt(nextPackage.videoPrompt);
+      setMode('video');
+      setVideoPreset('shorts clip');
+      setVideoRatio('9:16');
+      setThumbnailTitle(nextPackage.titleVariants[0] || thumbnailTitle);
+      setThumbnailSubtitle('Casper Studio Drop');
+      setThumbnailPrompt(nextPackage.thumbnailPrompt);
+      setThumbnailBg('');
+      setComposer(nextPackage.captionVariants[0] || result.response);
+      saveLibraryItem('finished', selectedAsset, nextPackage);
+      await recordUsage('casper_studio_packages');
+      await refresh();
+      setPackageStatus('Publish-ready package created. Prompts, composer copy, and library project are staged.');
+    } catch (err: any) {
+      setPackageStatus(err?.message || 'Package generation failed.');
+    } finally {
+      setPackaging(false);
+    }
+  };
+
+  const copyPackage = async (item: StudioContentPackage) => {
+    try {
+      await navigator.clipboard.writeText(item.blueprint);
+      setCopiedPackageId(item.id);
+      setPackageStatus('Package blueprint copied to clipboard.');
+      window.setTimeout(() => setCopiedPackageId(null), 1800);
+    } catch (err: any) {
+      setPackageStatus(err?.message || 'Clipboard copy failed. Use Download instead.');
+    }
+  };
+
+  const stagePackage = (item: StudioContentPackage) => {
+    setPackageBrief(item.brief);
+    setPackagePlatform(item.platform);
+    setPrompt(item.videoPrompt || item.brief);
+    setMode('video');
+    setVideoPreset('shorts clip');
+    setVideoRatio('9:16');
+    setThumbnailTitle(item.titleVariants[0] || 'CASPER DROP');
+    setThumbnailSubtitle(item.platform);
+    setThumbnailPrompt(item.thumbnailPrompt);
+    setThumbnailBg('');
+    setComposer(item.captionVariants[0] || item.blueprint);
+    if (item.assetId && assets.some((asset) => asset.id === item.assetId)) {
+      setSelectedAssetId(item.assetId);
+    } else {
+      setSelectedAssetId('');
+    }
+    setPackageStatus('Package staged into Visual Forge, Thumbnail Creator, and composer.');
+  };
+
+  const downloadPackage = (item: StudioContentPackage) => {
+    const blob = new Blob([item.blueprint], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `casper-content-package-${item.id}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const downloadAsset = async (asset = selectedAsset) => {
@@ -359,24 +561,25 @@ export function ContentCreationStudio() {
     setStatus('Asset loaded into Thumbnail Creator background.');
   };
 
-  const saveLibraryItem = (status: LibraryStatus, assetOverride?: StudioAsset | null) => {
+  const saveLibraryItem = (status: LibraryStatus, assetOverride?: StudioAsset | null, packageOverride?: StudioContentPackage | null) => {
     const now = new Date().toISOString();
     const asset = assetOverride ?? selectedAsset;
-    const title = (thumbnailTitle || composer.split('\n')[0] || prompt.slice(0, 48) || 'Untitled Studio Project').trim();
+    const title = (packageOverride?.titleVariants[0] || thumbnailTitle || composer.split('\n')[0] || prompt.slice(0, 48) || 'Untitled Studio Project').trim();
     const item: CreatorLibraryItem = {
       id: crypto.randomUUID(),
       status,
-      mode,
+      mode: packageOverride ? 'video' : mode,
       title,
-      prompt: mode === 'thumbnail' ? `${thumbnailTitle} — ${thumbnailSubtitle}` : prompt,
-      composer,
+      prompt: packageOverride?.videoPrompt || (mode === 'thumbnail' ? `${thumbnailTitle} — ${thumbnailSubtitle}` : prompt),
+      composer: packageOverride?.captionVariants[0] || composer,
       scheduleAt,
       assetId: asset?.id,
-      assetUrl: asset?.url,
+      assetUrl: isDurableAssetUrl(asset?.url) ? asset?.url : undefined,
       assetType: asset?.type,
-      ratio: asset?.ratio ?? (mode === 'video' ? videoRatio : ratio),
+      ratio: packageOverride ? '9:16' : asset?.ratio ?? (mode === 'video' ? videoRatio : ratio),
       createdAt: now,
       updatedAt: now,
+      packageId: packageOverride?.id,
     };
     setLibrary((prev) => [item, ...prev]);
     setStatus(status === 'draft' ? 'Draft saved to Creator Library.' : 'Finished project saved to Creator Library.');
@@ -384,6 +587,11 @@ export function ContentCreationStudio() {
 
   const reopenLibraryItem = (item: CreatorLibraryItem) => {
     setMode(item.mode);
+    if (item.packageId) {
+      setMode('video');
+      setVideoPreset('shorts clip');
+      setVideoRatio('9:16');
+    }
     setPrompt(item.prompt);
     setComposer(item.composer);
     setScheduleAt(item.scheduleAt ?? '');
@@ -467,6 +675,89 @@ export function ContentCreationStudio() {
           </div>
         </header>
 
+        <section className="mb-6 overflow-hidden rounded-[2rem] border border-cyan-300/20 bg-[radial-gradient(circle_at_18%_0%,rgba(0,255,255,0.18),transparent_32%),linear-gradient(135deg,rgba(255,0,255,0.08),rgba(0,0,0,0.86))] p-5 shadow-2xl">
+          <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+            <div>
+              <div className="mb-4 flex items-center gap-3">
+                <div className="rounded-2xl bg-cyan-300/10 p-3 text-cyan-100"><PackageCheck className="h-5 w-5" /></div>
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.32em] text-cyan-200">New monetizable loop</p>
+                  <h2 className="text-xl font-black uppercase italic tracking-tight text-white">Casper Content Package</h2>
+                  <p className="mt-1 text-xs leading-5 text-zinc-400">Drop an idea, clip, or image context. Casper returns a publish-ready short package with script, cut plan, prompts, titles, captions, and export notes.</p>
+                </div>
+              </div>
+              <textarea
+                value={packageBrief}
+                onChange={(e) => setPackageBrief(e.target.value)}
+                className="min-h-28 w-full resize-y rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm leading-6 text-white outline-none focus:border-cyan-300"
+                placeholder="Example: Turn my 30-minute coding livestream into a punchy YouTube Short that sells Casper Studio..."
+              />
+              <div className="mt-3 flex flex-wrap gap-2">
+                {(['YouTube Shorts', 'TikTok', 'Instagram Reels', 'BSC Feed', 'X'] as PackagePlatform[]).map((item) => (
+                  <button
+                    key={item}
+                    onClick={() => setPackagePlatform(item)}
+                    className={cn('rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-widest transition', packagePlatform === item ? 'border-cyan-300/50 bg-cyan-300/15 text-cyan-100' : 'border-white/10 text-zinc-500 hover:text-white')}
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
+                <div className="rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-xs leading-5 text-zinc-400">
+                  {selectedAsset ? <>Using selected {selectedAsset.type} asset as creative context: <span className="text-cyan-100">{selectedAsset.prompt.slice(0, 96)}</span></> : 'No asset selected. Casper will package from the brief alone.'}
+                </div>
+                <button
+                  onClick={() => void generateContentPackage()}
+                  disabled={packaging}
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl bg-cyan-300/20 px-5 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 transition hover:bg-cyan-300/30 disabled:opacity-50"
+                >
+                  {packaging ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Build Package
+                </button>
+              </div>
+              {packageStatus && <div className="mt-4 rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-4 text-sm text-cyan-100">{packageStatus}</div>}
+            </div>
+
+            <div className="rounded-[1.5rem] border border-white/10 bg-black/35 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-xs font-black uppercase tracking-widest text-white">Recent Packages</h3>
+                  <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500">Reusable campaigns and export-ready docs</p>
+                </div>
+                <span className="rounded-full border border-fuchsia-300/20 bg-fuchsia-300/10 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-fuchsia-100">{packages.length}</span>
+              </div>
+              <div className="max-h-80 space-y-3 overflow-y-auto pr-1">
+                {packages.length ? packages.slice(0, 5).map((item) => (
+                  <article key={item.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap gap-2">
+                          <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-cyan-100">{item.platform}</span>
+                          {item.assetType && <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-zinc-400">{item.assetType}</span>}
+                        </div>
+                        <p className="mt-2 line-clamp-1 text-xs font-black uppercase tracking-wider text-white">{item.titleVariants[0] || item.brief}</p>
+                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">{item.brief}</p>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      <button onClick={() => stagePackage(item)} className="rounded-xl border border-cyan-300/20 bg-cyan-300/10 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-cyan-100">Stage</button>
+                      <button aria-label="Copy package blueprint" title="Copy package blueprint" onClick={() => void copyPackage(item)} className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-white">{copiedPackageId === item.id ? <CheckCircle2 className="mx-auto h-3.5 w-3.5" /> : <Copy className="mx-auto h-3.5 w-3.5" />}</button>
+                      <button aria-label="Download package blueprint" title="Download package blueprint" onClick={() => downloadPackage(item)} className="rounded-xl border border-fuchsia-300/20 bg-fuchsia-300/10 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-fuchsia-100"><Download className="mx-auto h-3.5 w-3.5" /></button>
+                    </div>
+                  </article>
+                )) : (
+                  <div className="grid min-h-40 place-items-center rounded-2xl border border-dashed border-white/10 text-center">
+                    <div>
+                      <PackageCheck className="mx-auto mb-3 h-8 w-8 text-zinc-700" />
+                      <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">No packages yet</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </section>
+
         <div className="grid gap-6 lg:grid-cols-[430px_1fr]">
           <aside className="space-y-5">
             <div className="rounded-[2rem] border border-white/10 bg-zinc-950/80 p-5 backdrop-blur-xl">
@@ -505,6 +796,7 @@ export function ContentCreationStudio() {
                   <div className="grid grid-cols-2 gap-2">{THUMBNAIL_TEMPLATES.map((template) => <button key={template.id} onClick={() => { setThumbnailTemplate(template); setThumbnailColor(template.accent); }} className={cn('rounded-2xl border p-3 text-left text-[10px] font-black uppercase tracking-widest', thumbnailTemplate.id === template.id ? 'border-cyan-300/50 bg-cyan-300/10 text-cyan-100' : 'border-white/10 text-zinc-500')}>{template.name}</button>)}</div>
                   <input value={thumbnailTitle} onChange={(e) => setThumbnailTitle(e.target.value)} placeholder="Thumbnail title" className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none focus:border-cyan-300" />
                   <input value={thumbnailSubtitle} onChange={(e) => setThumbnailSubtitle(e.target.value)} placeholder="Subtitle" className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none focus:border-fuchsia-300" />
+                  <textarea value={thumbnailPrompt} onChange={(e) => setThumbnailPrompt(e.target.value)} placeholder="Thumbnail AI background prompt" className="min-h-24 w-full resize-y rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm leading-6 text-white outline-none focus:border-cyan-300" />
                   <input value={thumbnailColor} onChange={(e) => setThumbnailColor(e.target.value)} type="color" className="h-12 w-full rounded-2xl border border-white/10 bg-black/50 p-2" />
                   <div className="grid grid-cols-2 gap-3">
                     <button onClick={() => void generateImage(true)} disabled={generating} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-50"><RefreshCw className="h-4 w-4" /> AI BG</button>
