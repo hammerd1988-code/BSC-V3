@@ -405,7 +405,7 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
   }, [currentUser?.id, refresh]);
 
   const usageMeters = useMemo<UsageMeter[]>(() => {
-    return (['ai_image_generation', 'ai_video_generation', 'thumbnail_generation', 'casper_extended_chat', 'stream_replay_storage'] as PremiumFeature[])
+    return (['ai_image_generation', 'ai_video_generation', 'thumbnail_generation', 'casper_studio_packages', 'casper_extended_chat', 'stream_replay_storage'] as PremiumFeature[])
       .map((feature) => {
         const config = FEATURE_CONFIG[feature];
         const row = usage.find((item) => item.feature === feature);
