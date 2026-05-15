@@ -49,6 +49,7 @@ interface StudioContentPackage {
   assetId?: string;
   assetUrl?: string;
   assetType?: StudioAsset['type'];
+  assetLabel?: string;
   blueprint: string;
   thumbnailPrompt: string;
   videoPrompt: string;
@@ -110,7 +111,18 @@ function loadPackages(): StudioContentPackage[] {
 }
 
 function savePackages(items: StudioContentPackage[]) {
-  localStorage.setItem(PACKAGE_KEY, JSON.stringify(items.slice(0, 80)));
+  localStorage.setItem(PACKAGE_KEY, JSON.stringify(items.slice(0, 40)));
+}
+
+function isDurableAssetUrl(assetUrl: string | undefined) {
+  if (!assetUrl) return false;
+  return /^https?:\/\//i.test(assetUrl) || assetUrl.startsWith('/');
+}
+
+function getAssetContext(asset: StudioAsset | null) {
+  if (!asset) return 'No selected media asset yet. Create a package that can be executed from an idea alone.';
+  const durableUrl = isDurableAssetUrl(asset.url) ? `, durable URL ${asset.url}` : ', local unsaved preview only';
+  return `Selected asset: ${asset.type}, ratio ${asset.ratio}, prompt "${asset.prompt.slice(0, 300)}"${durableUrl}.`;
 }
 
 function parseNumberedList(section: string) {
@@ -142,8 +154,9 @@ function buildPackageFromResponse(input: {
     brief: input.brief,
     platform: input.platform,
     assetId: input.asset?.id,
-    assetUrl: input.asset?.url,
+    assetUrl: isDurableAssetUrl(input.asset?.url) ? input.asset?.url : undefined,
     assetType: input.asset?.type,
+    assetLabel: input.asset ? `${input.asset.type} // ${input.asset.ratio}` : undefined,
     blueprint: input.response.trim(),
     thumbnailPrompt: thumbnailPrompt || input.brief,
     videoPrompt: videoPrompt || input.brief,
@@ -228,6 +241,7 @@ export function ContentCreationStudio() {
   const [gate, setGate] = useState<ReturnType<typeof canAccess> | null>(null);
   const [thumbnailTitle, setThumbnailTitle] = useState('BUILD FASTER');
   const [thumbnailSubtitle, setThumbnailSubtitle] = useState('Blood Sweat Code');
+  const [thumbnailPrompt, setThumbnailPrompt] = useState('');
   const [thumbnailTemplate, setThumbnailTemplate] = useState(THUMBNAIL_TEMPLATES[0]);
   const [thumbnailBg, setThumbnailBg] = useState<string>('');
   const [thumbnailColor, setThumbnailColor] = useState('#00FFFF');
@@ -235,7 +249,7 @@ export function ContentCreationStudio() {
   const previewRef = useRef<HTMLDivElement>(null);
   const hasActiveGeneration = generating || Boolean(progress);
 
-  const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? assets[0] ?? null;
+  const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? null;
 
   useEffect(() => saveAssets(assets), [assets]);
   useEffect(() => saveLibrary(library), [library]);
@@ -269,7 +283,8 @@ export function ContentCreationStudio() {
     setProgress('Igniting Visual Forge image core...');
     setStatus(null);
     try {
-      const fullPrompt = `${prompt}\nStyle preset: ${imagePreset}. Guidance strength: ${guidance}/100. Aspect ratio target: ${ratio}.`;
+      const sourcePrompt = asThumbnailBg && thumbnailPrompt.trim() ? thumbnailPrompt : prompt;
+      const fullPrompt = `${sourcePrompt}\nStyle preset: ${imagePreset}. Guidance strength: ${guidance}/100. Aspect ratio target: ${ratio}.`;
       const initial = await requestRunwayGeneration({
         prompt: fullPrompt,
         type: 'image',
@@ -339,9 +354,7 @@ export function ContentCreationStudio() {
     setPackaging(true);
     setPackageStatus('Casper is building a publish-ready content package...');
     try {
-      const assetContext = selectedAsset
-        ? `Selected asset: ${selectedAsset.type}, ratio ${selectedAsset.ratio}, prompt "${selectedAsset.prompt}", URL ${selectedAsset.url}`
-        : 'No selected media asset yet. Create a package that can be executed from an idea alone.';
+      const assetContext = getAssetContext(selectedAsset);
       const result = await sendCasperCommand({
         surface: 'studio',
         source: 'user',
@@ -381,8 +394,13 @@ Requirements:
       });
       setPackages((prev) => [nextPackage, ...prev]);
       setPrompt(nextPackage.videoPrompt);
+      setMode('video');
+      setVideoPreset('shorts clip');
+      setVideoRatio('9:16');
       setThumbnailTitle(nextPackage.titleVariants[0] || thumbnailTitle);
       setThumbnailSubtitle('Casper Studio Drop');
+      setThumbnailPrompt(nextPackage.thumbnailPrompt);
+      setThumbnailBg('');
       setComposer(nextPackage.captionVariants[0] || result.response);
       saveLibraryItem('finished', selectedAsset, nextPackage);
       await recordUsage('casper_studio_packages');
@@ -396,19 +414,33 @@ Requirements:
   };
 
   const copyPackage = async (item: StudioContentPackage) => {
-    await navigator.clipboard.writeText(item.blueprint);
-    setCopiedPackageId(item.id);
-    window.setTimeout(() => setCopiedPackageId(null), 1800);
+    try {
+      await navigator.clipboard.writeText(item.blueprint);
+      setCopiedPackageId(item.id);
+      setPackageStatus('Package blueprint copied to clipboard.');
+      window.setTimeout(() => setCopiedPackageId(null), 1800);
+    } catch (err: any) {
+      setPackageStatus(err?.message || 'Clipboard copy failed. Use Download instead.');
+    }
   };
 
   const stagePackage = (item: StudioContentPackage) => {
     setPackageBrief(item.brief);
     setPackagePlatform(item.platform);
     setPrompt(item.videoPrompt || item.brief);
+    setMode('video');
+    setVideoPreset('shorts clip');
+    setVideoRatio('9:16');
     setThumbnailTitle(item.titleVariants[0] || 'CASPER DROP');
     setThumbnailSubtitle(item.platform);
+    setThumbnailPrompt(item.thumbnailPrompt);
+    setThumbnailBg('');
     setComposer(item.captionVariants[0] || item.blueprint);
-    if (item.assetId) setSelectedAssetId(item.assetId);
+    if (item.assetId && assets.some((asset) => asset.id === item.assetId)) {
+      setSelectedAssetId(item.assetId);
+    } else {
+      setSelectedAssetId('');
+    }
     setPackageStatus('Package staged into Visual Forge, Thumbnail Creator, and composer.');
   };
 
@@ -536,15 +568,15 @@ Requirements:
     const item: CreatorLibraryItem = {
       id: crypto.randomUUID(),
       status,
-      mode,
+      mode: packageOverride ? 'video' : mode,
       title,
       prompt: packageOverride?.videoPrompt || (mode === 'thumbnail' ? `${thumbnailTitle} — ${thumbnailSubtitle}` : prompt),
       composer: packageOverride?.captionVariants[0] || composer,
       scheduleAt,
       assetId: asset?.id,
-      assetUrl: asset?.url,
+      assetUrl: isDurableAssetUrl(asset?.url) ? asset?.url : undefined,
       assetType: asset?.type,
-      ratio: asset?.ratio ?? (mode === 'video' ? videoRatio : ratio),
+      ratio: packageOverride ? '9:16' : asset?.ratio ?? (mode === 'video' ? videoRatio : ratio),
       createdAt: now,
       updatedAt: now,
       packageId: packageOverride?.id,
@@ -555,6 +587,11 @@ Requirements:
 
   const reopenLibraryItem = (item: CreatorLibraryItem) => {
     setMode(item.mode);
+    if (item.packageId) {
+      setMode('video');
+      setVideoPreset('shorts clip');
+      setVideoRatio('9:16');
+    }
     setPrompt(item.prompt);
     setComposer(item.composer);
     setScheduleAt(item.scheduleAt ?? '');
@@ -704,8 +741,8 @@ Requirements:
                     </div>
                     <div className="mt-3 grid grid-cols-3 gap-2">
                       <button onClick={() => stagePackage(item)} className="rounded-xl border border-cyan-300/20 bg-cyan-300/10 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-cyan-100">Stage</button>
-                      <button onClick={() => void copyPackage(item)} className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-white">{copiedPackageId === item.id ? <CheckCircle2 className="mx-auto h-3.5 w-3.5" /> : <Copy className="mx-auto h-3.5 w-3.5" />}</button>
-                      <button onClick={() => downloadPackage(item)} className="rounded-xl border border-fuchsia-300/20 bg-fuchsia-300/10 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-fuchsia-100"><Download className="mx-auto h-3.5 w-3.5" /></button>
+                      <button aria-label="Copy package blueprint" title="Copy package blueprint" onClick={() => void copyPackage(item)} className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-white">{copiedPackageId === item.id ? <CheckCircle2 className="mx-auto h-3.5 w-3.5" /> : <Copy className="mx-auto h-3.5 w-3.5" />}</button>
+                      <button aria-label="Download package blueprint" title="Download package blueprint" onClick={() => downloadPackage(item)} className="rounded-xl border border-fuchsia-300/20 bg-fuchsia-300/10 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-fuchsia-100"><Download className="mx-auto h-3.5 w-3.5" /></button>
                     </div>
                   </article>
                 )) : (
@@ -759,6 +796,7 @@ Requirements:
                   <div className="grid grid-cols-2 gap-2">{THUMBNAIL_TEMPLATES.map((template) => <button key={template.id} onClick={() => { setThumbnailTemplate(template); setThumbnailColor(template.accent); }} className={cn('rounded-2xl border p-3 text-left text-[10px] font-black uppercase tracking-widest', thumbnailTemplate.id === template.id ? 'border-cyan-300/50 bg-cyan-300/10 text-cyan-100' : 'border-white/10 text-zinc-500')}>{template.name}</button>)}</div>
                   <input value={thumbnailTitle} onChange={(e) => setThumbnailTitle(e.target.value)} placeholder="Thumbnail title" className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none focus:border-cyan-300" />
                   <input value={thumbnailSubtitle} onChange={(e) => setThumbnailSubtitle(e.target.value)} placeholder="Subtitle" className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none focus:border-fuchsia-300" />
+                  <textarea value={thumbnailPrompt} onChange={(e) => setThumbnailPrompt(e.target.value)} placeholder="Thumbnail AI background prompt" className="min-h-24 w-full resize-y rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm leading-6 text-white outline-none focus:border-cyan-300" />
                   <input value={thumbnailColor} onChange={(e) => setThumbnailColor(e.target.value)} type="color" className="h-12 w-full rounded-2xl border border-white/10 bg-black/50 p-2" />
                   <div className="grid grid-cols-2 gap-3">
                     <button onClick={() => void generateImage(true)} disabled={generating} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-50"><RefreshCw className="h-4 w-4" /> AI BG</button>
