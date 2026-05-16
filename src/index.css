@@ -443,6 +443,8 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
 }
 
 .arena-spotlight {
+  --spotlight-start: -22deg;
+  --spotlight-end: 18deg;
   position: absolute;
   bottom: -12rem;
   width: 22rem;
@@ -455,11 +457,15 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
 }
 
 .arena-spotlight-left {
+  --spotlight-start: -24deg;
+  --spotlight-end: 18deg;
   left: 10%;
   transform: rotate(-24deg);
 }
 
 .arena-spotlight-right {
+  --spotlight-start: 24deg;
+  --spotlight-end: -18deg;
   right: 8%;
   background: linear-gradient(to top, rgba(0, 229, 255, 0.28), transparent 72%);
   transform: rotate(24deg);
@@ -537,8 +543,8 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
 }
 
 @keyframes arena-spotlight-sweep {
-  0%, 100% { opacity: 0.16; transform: rotate(-22deg); }
-  50% { opacity: 0.34; transform: rotate(18deg); }
+  0%, 100% { opacity: 0.16; transform: rotate(var(--spotlight-start)); }
+  50% { opacity: 0.34; transform: rotate(var(--spotlight-end)); }
 }
 
 @keyframes forge-constellation-drift {

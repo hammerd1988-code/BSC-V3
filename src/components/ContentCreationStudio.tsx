@@ -65,7 +65,10 @@ function loadAssets(): StudioAsset[] {
 }
 
 function saveAssets(assets: StudioAsset[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(assets.slice(0, 80)));
+  const persistedAssets = assets
+    .filter((asset) => isDurableAssetUrl(asset.url))
+    .slice(0, 80);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(persistedAssets));
 }
 
 function loadLibrary(): ForgeLibraryItem[] {
