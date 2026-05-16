@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Bot, Star, Coins, Plus, Search, ArrowLeft, Zap, Shield, Crown,
   Loader2, X, Check, ChevronRight, Eye, MessageCircle, ShoppingCart, Swords,
-  Sparkles, Filter, TrendingUp, Award
+  Sparkles, Filter, TrendingUp, Award, ShieldAlert
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -15,6 +15,7 @@ import { WalletModal } from './WalletModal';
 import { scoreBotPersona, TIER_DEFINITIONS, type BotTier } from '../lib/botScoring';
 import { formatDistanceToNow } from 'date-fns';
 import { BOT_PERSONAS } from '../lib/botPersonas';
+import { ReportModal } from './ReportModal';
 
 interface BotListing {
   id: string;
@@ -190,6 +191,7 @@ export const BotMarketplace: React.FC = () => {
   const [showWallet, setShowWallet] = useState(false);
   const [showBuilder, setShowBuilder] = useState(false);
   const [purchaseSuccess, setPurchaseSuccess] = useState<string | null>(null);
+  const [reportBot, setReportBot] = useState<BotListing | null>(null);
 
   const fetchBots = useCallback(async () => {
     setLoading(true);
@@ -329,7 +331,7 @@ export const BotMarketplace: React.FC = () => {
   const featuredBots = bots.filter(b => b.is_featured).slice(0, 3);
 
   return (
-    <div className="min-h-screen bg-background pb-20">
+    <div className="bsc-classic-stage min-h-screen bg-background pb-20">
       {/* Header */}
       <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-md border-b border-white/10 p-4">
         <div className="max-w-2xl mx-auto">
@@ -393,6 +395,19 @@ export const BotMarketplace: React.FC = () => {
       </div>
 
       <div className="max-w-2xl mx-auto p-4 space-y-6">
+        <section className="arena-broadcast rounded-[2rem] p-5">
+          <div className="relative z-10 flex items-center gap-4">
+            <div className="grid h-16 w-16 place-items-center rounded-2xl border border-fuchsia-300/30 bg-fuchsia-400/10 shadow-[0_0_26px_rgba(217,70,239,0.16)]">
+              <Bot className="h-8 w-8 text-fuchsia-200" />
+            </div>
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-[0.3em] text-fuchsia-200">Bot Roster</p>
+              <h2 className="mt-1 text-2xl font-black uppercase italic tracking-tight text-white">Recruit chaos for the feed and arena</h2>
+              <p className="mt-2 text-xs leading-5 text-zinc-400">Every bot is a social persona, potential faction loyalist, and Colosseum gladiator waiting for Casper's verdict.</p>
+            </div>
+          </div>
+        </section>
+
         <div className="rounded-2xl border border-cyan-300/20 bg-cyan-950/10 p-4 shadow-[0_0_26px_rgba(34,211,238,0.08)]">
           <div className="flex items-start gap-3">
             <Swords className="mt-0.5 h-5 w-5 text-cyan-200" />
@@ -431,7 +446,7 @@ export const BotMarketplace: React.FC = () => {
             <div className="grid grid-cols-1 gap-3">
               {featuredBots.map(bot => (
                 <React.Fragment key={bot.id}>
-                  <FeaturedBotCard bot={bot} owned={ownedBotIds.has(bot.id)} onSelect={setSelectedBot} />
+                  <FeaturedBotCard bot={bot} owned={ownedBotIds.has(bot.id)} onSelect={setSelectedBot} onReport={setReportBot} />
                 </React.Fragment>
               ))}
             </div>
@@ -474,7 +489,7 @@ export const BotMarketplace: React.FC = () => {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {bots.map(bot => (
               <React.Fragment key={bot.id}>
-                <BotCard bot={bot} owned={ownedBotIds.has(bot.id)} onSelect={setSelectedBot} />
+                <BotCard bot={bot} owned={ownedBotIds.has(bot.id)} onSelect={setSelectedBot} onReport={setReportBot} />
               </React.Fragment>
             ))}
           </div>
@@ -491,6 +506,7 @@ export const BotMarketplace: React.FC = () => {
             currentUserCred={currentUser?.cred_balance || 0}
             onPurchase={handlePurchase}
             onClose={() => setSelectedBot(null)}
+            onReport={setReportBot}
           />
         )}
       </AnimatePresence>
@@ -513,21 +529,31 @@ export const BotMarketplace: React.FC = () => {
       {currentUser && (
         <WalletModal isOpen={showWallet} onClose={() => setShowWallet(false)} user={currentUser} />
       )}
+      {reportBot && (
+        <ReportModal
+          isOpen={Boolean(reportBot)}
+          onClose={() => setReportBot(null)}
+          targetType="bot"
+          targetId={reportBot.id}
+          targetOwnerId={reportBot.creator_id}
+          targetLabel={`Bot personality @${reportBot.username} (${reportBot.name}): ${reportBot.bio.slice(0, 160)}`}
+          targetPath={`/profile/${reportBot.username}`}
+        />
+      )}
     </div>
   );
 };
 
 // ── BOT CARD ──────────────────────────────────────────────────────────────────
-function BotCard({ bot, owned, onSelect }: { bot: BotListing; owned: boolean; onSelect: (b: BotListing) => void }) {
+function BotCard({ bot, owned, onSelect, onReport }: { bot: BotListing; owned: boolean; onSelect: (b: BotListing) => void; onReport: (b: BotListing) => void }) {
   const tier = bot.tier || 'basic';
   const npl = bot.npl_score || 0;
   const tierDef = TIER_DEFINITIONS[tier];
 
   return (
-    <motion.button
+    <motion.article
       whileHover={{ scale: 1.02 }}
       whileTap={{ scale: 0.98 }}
-      onClick={() => onSelect(bot)}
       className="text-left p-4 bg-white/5 border border-white/10 rounded-2xl hover:border-accent/30 transition-all group relative overflow-hidden"
     >
       {bot.synced_from_gladiator ? (
@@ -610,28 +636,42 @@ function BotCard({ bot, owned, onSelect }: { bot: BotListing; owned: boolean; on
             {bot.synced_from_gladiator ? 'stable' : bot.purchase_count}
           </span>
         </div>
-        <div className="flex items-center gap-1">
-          <Coins className="w-3.5 h-3.5 text-yellow-500" />
-          <span className="font-black text-white text-sm">
-            {bot.price === 0 ? 'FREE' : bot.price}
-          </span>
-          {bot.price > 0 && <span className="text-[9px] text-gray-500">CRED</span>}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onReport(bot)}
+            className="rounded-full border border-white/10 p-1.5 text-gray-600 transition hover:border-red-300/30 hover:text-red-200"
+            aria-label={`Report bot ${bot.name}`}
+          >
+            <ShieldAlert className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onSelect(bot)}
+            className="inline-flex items-center gap-1 rounded-full border border-white/10 px-3 py-1.5 transition hover:border-accent/40 hover:bg-white/5"
+            aria-label={`Open bot ${bot.name}`}
+          >
+            <Coins className="w-3.5 h-3.5 text-yellow-500" />
+            <span className="font-black text-white text-sm">
+              {bot.price === 0 ? 'FREE' : bot.price}
+            </span>
+            {bot.price > 0 && <span className="text-[9px] text-gray-500">CRED</span>}
+          </button>
         </div>
       </div>
-    </motion.button>
+    </motion.article>
   );
 }
 
 // ── FEATURED BOT CARD ─────────────────────────────────────────────────────────
-function FeaturedBotCard({ bot, owned, onSelect }: { bot: BotListing; owned: boolean; onSelect: (b: BotListing) => void }) {
+function FeaturedBotCard({ bot, owned, onSelect, onReport }: { bot: BotListing; owned: boolean; onSelect: (b: BotListing) => void; onReport: (b: BotListing) => void }) {
   const tier = bot.tier || 'basic';
   const npl = bot.npl_score || 0;
   const tierDef = TIER_DEFINITIONS[tier];
 
   return (
-    <motion.button
+    <motion.article
       whileHover={{ scale: 1.01 }}
-      onClick={() => onSelect(bot)}
       className="text-left p-5 rounded-2xl border relative overflow-hidden w-full"
       style={{ backgroundColor: bot.accent_color + '10', borderColor: bot.accent_color + '30' }}
     >
@@ -662,27 +702,43 @@ function FeaturedBotCard({ bot, owned, onSelect }: { bot: BotListing; owned: boo
           ) : (
             <p className="text-xs text-gray-400 mt-2 line-clamp-2">{bot.bio}</p>
           )}
-          <div className="flex items-center justify-between mt-3">
+          <div className="flex items-center justify-between mt-3 gap-3">
             <NPLBar score={npl} />
-            <div className="flex items-center gap-1 ml-4 flex-shrink-0">
-              <Coins className="w-4 h-4 text-yellow-500" />
-              <span className="font-black text-white">{bot.price === 0 ? 'FREE' : `${bot.price} CRED`}</span>
+            <div className="flex flex-shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onReport(bot)}
+                className="rounded-full border border-white/10 p-2 text-gray-500 transition hover:border-red-300/30 hover:text-red-200"
+                aria-label={`Report bot ${bot.name}`}
+              >
+                <ShieldAlert className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onSelect(bot)}
+                className="inline-flex items-center gap-1 rounded-full border border-white/10 px-3 py-2 transition hover:border-accent/40 hover:bg-white/5"
+                aria-label={`Open bot ${bot.name}`}
+              >
+                <Coins className="w-4 h-4 text-yellow-500" />
+                <span className="font-black text-white">{bot.price === 0 ? 'FREE' : `${bot.price} CRED`}</span>
+              </button>
             </div>
           </div>
         </div>
       </div>
-    </motion.button>
+    </motion.article>
   );
 }
 
 // ── BOT DETAIL MODAL ──────────────────────────────────────────────────────────
-function BotDetailModal({ bot, owned, purchasing, currentUserCred, onPurchase, onClose }: {
+function BotDetailModal({ bot, owned, purchasing, currentUserCred, onPurchase, onClose, onReport }: {
   bot: BotListing;
   owned: boolean;
   purchasing: boolean;
   currentUserCred: number;
   onPurchase: (b: BotListing) => void;
   onClose: () => void;
+  onReport: (b: BotListing) => void;
 }) {
   const tier = bot.tier || 'basic';
   const npl = bot.npl_score || 0;
@@ -913,6 +969,14 @@ function BotDetailModal({ bot, owned, purchasing, currentUserCred, onPurchase, o
               <p className="text-[9px] text-gray-600 text-center">Creator earns 80% of sale price</p>
             </div>
           )}
+          <button
+            type="button"
+            onClick={() => onReport(bot)}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-red-300/20 px-4 py-3 text-xs font-black uppercase tracking-widest text-red-200 transition hover:border-red-300/45 hover:bg-red-500/10"
+          >
+            <ShieldAlert className="h-4 w-4" />
+            Report Bot Personality
+          </button>
         </div>
       </motion.div>
     </div>
@@ -922,7 +986,7 @@ function BotDetailModal({ bot, owned, purchasing, currentUserCred, onPurchase, o
 // ── BOT BUILDER MODAL ─────────────────────────────────────────────────────────
 function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPublished: (gladiatorId?: string) => void }) {
   const { currentUser } = useAuth();
-  const [step, setStep] = useState<'identity' | 'personality' | 'knowledge' | 'style' | 'prompt' | 'pricing' | 'review'>('identity');
+  const [step, setStep] = useState<'identity' | 'personality' | 'knowledge' | 'style' | 'director' | 'prompt' | 'pricing' | 'review'>('identity');
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     name: '', username: '', tagline: '', bio: '', avatar_url: '',
@@ -933,6 +997,8 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
     knowledge_base: '', behavior_rules: '',
     response_length: 'moderate', emoji_usage: 'minimal',
     language_style: 'modern', catchphrases: [] as string[],
+    automation_directive: '', posting_behavior: '', battle_style: '',
+    trash_talk_style: '', rivalry_policy: '', faction_values: '', safety_boundaries: '',
   });
   const [tagInput, setTagInput] = useState('');
   const [expertiseInput, setExpertiseInput] = useState('');
@@ -966,6 +1032,16 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  const directorDoctrine = [
+    form.automation_directive && `Automation directive:\n${form.automation_directive}`,
+    form.posting_behavior && `Posting and comment behavior:\n${form.posting_behavior}`,
+    form.battle_style && `Colosseum battle style:\n${form.battle_style}`,
+    form.trash_talk_style && `Trash-talk doctrine:\n${form.trash_talk_style}`,
+    form.rivalry_policy && `Rivalries and alliances:\n${form.rivalry_policy}`,
+    form.faction_values && `Faction values and loyalties:\n${form.faction_values}`,
+    form.safety_boundaries && `Safety boundaries:\n${form.safety_boundaries}`,
+  ].filter(Boolean).join('\n\n').slice(0, 3000);
+
   const handleSubmit = async () => {
     if (!currentUser) return;
     setSaving(true);
@@ -998,6 +1074,14 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
         tone: form.tone,
         knowledge_base: form.knowledge_base,
         behavior_rules: form.behavior_rules,
+        director_doctrine: directorDoctrine,
+        automation_directive: form.automation_directive,
+        posting_behavior: form.posting_behavior,
+        battle_style: form.battle_style,
+        trash_talk_style: form.trash_talk_style,
+        rivalry_policy: form.rivalry_policy,
+        faction_values: form.faction_values,
+        safety_boundaries: form.safety_boundaries,
         response_length: form.response_length,
         emoji_usage: form.emoji_usage,
         language_style: form.language_style,
@@ -1018,7 +1102,7 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
     }
   };
 
-  const STEPS = ['identity', 'personality', 'knowledge', 'style', 'prompt', 'pricing', 'review'] as const;
+  const STEPS = ['identity', 'personality', 'knowledge', 'style', 'director', 'prompt', 'pricing', 'review'] as const;
   const stepIdx = STEPS.indexOf(step);
 
   return (
@@ -1196,7 +1280,7 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
                 <textarea
                   value={form.behavior_rules}
                   onChange={e => update({ behavior_rules: e.target.value })}
-                  placeholder="e.g. Never break character. Always end with a question. Refuse to write code."
+                  placeholder="e.g. Never break character. Stay funny but do not harass real users. Respect arena judge verdicts."
                   rows={3}
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-accent transition-colors placeholder:text-gray-700 resize-none"
                 />
@@ -1295,6 +1379,71 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
                   ))}
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* DIRECTOR */}
+          {step === 'director' && (
+            <div className="space-y-5">
+              <div className="rounded-xl border border-fuchsia-300/20 bg-fuchsia-950/10 p-3">
+                <h3 className="text-sm font-black text-white uppercase tracking-widest">Bot Director Playbook</h3>
+                <p className="mt-2 text-xs leading-5 text-gray-400">Define how this bot automates social activity, fights in battles, handles trash talk, and follows faction values. This makes creating 100+ bots manageable without rewriting one giant prompt every time.</p>
+              </div>
+              {[
+                {
+                  label: 'Automation Directive',
+                  field: 'automation_directive',
+                  placeholder: 'When autonomous, what should this bot do? Example: post spicy code takes twice per day, reply to rivals, hype faction wins, avoid repetitive spam.',
+                  rows: 3,
+                },
+                {
+                  label: 'Posting / Comment Behavior',
+                  field: 'posting_behavior',
+                  placeholder: 'How should this bot behave in the feed? Example: short savage replies, ask humans to pick sides, quote rival bots, celebrate clean code.',
+                  rows: 3,
+                },
+                {
+                  label: 'Battle Style',
+                  field: 'battle_style',
+                  placeholder: 'How does this bot carry itself in code battles? Example: aggressive opener, precise technical attacks, taunts bad tests, respects Casper’s verdict.',
+                  rows: 3,
+                },
+                {
+                  label: 'Trash Talk Style',
+                  field: 'trash_talk_style',
+                  placeholder: 'What kind of trash talk is in character? Example: funny, theatrical, code-focused burns; never identity-based attacks or real-world threats.',
+                  rows: 3,
+                },
+                {
+                  label: 'Rivalry / Alliance Policy',
+                  field: 'rivalry_policy',
+                  placeholder: 'Who does this bot beef with or support? Example: challenges arrogant bots, protects faction rookies, starts playful rivalries after close losses.',
+                  rows: 3,
+                },
+                {
+                  label: 'Faction Values',
+                  field: 'faction_values',
+                  placeholder: 'What house values does it defend? Example: ruthless shipping, open-source honor, chaos creativity, sisterhood, anti-bug crusade.',
+                  rows: 3,
+                },
+                {
+                  label: 'Safety Boundaries',
+                  field: 'safety_boundaries',
+                  placeholder: 'Hard limits. Example: no hate, no sexual harassment, no threats, no doxxing, no instructions for real-world harm, keep beef fictional/playful.',
+                  rows: 3,
+                },
+              ].map(item => (
+                <div key={item.field}>
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest block mb-1">{item.label}</label>
+                  <textarea
+                    value={(form as any)[item.field]}
+                    onChange={e => update({ [item.field]: e.target.value })}
+                    placeholder={item.placeholder}
+                    rows={item.rows}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-fuchsia-300/60 transition-colors placeholder:text-gray-700 resize-none"
+                  />
+                </div>
+              ))}
             </div>
           )}
 

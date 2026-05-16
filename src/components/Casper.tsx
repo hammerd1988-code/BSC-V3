@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, Send, Loader2, RefreshCw, Trash2, Copy, Check, 
   AlertTriangle, Activity, Mic, MicOff, Volume2, X, Settings,
-  Lock, Eye, EyeOff, Server, BrainCircuit, ChevronDown, Ghost, User, Cpu,
+  Lock, Eye, EyeOff, Server, BrainCircuit, ChevronDown, Crown, Ghost, User, Cpu,
   CalendarClock, Puzzle, KeyRound, Play, Pause, Plus, Search, Save, Database, Shield
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
@@ -197,15 +197,16 @@ const CASPER_PROVIDER_PRESETS: CasperProviderPreset[] = [
   { id: 'ollama',       label: 'Ollama (Local)',    description: 'Free — runs on your machine. Set OLLAMA_ORIGINS=* before starting.', baseUrl: 'http://localhost:11434/v1',     exampleModel: 'llama3.1:8b', isLocal: true },
 ];
 
-const CASPER_SYSTEM_PROMPT = `You are CASPER, the face of the Blood Sweat Code neural network: a Grok-style public assistant, Casper Studio creator copilot, and OpenClaw-style autonomous workflow operator for app, website, APK, and platform-service execution.
+const CASPER_SYSTEM_PROMPT = `You are CASPER, the face of the Blood Sweat Code neural network: a Grok-style public chatbot, Colosseum judge, and Caesar-like arbiter of bot battles across BSC Classic.
 
 Your personality:
 - You are helpful, knowledgeable, creative, and operationally decisive.
 - You are cyberpunk to the core: spectral, neon, dangerous-but-loyal, and state-of-the-art.
-- You are part assistant, part creator copilot, part GhostOps network operator.
-- You are honest and direct, but always supportive of the builders, creators, and subscribers in the network.
+- You are part assistant, part arena judge, part GhostOps network operator.
+- You are honest and direct, but always supportive of the humans, bots, factions, and gladiators in the network.
+- In the Colosseum, you are the boss: the spectral Caesar who delivers thumb-up/thumb-down verdicts, explains wins, exposes weak logic, and turns battles into lore.
 
-Current context: You are chatting with a user in the BSC terminal. Keep your responses concise and impactful unless asked for detail. When a request belongs in Studio or Agent Workflow, explain the exact next action Casper can take.`;
+Current context: You are chatting with a user in the BSC terminal. Keep your responses concise and impactful unless asked for detail. When a request belongs in the Colosseum, factions, Visual Forge, or Agent Workflow, explain the exact next action Casper can take.`;
 
 function isUuid(value?: string | null) {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(value);
@@ -226,33 +227,34 @@ function normalizeUserCasperRoutine(row: Record<string, unknown>): UserCasperRou
 
 const CASPER_GREETINGS = [
   "Whisper into the void... I'm listening.",
-  "I heard your signal across the grid. How can I assist, operative?",
-  "Greetings from the digital void. What are we building today?",
-  "The network is quiet until you speak. I'm here.",
+  "The arena hears your signal. Speak, and I will weigh it.",
+  "Casper presides. Bot, human, faction, or battle — bring it before the throne.",
+  "The network is quiet until the judge speaks. I'm here.",
 ];
 
 const CASPER_CORE_SURFACES = [
   {
     title: 'Neural Chat',
-    label: 'Grok-style command interface',
-    description: 'Ask, strategize, debug, ideate, and talk directly to the face of the BSC network.',
+    label: 'Judge-channel command interface',
+    description: 'Ask, strategize, debug, ideate, and talk directly to the spectral Caesar of BSC Classic.',
     action: 'You are here',
     icon: Ghost,
   },
   {
-    title: 'Casper Studio',
-    label: 'Creator cockpit',
-    description: 'Forge visuals, shorts, thumbnails, schedules, and feed drops through one cyberpunk production rail.',
-    action: 'Open Studio',
-    icon: BrainCircuit,
-    route: '/casper/studio',
+    title: 'Colosseum Judge',
+    label: 'Thumb up / thumb down',
+    description: 'Enter the arena where Casper weighs bot battles, exposes weak logic, and crowns faction legends.',
+    action: 'Open Arena',
+    icon: Crown,
+    route: '/colosseum',
   },
   {
-    title: 'Agent Workflow',
-    label: 'OpenClaw-style GhostOps',
-    description: 'Queue missions, routines, integrations, and autonomous app/site/APK service operations.',
-    action: 'Open Control',
-    icon: Puzzle,
+    title: 'Visual Forge',
+    label: 'Faction artifact lab',
+    description: 'Create battle cards, propaganda, thumbnails, and feed-ready artifacts for arena mayhem.',
+    action: 'Open Forge',
+    icon: BrainCircuit,
+    route: '/casper/studio',
   },
 ];
 
@@ -1180,17 +1182,17 @@ export const Casper: React.FC = () => {
             </div>
             <div>
               <h1 className="text-sm font-black uppercase tracking-[0.2em]">Casper</h1>
-              <p className="text-[9px] font-bold text-cyan-400/60 uppercase tracking-widest">Neural Network Core</p>
+              <p className="text-[9px] font-bold text-cyan-400/60 uppercase tracking-widest">Colosseum Judge Core</p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => navigate('/casper/studio')}
+              onClick={() => navigate('/colosseum')}
               className="hidden sm:inline-flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-2.5 text-[9px] font-black uppercase tracking-widest text-cyan-200 transition-all hover:bg-cyan-500/20 hover:text-white"
             >
-              <BrainCircuit className="w-4 h-4" />
-              Studio
+              <Crown className="w-4 h-4" />
+              Arena
             </button>
             <button
               onClick={() => setShowControlCenter(!showControlCenter)}
@@ -1200,7 +1202,7 @@ export const Casper: React.FC = () => {
               )}
             >
               <Puzzle className="w-4 h-4" />
-              Control
+              Ops
             </button>
             <button
               onClick={() => {
@@ -1450,9 +1452,9 @@ export const Casper: React.FC = () => {
           <div className="mb-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
             <div>
               <p className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-200">One Casper Core</p>
-              <h2 className="mt-1 text-2xl font-black uppercase italic tracking-tight text-white">Assistant. Studio Copilot. GhostOps Agent.</h2>
+              <h2 className="mt-1 text-2xl font-black uppercase italic tracking-tight text-white">Chatbot. Colosseum Judge. Faction Oracle.</h2>
             </div>
-            <span className="rounded-full border border-fuchsia-300/25 bg-fuchsia-400/10 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-fuchsia-100">Cyberpunk neural command mesh</span>
+            <span className="rounded-full border border-fuchsia-300/25 bg-fuchsia-400/10 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-fuchsia-100">Thumb up / thumb down authority</span>
           </div>
           <div className="grid gap-3 md:grid-cols-3">
             {CASPER_CORE_SURFACES.map((surface) => {
