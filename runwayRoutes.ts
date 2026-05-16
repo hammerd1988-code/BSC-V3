@@ -54,14 +54,13 @@ const Z_IMAGE_API_KEY = process.env.Z_IMAGE_API_KEY || '';
 const Z_IMAGE_STEPS = parsePositiveIntegerEnv(process.env.Z_IMAGE_STEPS, DEFAULT_Z_IMAGE_STEPS);
 const Z_IMAGE_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.Z_IMAGE_TIMEOUT_MS, DEFAULT_Z_IMAGE_TIMEOUT_MS);
 const VALID_RATIOS = new Set<RunwayAspectRatio>(['16:9', '9:16', '1:1', '4:3']);
-const TIER_RANK: Record<SubscriptionTier, number> = { free: 0, pro: 1, infinity: 2 };
 const RUNWAY_FEATURES: Record<PremiumRunwayFeature, {
   requiredTier: SubscriptionTier;
   limits: Partial<Record<SubscriptionTier, number | null>>;
 }> = {
-  ai_image_generation: { requiredTier: 'pro', limits: { free: 0, pro: 12, infinity: null } },
-  ai_video_generation: { requiredTier: 'pro', limits: { free: 0, pro: 4, infinity: null } },
-  thumbnail_generation: { requiredTier: 'pro', limits: { free: 0, pro: 20, infinity: null } },
+  ai_image_generation: { requiredTier: 'free', limits: { free: null, pro: null, infinity: null } },
+  ai_video_generation: { requiredTier: 'free', limits: { free: null, pro: null, infinity: null } },
+  thumbnail_generation: { requiredTier: 'free', limits: { free: null, pro: null, infinity: null } },
 };
 
 function parsePositiveIntegerEnv(value: string | undefined, fallback: number): number {
@@ -301,7 +300,6 @@ async function resolveProfile(supabase: SupabaseClient, authUser: any) {
 async function checkFeatureAccess(supabase: SupabaseClient, authUser: any, feature: PremiumRunwayFeature): Promise<FeatureAccess> {
   const profile = await resolveProfile(supabase, authUser);
   const userId = String(profile.id ?? authUser.id);
-  const isAdmin = profile.role === 'admin';
   const fallbackTier = (profile.subscription_tier === 'pro' || profile.subscription_tier === 'infinity') ? profile.subscription_tier : 'free';
   const { start, end } = currentUsagePeriod();
   const [subscriptionRes, usageRes] = await Promise.all([
@@ -328,8 +326,6 @@ async function checkFeatureAccess(supabase: SupabaseClient, authUser: any, featu
   const config = RUNWAY_FEATURES[feature];
   const used = Number(usageRes.data?.usage_count ?? 0);
   const limit = config.limits[tier];
-  const tierAllowed = TIER_RANK[tier] >= TIER_RANK[config.requiredTier];
-  const withinLimit = limit === null || limit === undefined || used < limit;
 
   return {
     userId,
@@ -340,8 +336,8 @@ async function checkFeatureAccess(supabase: SupabaseClient, authUser: any, featu
     periodStart: start,
     periodEnd: end,
     usageId: usageRes.data?.id ? String(usageRes.data.id) : null,
-    allowed: isAdmin || (tierAllowed && withinLimit),
-    reason: isAdmin ? null : !tierAllowed ? 'tier' : !withinLimit ? 'limit' : null,
+    allowed: true,
+    reason: null,
   };
 }
 
@@ -531,9 +527,7 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
       const access = await checkFeatureAccess(supabase, authUser, feature);
       if (!access.allowed) {
         return res.status(access.reason === 'tier' ? 402 : 429).json({
-          error: access.reason === 'tier'
-            ? 'This Visual Forge feature requires a Pro or Infinity subscription.'
-            : 'Monthly Visual Forge usage limit reached.',
+          error: 'Visual Forge access is temporarily unavailable.',
           feature,
           tier: access.tier,
           used: access.used,

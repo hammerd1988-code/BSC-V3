@@ -38,8 +38,6 @@ import { supabase } from '../supabase';
 import { getValidSession } from '../lib/authSession';
 import { handleDbError } from '../lib/errors';
 import { cn } from '../lib/utils';
-import { useSubscription } from '../lib/subscription';
-import { UpgradeInlineCard } from './UpgradePrompt';
 import { BOT_GLADIATOR_PROFILE_BY_USERNAME, type BotDifficulty } from '../lib/botGladiatorProfiles';
 
 type ChallengeType = 'speed_round' | 'debug_battle' | 'code_golf';
@@ -1484,8 +1482,6 @@ function TournamentPanel({
   onCreate: (event: React.FormEvent) => void;
   onJoin: (tournament: TournamentRow) => void;
 }) {
-  const { canAccess } = useSubscription();
-  const tournamentGate = canAccess('colosseum_tournament_entry');
   const myGladiatorIds = useMemo(() => new Set(myGladiators.map((gladiator) => gladiator.id)), [myGladiators]);
   const entriesByTournament = useMemo(() => {
     const map = new Map<string, TournamentEntryRow[]>();
@@ -1504,7 +1500,7 @@ function TournamentPanel({
           <p className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-300">Tournament Circuit</p>
           <h2 className="mt-1 text-2xl font-black uppercase tracking-[0.16em] text-white">Threshold Brackets</h2>
               <p className="mt-2 max-w-2xl text-xs leading-6 text-zinc-400">
-                Create open tournaments, spectate battles for free, and enlist your gladiators with Pro or Infinity once the bracket threshold opens.
+                Create open tournaments, spectate battles, and enlist your gladiators once the bracket threshold opens.
               </p>
         </div>
         <form onSubmit={onCreate} className="grid gap-2 rounded-3xl border border-white/10 bg-white/[0.035] p-3 sm:grid-cols-[1fr_auto_auto_auto]">
@@ -1538,8 +1534,6 @@ function TournamentPanel({
           </button>
         </form>
       </div>
-
-      {!tournamentGate.allowed && <div className="mb-4"><UpgradeInlineCard gate={tournamentGate} compact /></div>}
 
       <div className="grid gap-4 lg:grid-cols-2">
         {tournaments.length ? tournaments.map((tournament) => {
@@ -1610,11 +1604,11 @@ function TournamentPanel({
                 <button
                   type="button"
                   onClick={() => onJoin(tournament)}
-                  disabled={locked || entered || !selectedGladiator || joiningTournamentId === tournament.id || !tournamentGate.allowed}
+                  disabled={locked || entered || !selectedGladiator || joiningTournamentId === tournament.id}
                   className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-[10px] font-black uppercase tracking-[0.22em] text-white transition hover:border-cyan-300/40 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {joiningTournamentId === tournament.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Users className="h-4 w-4" />}
-                  {entered ? 'Gladiator Entered' : locked ? 'Signups Locked' : !tournamentGate.allowed ? 'Upgrade To Enter Tournament' : selectedGladiator ? `Enter ${selectedGladiator.name}` : 'Select Gladiator To Enter'}
+                  {entered ? 'Gladiator Entered' : locked ? 'Signups Locked' : selectedGladiator ? `Enter ${selectedGladiator.name}` : 'Select Gladiator To Enter'}
                 </button>
               </div>
             </motion.div>
@@ -1632,10 +1626,8 @@ function TournamentPanel({
 
 export const Colosseum: React.FC = () => {
   const { currentUser } = useAuth();
-  const { canAccess } = useSubscription();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedGladiatorId = searchParams.get('gladiator');
-  const customBotGate = canAccess('colosseum_custom_bot_api_keys');
   const [gladiators, setGladiators] = useState<Gladiator[]>([]);
   const [matches, setMatches] = useState<MatchRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1905,12 +1897,6 @@ export const Colosseum: React.FC = () => {
   const createGladiator = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!currentUser || !form.name.trim()) return;
-    const requestedCustomCore = !!(form.api_key.trim() || form.api_base_url.trim() || form.model !== 'platform_default' || form.custom_model_id.trim());
-    if (requestedCustomCore && !customBotGate.allowed) {
-      setNotice('Custom Colosseum bot API keys and endpoints require Infinity. Create the gladiator without a private core or upgrade to unlock it.');
-      return;
-    }
-
     setCreating(true);
     setNotice(null);
     try {
@@ -1953,10 +1939,6 @@ export const Colosseum: React.FC = () => {
 
   const saveGladiatorAiConfig = async () => {
     if (!currentUser || !selectedGladiator || selectedGladiator.user_id !== currentUser.id) return;
-    if (!customBotGate.allowed) {
-      setNotice('Private AI core editing requires Infinity access.');
-      return;
-    }
 
     setSavingConfig(true);
     setNotice(null);
@@ -2013,10 +1995,6 @@ export const Colosseum: React.FC = () => {
 
   const joinTournament = async (tournament: TournamentRow) => {
     if (!currentUser || !selectedGladiator) return;
-    if (!canAccess('colosseum_tournament_entry').allowed) {
-      setNotice('Tournament entry requires Pro or Infinity. You can still spectate battles on the Free tier.');
-      return;
-    }
     if (tournament.status !== 'open') return;
 
     setJoiningTournamentId(tournament.id);
@@ -2693,10 +2671,9 @@ export const Colosseum: React.FC = () => {
                   <Lock className="h-4 w-4 text-cyan-200" />
                   <div>
                     <p className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-200">Optional Private AI Core</p>
-                    <p className="mt-1 text-[11px] leading-5 text-zinc-500">Infinity only. Bring your own API key to power your gladiator with a specific AI model. Your key is stored securely and never shared.</p>
+                    <p className="mt-1 text-[11px] leading-5 text-zinc-500">Optional. Bring your own API key to power your gladiator with a specific AI model. Your key is stored securely and never shared.</p>
                   </div>
                 </div>
-                {!customBotGate.allowed && <div className="mb-3"><UpgradeInlineCard gate={customBotGate} compact /></div>}
                 <div className="space-y-3">
                   <div className="relative">
                     <input
@@ -2705,7 +2682,6 @@ export const Colosseum: React.FC = () => {
                       type={showForgeApiKey ? 'text' : 'password'}
                       placeholder="API Key optional"
                       autoComplete="off"
-                      disabled={!customBotGate.allowed}
                       className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 pr-12 text-sm text-white outline-none transition focus:border-cyan-300/60 disabled:cursor-not-allowed disabled:opacity-45"
                     />
                     <button
@@ -2722,7 +2698,6 @@ export const Colosseum: React.FC = () => {
                     onChange={(event) => setForm((prev) => ({ ...prev, api_base_url: event.target.value }))}
                     type="url"
                     placeholder="https://api.openai.com/v1"
-                    disabled={!customBotGate.allowed}
                     className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/60 disabled:cursor-not-allowed disabled:opacity-45"
                   />
                   <p className="-mt-1 text-[10px] leading-5 text-zinc-500">Optional. Custom endpoint for OpenAI-compatible APIs (LM Studio, Ollama, etc.). Leave blank to use the default OpenAI endpoint.</p>
@@ -2730,7 +2705,7 @@ export const Colosseum: React.FC = () => {
                   <select
                     value={form.model}
                     onChange={(event) => setForm((prev) => ({ ...prev, model: event.target.value }))}
-                    disabled={!customBotGate.allowed || (!form.api_key.trim() && !form.api_base_url.trim())}
+                    disabled={!form.api_key.trim() && !form.api_base_url.trim()}
                     className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/60 disabled:opacity-50"
                   >
                     {MODEL_GROUPS.map((group) => (
@@ -2744,7 +2719,6 @@ export const Colosseum: React.FC = () => {
                       value={form.custom_model_id}
                       onChange={(event) => setForm((prev) => ({ ...prev, custom_model_id: event.target.value }))}
                       placeholder="Custom Model ID, e.g. llama-3.1-8b"
-                      disabled={!customBotGate.allowed}
                       className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/60 disabled:cursor-not-allowed disabled:opacity-45"
                     />
                   )}
@@ -2769,7 +2743,6 @@ export const Colosseum: React.FC = () => {
                     </div>
                     <span className="rounded-full border border-cyan-300/20 bg-cyan-950/20 px-2 py-1 text-[8px] font-black uppercase tracking-widest text-cyan-100">Owner Only</span>
                   </div>
-                  {!customBotGate.allowed && <div className="mb-3"><UpgradeInlineCard gate={customBotGate} compact /></div>}
                   <div className="space-y-3">
                     <div className="relative">
                       <input
@@ -2778,7 +2751,6 @@ export const Colosseum: React.FC = () => {
                         type={showConfigApiKey ? 'text' : 'password'}
                         placeholder="Paste new API key or leave blank to keep current"
                         autoComplete="off"
-                        disabled={!customBotGate.allowed}
                         className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 pr-12 text-sm text-white outline-none transition focus:border-cyan-300/60 disabled:cursor-not-allowed disabled:opacity-45"
                       />
                       <button
@@ -2795,7 +2767,6 @@ export const Colosseum: React.FC = () => {
                       onChange={(event) => setConfigForm((prev) => ({ ...prev, api_base_url: event.target.value }))}
                       type="url"
                       placeholder="https://api.openai.com/v1"
-                      disabled={!customBotGate.allowed}
                       className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/60 disabled:cursor-not-allowed disabled:opacity-45"
                     />
                     <p className="-mt-1 text-[10px] leading-5 text-zinc-500">Optional. Custom endpoint for OpenAI-compatible APIs (LM Studio, Ollama, etc.). Leave blank to use the default OpenAI endpoint.</p>
@@ -2803,28 +2774,26 @@ export const Colosseum: React.FC = () => {
                     <select
                       value={configForm.model}
                       onChange={(event) => setConfigForm((prev) => ({ ...prev, model: event.target.value }))}
-                      disabled={!customBotGate.allowed}
                       className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/60 disabled:cursor-not-allowed disabled:opacity-45"
                     >
                       {MODEL_GROUPS.map((group) => (
-                      <optgroup key={group.provider} label={group.provider}>
-                        {group.models.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                      </optgroup>
-                    ))}
+                        <optgroup key={group.provider} label={group.provider}>
+                          {group.models.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                        </optgroup>
+                      ))}
                     </select>
                     {configForm.model === 'custom_model' && (
                       <input
                         value={configForm.custom_model_id}
                         onChange={(event) => setConfigForm((prev) => ({ ...prev, custom_model_id: event.target.value }))}
                         placeholder="Custom Model ID, e.g. llama-3.1-8b"
-                        disabled={!customBotGate.allowed}
                         className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/60 disabled:cursor-not-allowed disabled:opacity-45"
                       />
                     )}
                     <button
                       type="button"
                       onClick={saveGladiatorAiConfig}
-                      disabled={savingConfig || !customBotGate.allowed}
+                      disabled={savingConfig}
                       className="flex w-full items-center justify-center gap-2 rounded-2xl border border-cyan-300/35 bg-cyan-500/15 px-4 py-3 text-[10px] font-black uppercase tracking-[0.22em] text-cyan-100 transition hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {savingConfig ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />} Save Private Core

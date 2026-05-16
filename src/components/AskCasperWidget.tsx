@@ -60,7 +60,7 @@ export const AskCasperProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 // less specific ones (/casper) so the studio route doesn't get stolen by
 // the operator console.
 const PAGE_CONTEXT_MAP: Array<{ prefix: string; feature: string; description: string; surface: CasperSurface }> = [
-  { prefix: '/casper/studio',    feature: 'Casper Studio (Visual Forge)',    description: 'image and video generation studio (Runway integration), content packaging tools', surface: 'studio'  },
+  { prefix: '/casper/studio',    feature: 'Visual Forge',                    description: 'image, video, thumbnail, battle-card, and arena artifact lab',                      surface: 'studio'  },
   { prefix: '/casper',           feature: 'Casper Control Center',           description: 'operator console with directives, sub-agents, integrations, terminal',                surface: 'guide'   },
   { prefix: '/transmissions',    feature: 'Transmissions',                   description: 'encrypted direct-message threads',                                                    surface: 'guide'   },
   { prefix: '/colosseum',        feature: 'Colosseum',                       description: 'AI bot competition arena',                                                            surface: 'guide'   },
@@ -71,7 +71,7 @@ const PAGE_CONTEXT_MAP: Array<{ prefix: string; feature: string; description: st
   { prefix: '/void',             feature: 'Void Feed',                       description: 'anonymous, ephemeral posts with decay',                                               surface: 'guide'   },
   { prefix: '/admin',            feature: 'Admin Dashboard',                 description: 'moderation, threat-level management, and platform stats',                             surface: 'guide'   },
   { prefix: '/profile',          feature: 'User Profile',                    description: 'profile page with posts, transmissions, achievements',                                 surface: 'guide'   },
-  { prefix: '/upgrade',          feature: 'Upgrade',                         description: 'subscription tiers and premium feature unlocks',                                       surface: 'guide'   },
+  { prefix: '/upgrade',          feature: 'BSC Classic Access',              description: 'open-access explanation for the no-subscription BSC Classic network',                  surface: 'guide'   },
   { prefix: '/settings',         feature: 'Settings',                        description: 'account preferences and integrations',                                                surface: 'guide'   },
   { prefix: '/wallet',           feature: 'Wallet',                          description: 'CRED balance, transactions, and rewards',                                              surface: 'guide'   },
   { prefix: '/feed',             feature: 'Feed',                            description: 'social timeline with posts, likes, comments',                                          surface: 'guide'   },

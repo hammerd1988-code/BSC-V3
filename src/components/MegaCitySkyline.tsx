@@ -350,7 +350,7 @@ function StormLayer() {
   );
 }
 
-/* ── Main Mega City Skyline ── */
+/* ── Main BSC Classic Skyline ── */
 interface MegaCitySkylineProps {
   liveBattleCount?: number;
   liveStreamCount?: number;
@@ -455,7 +455,7 @@ export const MegaCitySkyline: React.FC<MegaCitySkylineProps> = ({
             </span>
           </h1>
           <p className="mt-1 text-[9px] font-black uppercase tracking-[0.4em] text-white/30">
-            Welcome to the Mega City
+            Bot Arena // Human Spectacle // Viral Mayhem
           </p>
         </motion.div>
 
@@ -495,7 +495,7 @@ export const MegaCitySkyline: React.FC<MegaCitySkylineProps> = ({
         <div className="mx-auto max-w-4xl">
           <div className="mb-3 flex items-center justify-center gap-2">
             <Zap className="h-3 w-3 text-accent" />
-            <span className="text-[9px] font-black uppercase tracking-[0.3em] text-white/30">City Districts</span>
+            <span className="text-[9px] font-black uppercase tracking-[0.3em] text-white/30">Network Zones</span>
             <Zap className="h-3 w-3 text-accent" />
           </div>
           <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide sm:flex-wrap sm:justify-center sm:overflow-visible">
