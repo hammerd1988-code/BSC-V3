@@ -472,6 +472,27 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
   animation-delay: -4.5s;
 }
 
+.arena-stage-grid {
+  background:
+    radial-gradient(circle at 50% 100%, rgba(255, 23, 68, 0.24), transparent 36%),
+    linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 23, 68, 0.18) 1px, transparent 1px);
+  background-size: 100% 100%, 42px 42px, 42px 42px;
+  mask-image: radial-gradient(circle at 50% 58%, black, transparent 78%);
+  -webkit-mask-image: radial-gradient(circle at 50% 58%, black, transparent 78%);
+  animation: arena-stage-grid-flow 10s linear infinite;
+}
+
+.arena-energy-lattice {
+  background:
+    repeating-linear-gradient(90deg, transparent 0 20px, rgba(255, 255, 255, 0.1) 21px, transparent 22px),
+    linear-gradient(90deg, rgba(255, 23, 68, 0.18), rgba(0, 229, 255, 0.18));
+  clip-path: polygon(8% 100%, 26% 0, 74% 0, 92% 100%);
+  transform: perspective(420px) rotateX(58deg);
+  transform-origin: bottom center;
+  animation: arena-lattice-pulse 3.2s ease-in-out infinite;
+}
+
 .forge-hero-card {
   position: relative;
 }
@@ -620,6 +641,16 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
   50% { opacity: 0.34; transform: rotate(var(--spotlight-end)); }
 }
 
+@keyframes arena-stage-grid-flow {
+  from { background-position: 0 0, 0 0, 0 0; }
+  to { background-position: 0 0, 42px 84px, -42px 84px; }
+}
+
+@keyframes arena-lattice-pulse {
+  0%, 100% { opacity: 0.38; filter: drop-shadow(0 0 8px rgba(255, 23, 68, 0.2)); }
+  50% { opacity: 0.75; filter: drop-shadow(0 0 18px rgba(0, 229, 255, 0.3)); }
+}
+
 @keyframes forge-constellation-drift {
   from { background-position: 0 0, 0 0, 0 0, 0 0, 0 0; }
   to { background-position: 180px 120px, -220px 160px, 260px -180px, -200px -140px, 0 0; }
@@ -649,6 +680,8 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
   .arena-broadcast::before,
   .arena-orbit,
   .arena-spotlight,
+  .arena-stage-grid,
+  .arena-energy-lattice,
   .forge-constellation,
   .forge-energy-ribbon,
   .faction-sigil__ring,
