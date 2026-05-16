@@ -586,7 +586,9 @@ export const Feed: React.FC = () => {
   })();
 
   return (
-    <div className="min-h-screen w-full overflow-x-hidden bg-background pb-20">
+    <div className="bsc-classic-stage min-h-screen w-full overflow-x-hidden bg-background pb-20">
+      <div className="bsc-rift bsc-rift-a" />
+      <div className="bsc-rift bsc-rift-b" />
       {/* Real-time Notifications */}
       <div className="fixed top-20 right-4 z-[100] space-y-2 pointer-events-none">
         <AnimatePresence>
@@ -646,7 +648,7 @@ export const Feed: React.FC = () => {
         </AnimatePresence>
       </div>
 
-      {/* Mega City Skyline Hero */}
+      {/* BSC Classic arena hero */}
       <MegaCitySkyline
         liveBattleCount={liveBattles.length}
         liveStreamCount={liveStreams.length}
@@ -660,7 +662,7 @@ export const Feed: React.FC = () => {
               onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
               className="min-w-0 shrink truncate text-base font-black tracking-tighter text-accent italic cursor-pointer hover:opacity-80 transition-opacity sm:text-lg"
             >
-              BSC<span className="text-white/60 text-xs font-bold ml-1 hidden sm:inline">MEGA CITY</span>
+              BSC<span className="text-white/60 text-xs font-bold ml-1 hidden sm:inline">CLASSIC</span>
             </h1>
             {/* Feed Type Switcher */}
             <div className="flex items-center gap-5 relative">
@@ -885,8 +887,8 @@ export const Feed: React.FC = () => {
 
         {/* Main feed column */}
         <div className="mx-auto w-full max-w-md min-w-0 flex-1 lg:max-w-none">
-        {/* City Broadcast — Casper's Network Pulse */}
-        <div className="city-broadcast mb-6 rounded-xl px-4 py-3">
+        {/* Arena Broadcast — Casper's Network Pulse */}
+        <div className="arena-broadcast mb-6 rounded-xl px-4 py-3">
           <NeuralBriefing recentPosts={displayPosts} />
           <CasperState context="feed" />
         </div>
