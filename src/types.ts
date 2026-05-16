@@ -80,18 +80,30 @@ export interface FactionPost {
 export interface ContentReport {
   id: string;
   reporter_id?: string | null;
+  reporterId?: string | null;
   target_type: ReportTargetType;
+  targetType?: ReportTargetType;
   target_id: string;
+  targetId?: string;
   target_owner_id?: string | null;
+  targetOwnerId?: string | null;
   target_label?: string | null;
+  targetLabel?: string | null;
+  target_path?: string | null;
+  targetPath?: string | null;
   reason: ReportReason;
   details?: string | null;
   status: ReportStatus;
   admin_notes?: string | null;
+  adminNotes?: string | null;
   reviewed_by?: string | null;
+  reviewedBy?: string | null;
   reviewed_at?: string | null;
+  reviewedAt?: string | null;
   created_at: string;
+  createdAt?: string;
   updated_at?: string;
+  updatedAt?: string;
   reporter?: User | null;
 }
 

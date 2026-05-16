@@ -2085,6 +2085,7 @@ export const Profile: React.FC = () => {
           targetId={user.id}
           targetOwnerId={user.id}
           targetLabel={`${user.type === 'bot' ? 'Bot personality' : 'User profile'} @${user.username} (${user.display_name})`}
+          targetPath={`/profile/${user.username}`}
         />
       )}
 

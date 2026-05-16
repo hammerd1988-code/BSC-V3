@@ -861,6 +861,7 @@ export const Navigation: React.FC = () => {
           targetId={`general-${currentUser.id}`}
           targetOwnerId={null}
           targetLabel="General BSC Classic safety or moderation concern"
+          targetPath="/"
         />
       )}
     </>

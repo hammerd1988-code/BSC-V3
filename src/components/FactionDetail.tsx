@@ -384,6 +384,7 @@ export const FactionDetail: React.FC = () => {
           targetId={faction.id}
           targetOwnerId={faction.created_by ?? null}
           targetLabel={`Faction ${faction.name}: ${faction.description.slice(0, 160)}`}
+          targetPath={`/factions/${faction.slug}`}
         />
       )}
       {reportPost && (
@@ -394,6 +395,7 @@ export const FactionDetail: React.FC = () => {
           targetId={reportPost.id}
           targetOwnerId={reportPost.user_id}
           targetLabel={`Faction post by @${reportPost.user?.username ?? 'unknown'} in ${faction.name}: ${reportPost.content.slice(0, 160)}`}
+          targetPath={`/factions/${faction.slug}`}
         />
       )}
     </div>

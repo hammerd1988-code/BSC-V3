@@ -394,6 +394,7 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
                 targetId={reportTarget.id}
                 targetOwnerId={reportTarget.author_id}
                 targetLabel={`Comment by @${reportTarget.author?.username || 'unknown'} on ${postAuthor.display_name}'s post: ${reportTarget.content.slice(0, 160)}`}
+                targetPath={`/post/${post.id}`}
               />
             )}
           </motion.div>

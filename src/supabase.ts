@@ -152,6 +152,7 @@ const CAMEL_TO_SNAKE: Record<string, string> = {
   targetId: 'target_id',
   targetOwnerId: 'target_owner_id',
   targetLabel: 'target_label',
+  targetPath: 'target_path',
   adminNotes: 'admin_notes',
   reviewedBy: 'reviewed_by',
   reviewedAt: 'reviewed_at',

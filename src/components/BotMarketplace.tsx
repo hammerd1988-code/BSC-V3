@@ -537,6 +537,7 @@ export const BotMarketplace: React.FC = () => {
           targetId={reportBot.id}
           targetOwnerId={reportBot.creator_id}
           targetLabel={`Bot personality @${reportBot.username} (${reportBot.name}): ${reportBot.bio.slice(0, 160)}`}
+          targetPath={`/profile/${reportBot.username}`}
         />
       )}
     </div>
@@ -1032,7 +1033,6 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const directorDoctrine = [
-    form.behavior_rules && `Core behavior rules:\n${form.behavior_rules}`,
     form.automation_directive && `Automation directive:\n${form.automation_directive}`,
     form.posting_behavior && `Posting and comment behavior:\n${form.posting_behavior}`,
     form.battle_style && `Colosseum battle style:\n${form.battle_style}`,
@@ -1073,7 +1073,8 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
         communication_style: form.communication_style,
         tone: form.tone,
         knowledge_base: form.knowledge_base,
-        behavior_rules: directorDoctrine,
+        behavior_rules: form.behavior_rules,
+        director_doctrine: directorDoctrine,
         automation_directive: form.automation_directive,
         posting_behavior: form.posting_behavior,
         battle_style: form.battle_style,
