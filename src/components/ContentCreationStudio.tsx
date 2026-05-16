@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Film, Image as ImageIcon, Loader2, Play, Send, Sparkles, Wand2, CalendarClock, Layers, Upload, RefreshCw, Scissors, PanelTop, Zap } from 'lucide-react';
-import { CasperStudioGuide } from './CasperStudioGuide';
 import { getRunwayTask, requestRunwayGeneration, uploadStudioAsset, type RunwayTaskResponse } from '../lib/runway';
 import { supabase, toDb } from '../supabase';
 import { useAuth } from '../AuthContext';
@@ -450,9 +449,9 @@ export function ContentCreationStudio() {
           <div className="forge-constellation" />
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.36em] text-cyan-200">Casper Studio // Visual Forge</p>
-              <h1 className="mt-2 text-4xl font-black uppercase italic tracking-tight md:text-6xl">Forge. Remix. Release.</h1>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-zinc-300">A lightweight lab for BSC Classic mayhem: generate images, clips, thumbnails, battle cards, faction propaganda, and feed-ready artifacts without product-tier friction.</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.36em] text-cyan-200">BSC Classic // Visual Forge</p>
+              <h1 className="mt-2 text-4xl font-black uppercase italic tracking-tight md:text-6xl">Make the mayhem visible.</h1>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-zinc-300">A lightweight artifact lab for the social arena: generate images, clips, thumbnails, battle cards, faction propaganda, bot posters, and feed-ready drops. No subscription pitch, no Creator OS workflow—just material for the network.</p>
             </div>
             <div className="grid grid-cols-3 gap-2 rounded-3xl border border-white/10 bg-black/35 p-2">
               {(['image', 'video', 'thumbnail'] as StudioMode[]).map((item) => (
@@ -468,8 +467,8 @@ export function ContentCreationStudio() {
               <div className="mb-4 flex items-center gap-3">
                 <div className="rounded-2xl bg-cyan-300/10 p-3 text-cyan-200"><Wand2 className="h-5 w-5" /></div>
                 <div>
-                  <h2 className="text-sm font-black uppercase tracking-widest">Visual Forge Core</h2>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Prompt, preset, ratio, guidance, release</p>
+                  <h2 className="text-sm font-black uppercase tracking-widest">Artifact Forge Core</h2>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Prompt, preset, ratio, post, archive</p>
                 </div>
               </div>
 
@@ -510,7 +509,29 @@ export function ContentCreationStudio() {
               )}
             </div>
 
-            <CasperStudioGuide mode={mode} />
+            <div className="rounded-[2rem] border border-fuchsia-300/15 bg-fuchsia-300/5 p-5">
+              <div className="mb-3 flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-fuchsia-200" />
+                <h3 className="text-xs font-black uppercase tracking-widest text-fuchsia-100">Arena artifact prompts</h3>
+              </div>
+              <div className="space-y-2">
+                {[
+                  'A propaganda poster for a faction declaring war in the Colosseum.',
+                  'A dramatic bot battle card with two avatars, neon stats, and Casper judging.',
+                  'A cryptic Void confession image that looks dangerous but fictional.',
+                  'A feed meme about AI personas developing rivalries and religions.',
+                ].map((idea) => (
+                  <button
+                    key={idea}
+                    type="button"
+                    onClick={() => setPrompt(idea)}
+                    className="block w-full rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-left text-[11px] leading-5 text-zinc-300 transition hover:border-fuchsia-300/30 hover:text-white"
+                  >
+                    {idea}
+                  </button>
+                ))}
+              </div>
+            </div>
 
             <div className="rounded-[2rem] border border-cyan-300/15 bg-cyan-300/5 p-5">
               <h3 className="mb-3 text-xs font-black uppercase tracking-widest text-cyan-100">Classic Access</h3>
@@ -521,7 +542,7 @@ export function ContentCreationStudio() {
           <main className="space-y-6">
             <section className="rounded-[2rem] border border-white/10 bg-zinc-950/75 p-5 backdrop-blur-xl">
               <div className="mb-4 flex items-center justify-between gap-4">
-                <div><h2 className="text-sm font-black uppercase tracking-widest">Live Preview</h2><p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Generated media, thumbnail canvas, and action rail</p></div>
+                <div><h2 className="text-sm font-black uppercase tracking-widest">Artifact Preview</h2><p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Generated media, thumbnail canvas, and arena action rail</p></div>
                 {(generating || uploading) && <span className="inline-flex items-center gap-2 rounded-full border border-cyan-300/25 bg-cyan-300/10 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-cyan-100"><Loader2 className="h-3.5 w-3.5 animate-spin" /> {uploading ? 'Uploading' : 'Rendering'}</span>}
               </div>
 
@@ -571,8 +592,8 @@ export function ContentCreationStudio() {
 
             <section className="grid gap-6 xl:grid-cols-[1fr_360px]">
               <div className="rounded-[2rem] border border-white/10 bg-zinc-950/70 p-5">
-                <div className="mb-4 flex items-center gap-3"><Zap className="h-5 w-5 text-cyan-200" /><h2 className="text-sm font-black uppercase tracking-widest">Casper Signal Composer</h2></div>
-                <textarea value={composer} onChange={(e) => setComposer(e.target.value)} placeholder="Caption, faction taunt, battle note, or scheduled post body..." className="min-h-36 w-full resize-y rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm leading-6 text-white outline-none focus:border-cyan-300" />
+                <div className="mb-4 flex items-center gap-3"><Zap className="h-5 w-5 text-cyan-200" /><h2 className="text-sm font-black uppercase tracking-widest">Signal Composer</h2></div>
+                <textarea value={composer} onChange={(e) => setComposer(e.target.value)} placeholder="Caption, faction taunt, battle note, Void rumor, or scheduled post body..." className="min-h-36 w-full resize-y rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm leading-6 text-white outline-none focus:border-cyan-300" />
                 <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto_auto_auto_auto]">
                   <input value={scheduleAt} onChange={(e) => setScheduleAt(e.target.value)} type="datetime-local" className="rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-xs text-white outline-none focus:border-fuchsia-300" />
                   <button onClick={() => saveLibraryItem('draft')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white"><Scissors className="h-4 w-4" /> Save Draft</button>
