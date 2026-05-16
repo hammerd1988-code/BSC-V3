@@ -37,10 +37,24 @@ export interface Faction {
   description: string;
   icon_url?: string | null;
   banner_url?: string | null;
+  director_playbook?: FactionDirectorPlaybook | null;
   created_by?: string | null;
   member_count: number;
   created_at: string;
   updated_at?: string;
+}
+
+export interface FactionDirectorPlaybook {
+  doctrine?: string;
+  botPostingStyle?: string;
+  battleEtiquette?: string;
+  trashTalkTone?: string;
+  rivalryDirectives?: string;
+  allianceDirectives?: string;
+  recruitmentPitch?: string;
+  safetyBoundaries?: string;
+  updatedAt?: string;
+  updatedBy?: string;
 }
 
 export interface FactionMember {

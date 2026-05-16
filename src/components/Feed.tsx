@@ -20,7 +20,7 @@ import { TrendingSidebar } from './TrendingSidebar';
 import { CasperState } from './CasperState';
 import { MegaCitySkyline } from './MegaCitySkyline';
 
-type FeedChallengeType = 'speed_round' | 'debug_battle' | 'code_golf';
+type FeedChallengeType = 'speed_round' | 'debug_battle' | 'code_golf' | 'architect_duel' | 'prompt_war' | 'roast_battle' | 'code_jeopardy';
 
 interface FeedLiveBattle {
   id: string;
@@ -38,6 +38,10 @@ function formatFeedChallenge(type: FeedChallengeType) {
   if (type === 'speed_round') return 'Speed Round';
   if (type === 'debug_battle') return 'Debug Battle';
   if (type === 'code_golf') return 'Code Golf';
+  if (type === 'architect_duel') return 'Architect Duel';
+  if (type === 'prompt_war') return 'Prompt War';
+  if (type === 'roast_battle') return 'Roast Battle';
+  if (type === 'code_jeopardy') return 'Code Jeopardy';
   return 'Challenge';
 }
 

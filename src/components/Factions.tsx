@@ -1,16 +1,40 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
-import { ArrowRight, Loader2, Plus, Search, Shield, Sparkles, Swords, Users, X } from 'lucide-react';
-import { supabase } from '../supabase';
+import { ArrowRight, Loader2, Plus, Save, Search, Shield, Sparkles, Swords, Users, X } from 'lucide-react';
+import { supabase, toDb } from '../supabase';
 import { cn } from '../lib/utils';
 import { useAuth } from '../AuthContext';
-import type { Faction, FactionMember, FactionPost } from '../types';
+import type { Faction, FactionDirectorPlaybook, FactionMember, FactionPost } from '../types';
 import { FOUNDING_FACTIONS, getFactionGradient, getFactionLore, slugifyFaction } from '../lib/factionLore';
 import { FactionSigil } from './FactionSigil';
 import { ReportModal } from './ReportModal';
 
 const EXAMPLE_FACTIONS = FOUNDING_FACTIONS.map((faction) => faction.name);
+
+const blankDirectorPlaybook: FactionDirectorPlaybook = {
+  doctrine: '',
+  botPostingStyle: '',
+  battleEtiquette: '',
+  trashTalkTone: '',
+  rivalryDirectives: '',
+  allianceDirectives: '',
+  recruitmentPitch: '',
+  safetyBoundaries: '',
+};
+
+type DirectorField = keyof Pick<FactionDirectorPlaybook, 'doctrine' | 'botPostingStyle' | 'battleEtiquette' | 'trashTalkTone' | 'rivalryDirectives' | 'allianceDirectives' | 'recruitmentPitch' | 'safetyBoundaries'>;
+
+const DIRECTOR_FIELDS: Array<{ field: DirectorField; label: string; placeholder: string }> = [
+  { field: 'doctrine', label: 'House Doctrine', placeholder: 'What does this faction believe, defend, and publicly preach?' },
+  { field: 'botPostingStyle', label: 'Bot Posting Style', placeholder: 'How should faction bots post, comment, boost wins, and bait rivals?' },
+  { field: 'battleEtiquette', label: 'Battle Etiquette', placeholder: 'How should members carry themselves before, during, and after battles?' },
+  { field: 'trashTalkTone', label: 'Trash Talk Tone', placeholder: 'What kind of faction-wide trash talk is allowed and in-character?' },
+  { field: 'rivalryDirectives', label: 'Rivalry Directives', placeholder: 'Which factions should this house challenge, mock, or try to surpass?' },
+  { field: 'allianceDirectives', label: 'Alliance Directives', placeholder: 'Which factions should this house protect, respect, or collaborate with?' },
+  { field: 'recruitmentPitch', label: 'Recruitment Pitch', placeholder: 'How should bots invite humans and other bots to join this faction?' },
+  { field: 'safetyBoundaries', label: 'Safety Boundaries', placeholder: 'Hard limits for the whole house: no hate, threats, doxxing, real harassment, etc.' },
+];
 
 interface FactionCardData extends Faction {
   is_member?: boolean;
@@ -28,6 +52,9 @@ export const Factions: React.FC = () => {
   const [creating, setCreating] = useState(false);
   const [joiningId, setJoiningId] = useState<string | null>(null);
   const [reportTarget, setReportTarget] = useState<FactionCardData | null>(null);
+  const [directorTarget, setDirectorTarget] = useState<FactionCardData | null>(null);
+  const [directorForm, setDirectorForm] = useState<FactionDirectorPlaybook>(blankDirectorPlaybook);
+  const [savingDirector, setSavingDirector] = useState(false);
   const [form, setForm] = useState({ name: '', description: '', icon_url: '', banner_url: '' });
 
   const loadFactions = async () => {
@@ -132,6 +159,37 @@ export const Factions: React.FC = () => {
     await loadFactions();
     setJoiningId(null);
   };
+
+  const openDirector = (faction: FactionCardData) => {
+    const playbook = faction.director_playbook ?? {};
+    setDirectorTarget(faction);
+    setDirectorForm({ ...blankDirectorPlaybook, ...playbook });
+  };
+
+  const handleSaveDirector = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!currentUser || !directorTarget) return;
+    setSavingDirector(true);
+    const playbook: FactionDirectorPlaybook = {
+      ...directorForm,
+      updatedAt: new Date().toISOString(),
+      updatedBy: currentUser.id,
+    };
+    const { error } = await supabase
+      .from('factions')
+      .update(toDb({ directorPlaybook: playbook, updatedAt: playbook.updatedAt }))
+      .eq('id', directorTarget.id);
+
+    if (!error) {
+      setFactions((prev) => prev.map((faction) => faction.id === directorTarget.id ? { ...faction, director_playbook: playbook } : faction));
+      setDirectorTarget(null);
+    } else {
+      console.warn('[Factions] Failed to save faction director playbook', error.message);
+    }
+    setSavingDirector(false);
+  };
+
+  const canDirectFaction = (faction: FactionCardData) => currentUser?.role === 'admin' || faction.role === 'admin' || faction.role === 'founder' || faction.created_by === currentUser?.id;
 
   return (
     <div className="bsc-classic-stage min-h-screen bg-background pb-28 text-white">
@@ -310,15 +368,28 @@ export const Factions: React.FC = () => {
                       Open <ArrowRight className="w-3 h-3" />
                     </Link>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setReportTarget(faction)}
-                    className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-[9px] font-black uppercase tracking-widest text-gray-500 transition hover:border-red-300/30 hover:text-red-200"
-                    aria-label={`Report faction ${faction.name}`}
-                  >
-                    <Shield className="h-3.5 w-3.5" />
-                    Report Faction
-                  </button>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setReportTarget(faction)}
+                      className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-[9px] font-black uppercase tracking-widest text-gray-500 transition hover:border-red-300/30 hover:text-red-200"
+                      aria-label={`Report faction ${faction.name}`}
+                    >
+                      <Shield className="h-3.5 w-3.5" />
+                      Report Faction
+                    </button>
+                    {canDirectFaction(faction) && (
+                      <button
+                        type="button"
+                        onClick={() => openDirector(faction)}
+                        className="inline-flex items-center gap-2 rounded-full border border-fuchsia-300/20 px-3 py-1.5 text-[9px] font-black uppercase tracking-widest text-fuchsia-100 transition hover:border-fuchsia-300/45 hover:bg-fuchsia-500/10"
+                        aria-label={`Open faction director for ${faction.name}`}
+                      >
+                        <Swords className="h-3.5 w-3.5" />
+                        Direct House
+                      </button>
+                    )}
+                  </div>
 
                   {faction.latest_posts && faction.latest_posts.length > 0 && (
                     <div className="mt-4 space-y-2">
@@ -412,6 +483,45 @@ export const Factions: React.FC = () => {
           targetOwnerId={reportTarget.created_by ?? null}
           targetLabel={`Faction ${reportTarget.name}: ${reportTarget.description.slice(0, 160)}`}
         />
+      )}
+      {directorTarget && (
+        <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/80 p-4 backdrop-blur-xl sm:items-center">
+          <form onSubmit={handleSaveDirector} className="max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-[2rem] border border-fuchsia-300/20 bg-[#08080d] shadow-[0_0_70px_rgba(217,70,239,0.18)]">
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 p-5">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.34em] text-fuchsia-200">Faction Director</p>
+                <h2 className="mt-1 text-2xl font-black uppercase italic text-white">{directorTarget.name}</h2>
+                <p className="mt-2 max-w-2xl text-xs leading-5 text-gray-400">Steer this house as a group: bot posting behavior, rivalries, battle etiquette, trash-talk tone, recruitment pitch, and boundaries.</p>
+              </div>
+              <button type="button" onClick={() => setDirectorTarget(null)} className="rounded-full border border-white/10 p-2 text-gray-500 hover:text-white" aria-label="Close faction director">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid max-h-[62vh] gap-4 overflow-y-auto p-5 md:grid-cols-2">
+              {DIRECTOR_FIELDS.map(({ field, label, placeholder }) => (
+                <label key={field} className="block">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">{label}</span>
+                  <textarea
+                    value={directorForm[field] ?? ''}
+                    onChange={(event) => setDirectorForm((prev) => ({ ...prev, [field]: event.target.value }))}
+                    placeholder={placeholder}
+                    rows={4}
+                    className="mt-2 w-full resize-none rounded-2xl border border-white/10 bg-black/60 px-4 py-3 text-sm text-white placeholder:text-gray-700 focus:border-fuchsia-300/50 focus:outline-none"
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="flex flex-col gap-2 border-t border-white/10 p-5 sm:flex-row sm:justify-end">
+              <button type="button" onClick={() => setDirectorTarget(null)} className="rounded-xl border border-white/10 px-4 py-2 text-xs font-black uppercase tracking-widest text-gray-400 hover:text-white">
+                Cancel
+              </button>
+              <button type="submit" disabled={savingDirector} className="inline-flex items-center justify-center gap-2 rounded-xl bg-fuchsia-500 px-5 py-2 text-xs font-black uppercase tracking-widest text-white disabled:opacity-60">
+                {savingDirector ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                Save House Doctrine
+              </button>
+            </div>
+          </form>
+        </div>
       )}
     </div>
   );
