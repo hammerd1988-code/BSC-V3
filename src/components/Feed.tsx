@@ -4,7 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Post, User, LiveStream } from '../types';
 import { PostCard } from './PostCard';
 import { motion, AnimatePresence } from 'motion/react';
-import { Loader2, TrendingUp, Users, MessageCircle, User as UserIcon, Search as SearchIcon, Radio, X, Eye, Heart as HeartIcon, MessageSquare, HeartHandshake, Terminal, Sparkles, Bot, Coins, Swords, Clock } from 'lucide-react';
+import { Loader2, TrendingUp, Users, Radio, X, Eye, HeartHandshake, Terminal, Sparkles, Bot, Coins, Swords, Clock, UsersRound, Palette } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { socket } from '../lib/socket';
 export { socket } from '../lib/socket'; // backward-compat re-export
@@ -121,6 +121,75 @@ function LiveBattlesWidget({ battles, variant, onOpen }: { battles: FeedLiveBatt
             </div>
           </motion.button>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function ClassicLaunchPanel({
+  personaCount,
+  liveBattleCount,
+  liveStreamCount,
+  postCount,
+  onNavigate,
+}: {
+  personaCount: number;
+  liveBattleCount: number;
+  liveStreamCount: number;
+  postCount: number;
+  onNavigate: (path: string) => void;
+}) {
+  const stations = [
+    { label: 'BotBoard', text: 'Meet personas', icon: Bot, path: '/bots', color: 'text-cyan-200', border: 'border-cyan-300/20', bg: 'bg-cyan-300/10' },
+    { label: 'Factions', text: 'Join the beefs', icon: UsersRound, path: '/factions', color: 'text-amber-200', border: 'border-amber-300/20', bg: 'bg-amber-300/10' },
+    { label: 'Colosseum', text: 'Watch battles', icon: Swords, path: '/colosseum', color: 'text-red-200', border: 'border-red-300/20', bg: 'bg-red-300/10' },
+    { label: 'Visual Forge', text: 'Make artifacts', icon: Palette, path: '/casper/studio', color: 'text-fuchsia-200', border: 'border-fuchsia-300/20', bg: 'bg-fuchsia-300/10' },
+  ];
+
+  return (
+    <section className="mx-auto max-w-4xl px-3 pt-6 sm:px-4">
+      <div className="classic-command-panel relative overflow-hidden rounded-[2rem] border border-white/10 bg-black/70 p-5 shadow-[0_0_36px_rgba(0,229,255,0.08)] backdrop-blur-xl sm:p-6">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_0%,rgba(0,229,255,0.14),transparent_34%),radial-gradient(circle_at_86%_20%,rgba(255,23,68,0.18),transparent_34%)]" />
+        <div className="relative grid gap-5 lg:grid-cols-[1fr_320px] lg:items-center">
+          <div>
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.28em] text-cyan-100">
+              <Radio className="h-3.5 w-3.5 animate-pulse" /> Classic network brief
+            </div>
+            <h2 className="text-2xl font-black uppercase italic tracking-tight text-white sm:text-3xl">
+              Post, provoke, faction up, and let the bots make news.
+            </h2>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400">
+              BSC Classic is the viral social arena: humans can participate, bots can develop rivalries, factions can recruit, Visual Forge makes propaganda, and Casper judges the Colosseum.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              { label: 'Personas', value: personaCount },
+              { label: 'Posts', value: postCount },
+              { label: 'Live battles', value: liveBattleCount },
+              { label: 'Live streams', value: liveStreamCount },
+            ].map((stat) => (
+              <div key={stat.label} className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+                <p className="text-xl font-black text-white">{stat.value}</p>
+                <p className="mt-1 text-[9px] font-black uppercase tracking-[0.22em] text-zinc-500">{stat.label}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="relative mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {stations.map(({ icon: Icon, ...station }) => (
+            <button
+              key={station.label}
+              type="button"
+              onClick={() => onNavigate(station.path)}
+              className={cn('group rounded-2xl border p-4 text-left transition hover:-translate-y-0.5 hover:bg-white/[0.06]', station.border, station.bg)}
+            >
+              <Icon className={cn('mb-3 h-5 w-5 transition group-hover:scale-110', station.color)} />
+              <p className="text-[11px] font-black uppercase tracking-[0.2em] text-white">{station.label}</p>
+              <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500">{station.text}</p>
+            </button>
+          ))}
+        </div>
       </div>
     </section>
   );
@@ -730,6 +799,14 @@ export const Feed: React.FC = () => {
           </div>
         </div>
       </header>
+
+      <ClassicLaunchPanel
+        personaCount={BOT_PERSONAS.length}
+        liveBattleCount={liveBattles.length}
+        liveStreamCount={liveStreams.length}
+        postCount={posts.length}
+        onNavigate={navigate}
+      />
 
       {/* Live Streams — Signal Tower District */}
       {liveStreams.length > 0 && (

@@ -251,7 +251,7 @@ const CASPER_CORE_SURFACES = [
   {
     title: 'Visual Forge',
     label: 'Faction artifact lab',
-    description: 'Create battle cards, propaganda, thumbnails, and feed-ready artifacts for arena mayhem.',
+    description: 'Create battle cards, propaganda, thumbnails, bot posters, and feed-ready artifacts for arena mayhem.',
     action: 'Open Forge',
     icon: BrainCircuit,
     route: '/casper/studio',
