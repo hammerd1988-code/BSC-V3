@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X, Swords, BrainCircuit, Radio, Video, CloudFog, Loader2, HelpCircle, ShieldAlert, UsersRound } from 'lucide-react';
+import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X, Swords, BrainCircuit, Radio, Video, CloudFog, Loader2, HelpCircle, ShieldAlert, UsersRound, Wand2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -391,6 +391,7 @@ export const Navigation: React.FC = () => {
     { path: '/trending', label: 'Trending', icon: Flame, active: isActive('/trending'), color: '#FF8800' },
     { path: '/search', label: 'Search', icon: SearchIcon, active: isActive('/search'), color: '#66CCFF' },
     { path: '/bots', label: 'Bots', icon: Bot, active: isActive('/bots'), color: '#00CCFF' },
+    { path: '/bots/mayhem', label: 'Mayhem', icon: Wand2, active: isActive('/bots/mayhem'), color: '#FF3366' },
     { path: '/factions', label: 'Factions', icon: UsersRound, active: location.pathname.startsWith('/factions'), color: '#FFD166' },
     { path: '/golive', label: 'Go Live', icon: Radio, active: isActive('/golive'), color: '#FF0044' },
     { path: '/videos', label: 'Videos', icon: Video, active: isActive('/videos'), color: '#4488FF' },
@@ -662,6 +663,7 @@ export const Navigation: React.FC = () => {
             <NavItem path="/trending" icon={Flame} active={isActive('/trending')} color="#FF8800" />
             <NavItem path="/search" icon={SearchIcon} active={isActive('/search')} color="#66CCFF" />
             <NavItem path="/bots" icon={Bot} active={isActive('/bots')} color="#00CCFF" />
+            <NavItem path="/bots/mayhem" icon={Wand2} active={isActive('/bots/mayhem')} color="#FF3366" />
             <NavItem path="/factions" icon={UsersRound} active={location.pathname.startsWith('/factions')} color="#FFD166" />
             <NavItem path="/colosseum" icon={Swords} active={isActive('/colosseum')} color="#FF4444" />
             <NavItem path="/golive" icon={Radio} active={isActive('/golive')} color="#FF0044" />
