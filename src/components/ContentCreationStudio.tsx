@@ -1,13 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Download, Film, Image as ImageIcon, Loader2, Play, Send, Sparkles, Wand2, CalendarClock, Layers, Upload, RefreshCw, Scissors, PanelTop, Zap, PackageCheck, Copy, CheckCircle2 } from 'lucide-react';
+import { Download, Film, Image as ImageIcon, Loader2, Play, Send, Sparkles, Wand2, CalendarClock, Layers, Upload, RefreshCw, Scissors, PanelTop, Zap } from 'lucide-react';
 import { CasperStudioGuide } from './CasperStudioGuide';
 import { getRunwayTask, requestRunwayGeneration, uploadStudioAsset, type RunwayTaskResponse } from '../lib/runway';
 import { supabase, toDb } from '../supabase';
 import { useAuth } from '../AuthContext';
 import { cn } from '../lib/utils';
-import { useSubscription, type PremiumFeature } from '../lib/subscription';
-import { UpgradePromptModal } from './UpgradePrompt';
-import { sendCasperCommand } from '../lib/casper';
 
 interface StudioAsset {
   id: string;
@@ -23,9 +20,8 @@ interface StudioAsset {
 type StudioMode = 'image' | 'video' | 'thumbnail';
 type AssetAction = 'thumbnail' | 'feed' | 'short' | 'project' | 'download';
 type LibraryStatus = 'draft' | 'finished' | 'published';
-type PackagePlatform = 'TikTok' | 'Instagram Reels' | 'YouTube Shorts' | 'BSC Feed' | 'X';
 
-interface CreatorLibraryItem {
+interface ForgeLibraryItem {
   id: string;
   status: LibraryStatus;
   mode: StudioMode;
@@ -39,23 +35,6 @@ interface CreatorLibraryItem {
   ratio: string;
   createdAt: string;
   updatedAt: string;
-  packageId?: string;
-}
-
-interface StudioContentPackage {
-  id: string;
-  brief: string;
-  platform: PackagePlatform;
-  assetId?: string;
-  assetUrl?: string;
-  assetType?: StudioAsset['type'];
-  assetLabel?: string;
-  blueprint: string;
-  thumbnailPrompt: string;
-  videoPrompt: string;
-  titleVariants: string[];
-  captionVariants: string[];
-  createdAt: string;
 }
 
 const IMAGE_PRESETS = ['cyberpunk', 'minimal', 'cinematic', 'abstract', 'product hero', 'neon portrait', 'editorial', 'dark terminal'];
@@ -72,7 +51,6 @@ const THUMBNAIL_TEMPLATES = [
 
 const STORAGE_KEY = 'bsc_content_studio_assets_v1';
 const LIBRARY_KEY = 'bsc_content_studio_library_v1';
-const PACKAGE_KEY = 'bsc_content_studio_packages_v1';
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 const safeRunwayRatio = (ratio: string): '16:9' | '9:16' | '1:1' | '4:3' => ratio === '16:9' || ratio === '9:16' || ratio === '4:3' ? ratio : '1:1';
@@ -90,80 +68,16 @@ function saveAssets(assets: StudioAsset[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(assets.slice(0, 80)));
 }
 
-function loadLibrary(): CreatorLibraryItem[] {
+function loadLibrary(): ForgeLibraryItem[] {
   try {
-    return JSON.parse(localStorage.getItem(LIBRARY_KEY) || '[]') as CreatorLibraryItem[];
+    return JSON.parse(localStorage.getItem(LIBRARY_KEY) || '[]') as ForgeLibraryItem[];
   } catch {
     return [];
   }
 }
 
-function saveLibrary(items: CreatorLibraryItem[]) {
+function saveLibrary(items: ForgeLibraryItem[]) {
   localStorage.setItem(LIBRARY_KEY, JSON.stringify(items.slice(0, 120)));
-}
-
-function loadPackages(): StudioContentPackage[] {
-  try {
-    return JSON.parse(localStorage.getItem(PACKAGE_KEY) || '[]') as StudioContentPackage[];
-  } catch {
-    return [];
-  }
-}
-
-function savePackages(items: StudioContentPackage[]) {
-  localStorage.setItem(PACKAGE_KEY, JSON.stringify(items.slice(0, 40)));
-}
-
-function isDurableAssetUrl(assetUrl: string | undefined) {
-  if (!assetUrl) return false;
-  return /^https?:\/\//i.test(assetUrl) || assetUrl.startsWith('/');
-}
-
-function getAssetContext(asset: StudioAsset | null) {
-  if (!asset) return 'No selected media asset yet. Create a package that can be executed from an idea alone.';
-  const durableUrl = isDurableAssetUrl(asset.url) ? `, durable URL ${asset.url}` : ', local unsaved preview only';
-  return `Selected asset: ${asset.type}, ratio ${asset.ratio}, prompt "${asset.prompt.slice(0, 300)}"${durableUrl}.`;
-}
-
-function parseNumberedList(section: string) {
-  return section
-    .split('\n')
-    .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, '').trim())
-    .filter(Boolean)
-    .slice(0, 6);
-}
-
-function extractPackageSection(text: string, label: string) {
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = text.match(new RegExp(`(?:^|\\n)#{0,3}\\s*${escaped}\\s*:?\\s*\\n([\\s\\S]*?)(?=\\n#{0,3}\\s*(?:Blueprint|Video Prompt|Thumbnail Prompt|Title Variants|Caption Variants)\\s*:?\\s*\\n|$)`, 'i'));
-  return match?.[1]?.trim() ?? '';
-}
-
-function buildPackageFromResponse(input: {
-  brief: string;
-  platform: PackagePlatform;
-  response: string;
-  asset?: StudioAsset | null;
-}): StudioContentPackage {
-  const thumbnailPrompt = extractPackageSection(input.response, 'Thumbnail Prompt');
-  const videoPrompt = extractPackageSection(input.response, 'Video Prompt');
-  const titleVariants = parseNumberedList(extractPackageSection(input.response, 'Title Variants'));
-  const captionVariants = parseNumberedList(extractPackageSection(input.response, 'Caption Variants'));
-  return {
-    id: crypto.randomUUID(),
-    brief: input.brief,
-    platform: input.platform,
-    assetId: input.asset?.id,
-    assetUrl: isDurableAssetUrl(input.asset?.url) ? input.asset?.url : undefined,
-    assetType: input.asset?.type,
-    assetLabel: input.asset ? `${input.asset.type} // ${input.asset.ratio}` : undefined,
-    blueprint: input.response.trim(),
-    thumbnailPrompt: thumbnailPrompt || input.brief,
-    videoPrompt: videoPrompt || input.brief,
-    titleVariants: titleVariants.length ? titleVariants : [input.brief.slice(0, 70)],
-    captionVariants: captionVariants.length ? captionVariants : [`${input.brief}\n\n#BloodSweatCode #CreatorStudio`],
-    createdAt: new Date().toISOString(),
-  };
 }
 
 function renderSvgToPngDataUrl(svg: string, width = 1280, height = 720) {
@@ -213,15 +127,11 @@ function getAssetUrl(result: RunwayTaskResponse): string | null {
 
 export function ContentCreationStudio() {
   const { currentUser } = useAuth();
-  const { canAccess, recordUsage, refresh, usageMeters } = useSubscription();
   const [mode, setMode] = useState<StudioMode>('image');
   const [assets, setAssets] = useState<StudioAsset[]>(() => loadAssets());
-  const [library, setLibrary] = useState<CreatorLibraryItem[]>(() => loadLibrary());
-  const [packages, setPackages] = useState<StudioContentPackage[]>(() => loadPackages());
+  const [library, setLibrary] = useState<ForgeLibraryItem[]>(() => loadLibrary());
   const [selectedAssetId, setSelectedAssetId] = useState<string>('');
-  const [prompt, setPrompt] = useState('Create a high-impact Blood Sweat Code creator asset with neon cyan and magenta glassmorphism energy.');
-  const [packageBrief, setPackageBrief] = useState('Turn my idea into a punchy short about building faster with AI agents.');
-  const [packagePlatform, setPackagePlatform] = useState<PackagePlatform>('YouTube Shorts');
+  const [prompt, setPrompt] = useState('Create a high-impact Blood Sweat Code arena artifact with neon cyan and magenta glitch energy.');
   const [imagePreset, setImagePreset] = useState(IMAGE_PRESETS[0]);
   const [videoPreset, setVideoPreset] = useState(VIDEO_PRESETS[0]);
   const [ratio, setRatio] = useState<typeof RATIOS[number]>('16:9');
@@ -233,15 +143,10 @@ export function ContentCreationStudio() {
   const [composer, setComposer] = useState('');
   const [scheduleAt, setScheduleAt] = useState('');
   const [status, setStatus] = useState<string | null>(null);
-  const [packageStatus, setPackageStatus] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [packaging, setPackaging] = useState(false);
   const [actionLoading, setActionLoading] = useState<AssetAction | null>(null);
-  const [copiedPackageId, setCopiedPackageId] = useState<string | null>(null);
-  const [gate, setGate] = useState<ReturnType<typeof canAccess> | null>(null);
   const [thumbnailTitle, setThumbnailTitle] = useState('BUILD FASTER');
   const [thumbnailSubtitle, setThumbnailSubtitle] = useState('Blood Sweat Code');
-  const [thumbnailPrompt, setThumbnailPrompt] = useState('');
   const [thumbnailTemplate, setThumbnailTemplate] = useState(THUMBNAIL_TEMPLATES[0]);
   const [thumbnailBg, setThumbnailBg] = useState<string>('');
   const [thumbnailColor, setThumbnailColor] = useState('#00FFFF');
@@ -249,11 +154,10 @@ export function ContentCreationStudio() {
   const previewRef = useRef<HTMLDivElement>(null);
   const hasActiveGeneration = generating || Boolean(progress);
 
-  const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? null;
+  const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? assets[0] ?? null;
 
   useEffect(() => saveAssets(assets), [assets]);
   useEffect(() => saveLibrary(library), [library]);
-  useEffect(() => savePackages(packages), [packages]);
 
   const libraryCounts = useMemo(() => ({
     draft: library.filter((item) => item.status === 'draft').length,
@@ -261,30 +165,17 @@ export function ContentCreationStudio() {
     published: library.filter((item) => item.status === 'published').length,
   }), [library]);
 
-  const metered = useMemo(() => usageMeters.filter((meter) => ['ai_image_generation', 'ai_video_generation', 'thumbnail_generation', 'casper_studio_packages'].includes(meter.feature)), [usageMeters]);
-
   const addAsset = (asset: StudioAsset) => {
     setAssets((prev) => [asset, ...prev]);
     setSelectedAssetId(asset.id);
   };
 
-  const openGate = (feature: PremiumFeature) => {
-    const next = canAccess(feature);
-    if (!next.allowed) {
-      setGate(next);
-      return false;
-    }
-    return true;
-  };
-
   const generateImage = async (asThumbnailBg = false) => {
-    if (!openGate(asThumbnailBg ? 'thumbnail_generation' : 'ai_image_generation')) return;
     setGenerating(true);
     setProgress('Igniting Visual Forge image core...');
     setStatus(null);
     try {
-      const sourcePrompt = asThumbnailBg && thumbnailPrompt.trim() ? thumbnailPrompt : prompt;
-      const fullPrompt = `${sourcePrompt}\nStyle preset: ${imagePreset}. Guidance strength: ${guidance}/100. Aspect ratio target: ${ratio}.`;
+      const fullPrompt = `${prompt}\nStyle preset: ${imagePreset}. Guidance strength: ${guidance}/100. Aspect ratio target: ${ratio}.`;
       const initial = await requestRunwayGeneration({
         prompt: fullPrompt,
         type: 'image',
@@ -300,7 +191,6 @@ export function ContentCreationStudio() {
       if (asThumbnailBg) setThumbnailBg(url);
       const asset: StudioAsset = { id: crypto.randomUUID(), type: asThumbnailBg ? 'thumbnail' : 'image', url, prompt: fullPrompt, ratio, createdAt: new Date().toISOString() };
       addAsset(asset);
-      await refresh();
       setStatus(asThumbnailBg ? 'AI background added to thumbnail creator.' : 'Image generated and saved to studio history.');
     } catch (err: any) {
       setStatus(err?.message || 'Image generation failed.');
@@ -311,12 +201,11 @@ export function ContentCreationStudio() {
   };
 
   const generateVideo = async () => {
-    if (!openGate('ai_video_generation')) return;
     setGenerating(true);
     setProgress('Booting text-to-video render pipeline...');
     setStatus(null);
     try {
-      const fullPrompt = `${prompt}\nVideo preset: ${videoPreset}. Duration: ${duration}s. Format: ${videoRatio}. Cinematic movement, crisp contrast, premium creator-platform polish.`;
+      const fullPrompt = `${prompt}\nVideo preset: ${videoPreset}. Duration: ${duration}s. Format: ${videoRatio}. Cinematic movement, crisp contrast, BSC arena spectacle.`;
       const initial = await requestRunwayGeneration({ prompt: fullPrompt, type: 'video', feature: 'ai_video_generation', duration, aspectRatio: videoRatio, ratio: videoRatio });
       const result = await pollRunwayTask(initial, setProgress);
       if (result.status === 'FAILED') throw new Error('Runway video generation failed.');
@@ -324,7 +213,6 @@ export function ContentCreationStudio() {
       const url = getAssetUrl(result);
       if (!url) throw new Error('Runway returned no video URL.');
       addAsset({ id: crypto.randomUUID(), type: 'video', url, prompt: fullPrompt, ratio: videoRatio, createdAt: new Date().toISOString() });
-      await refresh();
       setStatus('Video generated and ready for short, project, or download actions.');
     } catch (err: any) {
       setStatus(err?.message || 'Video generation failed.');
@@ -335,123 +223,12 @@ export function ContentCreationStudio() {
   };
 
   const exportThumbnail = async () => {
-    if (!openGate('thumbnail_generation')) return null;
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#020617"/><stop offset="0.45" stop-color="#09090b"/><stop offset="1" stop-color="${thumbnailColor}" stop-opacity="0.55"/></linearGradient></defs><rect width="1280" height="720" fill="url(#g)"/><circle cx="1060" cy="90" r="260" fill="#FF00FF" opacity="0.28"/><circle cx="160" cy="620" r="260" fill="#00FFFF" opacity="0.22"/><path d="M0 560 L1280 420 L1280 720 L0 720 Z" fill="#000" opacity="0.55"/><text x="70" y="330" font-family="Arial Black, Impact, sans-serif" font-size="96" fill="#fff" stroke="#000" stroke-width="8">${thumbnailTitle.replace(/[<>&]/g, '')}</text><text x="74" y="430" font-family="Arial, sans-serif" font-size="42" fill="${thumbnailColor}">${thumbnailSubtitle.replace(/[<>&]/g, '')}</text><text x="75" y="640" font-family="Arial Black, sans-serif" font-size="28" fill="#fff" opacity="0.82">BLOOD SWEAT CODE // CREATOR SIGNAL</text></svg>`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#020617"/><stop offset="0.45" stop-color="#09090b"/><stop offset="1" stop-color="${thumbnailColor}" stop-opacity="0.55"/></linearGradient></defs><rect width="1280" height="720" fill="url(#g)"/><circle cx="1060" cy="90" r="260" fill="#FF00FF" opacity="0.28"/><circle cx="160" cy="620" r="260" fill="#00FFFF" opacity="0.22"/><path d="M0 560 L1280 420 L1280 720 L0 720 Z" fill="#000" opacity="0.55"/><text x="70" y="330" font-family="Arial Black, Impact, sans-serif" font-size="96" fill="#fff" stroke="#000" stroke-width="8">${thumbnailTitle.replace(/[<>&]/g, '')}</text><text x="74" y="430" font-family="Arial, sans-serif" font-size="42" fill="${thumbnailColor}">${thumbnailSubtitle.replace(/[<>&]/g, '')}</text><text x="75" y="640" font-family="Arial Black, sans-serif" font-size="28" fill="#fff" opacity="0.82">BLOOD SWEAT CODE // ARENA SIGNAL</text></svg>`;
     const url = await renderSvgToPngDataUrl(svg);
     const asset: StudioAsset = { id: crypto.randomUUID(), type: 'thumbnail', url, prompt: `${thumbnailTitle} — ${thumbnailSubtitle}`, title: thumbnailTitle, ratio: '16:9', createdAt: new Date().toISOString() };
     addAsset(asset);
-    await recordUsage('thumbnail_generation');
     setStatus('Thumbnail exported to your reusable studio library.');
     return asset;
-  };
-
-  const generateContentPackage = async () => {
-    if (!packageBrief.trim()) {
-      setPackageStatus('Describe the idea, clip, image, or campaign Casper should package.');
-      return;
-    }
-    if (!openGate('casper_studio_packages')) return;
-    setPackaging(true);
-    setPackageStatus('Casper is building a publish-ready content package...');
-    try {
-      const assetContext = getAssetContext(selectedAsset);
-      const result = await sendCasperCommand({
-        surface: 'studio',
-        source: 'user',
-        metadata: { studio_package: true, platform: packagePlatform, asset_id: selectedAsset?.id ?? null },
-        pageContext: {
-          path: '/casper/studio',
-          feature: 'Casper Studio package generator',
-          description: 'The user wants a marketable, publish-ready content package from one idea or asset.',
-        },
-        command: `Create a monetizable Casper Studio content package for ${packagePlatform}.
-
-Brief:
-${packageBrief.trim()}
-
-${assetContext}
-
-Return concise Markdown with EXACTLY these headings:
-Blueprint
-Video Prompt
-Thumbnail Prompt
-Title Variants
-Caption Variants
-
-Requirements:
-- The Blueprint must include a 20-45 second short-video structure, opening hook, scene/cut plan, captions/on-screen text, CTA, and export specs.
-- Video Prompt must be ready for an AI video generator.
-- Thumbnail Prompt must be ready for Visual Forge.
-- Title Variants must include 5 clickable titles.
-- Caption Variants must include 3 platform-ready captions with hashtags.
-- No preamble. Make it usable immediately.`,
-      });
-      const nextPackage = buildPackageFromResponse({
-        brief: packageBrief.trim(),
-        platform: packagePlatform,
-        response: result.response,
-        asset: selectedAsset,
-      });
-      setPackages((prev) => [nextPackage, ...prev]);
-      setPrompt(nextPackage.videoPrompt);
-      setMode('video');
-      setVideoPreset('shorts clip');
-      setVideoRatio('9:16');
-      setThumbnailTitle(nextPackage.titleVariants[0] || thumbnailTitle);
-      setThumbnailSubtitle('Casper Studio Drop');
-      setThumbnailPrompt(nextPackage.thumbnailPrompt);
-      setThumbnailBg('');
-      setComposer(nextPackage.captionVariants[0] || result.response);
-      saveLibraryItem('finished', selectedAsset, nextPackage);
-      await recordUsage('casper_studio_packages');
-      await refresh();
-      setPackageStatus('Publish-ready package created. Prompts, composer copy, and library project are staged.');
-    } catch (err: any) {
-      setPackageStatus(err?.message || 'Package generation failed.');
-    } finally {
-      setPackaging(false);
-    }
-  };
-
-  const copyPackage = async (item: StudioContentPackage) => {
-    try {
-      await navigator.clipboard.writeText(item.blueprint);
-      setCopiedPackageId(item.id);
-      setPackageStatus('Package blueprint copied to clipboard.');
-      window.setTimeout(() => setCopiedPackageId(null), 1800);
-    } catch (err: any) {
-      setPackageStatus(err?.message || 'Clipboard copy failed. Use Download instead.');
-    }
-  };
-
-  const stagePackage = (item: StudioContentPackage) => {
-    setPackageBrief(item.brief);
-    setPackagePlatform(item.platform);
-    setPrompt(item.videoPrompt || item.brief);
-    setMode('video');
-    setVideoPreset('shorts clip');
-    setVideoRatio('9:16');
-    setThumbnailTitle(item.titleVariants[0] || 'CASPER DROP');
-    setThumbnailSubtitle(item.platform);
-    setThumbnailPrompt(item.thumbnailPrompt);
-    setThumbnailBg('');
-    setComposer(item.captionVariants[0] || item.blueprint);
-    if (item.assetId && assets.some((asset) => asset.id === item.assetId)) {
-      setSelectedAssetId(item.assetId);
-    } else {
-      setSelectedAssetId('');
-    }
-    setPackageStatus('Package staged into Visual Forge, Thumbnail Creator, and composer.');
-  };
-
-  const downloadPackage = (item: StudioContentPackage) => {
-    const blob = new Blob([item.blueprint], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `casper-content-package-${item.id}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
   const downloadAsset = async (asset = selectedAsset) => {
@@ -558,40 +335,34 @@ Requirements:
     if (!asset) return;
     setThumbnailBg(asset.url);
     setMode('thumbnail');
-    setStatus('Asset loaded into Thumbnail Creator background.');
+    setStatus('Asset loaded into thumbnail forge background.');
   };
 
-  const saveLibraryItem = (status: LibraryStatus, assetOverride?: StudioAsset | null, packageOverride?: StudioContentPackage | null) => {
+  const saveLibraryItem = (status: LibraryStatus, assetOverride?: StudioAsset | null) => {
     const now = new Date().toISOString();
     const asset = assetOverride ?? selectedAsset;
-    const title = (packageOverride?.titleVariants[0] || thumbnailTitle || composer.split('\n')[0] || prompt.slice(0, 48) || 'Untitled Studio Project').trim();
-    const item: CreatorLibraryItem = {
+    const title = (thumbnailTitle || composer.split('\n')[0] || prompt.slice(0, 48) || 'Untitled Forge Artifact').trim();
+    const item: ForgeLibraryItem = {
       id: crypto.randomUUID(),
       status,
-      mode: packageOverride ? 'video' : mode,
+      mode,
       title,
-      prompt: packageOverride?.videoPrompt || (mode === 'thumbnail' ? `${thumbnailTitle} — ${thumbnailSubtitle}` : prompt),
-      composer: packageOverride?.captionVariants[0] || composer,
+      prompt: mode === 'thumbnail' ? `${thumbnailTitle} — ${thumbnailSubtitle}` : prompt,
+      composer,
       scheduleAt,
       assetId: asset?.id,
-      assetUrl: isDurableAssetUrl(asset?.url) ? asset?.url : undefined,
+      assetUrl: asset?.url,
       assetType: asset?.type,
-      ratio: packageOverride ? '9:16' : asset?.ratio ?? (mode === 'video' ? videoRatio : ratio),
+      ratio: asset?.ratio ?? (mode === 'video' ? videoRatio : ratio),
       createdAt: now,
       updatedAt: now,
-      packageId: packageOverride?.id,
     };
     setLibrary((prev) => [item, ...prev]);
-    setStatus(status === 'draft' ? 'Draft saved to Creator Library.' : 'Finished project saved to Creator Library.');
+    setStatus(status === 'draft' ? 'Draft saved to Artifact Library.' : 'Finished artifact saved to Artifact Library.');
   };
 
-  const reopenLibraryItem = (item: CreatorLibraryItem) => {
+  const reopenLibraryItem = (item: ForgeLibraryItem) => {
     setMode(item.mode);
-    if (item.packageId) {
-      setMode('video');
-      setVideoPreset('shorts clip');
-      setVideoRatio('9:16');
-    }
     setPrompt(item.prompt);
     setComposer(item.composer);
     setScheduleAt(item.scheduleAt ?? '');
@@ -616,7 +387,7 @@ Requirements:
 
   const setLibraryStatus = (id: string, status: LibraryStatus) => {
     setLibrary((prev) => prev.map((item) => item.id === id ? { ...item, status, updatedAt: new Date().toISOString() } : item));
-    setStatus(status === 'finished' ? 'Project marked finished in Creator Library.' : 'Project moved back to drafts.');
+    setStatus(status === 'finished' ? 'Artifact marked finished in Artifact Library.' : 'Artifact moved back to drafts.');
   };
 
   const handleAssetAction = async (action: AssetAction, asset: StudioAsset | null = selectedAsset) => {
@@ -637,7 +408,7 @@ Requirements:
         await postAsset(activeAsset, 'short');
       }
       if (action === 'project') {
-        setComposer(`Project asset staged:\n${activeAsset.url}\n\nPrompt:\n${activeAsset.prompt}`);
+        setComposer(`Forge artifact staged:\n${activeAsset.url}\n\nPrompt:\n${activeAsset.prompt}`);
         saveLibraryItem('finished', activeAsset);
         setStatus('Asset staged and saved as a finished project.');
       }
@@ -663,9 +434,9 @@ Requirements:
         <header className="mb-6 rounded-[2rem] border border-white/10 bg-white/[0.04] p-6 shadow-2xl backdrop-blur-xl">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.36em] text-cyan-200">Casper Studio // Creator Copilot</p>
-              <h1 className="mt-2 text-4xl font-black uppercase italic tracking-tight md:text-6xl">Forge. Schedule. Drop.</h1>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-zinc-300">Casper's state-of-the-art creator cockpit: forge visuals and shorts, build thumbnails, stage campaigns, schedule drops, and publish to the BSC neural feed from one cyberpunk command deck.</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.36em] text-cyan-200">Casper Studio // Visual Forge</p>
+              <h1 className="mt-2 text-4xl font-black uppercase italic tracking-tight md:text-6xl">Forge. Remix. Release.</h1>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-zinc-300">A lightweight lab for BSC Classic mayhem: generate images, clips, thumbnails, battle cards, faction propaganda, and feed-ready artifacts without product-tier friction.</p>
             </div>
             <div className="grid grid-cols-3 gap-2 rounded-3xl border border-white/10 bg-black/35 p-2">
               {(['image', 'video', 'thumbnail'] as StudioMode[]).map((item) => (
@@ -675,103 +446,20 @@ Requirements:
           </div>
         </header>
 
-        <section className="mb-6 overflow-hidden rounded-[2rem] border border-cyan-300/20 bg-[radial-gradient(circle_at_18%_0%,rgba(0,255,255,0.18),transparent_32%),linear-gradient(135deg,rgba(255,0,255,0.08),rgba(0,0,0,0.86))] p-5 shadow-2xl">
-          <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
-            <div>
-              <div className="mb-4 flex items-center gap-3">
-                <div className="rounded-2xl bg-cyan-300/10 p-3 text-cyan-100"><PackageCheck className="h-5 w-5" /></div>
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-[0.32em] text-cyan-200">New monetizable loop</p>
-                  <h2 className="text-xl font-black uppercase italic tracking-tight text-white">Casper Content Package</h2>
-                  <p className="mt-1 text-xs leading-5 text-zinc-400">Drop an idea, clip, or image context. Casper returns a publish-ready short package with script, cut plan, prompts, titles, captions, and export notes.</p>
-                </div>
-              </div>
-              <textarea
-                value={packageBrief}
-                onChange={(e) => setPackageBrief(e.target.value)}
-                className="min-h-28 w-full resize-y rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm leading-6 text-white outline-none focus:border-cyan-300"
-                placeholder="Example: Turn my 30-minute coding livestream into a punchy YouTube Short that sells Casper Studio..."
-              />
-              <div className="mt-3 flex flex-wrap gap-2">
-                {(['YouTube Shorts', 'TikTok', 'Instagram Reels', 'BSC Feed', 'X'] as PackagePlatform[]).map((item) => (
-                  <button
-                    key={item}
-                    onClick={() => setPackagePlatform(item)}
-                    className={cn('rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-widest transition', packagePlatform === item ? 'border-cyan-300/50 bg-cyan-300/15 text-cyan-100' : 'border-white/10 text-zinc-500 hover:text-white')}
-                  >
-                    {item}
-                  </button>
-                ))}
-              </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
-                <div className="rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-xs leading-5 text-zinc-400">
-                  {selectedAsset ? <>Using selected {selectedAsset.type} asset as creative context: <span className="text-cyan-100">{selectedAsset.prompt.slice(0, 96)}</span></> : 'No asset selected. Casper will package from the brief alone.'}
-                </div>
-                <button
-                  onClick={() => void generateContentPackage()}
-                  disabled={packaging}
-                  className="inline-flex items-center justify-center gap-2 rounded-2xl bg-cyan-300/20 px-5 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 transition hover:bg-cyan-300/30 disabled:opacity-50"
-                >
-                  {packaging ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Build Package
-                </button>
-              </div>
-              {packageStatus && <div className="mt-4 rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-4 text-sm text-cyan-100">{packageStatus}</div>}
-            </div>
-
-            <div className="rounded-[1.5rem] border border-white/10 bg-black/35 p-4">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-xs font-black uppercase tracking-widest text-white">Recent Packages</h3>
-                  <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500">Reusable campaigns and export-ready docs</p>
-                </div>
-                <span className="rounded-full border border-fuchsia-300/20 bg-fuchsia-300/10 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-fuchsia-100">{packages.length}</span>
-              </div>
-              <div className="max-h-80 space-y-3 overflow-y-auto pr-1">
-                {packages.length ? packages.slice(0, 5).map((item) => (
-                  <article key={item.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap gap-2">
-                          <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-cyan-100">{item.platform}</span>
-                          {item.assetType && <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-zinc-400">{item.assetType}</span>}
-                        </div>
-                        <p className="mt-2 line-clamp-1 text-xs font-black uppercase tracking-wider text-white">{item.titleVariants[0] || item.brief}</p>
-                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">{item.brief}</p>
-                      </div>
-                    </div>
-                    <div className="mt-3 grid grid-cols-3 gap-2">
-                      <button onClick={() => stagePackage(item)} className="rounded-xl border border-cyan-300/20 bg-cyan-300/10 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-cyan-100">Stage</button>
-                      <button aria-label="Copy package blueprint" title="Copy package blueprint" onClick={() => void copyPackage(item)} className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-white">{copiedPackageId === item.id ? <CheckCircle2 className="mx-auto h-3.5 w-3.5" /> : <Copy className="mx-auto h-3.5 w-3.5" />}</button>
-                      <button aria-label="Download package blueprint" title="Download package blueprint" onClick={() => downloadPackage(item)} className="rounded-xl border border-fuchsia-300/20 bg-fuchsia-300/10 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-fuchsia-100"><Download className="mx-auto h-3.5 w-3.5" /></button>
-                    </div>
-                  </article>
-                )) : (
-                  <div className="grid min-h-40 place-items-center rounded-2xl border border-dashed border-white/10 text-center">
-                    <div>
-                      <PackageCheck className="mx-auto mb-3 h-8 w-8 text-zinc-700" />
-                      <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">No packages yet</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </section>
-
         <div className="grid gap-6 lg:grid-cols-[430px_1fr]">
           <aside className="space-y-5">
             <div className="rounded-[2rem] border border-white/10 bg-zinc-950/80 p-5 backdrop-blur-xl">
               <div className="mb-4 flex items-center gap-3">
                 <div className="rounded-2xl bg-cyan-300/10 p-3 text-cyan-200"><Wand2 className="h-5 w-5" /></div>
                 <div>
-                  <h2 className="text-sm font-black uppercase tracking-widest">Casper Creation Core</h2>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Prompt, preset, ratio, guidance, deployment</p>
+                  <h2 className="text-sm font-black uppercase tracking-widest">Visual Forge Core</h2>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Prompt, preset, ratio, guidance, release</p>
                 </div>
               </div>
 
               {mode !== 'thumbnail' && (
                 <div className="space-y-4">
-                  <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} className="min-h-36 w-full resize-y rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm leading-6 text-white outline-none focus:border-cyan-300" placeholder="Describe the asset you want Casper to forge..." />
+                  <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} className="min-h-36 w-full resize-y rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm leading-6 text-white outline-none focus:border-cyan-300" placeholder="Describe the arena artifact you want Casper to forge..." />
                   {mode === 'image' ? (
                     <>
                       <div className="flex flex-wrap gap-2">{IMAGE_PRESETS.map((preset) => <button key={preset} onClick={() => setImagePreset(preset)} className={cn('rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-widest', imagePreset === preset ? 'border-cyan-300/50 bg-cyan-300/15 text-cyan-100' : 'border-white/10 text-zinc-500 hover:text-white')}>{preset}</button>)}</div>
@@ -796,7 +484,6 @@ Requirements:
                   <div className="grid grid-cols-2 gap-2">{THUMBNAIL_TEMPLATES.map((template) => <button key={template.id} onClick={() => { setThumbnailTemplate(template); setThumbnailColor(template.accent); }} className={cn('rounded-2xl border p-3 text-left text-[10px] font-black uppercase tracking-widest', thumbnailTemplate.id === template.id ? 'border-cyan-300/50 bg-cyan-300/10 text-cyan-100' : 'border-white/10 text-zinc-500')}>{template.name}</button>)}</div>
                   <input value={thumbnailTitle} onChange={(e) => setThumbnailTitle(e.target.value)} placeholder="Thumbnail title" className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none focus:border-cyan-300" />
                   <input value={thumbnailSubtitle} onChange={(e) => setThumbnailSubtitle(e.target.value)} placeholder="Subtitle" className="w-full rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm text-white outline-none focus:border-fuchsia-300" />
-                  <textarea value={thumbnailPrompt} onChange={(e) => setThumbnailPrompt(e.target.value)} placeholder="Thumbnail AI background prompt" className="min-h-24 w-full resize-y rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm leading-6 text-white outline-none focus:border-cyan-300" />
                   <input value={thumbnailColor} onChange={(e) => setThumbnailColor(e.target.value)} type="color" className="h-12 w-full rounded-2xl border border-white/10 bg-black/50 p-2" />
                   <div className="grid grid-cols-2 gap-3">
                     <button onClick={() => void generateImage(true)} disabled={generating} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 disabled:opacity-50"><RefreshCw className="h-4 w-4" /> AI BG</button>
@@ -809,9 +496,9 @@ Requirements:
 
             <CasperStudioGuide mode={mode} />
 
-            <div className="rounded-[2rem] border border-white/10 bg-zinc-950/70 p-5">
-              <h3 className="mb-3 text-xs font-black uppercase tracking-widest text-white">Usage</h3>
-              <div className="space-y-3">{metered.map((meter) => <div key={meter.feature}><div className="mb-1 flex justify-between text-[10px] font-bold uppercase tracking-widest text-zinc-500"><span>{meter.label}</span><span>{meter.limit === null ? 'Unlimited' : `${meter.used}/${meter.limit}`}</span></div><div className="h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full bg-gradient-to-r from-cyan-300 to-fuchsia-400" style={{ width: meter.limit === null ? '22%' : `${Math.min(100, meter.used / Math.max(1, meter.limit) * 100)}%` }} /></div></div>)}</div>
+            <div className="rounded-[2rem] border border-cyan-300/15 bg-cyan-300/5 p-5">
+              <h3 className="mb-3 text-xs font-black uppercase tracking-widest text-cyan-100">Classic Access</h3>
+              <p className="text-xs leading-6 text-zinc-400">Visual Forge, thumbnail creation, feed posting, Shorts, scheduling, and downloads are free-access tools for BSC Classic.</p>
             </div>
           </aside>
 
@@ -868,8 +555,8 @@ Requirements:
 
             <section className="grid gap-6 xl:grid-cols-[1fr_360px]">
               <div className="rounded-[2rem] border border-white/10 bg-zinc-950/70 p-5">
-                <div className="mb-4 flex items-center gap-3"><Zap className="h-5 w-5 text-cyan-200" /><h2 className="text-sm font-black uppercase tracking-widest">Casper Unified Composer</h2></div>
-                <textarea value={composer} onChange={(e) => setComposer(e.target.value)} placeholder="Caption, post copy, project notes, or scheduled content body..." className="min-h-36 w-full resize-y rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm leading-6 text-white outline-none focus:border-cyan-300" />
+                <div className="mb-4 flex items-center gap-3"><Zap className="h-5 w-5 text-cyan-200" /><h2 className="text-sm font-black uppercase tracking-widest">Casper Signal Composer</h2></div>
+                <textarea value={composer} onChange={(e) => setComposer(e.target.value)} placeholder="Caption, faction taunt, battle note, or scheduled post body..." className="min-h-36 w-full resize-y rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-sm leading-6 text-white outline-none focus:border-cyan-300" />
                 <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto_auto_auto_auto]">
                   <input value={scheduleAt} onChange={(e) => setScheduleAt(e.target.value)} type="datetime-local" className="rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-xs text-white outline-none focus:border-fuchsia-300" />
                   <button onClick={() => saveLibraryItem('draft')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white"><Scissors className="h-4 w-4" /> Save Draft</button>
@@ -880,8 +567,8 @@ Requirements:
               </div>
 
               <div className="rounded-[2rem] border border-white/10 bg-zinc-950/70 p-5">
-                <h2 className="text-sm font-black uppercase tracking-widest">Creator Library</h2>
-                <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500">Drafts, finished projects, and published drops</p>
+                <h2 className="text-sm font-black uppercase tracking-widest">Artifact Library</h2>
+                <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500">Drafts, finished artifacts, and published drops</p>
                 <div className="my-4 grid grid-cols-3 gap-2">
                   {(['draft', 'finished', 'published'] as LibraryStatus[]).map((item) => <div key={item} className="rounded-2xl border border-white/10 bg-black/35 p-3 text-center"><p className="text-lg font-black text-white">{libraryCounts[item]}</p><p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">{item}</p></div>)}
                 </div>
@@ -906,7 +593,7 @@ Requirements:
                         <button onClick={() => setLibraryStatus(item.id, 'finished')} className="rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-emerald-100">Finished</button>
                       </div>
                     </div>
-                  )) : <p className="rounded-2xl border border-dashed border-white/10 p-5 text-center text-xs uppercase tracking-widest text-zinc-600">Save a draft or mark a project finished to build your library.</p>}
+                  )) : <p className="rounded-2xl border border-dashed border-white/10 p-5 text-center text-xs uppercase tracking-widest text-zinc-600">Save a draft or mark an artifact finished to build your library.</p>}
                 </div>
 
                 <h3 className="mb-3 mt-6 border-t border-white/10 pt-5 text-xs font-black uppercase tracking-widest text-zinc-400">Generation History</h3>
@@ -918,7 +605,6 @@ Requirements:
           </main>
         </div>
       </div>
-      <UpgradePromptModal gate={gate} open={!!gate} onClose={() => setGate(null)} />
     </div>
   );
 }
