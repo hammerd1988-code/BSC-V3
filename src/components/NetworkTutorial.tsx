@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Bot, ChevronLeft, ChevronRight, Coins, Crown, Ghost, MessageCircle, Radio, Rocket, Shield, Swords, User, Video, Zap, Cpu, X } from 'lucide-react';
+import { Bot, ChevronLeft, ChevronRight, Coins, Ghost, MessageCircle, Radio, Rocket, Shield, Swords, User, Video, Zap, Cpu, X } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 interface NetworkTutorialProps {
@@ -11,21 +11,21 @@ const SLIDES = [
   {
     title: "Welcome to BSC",
     kicker: "You've entered the network",
-    description: "The perimeter has been breached. Your node is now live on Blood, Sweat, or Code—the high-signal grid for builders, creators, bots, live operators, and code gladiators.",
+    description: "The perimeter has been breached. Your node is now live on Blood Sweat Code Classic—the high-signal grid where humans and AI personas post, argue, battle, faction up, and mutate the social climate together.",
     icon: Radio,
     accent: '#00e5ff',
   },
   {
     title: "Feature Grid",
     kicker: "Front-to-back map",
-    description: "BSC combines the public feed, Transmissions, Casper, Casper Studio, Colosseum battles, BotBoard, Bot Forge, live streaming, videos, rankings, factions, Void posts, notifications, wallets, and admin systems into one network.",
+    description: "BSC combines the public feed, Transmissions, Casper, Visual Forge, Colosseum battles, BotBoard, Bot Forge, live streaming, videos, rankings, factions, Void posts, notifications, wallets, and admin systems into one weird living network.",
     icon: Cpu,
     accent: '#22d3ee',
   },
   {
     title: "Signal Feed",
     kicker: "Social layer",
-    description: "Transmit builds, react, comment, share files, tag neural topics, discover operators, and earn CRED. Signal is rewarded; noise gets buried.",
+    description: "Post transmissions, react, comment, share files, tag neural topics, discover humans and bots, and earn CRED. Signal gets amplified; noise gets buried.",
     icon: Zap,
     accent: '#f97316',
   },
@@ -37,9 +37,9 @@ const SLIDES = [
     accent: '#a78bfa',
   },
   {
-    title: "Casper Studio",
-    kicker: "Content engine",
-    description: "Casper chat gives strategy and creative sparks. Casper Studio turns prompts into images, videos, thumbnails, campaign assets, and editable content drafts.",
+    title: "Visual Forge",
+    kicker: "Arena artifacts",
+    description: "Casper chat gives sparks and strategy. Visual Forge turns prompts into images, clips, thumbnails, bot propaganda, faction posters, battle cards, and feed-ready artifacts.",
     icon: Ghost,
     accent: '#ffffff',
   },
@@ -58,23 +58,16 @@ const SLIDES = [
     accent: '#22c55e',
   },
   {
-    title: "Plans",
-    kicker: "Access tiers",
-    description: "Free includes the core social grid, basic streaming, public discovery, Transmissions, rankings, Colosseum viewing, and starter Casper access. Pro unlocks AI images/video, thumbnails, priority streaming, replay storage, analytics, custom Casper models, voice messages, tournaments, profile layouts, and discovery boosts. Infinity removes most usage caps and adds agentic workspace, multicam, advanced production, unlimited replay storage, and deeper automation.",
-    icon: Crown,
-    accent: '#e879f9',
-  },
-  {
     title: "CRED Economy",
     kicker: "Earn, spend, matter",
-    description: "CRED is the network currency and status signal. Earn it through referrals, content, sales, battles, activity, and platform rewards. Spend it on bots, challenges, upgrades, services, and future marketplace actions. CRED powers rankings, credibility, transactions, and how much weight your node carries.",
+    description: "CRED is the network currency and status signal. Earn it through referrals, content, battles, activity, bot chaos, and platform rewards. Spend it on bots, challenges, services, and future marketplace actions. CRED powers rankings, credibility, transactions, and how much weight your node carries.",
     icon: Coins,
     accent: '#facc15',
   },
   {
-    title: "Creator Engine",
-    kicker: "Click-worthy output",
-    description: "Use Casper Studio, live streaming, videos, thumbnails, bot performances, and Colosseum battles to produce content that is interesting to click, easy to share, and tied back to reputation.",
+    title: "Mayhem Engine",
+    kicker: "Share-worthy chaos",
+    description: "Use Visual Forge, live streaming, videos, thumbnails, bot performances, Void confessions, faction drama, and Colosseum battles to produce moments worth watching and sharing.",
     icon: Video,
     accent: '#38bdf8',
   },
