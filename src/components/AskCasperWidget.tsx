@@ -52,18 +52,18 @@ export const AskCasperProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 // specific paths (/casper/studio) MUST come before less specific ones
 // (/casper) so the studio route doesn't get stolen by the operator console.
 // Each entry maps a route prefix to the friendly feature name + a short
-// description AND which Casper surface persona to use. The Studio routes
-// pick 'studio' (full content + engineering expert with detailed
-// playbooks), all other routes pick 'guide' (concise help-style answers).
+// description AND which Casper surface persona to use. Visual Forge routes
+// pick 'studio' (artifact/propaganda guidance), all other routes pick
+// 'guide' (concise help-style answers).
 //
 // Order matters: more specific paths (/casper/studio) MUST come before
 // less specific ones (/casper) so the studio route doesn't get stolen by
 // the operator console.
 const PAGE_CONTEXT_MAP: Array<{ prefix: string; feature: string; description: string; surface: CasperSurface }> = [
-  { prefix: '/casper/studio',    feature: 'Visual Forge',                    description: 'image, video, thumbnail, battle-card, and arena artifact lab',                      surface: 'studio'  },
-  { prefix: '/casper',           feature: 'Casper Control Center',           description: 'operator console with directives, sub-agents, integrations, terminal',                surface: 'guide'   },
+  { prefix: '/casper/studio',    feature: 'Visual Forge',                    description: 'image, video, thumbnail, faction propaganda, battle-card, and arena artifact lab',    surface: 'studio'  },
+  { prefix: '/casper',           feature: 'Casper Judge Chamber',            description: 'chat with Casper, the Colosseum judge and spectral arbiter of BSC Classic',            surface: 'guide'   },
   { prefix: '/transmissions',    feature: 'Transmissions',                   description: 'encrypted direct-message threads',                                                    surface: 'guide'   },
-  { prefix: '/colosseum',        feature: 'Colosseum',                       description: 'AI bot competition arena',                                                            surface: 'guide'   },
+  { prefix: '/colosseum',        feature: 'Colosseum',                       description: 'AI bot competition arena ruled by Casper thumb-up/thumb-down verdicts',               surface: 'guide'   },
   { prefix: '/bots',             feature: 'Bot Marketplace',                 description: 'discover, hire, and configure AI bots',                                               surface: 'guide'   },
   { prefix: '/marketplace',      feature: 'Marketplace',                     description: 'CRED marketplace listings',                                                           surface: 'guide'   },
   { prefix: '/golive',           feature: 'GoLive',                          description: 'live streaming setup with LiveKit + RTMP and Socket.io crowd state',                  surface: 'studio'  },
@@ -299,7 +299,7 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
         {
           role: 'casper',
           ts: Date.now(),
-          text: `Hey${currentUser?.username ? `, @${currentUser.username}` : ''}. You're on **${pageContext.feature}**. Ask me anything about it — what a button does, why something isn't working, how to use a feature, or what to try next.`,
+          text: `Hey${currentUser?.username ? `, @${currentUser.username}` : ''}. You're on **${pageContext.feature}**. Ask Casper about the page, the factions, the bots, or the next arena move.`,
         },
       ]);
     }
@@ -471,7 +471,7 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
                 {turn.pending ? (
                   <span className="inline-flex items-center gap-2 text-cyan-200/70">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Casper is thinking…
+                    Casper is weighing the signal…
                   </span>
                 ) : (
                   <>
@@ -534,7 +534,7 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={onKeyDown}
-              placeholder={listening ? 'Listening…' : `Ask about ${pageContext.feature}…`}
+              placeholder={listening ? 'Listening…' : `Ask Judge Casper about ${pageContext.feature}…`}
               rows={2}
               className={cn(
                 'flex-1 resize-none rounded-xl border bg-black/40 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-cyan-400/60 focus:outline-none',

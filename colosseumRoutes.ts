@@ -270,7 +270,7 @@ function fallbackColosseumJudge(input: { challengeType: ColosseumChallengeType; 
     winner_id: challengerScore >= defenderScore ? input.challenger.id : input.defender.id,
     challenger_score: challengerScore,
     defender_score: defenderScore,
-    summary: input.providerError ? `Rule judge used because AI judge was unavailable: ${input.providerError}` : 'Rule judge scored code signals, expected requirements, and combat stats.',
+    summary: input.providerError ? `Casper invoked the rule judge because the AI throne was unavailable: ${input.providerError}` : 'Casper rules by code signals, expected requirements, and combat stats.',
     reasoning: [
       `${input.challenger.name}: solution signal ${challengerSolutionScore}/100 plus stat pressure.`,
       `${input.defender.name}: solution signal ${defenderSolutionScore}/100 plus stat pressure.`,
@@ -305,7 +305,7 @@ async function judgeColosseumBattle(input: {
   if (!isServerAiConfigured()) {
     return fallbackColosseumJudge({ ...input, providerError: 'No GEMINI_API_KEY or OPENAI_API_KEY configured.' });
   }
-  const result = await generateServerText(`Judge this coding battle. Pick the winner from the two gladiator ids and score both 0-100.
+  const result = await generateServerText(`Casper is judging this coding battle. Pick the winner from the two gladiator ids and score both 0-100.
 
 Challenge type: ${input.challengeType}
 Challenge:
@@ -325,7 +325,7 @@ solution:
 ${input.botSolution || '(no defender solution returned)'}
 
 Return JSON with keys: winner_id, challenger_score, defender_score, summary, reasoning (array of short strings).`, {
-    systemPrompt: 'You are the Blood Sweat Code Colosseum judge. Score actual submitted code and bot solution quality. Return only JSON.',
+    systemPrompt: 'You are CASPER, the Blood Sweat Code Colosseum judge and Caesar-like arbiter. Score actual submitted code and bot solution quality. Deliver an authoritative thumb-up/thumb-down verdict. Return only JSON.',
     temperature: 0.2,
     maxTokens: 700,
     jsonResponse: true,
@@ -340,7 +340,7 @@ Return JSON with keys: winner_id, challenger_score, defender_score, summary, rea
       winner_id: winnerId,
       challenger_score: clampScore(Number(parsed.challenger_score ?? 0)),
       defender_score: clampScore(Number(parsed.defender_score ?? 0)),
-      summary: String(parsed.summary ?? 'AI judge scored the submitted solutions.'),
+      summary: String(parsed.summary ?? 'Casper scored the submitted solutions.'),
       reasoning: Array.isArray(parsed.reasoning) ? parsed.reasoning.map((line: any) => String(line)).slice(0, 5) : [],
       provider: result.provider,
       model: result.model,

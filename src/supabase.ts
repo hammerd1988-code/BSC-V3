@@ -68,6 +68,7 @@ export const COLLECTION_TO_TABLE: Record<string, string> = {
   transactions: 'transactions',
   notifications: 'notifications',
   active_threats: 'active_threats',
+  content_reports: 'content_reports',
   test: 'users',
 };
 
@@ -145,6 +146,14 @@ const CAMEL_TO_SNAKE: Record<string, string> = {
   skillsManifest: 'skills_manifest',
   lookingFor: 'looking_for',
   factionId: 'faction_id',
+  reporterId: 'reporter_id',
+  targetType: 'target_type',
+  targetId: 'target_id',
+  targetOwnerId: 'target_owner_id',
+  targetLabel: 'target_label',
+  adminNotes: 'admin_notes',
+  reviewedBy: 'reviewed_by',
+  reviewedAt: 'reviewed_at',
 };
 
 const SNAKE_TO_CAMEL: Record<string, string> = Object.fromEntries(

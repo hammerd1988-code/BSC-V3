@@ -1,36 +1,22 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
-import { ArrowRight, Loader2, Plus, Search, Shield, Sparkles, Users, X } from 'lucide-react';
+import { ArrowRight, Loader2, Plus, Search, Shield, Sparkles, Swords, Users, X } from 'lucide-react';
 import { supabase } from '../supabase';
 import { cn } from '../lib/utils';
 import { useAuth } from '../AuthContext';
 import type { Faction, FactionMember, FactionPost } from '../types';
+import { FOUNDING_FACTIONS, getFactionGradient, getFactionLore, slugifyFaction } from '../lib/factionLore';
+import { FactionSigil } from './FactionSigil';
+import { ReportModal } from './ReportModal';
 
-const EXAMPLE_FACTIONS = ['Rust Collective', 'AI Builders', 'Frontend Warriors', 'Open Source Legion'];
+const EXAMPLE_FACTIONS = FOUNDING_FACTIONS.map((faction) => faction.name);
 
 interface FactionCardData extends Faction {
   is_member?: boolean;
   role?: string;
   latest_posts?: FactionPost[];
 }
-
-const slugify = (value: string) => value
-  .toLowerCase()
-  .trim()
-  .replace(/[^a-z0-9]+/g, '-')
-  .replace(/^-+|-+$/g, '')
-  .slice(0, 72);
-
-const getFactionGradient = (index: number) => {
-  const gradients = [
-    'from-red-500/25 via-fuchsia-500/10 to-cyan-500/20',
-    'from-cyan-500/25 via-blue-500/10 to-fuchsia-500/20',
-    'from-yellow-500/20 via-red-500/10 to-purple-500/20',
-    'from-emerald-500/20 via-cyan-500/10 to-red-500/20',
-  ];
-  return gradients[index % gradients.length];
-};
 
 export const Factions: React.FC = () => {
   const { currentUser } = useAuth();
@@ -41,6 +27,7 @@ export const Factions: React.FC = () => {
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
   const [joiningId, setJoiningId] = useState<string | null>(null);
+  const [reportTarget, setReportTarget] = useState<FactionCardData | null>(null);
   const [form, setForm] = useState({ name: '', description: '', icon_url: '', banner_url: '' });
 
   const loadFactions = async () => {
@@ -110,11 +97,12 @@ export const Factions: React.FC = () => {
     if (!currentUser || !form.name.trim()) return;
 
     setCreating(true);
-    const slug = slugify(form.name);
+    const slug = slugifyFaction(form.name);
+    const lore = getFactionLore(form.name);
     const { error } = await supabase.from('factions').insert({
       name: form.name.trim(),
       slug,
-      description: form.description.trim() || 'A new neural faction forming inside Blood, Sweat, or Code.',
+      description: form.description.trim() || lore?.lore || 'A new neural faction forming inside Blood, Sweat, or Code.',
       icon_url: form.icon_url.trim() || null,
       banner_url: form.banner_url.trim() || null,
       created_by: currentUser.id,
@@ -146,10 +134,13 @@ export const Factions: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background pb-28 text-white">
+    <div className="bsc-classic-stage min-h-screen bg-background pb-28 text-white">
+      <div className="bsc-rift bsc-rift-a" />
+      <div className="bsc-rift bsc-rift-b" />
       <main className="max-w-6xl mx-auto px-4 py-8">
         <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-black/60 p-6 md:p-8 mb-8 shadow-[0_0_60px_rgba(255,0,80,0.08)]">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(255,0,80,0.2),transparent_30%),radial-gradient(circle_at_80%_10%,rgba(34,211,238,0.16),transparent_35%)]" />
+          <div className="forge-constellation" />
           <div className="relative z-10 flex flex-col md:flex-row md:items-end md:justify-between gap-6">
             <div>
               <div className="flex items-center gap-2 mb-3">
@@ -157,10 +148,10 @@ export const Factions: React.FC = () => {
                 <span className="text-[10px] font-black uppercase tracking-[0.4em] text-accent">Faction Network</span>
               </div>
               <h1 className="text-3xl md:text-5xl font-black uppercase italic tracking-tighter mb-3">
-                Find Your <span className="text-accent drop-shadow-[0_0_18px_rgba(255,0,0,0.7)]">Neon Tribe</span>
+                Choose Your <span className="text-accent drop-shadow-[0_0_18px_rgba(255,0,0,0.7)]">House</span>
               </h1>
               <p className="max-w-2xl text-sm text-gray-400 leading-relaxed">
-                Create or join interest-based communities for builders, language crews, open-source cells, and arena specialists. Factions surface on profiles as public badges and power focused mini-feeds.
+                BSC Classic factions are mythic houses with sigils, rivalries, values, and propaganda feeds. Join a preset house or found your own cell, then let bots and humans create the mayhem together.
               </p>
             </div>
             <button
@@ -173,13 +164,62 @@ export const Factions: React.FC = () => {
           </div>
         </section>
 
+        <section className="arena-broadcast mb-8 rounded-[1.75rem] p-5">
+          <div className="relative z-10 mb-4 flex flex-col justify-between gap-3 md:flex-row md:items-end">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.34em] text-yellow-200">Founding Houses</p>
+              <h2 className="mt-1 text-2xl font-black uppercase italic tracking-tight text-white">Preset factions with lore, values, and NFT-style sigils</h2>
+            </div>
+            <span className="rounded-full border border-cyan-300/25 bg-cyan-400/10 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-cyan-100">
+              Click a house to create or search
+            </span>
+          </div>
+          <div className="relative z-10 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {FOUNDING_FACTIONS.map((faction) => (
+              <button
+                key={faction.slug}
+                type="button"
+                onClick={() => {
+                  setForm((prev) => ({
+                    ...prev,
+                    name: faction.name,
+                    description: faction.lore,
+                  }));
+                  setQuery(faction.name);
+                }}
+                className="group rounded-3xl border border-white/10 bg-black/45 p-4 text-left transition hover:border-cyan-300/35 hover:bg-white/[0.06]"
+              >
+                <div className="flex gap-4">
+                  <FactionSigil
+                    name={faction.name}
+                    symbol={faction.symbol}
+                    primary={faction.primary}
+                    secondary={faction.secondary}
+                    className="h-16 w-16 shrink-0"
+                  />
+                  <div>
+                    <h3 className="text-sm font-black uppercase tracking-widest text-white group-hover:text-cyan-100">{faction.name}</h3>
+                    <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-fuchsia-200/80">{faction.motto}</p>
+                    <p className="mt-2 line-clamp-3 text-xs leading-5 text-zinc-400">{faction.lore}</p>
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {faction.values.map((value) => (
+                        <span key={value} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[8px] font-black uppercase tracking-widest text-zinc-400">{value}</span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </section>
+
         <div className="flex flex-col md:flex-row gap-4 md:items-center md:justify-between mb-6">
           <div className="relative flex-1 max-w-xl">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-600" />
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search Rust Collective, AI Builders, Frontend Warriors..."
+              placeholder="Search House Redline, Neon Matriarchy, Null Saints..."
               className="w-full rounded-2xl border border-white/10 bg-black/50 py-3 pl-11 pr-4 text-sm text-white placeholder:text-gray-600 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
             />
           </div>
@@ -217,20 +257,22 @@ export const Factions: React.FC = () => {
                 initial={{ opacity: 0, y: 18 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.035 }}
-                className="group relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/55 shadow-[0_0_34px_rgba(255,0,80,0.06)] hover:border-accent/35 transition-all"
+                className="holo-card group relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/55 shadow-[0_0_34px_rgba(255,0,80,0.06)] transition-all hover:border-accent/35"
               >
-                <div className={cn('h-28 bg-gradient-to-br', getFactionGradient(index))}>
+                <div className={cn('relative h-28 bg-gradient-to-br', getFactionGradient(faction.slug, index))}>
+                  <div className="faction-card-orbit" />
                   {faction.banner_url && <img src={faction.banner_url} alt="" className="h-full w-full object-cover opacity-80" />}
                 </div>
-                <div className="p-5 -mt-10 relative z-10">
+                <div className="relative z-10 -mt-10 p-5">
                   <div className="flex items-end justify-between gap-3 mb-4">
-                    <div className="h-16 w-16 rounded-2xl border border-white/15 bg-black overflow-hidden flex items-center justify-center shadow-[0_0_20px_rgba(255,255,255,0.08)]">
-                      {faction.icon_url ? (
-                        <img src={faction.icon_url} alt={faction.name} className="h-full w-full object-cover" />
-                      ) : (
-                        <Shield className="w-8 h-8 text-accent" />
-                      )}
-                    </div>
+                    <FactionSigil
+                      name={faction.name}
+                      symbol={getFactionLore(faction.slug)?.symbol}
+                      primary={getFactionLore(faction.slug)?.primary}
+                      secondary={getFactionLore(faction.slug)?.secondary}
+                      iconUrl={faction.icon_url}
+                      className="h-16 w-16"
+                    />
                     <button
                       onClick={() => void handleJoinFaction(faction)}
                       disabled={joiningId === faction.id}
@@ -250,6 +292,11 @@ export const Factions: React.FC = () => {
                       {faction.name}
                     </h2>
                     <p className="text-[10px] font-mono uppercase tracking-widest text-gray-600 mb-3">/{faction.slug}</p>
+                    {getFactionLore(faction.slug) && (
+                      <p className="mb-3 text-[10px] font-black uppercase tracking-widest text-fuchsia-200/70">
+                        {getFactionLore(faction.slug)?.attitude}
+                      </p>
+                    )}
                     <p className="text-sm text-gray-400 leading-relaxed line-clamp-3 min-h-[4rem]">{faction.description}</p>
                   </Link>
 
@@ -263,6 +310,15 @@ export const Factions: React.FC = () => {
                       Open <ArrowRight className="w-3 h-3" />
                     </Link>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setReportTarget(faction)}
+                    className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-[9px] font-black uppercase tracking-widest text-gray-500 transition hover:border-red-300/30 hover:text-red-200"
+                    aria-label={`Report faction ${faction.name}`}
+                  >
+                    <Shield className="h-3.5 w-3.5" />
+                    Report Faction
+                  </button>
 
                   {faction.latest_posts && faction.latest_posts.length > 0 && (
                     <div className="mt-4 space-y-2">
@@ -305,7 +361,7 @@ export const Factions: React.FC = () => {
               <textarea
                 value={form.description}
                 onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
-                placeholder="Describe the mission, interests, and kind of builders who should join."
+                placeholder="Describe the lore, rivalries, values, and kind of bots/humans who should join."
                 maxLength={800}
                 className="min-h-[120px] w-full resize-none rounded-2xl border border-white/10 bg-black/60 px-4 py-3 text-sm text-white focus:border-accent focus:outline-none"
               />
@@ -324,6 +380,18 @@ export const Factions: React.FC = () => {
             </div>
 
             <button
+              type="button"
+              onClick={() => {
+                const nextFaction = FOUNDING_FACTIONS.find((faction) => !factions.some((existing) => existing.slug === faction.slug)) ?? FOUNDING_FACTIONS[0];
+                setForm((prev) => ({ ...prev, name: nextFaction.name, description: nextFaction.lore }));
+              }}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl border border-fuchsia-300/25 bg-fuchsia-400/10 px-5 py-3 text-xs font-black uppercase tracking-[0.2em] text-fuchsia-100"
+            >
+              <Swords className="w-4 h-4" />
+              Use Founding House Lore
+            </button>
+
+            <button
               type="submit"
               disabled={creating || !form.name.trim()}
               className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-accent px-5 py-3 text-xs font-black uppercase tracking-[0.2em] text-white disabled:opacity-50"
@@ -333,6 +401,17 @@ export const Factions: React.FC = () => {
             </button>
           </form>
         </div>
+      )}
+
+      {reportTarget && (
+        <ReportModal
+          isOpen={Boolean(reportTarget)}
+          onClose={() => setReportTarget(null)}
+          targetType="faction"
+          targetId={reportTarget.id}
+          targetOwnerId={reportTarget.created_by ?? null}
+          targetLabel={`Faction ${reportTarget.name}: ${reportTarget.description.slice(0, 160)}`}
+        />
       )}
     </div>
   );

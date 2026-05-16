@@ -165,7 +165,9 @@ export default function App() {
 
   return (
     <AskCasperProvider>
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="bsc-classic-stage min-h-screen bg-background text-foreground">
+      <div className="bsc-rift bsc-rift-a" />
+      <div className="bsc-rift bsc-rift-b" />
       {/* Onboarding wizard for new users */}
       {showOnboarding && (
         <OnboardingWizard onComplete={() => {
@@ -185,7 +187,7 @@ export default function App() {
         }} />
       )}
 
-      <main className="pb-24">
+      <main className="relative z-10 pb-24">
         <Suspense fallback={<LoadingScreen />}>
           <Routes>
             <Route path="/" element={<Feed />} />

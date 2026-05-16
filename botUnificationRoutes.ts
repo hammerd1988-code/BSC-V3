@@ -314,6 +314,13 @@ export function registerUnifiedBotRoutes(app: express.Express, supabase: Supabas
       const tone = toText(body.tone, 'neutral');
       const knowledgeBase = toText(body.knowledge_base || body.knowledgeBase).slice(0, 5000);
       const behaviorRules = toText(body.behavior_rules || body.behaviorRules).slice(0, 3000);
+      const automationDirective = toText(body.automation_directive || body.automationDirective).slice(0, 900);
+      const postingBehavior = toText(body.posting_behavior || body.postingBehavior).slice(0, 900);
+      const requestedBattleStyle = toText(body.battle_style || body.battleStyle).slice(0, 900);
+      const trashTalkStyle = toText(body.trash_talk_style || body.trashTalkStyle).slice(0, 900);
+      const rivalryPolicy = toText(body.rivalry_policy || body.rivalryPolicy).slice(0, 900);
+      const factionValues = toText(body.faction_values || body.factionValues).slice(0, 900);
+      const safetyBoundaries = toText(body.safety_boundaries || body.safetyBoundaries).slice(0, 900);
       const responseLength = toText(body.response_length || body.responseLength, 'moderate');
       const emojiUsage = toText(body.emoji_usage || body.emojiUsage, 'minimal');
       const languageStyle = toText(body.language_style || body.languageStyle, 'modern');
@@ -349,13 +356,22 @@ export function registerUnifiedBotRoutes(app: express.Express, supabase: Supabas
         tone,
         communicationStyle,
         knowledgeBase,
-        behaviorRules,
+        behaviorRules: [
+          behaviorRules,
+          automationDirective && `Automation directive: ${automationDirective}`,
+          postingBehavior && `Posting/comment behavior: ${postingBehavior}`,
+          requestedBattleStyle && `Battle style: ${requestedBattleStyle}`,
+          trashTalkStyle && `Trash talk: ${trashTalkStyle}`,
+          rivalryPolicy && `Rivalries/alliances: ${rivalryPolicy}`,
+          factionValues && `Faction values: ${factionValues}`,
+          safetyBoundaries && `Safety boundaries: ${safetyBoundaries}`,
+        ].filter(Boolean).join('\n\n').slice(0, 3000),
         expertiseTags,
         personalityTags,
         abilities,
       });
       const expertise = expertiseTags.length ? expertiseTags : abilities.length ? abilities : [category];
-      const battleStyle = `${tone || 'confident'}, ${communicationStyle || 'technical'}, and loud enough to brag after a clean commit`;
+      const battleStyle = requestedBattleStyle || `${tone || 'confident'}, ${communicationStyle || 'technical'}, and loud enough to brag after a clean commit`;
       const fallbackLine = `${name} is online: social feed, DMs, marketplace, and Colosseum combat are unified.`;
 
       const { error: botUserError } = await supabase.from('users').upsert({
@@ -379,6 +395,15 @@ export function registerUnifiedBotRoutes(app: express.Express, supabase: Supabas
           listing_id: listingRecordId,
           gladiator_id: gladiatorId,
           unified_bot: true,
+          director_playbook: {
+            automation_directive: automationDirective,
+            posting_behavior: postingBehavior,
+            battle_style: battleStyle,
+            trash_talk_style: trashTalkStyle,
+            rivalry_policy: rivalryPolicy,
+            faction_values: factionValues,
+            safety_boundaries: safetyBoundaries,
+          },
         },
         updated_at: new Date().toISOString(),
       }, { onConflict: 'id' });

@@ -23,6 +23,7 @@ import { VoidPost } from '../types';
 import { cn } from '../lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 import { generateText } from '../lib/ai';
+import { ReportModal } from './ReportModal';
 
 export const VoidFeed: React.FC = () => {
   const navigate = useNavigate();
@@ -32,6 +33,7 @@ export const VoidFeed: React.FC = () => {
   const [newContent, setNewContent] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [mood, setMood] = useState<string>('CALIBRATING...');
+  const [reportPost, setReportPost] = useState<VoidPost | null>(null);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -140,7 +142,7 @@ export const VoidFeed: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-transparent text-white pb-20 overflow-x-hidden">
+    <div className="bsc-classic-stage min-h-screen bg-transparent text-white pb-20 overflow-x-hidden">
       {/* Void Header */}
       <div className="sticky top-0 z-20 bg-black/80 backdrop-blur-xl border-b border-white/5 p-6">
         <div className="max-w-2xl mx-auto flex items-center justify-between">
@@ -176,6 +178,19 @@ export const VoidFeed: React.FC = () => {
       </div>
 
       <div className="max-w-2xl mx-auto p-4 space-y-8">
+        <section className="arena-broadcast rounded-[2rem] p-5">
+          <div className="relative z-10 flex items-center gap-4">
+            <div className="grid h-16 w-16 place-items-center rounded-2xl border border-violet-300/30 bg-violet-400/10 shadow-[0_0_26px_rgba(139,92,246,0.16)]">
+              <CloudFog className="h-8 w-8 text-violet-200" />
+            </div>
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-[0.3em] text-violet-200">Anonymous Decay Channel</p>
+              <h2 className="mt-1 text-2xl font-black uppercase italic tracking-tight text-white">Whisper where factions cannot claim you</h2>
+              <p className="mt-2 text-xs leading-5 text-zinc-400">Ephemeral signals dissolve into lore, rumor, confessions, bot paranoia, and strange little sparks.</p>
+            </div>
+          </div>
+        </section>
+
         {/* Input Area */}
         <motion.div 
           initial={{ opacity: 0, y: -20 }}
@@ -291,6 +306,15 @@ export const VoidFeed: React.FC = () => {
                         <Eye className="w-4 h-4" />
                         <span className="font-mono">{post.view_count}</span>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => setReportPost(post)}
+                        className="flex items-center gap-2 text-xs text-white/40 transition-colors hover:text-red-200"
+                        aria-label="Report anonymous void signal"
+                      >
+                        <ShieldAlert className="w-4 h-4" />
+                        <span className="font-mono uppercase">Report</span>
+                      </button>
                     </div>
 
                     {/* Glitch Overlay (Visible on Hover) */}
@@ -302,6 +326,16 @@ export const VoidFeed: React.FC = () => {
           </div>
         )}
       </div>
+      {reportPost && (
+        <ReportModal
+          isOpen={Boolean(reportPost)}
+          onClose={() => setReportPost(null)}
+          targetType="void_post"
+          targetId={reportPost.id}
+          targetOwnerId={reportPost.author_id ?? null}
+          targetLabel={`Anonymous Void signal: ${reportPost.content.slice(0, 160)}`}
+        />
+      )}
     </div>
   );
 };
