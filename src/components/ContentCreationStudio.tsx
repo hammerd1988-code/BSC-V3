@@ -80,6 +80,16 @@ function saveLibrary(items: ForgeLibraryItem[]) {
   localStorage.setItem(LIBRARY_KEY, JSON.stringify(items.slice(0, 120)));
 }
 
+function isDurableAssetUrl(assetUrl?: string) {
+  if (!assetUrl || assetUrl.startsWith('data:') || assetUrl.startsWith('blob:')) return false;
+  try {
+    const parsed = new URL(assetUrl);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 function renderSvgToPngDataUrl(svg: string, width = 1280, height = 720) {
   return new Promise<string>((resolve, reject) => {
     const image = new Image();
@@ -351,7 +361,7 @@ export function ContentCreationStudio() {
       composer,
       scheduleAt,
       assetId: asset?.id,
-      assetUrl: asset?.url,
+      assetUrl: isDurableAssetUrl(asset?.url) ? asset?.url : undefined,
       assetType: asset?.type,
       ratio: asset?.ratio ?? (mode === 'video' ? videoRatio : ratio),
       createdAt: now,
@@ -428,10 +438,13 @@ export function ContentCreationStudio() {
   };
 
   return (
-    <div className="min-h-screen overflow-hidden bg-[#03050b] pb-28 text-white">
+    <div className="visual-forge-stage min-h-screen overflow-hidden bg-[#03050b] pb-28 text-white">
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_15%_8%,rgba(0,255,255,0.18),transparent_30%),radial-gradient(circle_at_86%_0%,rgba(255,0,255,0.17),transparent_32%),linear-gradient(135deg,rgba(0,255,255,0.04),transparent_42%,rgba(255,0,255,0.05))]" />
+      <div className="forge-energy-ribbon forge-energy-ribbon-a" />
+      <div className="forge-energy-ribbon forge-energy-ribbon-b" />
       <div className="relative mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        <header className="mb-6 rounded-[2rem] border border-white/10 bg-white/[0.04] p-6 shadow-2xl backdrop-blur-xl">
+        <header className="forge-hero-card mb-6 overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.04] p-6 shadow-2xl backdrop-blur-xl">
+          <div className="forge-constellation" />
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-[10px] font-black uppercase tracking-[0.36em] text-cyan-200">Casper Studio // Visual Forge</p>
