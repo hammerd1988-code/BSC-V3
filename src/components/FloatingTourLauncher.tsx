@@ -31,7 +31,7 @@ export function FloatingTourLauncher() {
                 </span>
                 <span>
                   <span className="block text-[10px] font-black uppercase tracking-[0.28em] text-cyan-200">BSC Tour</span>
-                  <span className="mt-0.5 block text-[9px] font-bold uppercase tracking-widest text-zinc-500">Features · Plans · CRED</span>
+                  <span className="mt-0.5 block text-[9px] font-bold uppercase tracking-widest text-zinc-500">Bots · Arena · CRED</span>
                 </span>
               </div>
             </motion.button>

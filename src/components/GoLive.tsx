@@ -33,8 +33,6 @@ import { supabase } from '../supabase';
 import { cn } from '../lib/utils';
 import { handleDbError } from '../lib/errors';
 import { requestLiveKitToken } from '../lib/livekit';
-import { useSubscription } from '../lib/subscription';
-import { UpgradeInlineCard } from './UpgradePrompt';
 import { Room, RoomEvent, Track } from 'livekit-client';
 
 const STREAM_CATEGORIES = ['Coding', 'Tutorials', 'Code Battles', 'Gaming', 'Music', 'Art', 'Reactions', 'Q&A', 'Creative', 'Other'] as const;
@@ -148,7 +146,6 @@ export const GoLive: React.FC = () => {
   const [searchParams] = useSearchParams();
   const viewerStreamId = searchParams.get('streamId');
   const { currentUser } = useAuth();
-  const { canAccess, recordUsage } = useSubscription();
 
   const [streamId, setStreamId] = useState<string | null>(viewerStreamId);
   const [streamData, setStreamData] = useState<StreamRow | null>(null);
@@ -183,11 +180,6 @@ export const GoLive: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isViewer = !!viewerStreamId && !isLive;
   const activeStreamId = streamId || viewerStreamId;
-  const replayStorageGate = canAccess('stream_replay_storage');
-  const streamAnalyticsGate = canAccess('stream_analytics');
-  const streamOverlayGate = canAccess('stream_custom_overlays');
-  const streamMulticamGate = canAccess('stream_multicam');
-
   const filteredStreams = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
     return activeStreams.filter((stream) => {
@@ -395,7 +387,7 @@ export const GoLive: React.FC = () => {
               : Track.Source.Microphone,
           });
         }
-        if (replayStorageGate.allowed) startReplayRecording(id);
+        startReplayRecording(id);
       } else {
         room.remoteParticipants.forEach((participant) => {
           participant.trackPublications.forEach((publication) => {
@@ -570,8 +562,7 @@ export const GoLive: React.FC = () => {
   const handleEndStream = async () => {
     if (!activeStreamId || !currentUser) return;
     try {
-      const replayUrl = replayStorageGate.allowed ? await stopReplayRecordingAndUpload(activeStreamId) : null;
-      if (replayUrl) await recordUsage('stream_replay_storage');
+      const replayUrl = await stopReplayRecordingAndUpload(activeStreamId);
       await supabase.from('streams').update({ status: 'ended', is_live: false, ended_at: new Date().toISOString(), ...(replayUrl ? { replay_url: replayUrl } : {}) }).eq('id', activeStreamId);
       await supabase.from('users').update({ is_live: false, active_stream_id: null }).eq('id', currentUser.id);
       setIsLive(false);
@@ -699,27 +690,23 @@ export const GoLive: React.FC = () => {
                   </button>
                 </div>
                 <div className="rounded-2xl border border-green-300/20 bg-green-400/10 p-4">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-green-200">Free streaming active</p>
-                  <p className="mt-2 text-xs leading-5 text-zinc-300">Basic go-live, live chat, and standard quality are included for every BSC creator.</p>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-green-200">Classic streaming active</p>
+                  <p className="mt-2 text-xs leading-5 text-zinc-300">Go-live, live chat, replay capture, and arena broadcasts are open to every BSC node.</p>
                 </div>
               </div>
             </div>
 
             <div className="space-y-6">
               <div className="grid gap-4 md:grid-cols-2">
-                {streamAnalyticsGate.allowed ? (
-                  <div className="rounded-3xl border border-cyan-300/20 bg-cyan-300/10 p-5">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-cyan-200">Pro analytics online</p>
-                    <p className="mt-2 text-2xl font-black text-white">{activeStreams.length}</p>
-                    <p className="text-xs text-zinc-400">Live signals currently broadcasting.</p>
-                  </div>
-                ) : <UpgradeInlineCard gate={streamAnalyticsGate} compact />}
-                {streamOverlayGate.allowed ? (
-                  <div className="rounded-3xl border border-fuchsia-300/20 bg-fuchsia-300/10 p-5">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-fuchsia-200">Overlay forge unlocked</p>
-                    <p className="mt-2 text-sm text-zinc-300">Custom stream overlays can be generated from Casper Studio and attached to upcoming broadcasts.</p>
-                  </div>
-                ) : <UpgradeInlineCard gate={streamOverlayGate} compact />}
+                <div className="rounded-3xl border border-cyan-300/20 bg-cyan-300/10 p-5">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-cyan-200">Live signals online</p>
+                  <p className="mt-2 text-2xl font-black text-white">{activeStreams.length}</p>
+                  <p className="text-xs text-zinc-400">Broadcasts currently running across the network.</p>
+                </div>
+                <div className="rounded-3xl border border-fuchsia-300/20 bg-fuchsia-300/10 p-5">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-fuchsia-200">Overlay forge open</p>
+                  <p className="mt-2 text-sm text-zinc-300">Custom stream overlays can be generated from Visual Forge and attached to upcoming broadcasts.</p>
+                </div>
               </div>
 
               <div className="rounded-[2rem] border border-white/10 bg-zinc-950/80 p-4">
@@ -755,12 +742,10 @@ export const GoLive: React.FC = () => {
                 <div className="mb-4 flex items-center justify-between">
                   <div>
                     <h2 className="text-sm font-black uppercase tracking-widest">Replay Archive</h2>
-                    <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-zinc-600">Replay storage is Pro; unlimited archive is Infinity.</p>
+                    <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-zinc-600">Replay archive is open for BSC Classic broadcasts.</p>
                   </div>
                   <Clapperboard className="h-5 w-5 text-zinc-500" />
                 </div>
-                {!replayStorageGate.allowed && <div className="mb-4"><UpgradeInlineCard gate={replayStorageGate} compact /></div>}
-                {!streamMulticamGate.allowed && <div className="mb-4"><UpgradeInlineCard gate={streamMulticamGate} compact /></div>}
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                   {replays.slice(0, 6).map((stream) => <StreamCard key={stream.id} stream={stream} onOpen={(id) => navigate(`/golive?streamId=${id}`)} />)}
                 </div>
