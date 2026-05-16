@@ -400,6 +400,28 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
   animation: bsc-broadcast-sweep 7s ease-in-out infinite;
 }
 
+.classic-command-panel::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, transparent, rgba(0, 229, 255, 0.14), transparent),
+    repeating-linear-gradient(90deg, transparent 0 18px, rgba(255, 255, 255, 0.035) 18px 19px, transparent 19px 42px);
+  opacity: 0.48;
+  transform: translateX(-18%);
+  animation: classic-command-scan 9s ease-in-out infinite;
+}
+
+.classic-command-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow: inset 0 0 42px rgba(255, 23, 68, 0.08), inset 0 0 64px rgba(0, 229, 255, 0.055);
+}
+
 .arena-orbit {
   position: absolute;
   left: 50%;
@@ -625,6 +647,11 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
   50% { transform: translate3d(8vw, -5vh, 0) scale(1.14); }
 }
 
+@keyframes classic-command-scan {
+  0%, 100% { transform: translateX(-22%); opacity: 0.34; }
+  50% { transform: translateX(18%); opacity: 0.58; }
+}
+
 @keyframes bsc-broadcast-sweep {
   0%, 45% { transform: translateX(-100%); opacity: 0; }
   55% { opacity: 1; }
@@ -678,6 +705,7 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
   .visual-forge-stage::after,
   .bsc-rift,
   .arena-broadcast::before,
+  .classic-command-panel::before,
   .arena-orbit,
   .arena-spotlight,
   .arena-stage-grid,

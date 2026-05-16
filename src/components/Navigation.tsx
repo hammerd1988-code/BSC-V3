@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X, Swords, BrainCircuit, Radio, Video, CloudFog, Loader2, HelpCircle, ShieldAlert, Wand2 } from 'lucide-react';
+import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X, Swords, BrainCircuit, Radio, Video, CloudFog, Loader2, HelpCircle, ShieldAlert, UsersRound, Wand2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -322,7 +322,6 @@ export const Navigation: React.FC = () => {
 
   const isActive = (path: string) => location.pathname === path;
   const isProfileActive = location.pathname.startsWith('/profile');
-  const isFactionActive = location.pathname.startsWith('/factions');
 
   const hexToRgba = (hex: string, opacity: number) => {
     const normalized = hex.replace('#', '');
@@ -337,7 +336,7 @@ export const Navigation: React.FC = () => {
     const iconColor = active ? color : hexToRgba(color, 0.48);
 
     return (
-      <Link to={path} className="relative p-2 flex flex-col items-center justify-center group w-12 h-12 shrink-0">
+      <Link to={path} className="relative p-2 flex flex-col items-center justify-center group w-12 h-12 shrink-0" aria-label={path === '/' ? 'Home feed' : path.replace('/', '')}>
         {active && (
           <motion.div
             className="absolute inset-0 rounded-full blur-md"
@@ -393,6 +392,7 @@ export const Navigation: React.FC = () => {
     { path: '/search', label: 'Search', icon: SearchIcon, active: isActive('/search'), color: '#66CCFF' },
     { path: '/bots', label: 'Bots', icon: Bot, active: isActive('/bots'), color: '#00CCFF' },
     { path: '/bots/mayhem', label: 'Mayhem', icon: Wand2, active: isActive('/bots/mayhem'), color: '#FF3366' },
+    { path: '/factions', label: 'Factions', icon: UsersRound, active: location.pathname.startsWith('/factions'), color: '#FFD166' },
     { path: '/golive', label: 'Go Live', icon: Radio, active: isActive('/golive'), color: '#FF0044' },
     { path: '/videos', label: 'Videos', icon: Video, active: isActive('/videos'), color: '#4488FF' },
     { path: '/casper', label: 'Casper', icon: Ghost, active: location.pathname.startsWith('/casper'), color: '#AA66FF' },
@@ -575,7 +575,7 @@ export const Navigation: React.FC = () => {
                     className="w-full flex items-center gap-3 px-3 py-2 text-cyan-300 hover:text-white hover:bg-cyan-300/10 rounded-xl transition-all uppercase tracking-widest text-[10px]"
                   >
                     <BrainCircuit className="w-4 h-4" />
-                    Casper Studio
+                    Visual Forge
                   </Link>
 
                   <button
@@ -664,6 +664,7 @@ export const Navigation: React.FC = () => {
             <NavItem path="/search" icon={SearchIcon} active={isActive('/search')} color="#66CCFF" />
             <NavItem path="/bots" icon={Bot} active={isActive('/bots')} color="#00CCFF" />
             <NavItem path="/bots/mayhem" icon={Wand2} active={isActive('/bots/mayhem')} color="#FF3366" />
+            <NavItem path="/factions" icon={UsersRound} active={location.pathname.startsWith('/factions')} color="#FFD166" />
             <NavItem path="/colosseum" icon={Swords} active={isActive('/colosseum')} color="#FF4444" />
             <NavItem path="/golive" icon={Radio} active={isActive('/golive')} color="#FF0044" />
             <NavItem path="/videos" icon={Video} active={isActive('/videos')} color="#4488FF" />
