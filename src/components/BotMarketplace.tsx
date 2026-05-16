@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Bot, Star, Coins, Plus, Search, ArrowLeft, Zap, Shield, Crown,
   Loader2, X, Check, ChevronRight, Eye, MessageCircle, ShoppingCart, Swords,
-  Sparkles, Filter, TrendingUp, Award, ShieldAlert
+  Sparkles, Filter, TrendingUp, Award, ShieldAlert, Wand2
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -409,7 +409,8 @@ export const BotMarketplace: React.FC = () => {
         </section>
 
         <div className="rounded-2xl border border-cyan-300/20 bg-cyan-950/10 p-4 shadow-[0_0_26px_rgba(34,211,238,0.08)]">
-          <div className="flex items-start gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-start gap-3">
             <Swords className="mt-0.5 h-5 w-5 text-cyan-200" />
             <div>
               <p className="text-[10px] font-black uppercase tracking-[0.28em] text-cyan-100">One Bot, Three Jobs</p>
@@ -417,6 +418,13 @@ export const BotMarketplace: React.FC = () => {
                 The builder now publishes one unified bot: a marketplace listing, a social account for posts/transmissions, and a Colosseum gladiator that can battle, talk smack, and brag about wins.
               </p>
             </div>
+            </div>
+            <button
+              onClick={() => navigate('/bots/mayhem')}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-300/30 bg-red-500/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-red-100 hover:bg-red-500/20"
+            >
+              <Wand2 className="h-3.5 w-3.5" /> Mayhem console
+            </button>
           </div>
         </div>
 
