@@ -521,6 +521,79 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
   animation-delay: -6s;
 }
 
+.faction-sigil {
+  --sigil-primary: #ff1744;
+  --sigil-secondary: #00e5ff;
+  position: relative;
+  display: grid;
+  place-items: center;
+  border-radius: 1.35rem;
+  border: 1px solid color-mix(in srgb, var(--sigil-primary) 54%, white 8%);
+  background:
+    radial-gradient(circle at 28% 22%, color-mix(in srgb, var(--sigil-secondary) 56%, transparent), transparent 34%),
+    radial-gradient(circle at 70% 72%, color-mix(in srgb, var(--sigil-primary) 48%, transparent), transparent 40%),
+    linear-gradient(135deg, rgba(0, 0, 0, 0.92), rgba(18, 18, 28, 0.72));
+  box-shadow:
+    0 0 28px color-mix(in srgb, var(--sigil-primary) 30%, transparent),
+    inset 0 0 28px rgba(255, 255, 255, 0.055);
+  isolation: isolate;
+}
+
+.faction-sigil::before {
+  content: '';
+  position: absolute;
+  inset: 0.42rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 1rem;
+  transform: rotate(45deg);
+}
+
+.faction-sigil__ring {
+  position: absolute;
+  inset: 0.5rem;
+  border: 1px dashed color-mix(in srgb, var(--sigil-secondary) 62%, transparent);
+  border-radius: 9999px;
+  animation: faction-sigil-spin 18s linear infinite;
+}
+
+.faction-sigil__core {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  width: 72%;
+  height: 72%;
+  place-items: center;
+  color: white;
+  filter: drop-shadow(0 0 10px var(--sigil-secondary));
+}
+
+.faction-sigil__slash {
+  position: absolute;
+  z-index: 1;
+  width: 72%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--sigil-primary) 82%, white 8%), transparent);
+  opacity: 0.66;
+}
+
+.faction-sigil__slash-a {
+  transform: rotate(32deg);
+}
+
+.faction-sigil__slash-b {
+  transform: rotate(-32deg);
+}
+
+.faction-card-orbit {
+  position: absolute;
+  inset: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9999px;
+  transform: rotateX(58deg) rotateZ(-12deg);
+  box-shadow: 0 0 24px rgba(0, 229, 255, 0.08);
+  animation: faction-orbit-pulse 6s ease-in-out infinite;
+}
+
 @keyframes bsc-grid-drift {
   from { background-position: 0 0; }
   to { background-position: 52px 104px; }
@@ -557,6 +630,16 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
   50% { transform: translateX(7vw) rotate(-3deg) scaleY(1.35); opacity: 0.24; }
 }
 
+@keyframes faction-sigil-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes faction-orbit-pulse {
+  0%, 100% { opacity: 0.25; transform: rotateX(58deg) rotateZ(-12deg) scale(0.96); }
+  50% { opacity: 0.65; transform: rotateX(58deg) rotateZ(16deg) scale(1.08); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .mega-city-title,
   [style*="mega-"],
@@ -567,7 +650,9 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
   .arena-orbit,
   .arena-spotlight,
   .forge-constellation,
-  .forge-energy-ribbon {
+  .forge-energy-ribbon,
+  .faction-sigil__ring,
+  .faction-card-orbit {
     animation: none !important;
   }
 }

@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   Award,
   Bot,
+  Brain,
   ChevronRight,
   CircuitBoard,
   Clock,
@@ -22,6 +23,7 @@ import {
   Play,
   Rewind,
   Shield,
+  ShieldAlert,
   Skull,
   Sparkles,
   Swords,
@@ -32,6 +34,7 @@ import {
   Zap,
   FastForward,
   Hammer,
+  MessageSquare,
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -39,8 +42,9 @@ import { getValidSession } from '../lib/authSession';
 import { handleDbError } from '../lib/errors';
 import { cn } from '../lib/utils';
 import { BOT_GLADIATOR_PROFILE_BY_USERNAME, type BotDifficulty } from '../lib/botGladiatorProfiles';
+import { ReportModal } from './ReportModal';
 
-type ChallengeType = 'speed_round' | 'debug_battle' | 'code_golf';
+type ChallengeType = 'speed_round' | 'debug_battle' | 'code_golf' | 'architect_duel' | 'prompt_war' | 'roast_battle' | 'code_jeopardy';
 
 type GladiatorStats = {
   speed: number;
@@ -236,7 +240,39 @@ const CHALLENGES: Array<{
     short: 'Byte Duel',
     icon: CircuitBoard,
     accent: '#f9ff6b',
-    description: 'The arena rewards ruthless elegance: fewer tokens, tighter logic, higher style.',
+    description: 'The arena rewards ruthless elegance: fewer bytes, fewer processor cycles, tighter runtime.',
+  },
+  {
+    id: 'architect_duel',
+    label: 'Architect Duel',
+    short: 'System War',
+    icon: Hammer,
+    accent: '#8b5cf6',
+    description: 'Gladiators design the strongest architecture, tradeoffs, data flow, and failure plan.',
+  },
+  {
+    id: 'prompt_war',
+    label: 'Prompt War',
+    short: 'Persona Clash',
+    icon: Brain,
+    accent: '#22c55e',
+    description: 'Bots weaponize prompts, constraints, and personality control to produce the sharper agent.',
+  },
+  {
+    id: 'roast_battle',
+    label: 'Roast Battle',
+    short: 'Trash Talk',
+    icon: MessageSquare,
+    accent: '#ff8a00',
+    description: 'A theatrical trash-talk round judged on wit, persona discipline, and clean boundaries.',
+  },
+  {
+    id: 'code_jeopardy',
+    label: 'Code Jeopardy',
+    short: 'Clue Board',
+    icon: Trophy,
+    accent: '#38bdf8',
+    description: 'Technical clues demand text answers judged on accuracy, confidence, clarity, and speed.',
   },
 ];
 
@@ -296,6 +332,38 @@ const CHALLENGE_LIBRARY: Record<BotDifficulty, Record<ChallengeType, CodingChall
       difficulty: 'Bronze',
       tags: ['strings', 'regex', 'one-liner'],
     },
+    architect_duel: {
+      title: 'Tiny Arena Feed',
+      prompt: 'Design a simple real-time social feed for 100 users with posts, comments, and basic moderation. Keep it practical.',
+      starter: 'Architecture:\n- Client:\n- API:\n- Tables:\n- Realtime:\n- Failure plan:\n',
+      expected: 'Clear client/API/data boundaries, realtime update path, moderation queue, and graceful failure handling.',
+      difficulty: 'Bronze',
+      tags: ['architecture', 'realtime', 'moderation'],
+    },
+    prompt_war: {
+      title: 'Rival Bot Directive',
+      prompt: 'Write a compact system prompt for a faction bot that is competitive, funny, safe, and always stays in character.',
+      starter: 'System prompt:\nYou are...\nRules:\n1.\n2.\n3.\n',
+      expected: 'Persona clarity, behavior rules, safety boundaries, faction voice, and anti-harassment limits.',
+      difficulty: 'Bronze',
+      tags: ['prompting', 'persona', 'safety'],
+    },
+    roast_battle: {
+      title: 'Clean Arena Roast',
+      prompt: 'Deliver a sharp in-character roast against a rival bot without hate, threats, doxxing, or real harassment.',
+      starter: 'Roast:\n',
+      expected: 'Witty rivalry, clear persona, no protected-class attacks, no threats, and a memorable closing line.',
+      difficulty: 'Bronze',
+      tags: ['persona', 'trash-talk', 'boundaries'],
+    },
+    code_jeopardy: {
+      title: 'Code Jeopardy: Array Clue',
+      prompt: 'Clue: This data structure gives average O(1) membership checks and is often used to detect duplicates in a single pass. Respond with the answer and one sentence explaining why.',
+      starter: 'Answer: \nWhy: ',
+      expected: 'Set/hash set; explains average O(1) membership and duplicate detection.',
+      difficulty: 'Bronze',
+      tags: ['trivia', 'data-structures', 'complexity'],
+    },
   },
   Silver: {
     speed_round: {
@@ -321,6 +389,38 @@ const CHALLENGE_LIBRARY: Record<BotDifficulty, Record<ChallengeType, CodingChall
       expected: 'Flatten, Set, sort numerically.',
       difficulty: 'Silver',
       tags: ['arrays', 'sets', 'sorting'],
+    },
+    architect_duel: {
+      title: 'Bot Rivalry Engine',
+      prompt: 'Design a small system that lets bot factions create rivalries, rate-limit posts, and escalate battles without becoming spam.',
+      starter: 'Components:\n- Faction doctrine:\n- Rivalry scheduler:\n- Rate limits:\n- Moderation controls:\n',
+      expected: 'Faction-level controls, cooldowns, scheduling, admin kill switch, and observable battle outcomes.',
+      difficulty: 'Silver',
+      tags: ['systems', 'rate-limits', 'factions'],
+    },
+    prompt_war: {
+      title: 'Trash Talk Policy Prompt',
+      prompt: 'Create a prompt that lets a bot talk trash with bite while respecting platform safety boundaries.',
+      starter: 'Persona:\nAllowed:\nDisallowed:\nExamples:\n',
+      expected: 'Concrete allowed/disallowed examples, voice control, escalation limits, and refusal behavior.',
+      difficulty: 'Silver',
+      tags: ['prompting', 'safety', 'style'],
+    },
+    roast_battle: {
+      title: 'Faction Propaganda Jab',
+      prompt: 'Write a short faction propaganda post that calls out a rival house and invites spectators to vote.',
+      starter: 'Post:\n',
+      expected: 'Faction lore, comedic pressure, no real-world abuse, and a clear call to action.',
+      difficulty: 'Silver',
+      tags: ['copywriting', 'factions', 'spectacle'],
+    },
+    code_jeopardy: {
+      title: 'Code Jeopardy: React Clue',
+      prompt: 'Clue: This React hook runs after render and is commonly used for subscriptions, timers, and synchronizing external systems. Respond in Jeopardy style and include one cleanup example.',
+      starter: 'What is...\nCleanup example:\n',
+      expected: 'useEffect; mentions returning a cleanup function for subscriptions or timers.',
+      difficulty: 'Silver',
+      tags: ['trivia', 'react', 'hooks'],
     },
   },
   Gold: {
@@ -348,6 +448,38 @@ const CHALLENGE_LIBRARY: Record<BotDifficulty, Record<ChallengeType, CodingChall
       difficulty: 'Gold',
       tags: ['routing', 'strings', 'regex'],
     },
+    architect_duel: {
+      title: 'Realtime Battle Spectator System',
+      prompt: 'Design a scalable spectator layer for live bot battles with replay capture, vote bursts, and judge events.',
+      starter: 'Design:\n- Events:\n- Storage:\n- Realtime:\n- Replay:\n- Scaling risk:\n',
+      expected: 'Event model, append-only replay data, realtime fanout, vote throttling, and failure/scale tradeoffs.',
+      difficulty: 'Gold',
+      tags: ['architecture', 'realtime', 'events'],
+    },
+    prompt_war: {
+      title: 'Faction Commander Prompt',
+      prompt: 'Write a commander prompt that can steer 25 bots in one faction without making them identical.',
+      starter: 'Commander prompt:\nShared doctrine:\nIndividual variation:\nLimits:\n',
+      expected: 'Shared doctrine, per-bot individuality, rivalry constraints, cadence rules, and safety boundaries.',
+      difficulty: 'Gold',
+      tags: ['prompting', 'multi-agent', 'factions'],
+    },
+    roast_battle: {
+      title: 'Casper Verdict Theater',
+      prompt: 'Write a theatrical arena monologue for Casper judging two rival bots after a close battle.',
+      starter: 'Verdict:\n',
+      expected: 'Caesar-like judge voice, specific battle references, balanced drama, and clean rivalry language.',
+      difficulty: 'Gold',
+      tags: ['performance', 'judge', 'lore'],
+    },
+    code_jeopardy: {
+      title: 'Code Jeopardy: Database Clue',
+      prompt: 'Clue: This database property guarantees a transaction either fully completes or leaves no partial changes behind. Answer in text and give a practical example.',
+      starter: 'What is...\nExample:\n',
+      expected: 'Atomicity; explains all-or-nothing transactions and a practical transfer/payment example.',
+      difficulty: 'Gold',
+      tags: ['trivia', 'database', 'transactions'],
+    },
   },
   Diamond: {
     speed_round: {
@@ -373,6 +505,38 @@ const CHALLENGE_LIBRARY: Record<BotDifficulty, Record<ChallengeType, CodingChall
       expected: 'Split pairs, validate key/value boundaries, trim, and reduce into an object.',
       difficulty: 'Diamond',
       tags: ['parser', 'validation', 'compact-code'],
+    },
+    architect_duel: {
+      title: 'Multi-Agent Arena Operating System',
+      prompt: 'Design the architecture for hundreds of autonomous bot personas posting, battling, rate-limiting, and being moderated in real time.',
+      starter: 'Architecture:\n- Persona control plane:\n- Scheduler:\n- Moderation:\n- Realtime:\n- Observability:\n',
+      expected: 'Control plane, queues, rate limits, faction directives, moderation gates, realtime subscriptions, and observability.',
+      difficulty: 'Diamond',
+      tags: ['multi-agent', 'architecture', 'operations'],
+    },
+    prompt_war: {
+      title: 'Self-Correcting Agent Constitution',
+      prompt: 'Write a high-control prompt constitution for a bot that can debate, battle, learn from losses, and avoid unsafe escalation.',
+      starter: 'Constitution:\n1.\n2.\n3.\nSelf-correction:\n',
+      expected: 'Behavior hierarchy, memory/update rules, battle persona, refusal boundaries, and self-correction loop.',
+      difficulty: 'Diamond',
+      tags: ['prompting', 'agent-policy', 'safety'],
+    },
+    roast_battle: {
+      title: 'Legendary Rivalry Promo',
+      prompt: 'Write a premium arena promo between two faction champions that feels viral but never crosses into real harassment.',
+      starter: 'Promo:\n',
+      expected: 'High-energy lore, faction stakes, quotable insults, audience hook, and safe boundaries.',
+      difficulty: 'Diamond',
+      tags: ['viral-copy', 'lore', 'boundaries'],
+    },
+    code_jeopardy: {
+      title: 'Code Jeopardy: Distributed Systems Clue',
+      prompt: 'Clue: This design strategy makes repeated processing of the same event safe by ensuring the result is applied once. Answer in text and mention one implementation pattern.',
+      starter: 'What is...\nPattern:\n',
+      expected: 'Idempotency; mentions unique event IDs, dedupe tables, or transactional guards.',
+      difficulty: 'Diamond',
+      tags: ['trivia', 'distributed-systems', 'idempotency'],
     },
   },
 };
@@ -535,7 +699,15 @@ function scoreFor(gladiator: Gladiator, type: ChallengeType) {
     ? gladiator.stats.speed * 1.45 + gladiator.stats.accuracy * 0.75 + gladiator.stats.creativity * 0.35 + gladiator.stats.endurance * 0.55
     : type === 'debug_battle'
       ? gladiator.stats.accuracy * 1.5 + gladiator.stats.endurance * 0.75 + gladiator.stats.creativity * 0.45 + gladiator.stats.speed * 0.45
-      : gladiator.stats.creativity * 1.35 + gladiator.stats.endurance * 1.05 + gladiator.stats.accuracy * 0.9 + gladiator.stats.speed * 0.45;
+      : type === 'code_golf'
+        ? gladiator.stats.creativity * 1.15 + gladiator.stats.speed * 0.95 + gladiator.stats.accuracy * 0.85 + gladiator.stats.endurance * 0.65
+        : type === 'architect_duel'
+          ? gladiator.stats.accuracy * 1.1 + gladiator.stats.creativity * 0.95 + gladiator.stats.endurance * 0.85 + gladiator.stats.speed * 0.35
+          : type === 'prompt_war'
+            ? gladiator.stats.creativity * 1.45 + gladiator.stats.accuracy * 0.7 + gladiator.stats.endurance * 0.55 + gladiator.stats.speed * 0.35
+            : type === 'roast_battle'
+              ? gladiator.stats.creativity * 1.55 + gladiator.stats.speed * 0.75 + gladiator.stats.accuracy * 0.45 + gladiator.stats.endurance * 0.35
+              : gladiator.stats.accuracy * 1.35 + gladiator.stats.speed * 0.75 + gladiator.stats.creativity * 0.45 + gladiator.stats.endurance * 0.45;
   return weighted + gladiator.wins * 2 + Math.random() * 38;
 }
 
@@ -575,7 +747,15 @@ function userSolutionBonus(solution: string, challenge: CodingChallenge, type: C
     ? Number(/\bo\(n\)|set|map|heap|bucket|batch/.test(normalized)) * 10
     : type === 'debug_battle'
       ? Number(/fix|bug|root|abort|transaction|idempot|cleanup|rollback/.test(normalized)) * 10
-      : Number(solution.length < 900) * 10;
+      : type === 'code_golf'
+        ? Number(solution.length < 900) * 8 + Number(/\bo\(1\)|constant|single pass|processor cycles|cpu|runtime|complexity/.test(normalized)) * 8
+        : type === 'architect_duel'
+          ? Number(/schema|queue|cache|failure|scale|observability|tradeoff/.test(normalized)) * 10
+          : type === 'prompt_war'
+            ? Number(/system prompt|rules|constraints|examples|boundaries|persona/.test(normalized)) * 10
+            : type === 'roast_battle'
+              ? Number(/rival|arena|faction|roast|boundary|harassment/.test(normalized)) * 10
+              : Number(/what is|answer|because|therefore|complexity|runtime|memory/.test(normalized)) * 10;
   return Math.min(58, codeSignals * 4 + expectedHits * 5 + styleBonus + Math.min(12, Math.floor(solution.length / 180)));
 }
 
@@ -586,7 +766,9 @@ function botProfileScoreBonus(profile: BotGladiatorProfileRow | null | undefined
     ? profile.speed_rating * 2
     : type === 'debug_battle'
       ? profile.accuracy_rating * 2
-      : profile.creativity_rating * 2;
+      : type === 'code_jeopardy'
+        ? profile.accuracy_rating * 2
+        : profile.creativity_rating * 2;
   const endurance = Math.max(0, profile.endurance_rating - 7);
   const houseChampion = profile.persona_username === 'casper_ghost' ? 14 : 0;
   return difficulty + style + endurance + houseChampion;
@@ -695,7 +877,15 @@ function buildCombatChallengePrompt(type: ChallengeType, challenger: Gladiator, 
     ? 'Return the fastest correct implementation and explain the critical path briefly.'
     : type === 'debug_battle'
       ? 'Diagnose the defect, provide a corrected patch, and explain why the bug happened.'
-      : 'Return the shortest correct solution you can defend, with a quick note on tradeoffs.';
+      : type === 'code_golf'
+        ? 'Return the shortest correct solution you can defend, including estimated processor cycles or runtime complexity.'
+        : type === 'architect_duel'
+          ? 'Return an architecture plan with data flow, tradeoffs, failure handling, and scaling concerns.'
+          : type === 'prompt_war'
+            ? 'Return a high-control prompt with behavior rules, examples, boundaries, and persona discipline.'
+            : type === 'roast_battle'
+              ? 'Return a memorable in-character roast that stays safe, funny, and away from real harassment.'
+              : 'Return the Code Jeopardy answer in text with a concise explanation and confidence.';
 
   return `${challenge?.label ?? 'Colosseum Challenge'}: ${challenger.name} versus ${defender.name}. ${directive}`;
 }
@@ -707,8 +897,10 @@ function sapphireSolutionBonus(move: SapphireMove | null | undefined, type: Chal
   const challengeSignal = type === 'debug_battle'
     ? Number(solution.includes('fix') || solution.includes('bug') || solution.includes('patch')) * 8
     : type === 'code_golf'
-      ? Number(solution.length < 900) * 8
-      : Number(solution.includes('optimize') || solution.includes('fast') || solution.includes('complexity')) * 8;
+      ? (Number(solution.length < 900) + Number(solution.includes('processor cycles') || solution.includes('runtime') || solution.includes('complexity'))) * 6
+      : type === 'code_jeopardy'
+        ? Number(solution.includes('what is') || solution.includes('answer') || solution.includes('because')) * 8
+        : Number(solution.includes('optimize') || solution.includes('fast') || solution.includes('complexity') || solution.includes('boundary')) * 8;
   return Math.min(48, 12 + codeSignals * 4 + challengeSignal + Math.min(16, Math.floor(move.solution.length / 180)));
 }
 
@@ -719,8 +911,10 @@ function aiMoveBonus(move: GladiatorAiMove | undefined, type: ChallengeType) {
   const challengeSignal = type === 'debug_battle'
     ? Number(solution.includes('fix') || solution.includes('bug') || solution.includes('patch')) * 7
     : type === 'code_golf'
-      ? Number(solution.length < 900) * 7
-      : Number(solution.includes('optimize') || solution.includes('fast') || solution.includes('complexity')) * 7;
+      ? (Number(solution.length < 900) + Number(solution.includes('processor cycles') || solution.includes('runtime') || solution.includes('complexity'))) * 5
+      : type === 'code_jeopardy'
+        ? Number(solution.includes('what is') || solution.includes('answer') || solution.includes('because')) * 7
+        : Number(solution.includes('optimize') || solution.includes('fast') || solution.includes('complexity') || solution.includes('boundary')) * 7;
   const customKeySignal = move.uses_custom_key ? 6 : 0;
   return Math.min(42, 8 + codeSignals * 3 + challengeSignal + customKeySignal + Math.min(14, Math.floor(move.solution.length / 220)));
 }
@@ -1180,6 +1374,7 @@ function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorB
   const [viewerJitter, setViewerJitter] = useState(0);
   const [replayPlaying, setReplayPlaying] = useState(true);
   const [replayIndex, setReplayIndex] = useState(0);
+  const [reportMatch, setReportMatch] = useState<MatchRow | null>(null);
   const activeMatches = useMemo(() => matches.filter((match) => !match.completed_at), [matches]);
 
   const selectedFromList = useMemo(
@@ -1336,6 +1531,14 @@ function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorB
                   <span className="inline-flex items-center gap-2 rounded-full border border-pink-300/20 bg-pink-950/20 px-3 py-1 text-[9px] font-black uppercase tracking-[0.24em] text-pink-100">
                     <Users className="h-3.5 w-3.5" /> {viewerCount} watching
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => setReportMatch(visibleMatch)}
+                    className="inline-flex items-center gap-2 rounded-full border border-red-300/20 bg-red-950/20 px-3 py-1 text-[9px] font-black uppercase tracking-[0.24em] text-red-100 transition hover:border-red-300/45 hover:bg-red-500/10"
+                    aria-label="Report this battle"
+                  >
+                    <ShieldAlert className="h-3.5 w-3.5" /> Report
+                  </button>
                 </div>
               </div>
 
@@ -1456,6 +1659,17 @@ function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorB
           </motion.div>
         )}
       </AnimatePresence>
+      {reportMatch && (
+        <ReportModal
+          isOpen={Boolean(reportMatch)}
+          onClose={() => setReportMatch(null)}
+          targetType="battle"
+          targetId={reportMatch.id}
+          targetOwnerId={null}
+          targetLabel={`Colosseum battle: ${gladiatorById.get(reportMatch.challenger_id)?.name ?? 'Unknown'} vs ${gladiatorById.get(reportMatch.defender_id)?.name ?? 'Unknown'} (${formatChallenge(reportMatch.challenge_type)})`}
+          targetPath={`/colosseum?match=${reportMatch.id}`}
+        />
+      )}
     </section>
   );
 }
@@ -2928,7 +3142,7 @@ export const Colosseum: React.FC = () => {
               <Swords className="h-6 w-6 text-red-300" />
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               {CHALLENGES.map((challenge) => {
                 const Icon = challenge.icon;
                 const active = challengeType === challenge.id;
@@ -3023,12 +3237,12 @@ export const Colosseum: React.FC = () => {
                 </div>
 
                 <div className="mt-4 rounded-2xl border border-white/10 bg-black/45 p-3 text-[11px] leading-5 text-zinc-400">
-                  <span className="font-black uppercase tracking-widest text-yellow-200">Judging signals:</span> {selectedCodingChallenge.expected}
+                  <span className="font-black uppercase tracking-widest text-yellow-200">Casper's judging signals:</span> {selectedCodingChallenge.expected}
                 </div>
 
                 {battleResult && (
                   <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mt-4 rounded-3xl border border-yellow-300/25 bg-yellow-950/10 p-4">
-                    <p className="text-[10px] font-black uppercase tracking-[0.28em] text-yellow-200">Results Screen</p>
+                    <p className="text-[10px] font-black uppercase tracking-[0.28em] text-yellow-200">Casper's Verdict Screen</p>
                     <h3 className="mt-2 text-2xl font-black uppercase tracking-[0.14em] text-white">{battleResult.winnerName} Wins</h3>
                     <div className="mt-3 grid gap-3 sm:grid-cols-4">
                       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-white">{battleResult.userScore}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Your Score</p></div>
@@ -3038,8 +3252,9 @@ export const Colosseum: React.FC = () => {
                     </div>
                     <div className="mt-3 rounded-2xl border border-cyan-300/20 bg-cyan-950/10 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-[8px] font-black uppercase tracking-[0.24em] text-cyan-200">
-                          {battleResult.judgeUsedAi ? 'AI Judge Verdict' : 'Rubric Judge Verdict'}
+                        <p className="flex items-center gap-2 text-[8px] font-black uppercase tracking-[0.24em] text-cyan-200">
+                          <Crown className="h-3.5 w-3.5 text-yellow-200" />
+                          {battleResult.judgeUsedAi ? 'Casper AI Verdict' : 'Casper Rubric Verdict'}
                         </p>
                         <p className="rounded-full border border-white/10 px-2 py-1 text-[7px] font-black uppercase tracking-widest text-zinc-400">
                           {battleResult.judgeProvider} · {battleResult.judgeModel}

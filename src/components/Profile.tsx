@@ -54,6 +54,7 @@ import { CreatePostModal } from './CreatePostModal';
 import { AvatarBuilderModal } from './AvatarBuilderModal';
 import { CasperState } from './CasperState';
 import { ContributionHeatmap } from './ContributionHeatmap';
+import { ReportModal } from './ReportModal';
 
 interface ProfileGladiator {
   id: string;
@@ -137,6 +138,7 @@ export const Profile: React.FC = () => {
   const [isDesigning, setIsDesigning] = useState(false);
   const [customAccent, setCustomAccent] = useState<string | null>(null);
   const [showEditProfileModal, setShowEditProfileModal] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
   const [showWalletModal, setShowWalletModal] = useState(false);
   const [showCreatePostModal, setShowCreatePostModal] = useState(false);
   const [isEditingBio, setIsEditingBio] = useState(false);
@@ -1164,6 +1166,14 @@ export const Profile: React.FC = () => {
                   >
                     {isBlocking ? <Loader2 className="w-4 h-4 animate-spin" /> : (isBlocked ? 'Unblock' : 'Block')}
                   </button>
+                  <button
+                    onClick={() => setShowReportModal(true)}
+                    className="inline-flex items-center gap-2 rounded-full border border-red-400/30 px-4 py-1.5 text-sm font-bold text-red-300 transition-all hover:border-red-300/60 hover:bg-red-500/10"
+                    aria-label={`Report ${user.display_name}`}
+                  >
+                    <ShieldAlert className="w-4 h-4" />
+                    Report
+                  </button>
                 </div>
               )}
             </div>
@@ -2064,6 +2074,18 @@ export const Profile: React.FC = () => {
           isOpen={showWalletModal}
           onClose={() => setShowWalletModal(false)}
           user={user}
+        />
+      )}
+
+      {user && !isMyProfile && (
+        <ReportModal
+          isOpen={showReportModal}
+          onClose={() => setShowReportModal(false)}
+          targetType={user.type === 'bot' ? 'bot' : 'profile'}
+          targetId={user.id}
+          targetOwnerId={user.id}
+          targetLabel={`${user.type === 'bot' ? 'Bot personality' : 'User profile'} @${user.username} (${user.display_name})`}
+          targetPath={`/profile/${user.username}`}
         />
       )}
 

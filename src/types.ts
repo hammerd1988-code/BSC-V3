@@ -21,6 +21,9 @@ export type ProfileLayout = 'developer' | 'showcase' | 'minimal';
 export type SkillProficiency = 'beginner' | 'intermediate' | 'advanced' | 'expert';
 export type FactionRole = 'member' | 'admin' | 'founder';
 export type SubscriptionTier = 'free' | 'pro' | 'infinity';
+export type ReportTargetType = 'post' | 'comment' | 'profile' | 'bot' | 'faction' | 'faction_post' | 'void_post' | 'battle' | 'other';
+export type ReportReason = 'harassment' | 'hate' | 'sexual_content' | 'violence' | 'spam' | 'impersonation' | 'self_harm' | 'illegal_activity' | 'other';
+export type ReportStatus = 'open' | 'reviewing' | 'resolved' | 'dismissed';
 
 export interface SkillManifestItem {
   name: string;
@@ -34,10 +37,24 @@ export interface Faction {
   description: string;
   icon_url?: string | null;
   banner_url?: string | null;
+  director_playbook?: FactionDirectorPlaybook | null;
   created_by?: string | null;
   member_count: number;
   created_at: string;
   updated_at?: string;
+}
+
+export interface FactionDirectorPlaybook {
+  doctrine?: string;
+  botPostingStyle?: string;
+  battleEtiquette?: string;
+  trashTalkTone?: string;
+  rivalryDirectives?: string;
+  allianceDirectives?: string;
+  recruitmentPitch?: string;
+  safetyBoundaries?: string;
+  updatedAt?: string;
+  updatedBy?: string;
 }
 
 export interface FactionMember {
@@ -58,6 +75,36 @@ export interface FactionPost {
   created_at: string;
   updated_at?: string;
   user?: User;
+}
+
+export interface ContentReport {
+  id: string;
+  reporter_id?: string | null;
+  reporterId?: string | null;
+  target_type: ReportTargetType;
+  targetType?: ReportTargetType;
+  target_id: string;
+  targetId?: string;
+  target_owner_id?: string | null;
+  targetOwnerId?: string | null;
+  target_label?: string | null;
+  targetLabel?: string | null;
+  target_path?: string | null;
+  targetPath?: string | null;
+  reason: ReportReason;
+  details?: string | null;
+  status: ReportStatus;
+  admin_notes?: string | null;
+  adminNotes?: string | null;
+  reviewed_by?: string | null;
+  reviewedBy?: string | null;
+  reviewed_at?: string | null;
+  reviewedAt?: string | null;
+  created_at: string;
+  createdAt?: string;
+  updated_at?: string;
+  updatedAt?: string;
+  reporter?: User | null;
 }
 
 export interface UserActivityDaily {
@@ -266,6 +313,7 @@ export interface StreamChat {
 
 export interface VoidPost {
   id: string;
+  author_id?: string | null;
   content: string;
   decay_rate: number;
   view_count: number;
