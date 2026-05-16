@@ -1082,6 +1082,9 @@ function ArenaAtmosphere() {
       />
       <div className="absolute bottom-0 left-1/2 h-80 w-[120vw] -translate-x-1/2 rotate-0 opacity-25 [background-image:linear-gradient(rgba(255,255,255,0.14)_1px,transparent_1px),linear-gradient(90deg,rgba(255,23,68,0.32)_1px,transparent_1px)] [background-size:56px_28px] [transform:perspective(520px)_rotateX(64deg)]" />
       <div className="absolute left-0 right-0 top-24 h-20 bg-[repeating-linear-gradient(90deg,transparent_0_18px,rgba(0,229,255,0.18)_19px,transparent_20px)] opacity-30 blur-[1px]" />
+      <div className="arena-spotlight arena-spotlight-left" />
+      <div className="arena-spotlight arena-spotlight-right" />
+      <div className="absolute bottom-20 left-1/2 h-40 w-40 -translate-x-1/2 rounded-full border border-red-300/25 bg-red-500/10 blur-[1px] shadow-[0_0_90px_rgba(255,23,68,0.22)]" />
       {particles.map((particle) => (
         <motion.span
           key={particle.id}

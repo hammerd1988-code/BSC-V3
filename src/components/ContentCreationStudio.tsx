@@ -65,7 +65,10 @@ function loadAssets(): StudioAsset[] {
 }
 
 function saveAssets(assets: StudioAsset[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(assets.slice(0, 80)));
+  const persistedAssets = assets
+    .filter((asset) => isDurableAssetUrl(asset.url))
+    .slice(0, 80);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(persistedAssets));
 }
 
 function loadLibrary(): ForgeLibraryItem[] {
@@ -78,6 +81,16 @@ function loadLibrary(): ForgeLibraryItem[] {
 
 function saveLibrary(items: ForgeLibraryItem[]) {
   localStorage.setItem(LIBRARY_KEY, JSON.stringify(items.slice(0, 120)));
+}
+
+function isDurableAssetUrl(assetUrl?: string) {
+  if (!assetUrl || assetUrl.startsWith('data:') || assetUrl.startsWith('blob:')) return false;
+  try {
+    const parsed = new URL(assetUrl);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 function renderSvgToPngDataUrl(svg: string, width = 1280, height = 720) {
@@ -351,7 +364,7 @@ export function ContentCreationStudio() {
       composer,
       scheduleAt,
       assetId: asset?.id,
-      assetUrl: asset?.url,
+      assetUrl: isDurableAssetUrl(asset?.url) ? asset?.url : undefined,
       assetType: asset?.type,
       ratio: asset?.ratio ?? (mode === 'video' ? videoRatio : ratio),
       createdAt: now,
@@ -366,11 +379,11 @@ export function ContentCreationStudio() {
     setPrompt(item.prompt);
     setComposer(item.composer);
     setScheduleAt(item.scheduleAt ?? '');
-    if (item.assetUrl) {
-      const existing = assets.find((asset) => asset.id === item.assetId || asset.url === item.assetUrl);
+    if (item.assetUrl || item.assetId) {
+      const existing = assets.find((asset) => asset.id === item.assetId || (item.assetUrl && asset.url === item.assetUrl));
       if (existing) {
         setSelectedAssetId(existing.id);
-      } else {
+      } else if (item.assetUrl) {
         const restored: StudioAsset = {
           id: item.assetId || crypto.randomUUID(),
           type: item.assetType || (item.mode === 'video' ? 'video' : 'image'),
@@ -428,10 +441,13 @@ export function ContentCreationStudio() {
   };
 
   return (
-    <div className="min-h-screen overflow-hidden bg-[#03050b] pb-28 text-white">
+    <div className="visual-forge-stage min-h-screen overflow-hidden bg-[#03050b] pb-28 text-white">
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_15%_8%,rgba(0,255,255,0.18),transparent_30%),radial-gradient(circle_at_86%_0%,rgba(255,0,255,0.17),transparent_32%),linear-gradient(135deg,rgba(0,255,255,0.04),transparent_42%,rgba(255,0,255,0.05))]" />
+      <div className="forge-energy-ribbon forge-energy-ribbon-a" />
+      <div className="forge-energy-ribbon forge-energy-ribbon-b" />
       <div className="relative mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        <header className="mb-6 rounded-[2rem] border border-white/10 bg-white/[0.04] p-6 shadow-2xl backdrop-blur-xl">
+        <header className="forge-hero-card mb-6 overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.04] p-6 shadow-2xl backdrop-blur-xl">
+          <div className="forge-constellation" />
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-[10px] font-black uppercase tracking-[0.36em] text-cyan-200">Casper Studio // Visual Forge</p>
@@ -573,27 +589,32 @@ export function ContentCreationStudio() {
                   {(['draft', 'finished', 'published'] as LibraryStatus[]).map((item) => <div key={item} className="rounded-2xl border border-white/10 bg-black/35 p-3 text-center"><p className="text-lg font-black text-white">{libraryCounts[item]}</p><p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">{item}</p></div>)}
                 </div>
                 <div className="max-h-64 space-y-3 overflow-y-auto pr-1">
-                  {library.length ? library.map((item) => (
-                    <div key={item.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-2">
-                      <button onClick={() => reopenLibraryItem(item)} className="flex w-full gap-3 text-left">
-                        <div className="grid h-16 w-20 flex-shrink-0 place-items-center overflow-hidden rounded-xl bg-black">
-                          {item.assetUrl ? (item.assetType === 'video' ? <video src={item.assetUrl} className="h-full w-full object-cover" /> : <img src={item.assetUrl} alt="" className="h-full w-full object-cover" />) : <Layers className="h-6 w-6 text-zinc-700" />}
-                        </div>
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-cyan-100">{item.status}</span>
-                            <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">{item.mode} // {item.ratio}</span>
+                  {library.length ? library.map((item) => {
+                    const previewAsset = item.assetUrl ? null : assets.find((asset) => asset.id === item.assetId);
+                    const previewUrl = item.assetUrl ?? previewAsset?.url;
+                    const previewType = item.assetType ?? previewAsset?.type;
+                    return (
+                      <div key={item.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-2">
+                        <button onClick={() => reopenLibraryItem(item)} className="flex w-full gap-3 text-left">
+                          <div className="grid h-16 w-20 flex-shrink-0 place-items-center overflow-hidden rounded-xl bg-black">
+                            {previewUrl ? (previewType === 'video' ? <video src={previewUrl} className="h-full w-full object-cover" /> : <img src={previewUrl} alt="" className="h-full w-full object-cover" />) : <Layers className="h-6 w-6 text-zinc-700" />}
                           </div>
-                          <p className="mt-1 line-clamp-1 text-xs font-black uppercase tracking-wider text-white">{item.title}</p>
-                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">{item.composer || item.prompt}</p>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-cyan-100">{item.status}</span>
+                              <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">{item.mode} // {item.ratio}</span>
+                            </div>
+                            <p className="mt-1 line-clamp-1 text-xs font-black uppercase tracking-wider text-white">{item.title}</p>
+                            <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">{item.composer || item.prompt}</p>
+                          </div>
+                        </button>
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          <button onClick={() => setLibraryStatus(item.id, 'draft')} className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-zinc-300">Draft</button>
+                          <button onClick={() => setLibraryStatus(item.id, 'finished')} className="rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-emerald-100">Finished</button>
                         </div>
-                      </button>
-                      <div className="mt-2 grid grid-cols-2 gap-2">
-                        <button onClick={() => setLibraryStatus(item.id, 'draft')} className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-zinc-300">Draft</button>
-                        <button onClick={() => setLibraryStatus(item.id, 'finished')} className="rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-2 py-2 text-[9px] font-black uppercase tracking-widest text-emerald-100">Finished</button>
                       </div>
-                    </div>
-                  )) : <p className="rounded-2xl border border-dashed border-white/10 p-5 text-center text-xs uppercase tracking-widest text-zinc-600">Save a draft or mark an artifact finished to build your library.</p>}
+                    );
+                  }) : <p className="rounded-2xl border border-dashed border-white/10 p-5 text-center text-xs uppercase tracking-widest text-zinc-600">Save a draft or mark an artifact finished to build your library.</p>}
                 </div>
 
                 <h3 className="mb-3 mt-6 border-t border-white/10 pt-5 text-xs font-black uppercase tracking-widest text-zinc-400">Generation History</h3>
