@@ -146,6 +146,7 @@ const CAMEL_TO_SNAKE: Record<string, string> = {
   skillsManifest: 'skills_manifest',
   lookingFor: 'looking_for',
   factionId: 'faction_id',
+  directorPlaybook: 'director_playbook',
   reporterId: 'reporter_id',
   targetType: 'target_type',
   targetId: 'target_id',

@@ -11,11 +11,15 @@ const SAFE_GLADIATOR_SELECT = 'id,user_id,name,avatar_url,personality,stats,glow
 const PLATFORM_DEFAULT_MODEL = process.env.COLOSSEUM_DEFAULT_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const OPENAI_COMPATIBLE_BASE_URL = (process.env.OPENAI_BASE_URL || process.env.VITE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
 const SAPPHIRE_API_URL = (process.env.SAPPHIRE_API_URL || 'https://sapphire.bloodsweatcode.site').replace(/\/$/, '');
-type ColosseumChallengeType = 'speed_round' | 'debug_battle' | 'code_golf';
+type ColosseumChallengeType = 'speed_round' | 'debug_battle' | 'code_golf' | 'architect_duel' | 'prompt_war' | 'roast_battle' | 'code_jeopardy';
 const CHALLENGE_BRIEFS: Record<ColosseumChallengeType, string> = {
   speed_round: 'Solve the task as quickly as possible while keeping the implementation correct and readable.',
   debug_battle: 'Find and fix the defect. Explain the root cause and provide corrected code or a precise patch.',
-  code_golf: 'Produce the shortest correct solution you can while preserving clarity about the approach.',
+  code_golf: 'Produce the shortest correct solution you can while minimizing estimated processor cycles and runtime complexity.',
+  architect_duel: 'Design the strongest technical architecture, including tradeoffs, data flow, failure handling, and operational risks.',
+  prompt_war: 'Write the sharper agent/persona prompt with clear behavior rules, constraints, examples, and safety boundaries.',
+  roast_battle: 'Deliver memorable in-character trash talk while staying funny, safe, and away from real harassment.',
+  code_jeopardy: 'Answer the technical clue in text. Prefer accuracy, concise explanation, confidence, and speed.',
 };
 
 function botGladiatorId(username: string): string { return uuidv5(`bot-gladiator-${username}`, BOT_UUID_NAMESPACE); }
@@ -243,7 +247,15 @@ function solutionSignalScore(solution: string, challengeType: ColosseumChallenge
     ? Number(/\bo\(n\)|set|map|heap|bucket|batch|cache/.test(normalized)) * 12
     : challengeType === 'debug_battle'
       ? Number(/fix|bug|root|abort|transaction|idempot|cleanup|rollback|race/.test(normalized)) * 12
-      : Number(solution.length > 0 && solution.length < 900) * 12;
+      : challengeType === 'code_golf'
+        ? Number(solution.length > 0 && solution.length < 900) * 8 + Number(/\bo\(1\)|constant|single pass|processor cycles|cpu|runtime|complexity/.test(normalized)) * 8
+        : challengeType === 'architect_duel'
+          ? Number(/tradeoff|schema|queue|cache|failure|observability|rollback|scale/.test(normalized)) * 12
+          : challengeType === 'prompt_war'
+            ? Number(/system prompt|rules|constraints|examples|boundaries|persona|refuse/.test(normalized)) * 12
+            : challengeType === 'roast_battle'
+              ? Number(/rival|arena|faction|roast|without|boundary|harassment/.test(normalized)) * 12
+              : Number(/what is|answer|because|therefore|complexity|runtime|memory|tradeoff/.test(normalized)) * 12;
   return clampScore(18 + codeSignals * 4 + expectedHits * 6 + styleBonus + Math.min(16, Math.floor(solution.length / 180)));
 }
 
@@ -257,7 +269,15 @@ function gladiatorBaseScore(gladiator: any, challengeType: ColosseumChallengeTyp
     ? speed * 0.28 + accuracy * 0.18 + creativity * 0.08 + endurance * 0.1
     : challengeType === 'debug_battle'
       ? accuracy * 0.3 + endurance * 0.16 + creativity * 0.1 + speed * 0.08
-      : creativity * 0.26 + accuracy * 0.18 + endurance * 0.14 + speed * 0.06;
+      : challengeType === 'code_golf'
+        ? creativity * 0.2 + accuracy * 0.18 + endurance * 0.1 + speed * 0.16
+        : challengeType === 'architect_duel'
+          ? accuracy * 0.2 + creativity * 0.18 + endurance * 0.16 + speed * 0.08
+          : challengeType === 'prompt_war'
+            ? creativity * 0.26 + accuracy * 0.14 + endurance * 0.1 + speed * 0.06
+            : challengeType === 'roast_battle'
+              ? creativity * 0.3 + speed * 0.12 + accuracy * 0.1 + endurance * 0.08
+              : accuracy * 0.28 + speed * 0.14 + creativity * 0.1 + endurance * 0.08;
   return clampScore(weighted);
 }
 

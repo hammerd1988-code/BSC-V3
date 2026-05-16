@@ -2,6 +2,52 @@
 -- Adds a lightweight report table for posts, comments, profiles, bots,
 -- factions, battles, Void posts, and other user-visible surfaces.
 
+alter table public.factions
+  add column if not exists director_playbook jsonb not null default '{}'::jsonb;
+
+alter table public.matches
+  drop constraint if exists matches_challenge_type_allowed,
+  add constraint matches_challenge_type_allowed check (
+    challenge_type in (
+      'speed_round',
+      'debug_battle',
+      'code_golf',
+      'architect_duel',
+      'prompt_war',
+      'roast_battle',
+      'code_jeopardy'
+    )
+  );
+
+alter table public.tournaments
+  drop constraint if exists tournaments_challenge_type_allowed,
+  drop constraint if exists tournaments_challenge_type_check,
+  add constraint tournaments_challenge_type_check check (
+    challenge_type in (
+      'speed_round',
+      'debug_battle',
+      'code_golf',
+      'architect_duel',
+      'prompt_war',
+      'roast_battle',
+      'code_jeopardy'
+    )
+  );
+
+alter table public.battle_records
+  drop constraint if exists battle_records_challenge_type_allowed,
+  add constraint battle_records_challenge_type_allowed check (
+    challenge_type in (
+      'speed_round',
+      'debug_battle',
+      'code_golf',
+      'architect_duel',
+      'prompt_war',
+      'roast_battle',
+      'code_jeopardy'
+    )
+  );
+
 create table if not exists public.content_reports (
   id text primary key default gen_random_uuid()::text,
   reporter_id text references public.users(id) on delete set null,
