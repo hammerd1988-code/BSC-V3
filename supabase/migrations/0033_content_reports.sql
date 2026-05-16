@@ -67,6 +67,7 @@ create table if not exists public.content_reports (
   target_id text not null,
   target_owner_id text references public.users(id) on delete set null,
   target_label text,
+  target_path text,
   reason text not null check (
     reason in (
       'harassment',
@@ -102,8 +103,8 @@ on public.content_reports
 for insert
 to authenticated
 with check (
-  reporter_id is null
-  or exists (
+  reporter_id is not null
+  and exists (
     select 1
     from public.users u
     where u.id = content_reports.reporter_id
@@ -112,18 +113,13 @@ with check (
 );
 
 drop policy if exists content_reports_reporter_read on public.content_reports;
-create policy content_reports_reporter_read
+drop policy if exists content_reports_admin_read on public.content_reports;
+create policy content_reports_admin_read
 on public.content_reports
 for select
 to authenticated
 using (
   exists (
-    select 1
-    from public.users u
-    where u.id = content_reports.reporter_id
-      and u.auth_uid = (select auth.uid())
-  )
-  or exists (
     select 1
     from public.users u
     where u.auth_uid = (select auth.uid())
@@ -167,3 +163,10 @@ drop trigger if exists content_reports_touch_updated_at on public.content_report
 create trigger content_reports_touch_updated_at
 before update on public.content_reports
 for each row execute function public.touch_content_reports_updated_at();
+
+do $$
+begin
+  alter publication supabase_realtime add table public.content_reports;
+exception
+  when duplicate_object then null;
+end $$;

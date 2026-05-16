@@ -334,6 +334,7 @@ export const VoidFeed: React.FC = () => {
           targetId={reportPost.id}
           targetOwnerId={reportPost.author_id ?? null}
           targetLabel={`Anonymous Void signal: ${reportPost.content.slice(0, 160)}`}
+          targetPath="/void"
         />
       )}
     </div>

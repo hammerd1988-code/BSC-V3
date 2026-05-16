@@ -482,6 +482,7 @@ export const Factions: React.FC = () => {
           targetId={reportTarget.id}
           targetOwnerId={reportTarget.created_by ?? null}
           targetLabel={`Faction ${reportTarget.name}: ${reportTarget.description.slice(0, 160)}`}
+          targetPath={`/factions/${reportTarget.slug}`}
         />
       )}
       {directorTarget && (

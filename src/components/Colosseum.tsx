@@ -1667,6 +1667,7 @@ function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorB
           targetId={reportMatch.id}
           targetOwnerId={null}
           targetLabel={`Colosseum battle: ${gladiatorById.get(reportMatch.challenger_id)?.name ?? 'Unknown'} vs ${gladiatorById.get(reportMatch.defender_id)?.name ?? 'Unknown'} (${formatChallenge(reportMatch.challenge_type)})`}
+          targetPath={`/colosseum?match=${reportMatch.id}`}
         />
       )}
     </section>

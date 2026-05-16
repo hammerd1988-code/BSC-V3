@@ -914,6 +914,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
         targetId={post.id}
         targetOwnerId={post.author_id}
         targetLabel={`Transmission by @${author.username}: ${post.content.replace(/<[^>]*>/g, '').slice(0, 160)}`}
+        targetPath={`/post/${post.id}`}
       />
 
       {/* Delete Confirmation Modal */}

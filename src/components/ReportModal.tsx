@@ -24,6 +24,7 @@ interface ReportModalProps {
   targetId: string;
   targetOwnerId?: string | null;
   targetLabel: string;
+  targetPath?: string | null;
 }
 
 const prettyTargetType = (targetType: ReportTargetType) => {
@@ -44,6 +45,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({
   targetId,
   targetOwnerId,
   targetLabel,
+  targetPath,
 }) => {
   const { currentUser } = useAuth();
   const [reason, setReason] = useState<ReportReason>('harassment');
@@ -71,6 +73,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({
       targetId,
       targetOwnerId: targetOwnerId ?? null,
       targetLabel: targetLabel.slice(0, 240),
+      targetPath: targetPath ?? null,
       reason,
       details: details.trim() || null,
       status: 'open',
@@ -106,6 +109,8 @@ export const ReportModal: React.FC<ReportModalProps> = ({
             onClick={(event) => event.stopPropagation()}
             onSubmit={handleSubmit}
             aria-labelledby="report-modal-title"
+            role="dialog"
+            aria-modal="true"
             className="relative max-h-[86vh] w-full max-w-xl overflow-hidden rounded-[2rem] border border-red-300/20 bg-[#08080d]/95 shadow-[0_0_60px_rgba(255,23,68,0.18)]"
           >
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,23,68,0.2),transparent_35%),radial-gradient(circle_at_bottom_right,rgba(217,70,239,0.14),transparent_38%)]" />

@@ -325,6 +325,7 @@ export function registerUnifiedBotRoutes(app: express.Express, supabase: Supabas
       const emojiUsage = toText(body.emoji_usage || body.emojiUsage, 'minimal');
       const languageStyle = toText(body.language_style || body.languageStyle, 'modern');
       const catchphrases = toTextArray(body.catchphrases).slice(0, 12);
+      const directorDoctrine = toText(body.director_doctrine || body.directorDoctrine).slice(0, 3000);
 
       const { data: existingUsers, error: userLookupError } = await supabase
         .from('users')
@@ -358,13 +359,7 @@ export function registerUnifiedBotRoutes(app: express.Express, supabase: Supabas
         knowledgeBase,
         behaviorRules: [
           behaviorRules,
-          automationDirective && `Automation directive: ${automationDirective}`,
-          postingBehavior && `Posting/comment behavior: ${postingBehavior}`,
-          requestedBattleStyle && `Battle style: ${requestedBattleStyle}`,
-          trashTalkStyle && `Trash talk: ${trashTalkStyle}`,
-          rivalryPolicy && `Rivalries/alliances: ${rivalryPolicy}`,
-          factionValues && `Faction values: ${factionValues}`,
-          safetyBoundaries && `Safety boundaries: ${safetyBoundaries}`,
+          directorDoctrine,
         ].filter(Boolean).join('\n\n').slice(0, 3000),
         expertiseTags,
         personalityTags,

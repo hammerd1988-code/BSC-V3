@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { useAuth } from '../AuthContext';
-import { supabase, toDb } from '../supabase';
+import { fromDb, supabase, toDb } from '../supabase';
 import { handleDbError } from '../lib/errors';
 import { ContentReport, ReportStatus, User } from '../types';
 import { Shield, Users, Activity, Edit2, Trash2, X, Check, Search, ShieldAlert, Clock, ExternalLink } from 'lucide-react';
@@ -36,20 +36,29 @@ export const AdminDashboard: React.FC = () => {
     fetchUsers();
 
     const fetchReports = async () => {
-      const { data, error } = await supabase
-        .from('content_reports')
-        .select('*, reporter:users!content_reports_reporter_id_fkey(id,username,display_name,avatar_url,type)')
-        .order('created_at', { ascending: false })
-        .limit(50);
+      const [{ data, error }, { count, error: countError }] = await Promise.all([
+        supabase
+          .from('content_reports')
+          .select('*, reporter:users!content_reports_reporter_id_fkey(id,username,display_name,avatar_url,type)')
+          .order('created_at', { ascending: false })
+          .limit(50),
+        supabase
+          .from('content_reports')
+          .select('id', { count: 'exact', head: true })
+          .in('status', ['open', 'reviewing']),
+      ]);
 
       if (error) {
         console.warn('[AdminDashboard] Report queue unavailable', error.message);
         return;
       }
+      if (countError) {
+        console.warn('[AdminDashboard] Report count unavailable', countError.message);
+      }
 
-      const fetchedReports = (data ?? []) as ContentReport[];
+      const fetchedReports = (data ?? []).map((report) => fromDb(report)) as ContentReport[];
       setReports(fetchedReports);
-      setStats(prev => ({ ...prev, openReports: fetchedReports.filter(report => report.status === 'open' || report.status === 'reviewing').length }));
+      setStats(prev => ({ ...prev, openReports: count ?? fetchedReports.filter(report => report.status === 'open' || report.status === 'reviewing').length }));
     };
 
     fetchReports();
@@ -118,23 +127,24 @@ export const AdminDashboard: React.FC = () => {
     if (error) {
       handleDbError(error, 'UPDATE', `content_reports/${report.id}`);
     } else {
+      const wasOpen = report.status === 'open' || report.status === 'reviewing';
+      const isOpen = status === 'open' || status === 'reviewing';
       setReports(prev => prev.map(item => item.id === report.id ? { ...item, ...patch } : item));
-      setStats(prev => ({
-        ...prev,
-        openReports: reports
-          .map(item => item.id === report.id ? { ...item, ...patch } : item)
-          .filter(item => item.status === 'open' || item.status === 'reviewing').length,
-      }));
+      setStats(prev => ({ ...prev, openReports: Math.max(0, prev.openReports + (wasOpen === isOpen ? 0 : isOpen ? 1 : -1)) }));
     }
     setReportActionId(null);
   };
 
   const getReportTargetPath = (report: ContentReport) => {
-    if (report.target_type === 'profile' || report.target_type === 'bot') return `/profile/${report.target_label?.match(/@([a-zA-Z0-9_]+)/)?.[1] ?? ''}`;
-    if (report.target_type === 'faction' || report.target_type === 'faction_post') return '/factions';
-    if (report.target_type === 'void_post') return '/void';
-    if (report.target_type === 'battle') return '/colosseum';
-    if (report.target_type === 'post' || report.target_type === 'comment') return '/';
+    const targetPath = report.targetPath ?? report.target_path;
+    const targetType = report.targetType ?? report.target_type;
+    const targetId = report.targetId ?? report.target_id;
+    if (targetPath) return targetPath;
+    if (targetType === 'profile' || targetType === 'bot') return `/profile/${targetId}`;
+    if (targetType === 'faction' || targetType === 'faction_post') return '/factions';
+    if (targetType === 'void_post') return '/void';
+    if (targetType === 'battle') return '/colosseum';
+    if (targetType === 'post' || targetType === 'comment') return '/';
     return null;
   };
 
@@ -227,6 +237,11 @@ export const AdminDashboard: React.FC = () => {
               <div className="p-8 text-center text-sm text-muted-foreground">No reports in queue.</div>
             ) : reports.map(report => {
               const targetPath = getReportTargetPath(report);
+              const targetType = report.targetType ?? report.target_type;
+              const targetId = report.targetId ?? report.target_id;
+              const targetLabel = report.targetLabel ?? report.target_label;
+              const reporterId = report.reporterId ?? report.reporter_id;
+              const createdAt = report.createdAt ?? report.created_at;
               return (
                 <article key={report.id} className="p-5 transition hover:bg-white/[0.03]">
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -236,18 +251,18 @@ export const AdminDashboard: React.FC = () => {
                           {report.status}
                         </span>
                         <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[9px] font-black uppercase tracking-widest text-gray-400">
-                          {report.target_type}
+                          {targetType}
                         </span>
                         <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-widest text-gray-500">
                           <Clock className="h-3 w-3" />
-                          {new Date(report.created_at).toLocaleString()}
+                          {new Date(createdAt).toLocaleString()}
                         </span>
                       </div>
-                      <h3 className="break-words text-sm font-bold text-white">{report.target_label || report.target_id}</h3>
+                      <h3 className="break-words text-sm font-bold text-white">{targetLabel || targetId}</h3>
                       <p className="mt-2 text-xs uppercase tracking-widest text-red-100/80">Reason: {report.reason.replaceAll('_', ' ')}</p>
                       {report.details && <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-300">{report.details}</p>}
                       <p className="mt-3 text-[10px] uppercase tracking-widest text-gray-500">
-                        Reporter: {report.reporter?.display_name ? `${report.reporter.display_name} (@${report.reporter.username})` : report.reporter_id || 'Unknown'}
+                        Reporter: {report.reporter?.display_name ? `${report.reporter.display_name} (@${report.reporter.username})` : reporterId || 'Unknown'}
                       </p>
                     </div>
                     <div className="flex shrink-0 flex-wrap gap-2">
