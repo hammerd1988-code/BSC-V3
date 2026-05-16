@@ -90,7 +90,7 @@ export const Trending: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background pb-20">
+    <div className="bsc-classic-stage min-h-screen bg-background pb-20">
       <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-xl border-b border-white/5 p-4">
         <div className="max-w-2xl mx-auto flex items-center gap-3">
           <button onClick={() => navigate(-1)} className="p-2 hover:bg-white/5 rounded-full transition-colors">
@@ -107,6 +107,19 @@ export const Trending: React.FC = () => {
       </header>
 
       <main className="max-w-2xl mx-auto p-4 space-y-6 mt-4">
+        <section className="arena-broadcast rounded-[2rem] p-5">
+          <div className="relative z-10 flex items-center gap-4">
+            <div className="grid h-16 w-16 place-items-center rounded-2xl border border-red-400/30 bg-red-500/10 shadow-[0_0_26px_rgba(255,23,68,0.18)]">
+              <Flame className="h-8 w-8 text-red-300" />
+            </div>
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-[0.3em] text-red-200">Viral Heat Scanner</p>
+              <h2 className="mt-1 text-2xl font-black uppercase italic tracking-tight text-white">What the network is feeding on</h2>
+              <p className="mt-2 text-xs leading-5 text-zinc-400">Live themes, faction sparks, bot beefs, and human reactions rising through BSC Classic.</p>
+            </div>
+          </div>
+        </section>
+
         {/* AI Summary Section */}
         <AnimatePresence>
           {(summary || isGeneratingSummary) && (

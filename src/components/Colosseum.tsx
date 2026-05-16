@@ -22,6 +22,7 @@ import {
   Play,
   Rewind,
   Shield,
+  ShieldAlert,
   Skull,
   Sparkles,
   Swords,
@@ -39,6 +40,7 @@ import { getValidSession } from '../lib/authSession';
 import { handleDbError } from '../lib/errors';
 import { cn } from '../lib/utils';
 import { BOT_GLADIATOR_PROFILE_BY_USERNAME, type BotDifficulty } from '../lib/botGladiatorProfiles';
+import { ReportModal } from './ReportModal';
 
 type ChallengeType = 'speed_round' | 'debug_battle' | 'code_golf';
 
@@ -1180,6 +1182,7 @@ function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorB
   const [viewerJitter, setViewerJitter] = useState(0);
   const [replayPlaying, setReplayPlaying] = useState(true);
   const [replayIndex, setReplayIndex] = useState(0);
+  const [reportMatch, setReportMatch] = useState<MatchRow | null>(null);
   const activeMatches = useMemo(() => matches.filter((match) => !match.completed_at), [matches]);
 
   const selectedFromList = useMemo(
@@ -1336,6 +1339,14 @@ function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorB
                   <span className="inline-flex items-center gap-2 rounded-full border border-pink-300/20 bg-pink-950/20 px-3 py-1 text-[9px] font-black uppercase tracking-[0.24em] text-pink-100">
                     <Users className="h-3.5 w-3.5" /> {viewerCount} watching
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => setReportMatch(visibleMatch)}
+                    className="inline-flex items-center gap-2 rounded-full border border-red-300/20 bg-red-950/20 px-3 py-1 text-[9px] font-black uppercase tracking-[0.24em] text-red-100 transition hover:border-red-300/45 hover:bg-red-500/10"
+                    aria-label="Report this battle"
+                  >
+                    <ShieldAlert className="h-3.5 w-3.5" /> Report
+                  </button>
                 </div>
               </div>
 
@@ -1456,6 +1467,16 @@ function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorB
           </motion.div>
         )}
       </AnimatePresence>
+      {reportMatch && (
+        <ReportModal
+          isOpen={Boolean(reportMatch)}
+          onClose={() => setReportMatch(null)}
+          targetType="battle"
+          targetId={reportMatch.id}
+          targetOwnerId={null}
+          targetLabel={`Colosseum battle: ${gladiatorById.get(reportMatch.challenger_id)?.name ?? 'Unknown'} vs ${gladiatorById.get(reportMatch.defender_id)?.name ?? 'Unknown'} (${formatChallenge(reportMatch.challenge_type)})`}
+        />
+      )}
     </section>
   );
 }
@@ -3023,12 +3044,12 @@ export const Colosseum: React.FC = () => {
                 </div>
 
                 <div className="mt-4 rounded-2xl border border-white/10 bg-black/45 p-3 text-[11px] leading-5 text-zinc-400">
-                  <span className="font-black uppercase tracking-widest text-yellow-200">Judging signals:</span> {selectedCodingChallenge.expected}
+                  <span className="font-black uppercase tracking-widest text-yellow-200">Casper's judging signals:</span> {selectedCodingChallenge.expected}
                 </div>
 
                 {battleResult && (
                   <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mt-4 rounded-3xl border border-yellow-300/25 bg-yellow-950/10 p-4">
-                    <p className="text-[10px] font-black uppercase tracking-[0.28em] text-yellow-200">Results Screen</p>
+                    <p className="text-[10px] font-black uppercase tracking-[0.28em] text-yellow-200">Casper's Verdict Screen</p>
                     <h3 className="mt-2 text-2xl font-black uppercase tracking-[0.14em] text-white">{battleResult.winnerName} Wins</h3>
                     <div className="mt-3 grid gap-3 sm:grid-cols-4">
                       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-white">{battleResult.userScore}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Your Score</p></div>
@@ -3038,8 +3059,9 @@ export const Colosseum: React.FC = () => {
                     </div>
                     <div className="mt-3 rounded-2xl border border-cyan-300/20 bg-cyan-950/10 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-[8px] font-black uppercase tracking-[0.24em] text-cyan-200">
-                          {battleResult.judgeUsedAi ? 'AI Judge Verdict' : 'Rubric Judge Verdict'}
+                        <p className="flex items-center gap-2 text-[8px] font-black uppercase tracking-[0.24em] text-cyan-200">
+                          <Crown className="h-3.5 w-3.5 text-yellow-200" />
+                          {battleResult.judgeUsedAi ? 'Casper AI Verdict' : 'Casper Rubric Verdict'}
                         </p>
                         <p className="rounded-full border border-white/10 px-2 py-1 text-[7px] font-black uppercase tracking-widest text-zinc-400">
                           {battleResult.judgeProvider} · {battleResult.judgeModel}

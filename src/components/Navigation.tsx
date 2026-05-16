@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X, Swords, BrainCircuit, Radio, Video, CloudFog, Loader2, HelpCircle } from 'lucide-react';
+import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X, Swords, BrainCircuit, Radio, Video, CloudFog, Loader2, HelpCircle, ShieldAlert } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -11,6 +11,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { playCommentSound, playMentionSound } from '../lib/sounds';
 import { NotificationEnableButton } from './NotificationEnableButton';
 import { useAskCasper } from './AskCasperWidget';
+import { ReportModal } from './ReportModal';
 
 interface AppNotification {
   id: string;
@@ -60,6 +61,7 @@ export const Navigation: React.FC = () => {
   const [unreadCount, setUnreadCount] = useState(0);
   const [showCreatePostModal, setShowCreatePostModal] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showGeneralReport, setShowGeneralReport] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
@@ -591,6 +593,17 @@ export const Navigation: React.FC = () => {
                   <button
                     onClick={() => {
                       setShowUserMenu(false);
+                      setShowGeneralReport(true);
+                    }}
+                    className="w-full flex items-center gap-3 px-3 py-2 text-red-200 hover:text-white hover:bg-red-500/10 rounded-xl transition-all uppercase tracking-widest text-[10px]"
+                  >
+                    <ShieldAlert className="w-4 h-4" />
+                    Report Issue
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setShowUserMenu(false);
                       navigate(`/profile/${currentUser?.username || ''}`);
                     }}
                     className="w-full flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all uppercase tracking-widest text-[10px]"
@@ -840,6 +853,16 @@ export const Navigation: React.FC = () => {
         onClose={() => setShowCreatePostModal(false)}
         onPostCreated={() => {}}
       />
+      {currentUser && (
+        <ReportModal
+          isOpen={showGeneralReport}
+          onClose={() => setShowGeneralReport(false)}
+          targetType="other"
+          targetId={`general-${currentUser.id}`}
+          targetOwnerId={null}
+          targetLabel="General BSC Classic safety or moderation concern"
+        />
+      )}
     </>
   );
 };

@@ -21,6 +21,7 @@ import { socket } from '../lib/socket';
 import { useAuth } from '../AuthContext';
 import { CommentsModal } from './CommentsModal';
 import { CustomVideoPlayer } from './CustomVideoPlayer';
+import { ReportModal } from './ReportModal';
 
 export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) => {
   const { currentUser } = useAuth();
@@ -36,6 +37,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
   const [isCopied, setIsCopied] = useState(false);
   const [videoError, setVideoError] = useState<{ message: string; type: 'key_missing' | 'general' } | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isBoosting, setIsBoosting] = useState(false);
   const [showTipModal, setShowTipModal] = useState(false);
@@ -488,6 +490,16 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
               <Trash2 className="w-3.5 h-3.5" />
             </button>
           )}
+          {currentUser?.id !== post.author_id && (
+            <button
+              onClick={() => setShowReportModal(true)}
+              className="p-1.5 rounded-full text-gray-600 hover:text-red-300 hover:bg-red-500/10 transition-all"
+              title="Report this transmission"
+              aria-label={`Report transmission by ${author.display_name}`}
+            >
+              <ShieldAlert className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -893,6 +905,15 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
         isOpen={showComments} 
         onClose={() => setShowComments(false)} 
         onCommentCountChange={setCommentCount}
+      />
+
+      <ReportModal
+        isOpen={showReportModal}
+        onClose={() => setShowReportModal(false)}
+        targetType="post"
+        targetId={post.id}
+        targetOwnerId={post.author_id}
+        targetLabel={`Transmission by @${author.username}: ${post.content.replace(/<[^>]*>/g, '').slice(0, 160)}`}
       />
 
       {/* Delete Confirmation Modal */}

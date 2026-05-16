@@ -1,11 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'motion/react';
-import { ArrowLeft, Crown, Loader2, MessageCircle, Plus, Send, Shield, Users, Zap } from 'lucide-react';
+import { ArrowLeft, Crown, Loader2, MessageCircle, Plus, Send, Shield, ShieldAlert, Users, Zap } from 'lucide-react';
 import { supabase } from '../supabase';
 import { cn } from '../lib/utils';
 import { useAuth } from '../AuthContext';
 import type { Faction, FactionMember, FactionPost, User } from '../types';
+import { getFactionGradient, getFactionLore } from '../lib/factionLore';
+import { FactionSigil } from './FactionSigil';
+import { ReportModal } from './ReportModal';
 
 interface JoinedFactionMember extends FactionMember {
   user?: User;
@@ -32,12 +35,15 @@ export const FactionDetail: React.FC = () => {
   const [joining, setJoining] = useState(false);
   const [posting, setPosting] = useState(false);
   const [content, setContent] = useState('');
+  const [reportFactionOpen, setReportFactionOpen] = useState(false);
+  const [reportPost, setReportPost] = useState<JoinedFactionPost | null>(null);
 
   const currentMembership = useMemo(
     () => members.find((member) => member.user_id === currentUser?.id),
     [members, currentUser?.id]
   );
   const isMember = Boolean(currentMembership);
+  const factionLore = faction ? getFactionLore(faction.slug) : null;
 
   const loadFaction = async () => {
     if (!slug) return;
@@ -149,7 +155,9 @@ export const FactionDetail: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-background pb-28 text-white">
+    <div className="bsc-classic-stage min-h-screen bg-background pb-28 text-white">
+      <div className="bsc-rift bsc-rift-a" />
+      <div className="bsc-rift bsc-rift-b" />
       <main className="max-w-6xl mx-auto px-4 py-6">
         <button onClick={() => navigate('/factions')} className="mb-5 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.25em] text-gray-500 hover:text-accent transition-colors">
           <ArrowLeft className="w-4 h-4" />
@@ -157,21 +165,32 @@ export const FactionDetail: React.FC = () => {
         </button>
 
         <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-black/60 shadow-[0_0_60px_rgba(255,0,80,0.08)] mb-6">
-          <div className="h-56 bg-gradient-to-br from-red-500/20 via-fuchsia-500/10 to-cyan-400/20">
+          <div className={cn('relative h-56 bg-gradient-to-br', getFactionGradient(faction.slug))}>
+            <div className="forge-constellation" />
             {faction.banner_url && <img src={faction.banner_url} alt="" className="h-full w-full object-cover opacity-80" />}
           </div>
           <div className="absolute inset-0 bg-gradient-to-t from-black via-black/30 to-transparent" />
           <div className="relative z-10 p-6 md:p-8 -mt-24">
             <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-5">
               <div className="flex items-end gap-4">
-                <div className="h-24 w-24 rounded-[1.6rem] border border-white/15 bg-black overflow-hidden flex items-center justify-center shadow-[0_0_30px_rgba(255,0,80,0.15)]">
-                  {faction.icon_url ? <img src={faction.icon_url} alt={faction.name} className="h-full w-full object-cover" /> : <Shield className="w-12 h-12 text-accent" />}
-                </div>
+                <FactionSigil
+                  name={faction.name}
+                  symbol={factionLore?.symbol}
+                  primary={factionLore?.primary}
+                  secondary={factionLore?.secondary}
+                  iconUrl={faction.icon_url}
+                  className="h-24 w-24"
+                />
                 <div>
                   <p className="text-[10px] font-mono uppercase tracking-[0.3em] text-gray-500">/{faction.slug}</p>
                   <h1 className="text-3xl md:text-5xl font-black uppercase italic tracking-tighter text-white drop-shadow-[0_0_24px_rgba(255,255,255,0.12)]">
                     {faction.name}
                   </h1>
+                  {factionLore && (
+                    <p className="mt-2 text-[10px] font-black uppercase tracking-[0.25em] text-fuchsia-200">
+                      {factionLore.motto}
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -188,9 +207,37 @@ export const FactionDetail: React.FC = () => {
                 {joining ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                 {isMember ? 'Joined' : 'Join Faction'}
               </button>
+              <button
+                onClick={() => setReportFactionOpen(true)}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-red-300/25 px-5 py-3 text-xs font-black uppercase tracking-[0.2em] text-red-200 transition-all hover:border-red-300/50 hover:bg-red-500/10"
+                aria-label={`Report faction ${faction.name}`}
+              >
+                <ShieldAlert className="w-4 h-4" />
+                Report
+              </button>
             </div>
 
             <p className="mt-6 max-w-3xl text-sm text-gray-300 leading-relaxed">{faction.description}</p>
+            {factionLore && (
+              <div className="mt-6 grid gap-3 md:grid-cols-3">
+                <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
+                  <p className="text-[9px] font-black uppercase tracking-[0.25em] text-cyan-200">Attitude</p>
+                  <p className="mt-2 text-xs font-bold leading-5 text-zinc-300">{factionLore.attitude}</p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
+                  <p className="text-[9px] font-black uppercase tracking-[0.25em] text-fuchsia-200">Beliefs</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {factionLore.beliefs.map((belief) => <span key={belief} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[8px] font-black uppercase tracking-widest text-zinc-400">{belief}</span>)}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
+                  <p className="text-[9px] font-black uppercase tracking-[0.25em] text-yellow-200">Values</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {factionLore.values.map((value) => <span key={value} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[8px] font-black uppercase tracking-widest text-zinc-400">{value}</span>)}
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="mt-6 flex flex-wrap gap-3">
               <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
@@ -272,7 +319,7 @@ export const FactionDetail: React.FC = () => {
                       <Link to={`/profile/${post.user?.username ?? ''}`} className="h-10 w-10 rounded-full overflow-hidden border border-white/10 bg-white/5 flex-shrink-0">
                         {post.user?.avatar_url ? <img src={post.user.avatar_url} alt="" className="h-full w-full object-cover" /> : null}
                       </Link>
-                      <div>
+                      <div className="min-w-0 flex-1">
                         <Link to={`/profile/${post.user?.username ?? ''}`} className="text-sm font-black text-white hover:text-accent transition-colors">
                           {post.user?.display_name ?? 'Unknown Builder'}
                         </Link>
@@ -280,6 +327,17 @@ export const FactionDetail: React.FC = () => {
                           @{post.user?.username ?? 'unknown'} · {new Date(post.created_at).toLocaleDateString()}
                         </p>
                       </div>
+                      {currentUser?.id !== post.user_id && (
+                        <button
+                          type="button"
+                          onClick={() => setReportPost(post)}
+                          className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-gray-500 transition hover:border-red-300/30 hover:text-red-200"
+                          aria-label={`Report faction post by ${post.user?.display_name ?? 'unknown user'}`}
+                        >
+                          <ShieldAlert className="h-3 w-3" />
+                          Report
+                        </button>
+                      )}
                     </div>
                     <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-300">{post.content}</p>
                   </motion.article>
@@ -318,6 +376,26 @@ export const FactionDetail: React.FC = () => {
           </aside>
         </div>
       </main>
+      {faction && (
+        <ReportModal
+          isOpen={reportFactionOpen}
+          onClose={() => setReportFactionOpen(false)}
+          targetType="faction"
+          targetId={faction.id}
+          targetOwnerId={faction.created_by ?? null}
+          targetLabel={`Faction ${faction.name}: ${faction.description.slice(0, 160)}`}
+        />
+      )}
+      {reportPost && (
+        <ReportModal
+          isOpen={Boolean(reportPost)}
+          onClose={() => setReportPost(null)}
+          targetType="faction_post"
+          targetId={reportPost.id}
+          targetOwnerId={reportPost.user_id}
+          targetLabel={`Faction post by @${reportPost.user?.username ?? 'unknown'} in ${faction.name}: ${reportPost.content.slice(0, 160)}`}
+        />
+      )}
     </div>
   );
 };

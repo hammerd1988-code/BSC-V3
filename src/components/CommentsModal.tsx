@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Send, Loader2, Bot, MessageSquare } from 'lucide-react';
+import { X, Send, Loader2, Bot, MessageSquare, ShieldAlert } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
@@ -9,6 +9,7 @@ import { Post, User } from '../types';
 import { getBotReply } from './Feed';
 import { BOT_PERSONAS, getBotByUsername } from '../lib/botPersonas';
 import { sendPushEvent } from '../lib/notifications';
+import { ReportModal } from './ReportModal';
 
 interface Comment {
   id: string;
@@ -37,6 +38,7 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [thinkingBots, setThinkingBots] = useState<string[]>([]);
+  const [reportTarget, setReportTarget] = useState<Comment | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -302,27 +304,41 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
                   <p className="mt-1 text-xs text-gray-600">Be the first to initiate a neural link.</p>
                 </div>
               ) : (
-                comments.map(comment => (
-                  <motion.div
-                    key={comment.id}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="flex gap-3"
-                  >
-                    <img src={comment.author?.avatar_url || 'https://picsum.photos/seed/default/200'} alt="" className="w-8 h-8 shrink-0 rounded-full border border-white/10 object-cover" />
-                    <div className="min-w-0 flex-1">
-                      <div className="bg-black/40 border border-white/5 rounded-2xl rounded-tl-none p-3">
-                        <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-                          <span className="font-bold text-white text-sm">{comment.author?.display_name || 'Unknown'}</span>
-                          <span className="text-[10px] text-gray-500 uppercase tracking-widest">
-                            {formatDistanceToNow(new Date(comment.created_at), { addSuffix: true })}
-                          </span>
+                comments.map(comment => {
+                  const commentAuthor = comment.author;
+                  return (
+                    <motion.div
+                      key={comment.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="flex gap-3"
+                    >
+                      <img src={commentAuthor?.avatar_url || 'https://picsum.photos/seed/default/200'} alt="" className="w-8 h-8 shrink-0 rounded-full border border-white/10 object-cover" />
+                      <div className="min-w-0 flex-1">
+                        <div className="bg-black/40 border border-white/5 rounded-2xl rounded-tl-none p-3">
+                          <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <span className="font-bold text-white text-sm">{commentAuthor?.display_name || 'Unknown'}</span>
+                            <span className="text-[10px] text-gray-500 uppercase tracking-widest">
+                              {formatDistanceToNow(new Date(comment.created_at), { addSuffix: true })}
+                            </span>
+                            {currentUser?.id !== comment.author_id && (
+                              <button
+                                type="button"
+                                onClick={() => setReportTarget(comment)}
+                                className="ml-auto inline-flex items-center gap-1 rounded-full border border-white/10 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-gray-500 transition hover:border-red-300/30 hover:text-red-200"
+                                aria-label={`Report comment by ${commentAuthor?.display_name || 'unknown user'}`}
+                              >
+                                <ShieldAlert className="h-3 w-3" />
+                                Report
+                              </button>
+                            )}
+                          </div>
+                          <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-300">{comment.content}</p>
                         </div>
-                        <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-gray-300">{comment.content}</p>
                       </div>
-                    </div>
-                  </motion.div>
-                ))
+                    </motion.div>
+                  );
+                })
               )}
 
               {thinkingBots.map((name, idx) => (
@@ -369,6 +385,17 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
                 </div>
               </div>
             </form>
+
+            {reportTarget && (
+              <ReportModal
+                isOpen={Boolean(reportTarget)}
+                onClose={() => setReportTarget(null)}
+                targetType="comment"
+                targetId={reportTarget.id}
+                targetOwnerId={reportTarget.author_id}
+                targetLabel={`Comment by @${reportTarget.author?.username || 'unknown'} on ${postAuthor.display_name}'s post: ${reportTarget.content.slice(0, 160)}`}
+              />
+            )}
           </motion.div>
         </motion.div>
       )}

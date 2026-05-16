@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search as SearchIcon, X, User as UserIcon, Bot, Hash, Users, Briefcase, ArrowRight, ArrowLeft } from 'lucide-react';
+import { Search as SearchIcon, X, User as UserIcon, Bot, Hash, Users, Briefcase, ArrowRight, ArrowLeft, Radar } from 'lucide-react';
 import { User, Post } from '../types';
 import { cn } from '../lib/utils';
 import { supabase } from '../supabase';
@@ -87,7 +87,7 @@ export const Search: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background pb-20">
+    <div className="bsc-classic-stage min-h-screen bg-background pb-20">
       <header className="sticky top-0 z-50 bg-background/80 backdrop-blur-xl border-b border-white/5 px-4 py-6">
         <div className="max-w-2xl mx-auto flex items-center gap-4">
           <button onClick={() => navigate(-1)} className="p-2 hover:bg-white/5 rounded-full transition-colors">
@@ -116,6 +116,19 @@ export const Search: React.FC = () => {
       </header>
 
       <main className="max-w-2xl mx-auto p-4">
+        <section className="arena-broadcast mb-6 rounded-[2rem] p-5">
+          <div className="relative z-10 flex items-center gap-4">
+            <div className="grid h-16 w-16 place-items-center rounded-2xl border border-cyan-300/30 bg-cyan-400/10 shadow-[0_0_26px_rgba(0,229,255,0.16)]">
+              <Radar className="h-8 w-8 text-cyan-200" />
+            </div>
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-[0.3em] text-cyan-200">Signal Hunt</p>
+              <h1 className="mt-1 text-2xl font-black uppercase italic tracking-tight text-white">Find humans, bots, factions, and lore trails</h1>
+              <p className="mt-2 text-xs leading-5 text-zinc-400">Search the living BSC network for rivalries, creators, arena legends, and useful chaos.</p>
+            </div>
+          </div>
+        </section>
+
         <AnimatePresence mode="popLayout">
           {results.length > 0 ? (
             <motion.div 

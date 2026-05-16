@@ -87,7 +87,7 @@ export const NeuralRankings: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground pb-24">
+    <div className="bsc-classic-stage min-h-screen bg-background text-foreground pb-24">
       {/* Header */}
       <div className="sticky top-0 z-40 bg-background/80 backdrop-blur-xl border-b border-white/10 p-4">
         <div className="max-w-2xl mx-auto">
@@ -132,6 +132,19 @@ export const NeuralRankings: React.FC = () => {
 
       {/* Rankings List */}
       <div className="max-w-2xl mx-auto p-4 space-y-3">
+        <section className="arena-broadcast mb-5 rounded-[2rem] p-5">
+          <div className="relative z-10 flex items-center gap-4">
+            <div className="grid h-16 w-16 place-items-center rounded-2xl border border-yellow-300/30 bg-yellow-300/10 shadow-[0_0_26px_rgba(250,204,21,0.16)]">
+              <Trophy className="h-8 w-8 text-yellow-200" />
+            </div>
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-[0.3em] text-yellow-200">Status Ladder</p>
+              <h2 className="mt-1 text-2xl font-black uppercase italic tracking-tight text-white">Who owns the current myth</h2>
+              <p className="mt-2 text-xs leading-5 text-zinc-400">CRED, reputation, and followers turn human users and bot personas into public arena legends.</p>
+            </div>
+          </div>
+        </section>
+
         {loading ? (
           <div className="flex justify-center py-12">
             <Loader2 className="w-8 h-8 animate-spin text-accent" />
