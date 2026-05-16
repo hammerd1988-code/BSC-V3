@@ -217,6 +217,8 @@ const CHALLENGES: Array<{
   icon: React.ElementType;
   accent: string;
   description: string;
+  arena: string;
+  scoring: string[];
 }> = [
   {
     id: 'speed_round',
@@ -225,6 +227,8 @@ const CHALLENGES: Array<{
     icon: Zap,
     accent: '#00e5ff',
     description: 'Bots race to ship the first correct solution under crushing clock pressure.',
+    arena: 'Blue-white clock pylons, latency sirens, and a collapsing runtime maze.',
+    scoring: ['Correctness', 'Speed', 'Critical path'],
   },
   {
     id: 'debug_battle',
@@ -233,6 +237,8 @@ const CHALLENGES: Array<{
     icon: Target,
     accent: '#ff2bd6',
     description: 'Gladiators tear through hostile code and score by finding the cleanest fix.',
+    arena: 'Pink stack traces rain over a broken production shard.',
+    scoring: ['Root cause', 'Patch quality', 'Regression safety'],
   },
   {
     id: 'code_golf',
@@ -241,6 +247,8 @@ const CHALLENGES: Array<{
     icon: CircuitBoard,
     accent: '#f9ff6b',
     description: 'The arena rewards ruthless elegance: fewer bytes, fewer processor cycles, tighter runtime.',
+    arena: 'A yellow byte furnace counts characters, memory pressure, and processor cycles.',
+    scoring: ['Byte count', 'Processor cycles', 'Runtime class'],
   },
   {
     id: 'architect_duel',
@@ -249,6 +257,8 @@ const CHALLENGES: Array<{
     icon: Hammer,
     accent: '#8b5cf6',
     description: 'Gladiators design the strongest architecture, tradeoffs, data flow, and failure plan.',
+    arena: 'Violet blueprint slabs assemble and collapse under simulated traffic.',
+    scoring: ['System design', 'Tradeoffs', 'Failure plan'],
   },
   {
     id: 'prompt_war',
@@ -257,6 +267,8 @@ const CHALLENGES: Array<{
     icon: Brain,
     accent: '#22c55e',
     description: 'Bots weaponize prompts, constraints, and personality control to produce the sharper agent.',
+    arena: 'Green prompt glyphs orbit a containment chamber for unstable personas.',
+    scoring: ['Control', 'Examples', 'Boundaries'],
   },
   {
     id: 'roast_battle',
@@ -265,6 +277,8 @@ const CHALLENGES: Array<{
     icon: MessageSquare,
     accent: '#ff8a00',
     description: 'A theatrical trash-talk round judged on wit, persona discipline, and clean boundaries.',
+    arena: 'Orange crowd lights, mic-drop pylons, and rivalry heat without real harassment.',
+    scoring: ['Wit', 'Persona', 'Safety'],
   },
   {
     id: 'code_jeopardy',
@@ -273,6 +287,8 @@ const CHALLENGES: Array<{
     icon: Trophy,
     accent: '#38bdf8',
     description: 'Technical clues demand text answers judged on accuracy, confidence, clarity, and speed.',
+    arena: 'A cyan clue board unlocks categories while Casper listens for exact answers.',
+    scoring: ['Accuracy', 'Clarity', 'Confidence'],
   },
 ];
 
@@ -728,6 +744,10 @@ function formatChallenge(type: ChallengeType) {
   return CHALLENGES.find((challenge) => challenge.id === type)?.label ?? 'Challenge';
 }
 
+function challengeMeta(type: ChallengeType) {
+  return CHALLENGES.find((challenge) => challenge.id === type) ?? CHALLENGES[0];
+}
+
 function challengeFor(profile: BotGladiatorProfileRow | null | undefined, type: ChallengeType): CodingChallenge {
   return CHALLENGE_LIBRARY[profile?.difficulty ?? 'Bronze'][type];
 }
@@ -872,7 +892,7 @@ function isSapphireGladiator(gladiator?: Gladiator | null) {
 }
 
 function buildCombatChallengePrompt(type: ChallengeType, challenger: Gladiator, defender: Gladiator) {
-  const challenge = CHALLENGES.find((item) => item.id === type);
+  const challenge = challengeMeta(type);
   const directive = type === 'speed_round'
     ? 'Return the fastest correct implementation and explain the critical path briefly.'
     : type === 'debug_battle'
@@ -887,7 +907,7 @@ function buildCombatChallengePrompt(type: ChallengeType, challenger: Gladiator, 
               ? 'Return a memorable in-character roast that stays safe, funny, and away from real harassment.'
               : 'Return the Code Jeopardy answer in text with a concise explanation and confidence.';
 
-  return `${challenge?.label ?? 'Colosseum Challenge'}: ${challenger.name} versus ${defender.name}. ${directive}`;
+  return `${challenge.label}: ${challenger.name} versus ${defender.name}. ${directive}`;
 }
 
 function sapphireSolutionBonus(move: SapphireMove | null | undefined, type: ChallengeType) {
@@ -917,6 +937,69 @@ function aiMoveBonus(move: GladiatorAiMove | undefined, type: ChallengeType) {
         : Number(solution.includes('optimize') || solution.includes('fast') || solution.includes('complexity') || solution.includes('boundary')) * 7;
   const customKeySignal = move.uses_custom_key ? 6 : 0;
   return Math.min(42, 8 + codeSignals * 3 + challengeSignal + customKeySignal + Math.min(14, Math.floor(move.solution.length / 220)));
+}
+
+function combatLinesFor(type: ChallengeType, challenger: Gladiator, defender: Gladiator, challenge: CodingChallenge) {
+  if (type === 'speed_round') {
+    return [
+      'Clock pressure spikes. Syntax sparks across the pit wall.',
+      `${challenger.name} hunts the hot path while ${defender.name} shaves latency.`,
+      'Casper watches the critical path collapse into one decisive branch.',
+      'The runtime maze flashes green as the fastest correct route surfaces.',
+    ];
+  }
+
+  if (type === 'debug_battle') {
+    return [
+      'A corrupted stack trace descends into the cage.',
+      `${defender.name} circles the failing branch while ${challenger.name} opens the crash log.`,
+      'Patch blades flash through nested exceptions.',
+      'Casper weighs root cause, regression risk, and cleanup discipline.',
+    ];
+  }
+
+  if (type === 'code_golf') {
+    return [
+      'Token counters glow like weapon heat.',
+      'The byte furnace starts counting characters against estimated processor cycles.',
+      `${challenger.name} compresses syntax while ${defender.name} defends runtime class.`,
+      'Casper compares compactness, cycle pressure, and whether the incantation still works.',
+    ];
+  }
+
+  if (type === 'architect_duel') {
+    return [
+      'A holographic system map rises from the arena floor.',
+      'Load balancers, queues, stores, and failure zones lock into place.',
+      `${challenger.name} argues tradeoffs while ${defender.name} stress-tests the design.`,
+      'Casper checks whether the blueprint survives scale, outages, and messy users.',
+    ];
+  }
+
+  if (type === 'prompt_war') {
+    return [
+      'Prompt glyphs orbit the cage like loaded spell cards.',
+      `${challenger.name} tightens constraints while ${defender.name} attacks ambiguity.`,
+      'Examples, boundaries, and persona rules slam into the containment field.',
+      'Casper scores control, clarity, and whether the agent can be trusted under pressure.',
+    ];
+  }
+
+  if (type === 'roast_battle') {
+    return [
+      'The crowd mic drops from the rafters and the rivalry lights turn orange.',
+      `${challenger.name} throws a clean shot; ${defender.name} answers with persona heat.`,
+      'The arena rejects cheap harassment and rewards surgical wit.',
+      'Casper waits for the line that lands without breaking the code of the pit.',
+    ];
+  }
+
+  return [
+    `The clue board unlocks: ${challenge.title}.`,
+    `${challenger.name} buzzes in while ${defender.name} parses the category.`,
+    'Text answers hit the judgment rail one clue at a time.',
+    'Casper listens for accuracy, confidence, and a clean explanation.',
+  ];
 }
 
 async function requestGladiatorAiMoves(match: MatchRow, type: ChallengeType, challenger: Gladiator, defender: Gladiator, battlePrompt?: string): Promise<GladiatorAiMove[]> {
@@ -1310,6 +1393,122 @@ function CombatantPortrait({ gladiator, label }: { gladiator?: Gladiator; label:
   );
 }
 
+function ArenaStage({
+  challenger,
+  defender,
+  match,
+  replayProgress,
+}: {
+  challenger?: Gladiator;
+  defender?: Gladiator;
+  match: MatchRow;
+  replayProgress: number;
+}) {
+  const meta = challengeMeta(match.challenge_type);
+  const Icon = meta.icon;
+  const challengerGlow = challenger?.glow_color ?? '#ff1744';
+  const defenderGlow = defender?.glow_color ?? '#00e5ff';
+  const matchComplete = Boolean(match.completed_at);
+
+  return (
+    <div className="relative min-h-[24rem] overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/80 p-5 shadow-[inset_0_0_80px_rgba(255,23,68,0.08)]">
+      <div className="arena-stage-grid absolute inset-0 opacity-60" />
+      <div
+        className="absolute -left-24 top-8 h-56 w-56 rounded-full blur-3xl"
+        style={{ backgroundColor: `${challengerGlow}55` }}
+      />
+      <div
+        className="absolute -right-24 bottom-4 h-64 w-64 rounded-full blur-3xl"
+        style={{ backgroundColor: `${defenderGlow}55` }}
+      />
+      <div className="absolute inset-x-8 bottom-7 h-28 rounded-[50%] border border-red-300/20 bg-red-500/10 blur-[1px]" />
+      <div className="arena-energy-lattice absolute inset-x-6 bottom-10 h-40 opacity-55" />
+
+      <div className="relative z-10 flex flex-col gap-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[9px] font-black uppercase tracking-[0.32em] text-zinc-500">Arena Theater</p>
+            <h3 className="mt-1 flex items-center gap-2 text-xl font-black uppercase tracking-[0.14em] text-white">
+              <Icon className="h-5 w-5" style={{ color: meta.accent }} />
+              {meta.short}
+            </h3>
+            <p className="mt-2 max-w-xl text-xs leading-6 text-zinc-400">{meta.arena}</p>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-black/55 px-3 py-2 text-right">
+            <p className="text-[8px] font-black uppercase tracking-[0.22em] text-zinc-500">Casper Status</p>
+            <p className="mt-1 text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: meta.accent }}>
+              {matchComplete ? 'Thumb Verdict Cast' : 'Thumb Hovering'}
+            </p>
+          </div>
+        </div>
+
+        <div className="grid items-end gap-5 md:grid-cols-[1fr_auto_1fr]">
+          <motion.div
+            animate={{ y: [0, -8, 0], x: [0, 4, 0] }}
+            transition={{ duration: 2.6, repeat: Infinity, ease: 'easeInOut' }}
+            className="flex justify-center md:justify-start"
+          >
+            <AnimatedGladiatorAvatar gladiator={challenger} size="xl" label={challenger?.name ?? 'Red Corner'} active />
+          </motion.div>
+
+          <div className="relative mx-auto grid h-36 w-36 place-items-center">
+            <motion.div
+              aria-hidden
+              animate={{ rotate: 360 }}
+              transition={{ duration: 8, repeat: Infinity, ease: 'linear' }}
+              className="absolute inset-0 rounded-full border border-dashed border-yellow-200/35"
+            />
+            <motion.div
+              aria-hidden
+              animate={{ scale: [0.92, 1.08, 0.92], opacity: [0.35, 0.8, 0.35] }}
+              transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
+              className="absolute inset-4 rounded-full bg-yellow-300/10 shadow-[0_0_44px_rgba(250,204,21,0.32)]"
+            />
+            <div className="relative grid h-24 w-24 place-items-center rounded-full border border-yellow-200/25 bg-black/75">
+              <Crown className="h-10 w-10 text-yellow-200 drop-shadow-[0_0_18px_rgba(250,204,21,0.9)]" />
+              <span className="absolute -bottom-6 whitespace-nowrap text-[8px] font-black uppercase tracking-[0.24em] text-yellow-100/80">Casper Judge</span>
+            </div>
+          </div>
+
+          <motion.div
+            animate={{ y: [0, -8, 0], x: [0, -4, 0] }}
+            transition={{ duration: 2.45, repeat: Infinity, ease: 'easeInOut', delay: 0.25 }}
+            className="flex justify-center md:justify-end"
+          >
+            <AnimatedGladiatorAvatar gladiator={defender} size="xl" label={defender?.name ?? 'Shadow Cage'} active />
+          </motion.div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          {meta.scoring.map((signal) => (
+            <div key={signal} className="rounded-2xl border border-white/10 bg-black/50 p-3">
+              <p className="text-[8px] font-black uppercase tracking-[0.22em] text-zinc-500">Judging Signal</p>
+              <p className="mt-1 text-xs font-black uppercase tracking-[0.14em] text-white">{signal}</p>
+            </div>
+          ))}
+        </div>
+
+        <div>
+          <div className="mb-2 flex items-center justify-between text-[9px] font-black uppercase tracking-[0.24em] text-zinc-500">
+            <span>Replay Heat</span>
+            <span>{replayProgress}%</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-white/10">
+            <motion.div
+              className="h-full rounded-full"
+              animate={{ width: `${replayProgress}%` }}
+              style={{
+                background: `linear-gradient(90deg, ${challengerGlow}, ${meta.accent}, ${defenderGlow})`,
+                boxShadow: `0 0 24px ${meta.accent}`,
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LiveBattleCard({ match, challenger, defender, now, onSelect }: { match: MatchRow; challenger?: Gladiator; defender?: Gladiator; now: number; onSelect: () => void }) {
   const challengerGlow = challenger?.glow_color ?? '#ff1744';
   const defenderGlow = defender?.glow_color ?? '#00e5ff';
@@ -1542,10 +1741,18 @@ function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorB
                 </div>
               </div>
 
-              <div className="grid gap-4 lg:grid-cols-[0.82fr_1.18fr]">
+              <div className="grid gap-4 lg:grid-cols-[1.05fr_1fr]">
                 <div className="space-y-4">
-                  <CombatantPortrait label="Red Corner" gladiator={challenger} />
-                  <CombatantPortrait label="Shadow Cage" gladiator={defender} />
+                  <ArenaStage
+                    challenger={challenger}
+                    defender={defender}
+                    match={visibleMatch}
+                    replayProgress={replayProgress}
+                  />
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <CombatantPortrait label="Red Corner" gladiator={challenger} />
+                    <CombatantPortrait label="Shadow Cage" gladiator={defender} />
+                  </div>
                 </div>
 
                 <div className="overflow-hidden rounded-3xl border border-green-300/15 bg-black/80 shadow-[inset_0_0_34px_rgba(34,197,94,0.08)]">
@@ -2024,6 +2231,7 @@ export const Colosseum: React.FC = () => {
   const selectedGladiator = selectedGladiatorId ? gladiatorById.get(selectedGladiatorId) : null;
   const selectedOpponent = selectedOpponentId ? gladiatorById.get(selectedOpponentId) : null;
   const selectedCodingChallenge = useMemo(() => challengeFor(selectedOpponent?.botProfile, challengeType), [selectedOpponent?.botProfile, challengeType]);
+  const selectedChallengeMeta = challengeMeta(challengeType);
   const battleInProgress = simulation?.status === 'booting' || simulation?.status === 'running';
 
   useEffect(() => {
@@ -2283,7 +2491,7 @@ export const Colosseum: React.FC = () => {
       if (error) throw error;
 
       const match = data as MatchRow;
-      const challenge = CHALLENGES.find((item) => item.id === activeChallengeType)!;
+      const challenge = challengeMeta(activeChallengeType);
       const logs = [
         `Gate locks engaged for ${challenge.label}.`,
         `${challenger.name} boots combat compiler in the red corner.`,
@@ -2387,11 +2595,7 @@ export const Colosseum: React.FC = () => {
     };
     const initialChallengerScore = clampBattleScore(42 + userSolutionBonus(submittedSolution, codingChallenge, type) + aiMoveBonus(challengerMove, type));
     const initialDefenderScore = clampBattleScore(42 + aiMoveBonus(defenderMove, type) + botProfileScoreBonus(defender.botProfile, type) + (isSapphireGladiator(defender) ? sapphireSolutionBonus(sapphireMove, type) : 0));
-    const combatLines = type === 'speed_round'
-      ? ['Clock pressure spikes. Syntax sparks across the pit wall.', 'Both bots deploy hot paths through the runtime maze.', 'The crowd holograms slam the rail as latency drops.']
-      : type === 'debug_battle'
-        ? ['A corrupted stack trace descends into the cage.', 'Patch blades flash through nested exceptions.', 'One bot isolates the fault before the watchdog bites.']
-        : ['Token counters glow like weapon heat.', 'Every character is carved down to bone.', 'The shortest working incantation draws blood from the scoreboard.'];
+    const combatLines = combatLinesFor(type, challenger, defender, codingChallenge);
 
     let tick = 0;
     const interval = window.setInterval(() => {
@@ -3215,6 +3419,41 @@ export const Colosseum: React.FC = () => {
                   <span className="rounded-full border px-3 py-1 text-[9px] font-black uppercase tracking-[0.22em]" style={{ borderColor: `${difficultyColor(selectedCodingChallenge.difficulty)}55`, color: difficultyColor(selectedCodingChallenge.difficulty), backgroundColor: `${difficultyColor(selectedCodingChallenge.difficulty)}12` }}>{selectedCodingChallenge.difficulty}</span>
                 </div>
 
+                <div
+                  className="mb-4 overflow-hidden rounded-3xl border border-white/10 bg-black/55 p-4"
+                  style={{ boxShadow: `inset 0 0 42px ${selectedChallengeMeta.accent}12` }}
+                >
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
+                    <div className="relative grid min-h-28 flex-1 place-items-center overflow-hidden rounded-2xl border border-white/10 bg-zinc-950/80">
+                      <div className="arena-stage-grid absolute inset-0 opacity-50" />
+                      <div className="arena-energy-lattice absolute inset-x-4 bottom-0 h-24 opacity-50" />
+                      <motion.div
+                        aria-hidden
+                        animate={{ x: ['-34%', '34%', '-34%'], opacity: [0.22, 0.58, 0.22] }}
+                        transition={{ duration: 4.2, repeat: Infinity, ease: 'easeInOut' }}
+                        className="absolute top-1/2 h-20 w-32 -translate-y-1/2 rounded-full blur-2xl"
+                        style={{ backgroundColor: selectedChallengeMeta.accent }}
+                      />
+                      <div className="relative z-10 flex items-center gap-5">
+                        <AnimatedGladiatorAvatar gladiator={selectedGladiator ?? undefined} size="sm" label="Red" active />
+                        <div className="grid h-16 w-16 place-items-center rounded-full border border-yellow-200/25 bg-black/75 shadow-[0_0_34px_rgba(250,204,21,0.22)]">
+                          <Crown className="h-7 w-7 text-yellow-200" />
+                        </div>
+                        <AnimatedGladiatorAvatar gladiator={selectedOpponent} size="sm" label="Shadow" active />
+                      </div>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-[9px] font-black uppercase tracking-[0.28em]" style={{ color: selectedChallengeMeta.accent }}>{selectedChallengeMeta.short}</p>
+                      <p className="mt-2 text-xs leading-6 text-zinc-400">{selectedChallengeMeta.arena}</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {selectedChallengeMeta.scoring.map((signal) => (
+                          <span key={signal} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[8px] font-black uppercase tracking-widest text-zinc-300">{signal}</span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="grid gap-4 lg:grid-cols-2">
                   <label className="block">
                     <span className="mb-2 block text-[10px] font-black uppercase tracking-[0.24em] text-zinc-500">Your Code Editor</span>
@@ -3291,6 +3530,21 @@ export const Colosseum: React.FC = () => {
               </div>
               {simulation ? (
                 <div className="space-y-4">
+                  <ArenaStage
+                    challenger={gladiatorById.get(simulation.challengerId)}
+                    defender={gladiatorById.get(simulation.defenderId)}
+                    match={{
+                      id: simulation.matchId,
+                      challenger_id: simulation.challengerId,
+                      defender_id: simulation.defenderId,
+                      challenge_type: simulation.challengeType,
+                      winner_id: simulation.winnerId,
+                      started_at: new Date().toISOString(),
+                      completed_at: simulation.status === 'complete' ? new Date().toISOString() : null,
+                      replay_data: { log: simulation.log },
+                    }}
+                    replayProgress={Math.max(simulation.challengerProgress, simulation.defenderProgress)}
+                  />
                   <div className="grid gap-3 sm:grid-cols-2">
                     {[
                       { label: 'Challenger', gladiator: gladiatorById.get(simulation.challengerId), progress: simulation.challengerProgress },
