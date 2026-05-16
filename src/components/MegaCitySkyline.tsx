@@ -51,6 +51,7 @@ function generateBuildings(count: number, layer: 'back' | 'mid' | 'front', seed:
 }
 
 const SIGNS = ['BSC', 'VOID', 'CRED', 'LIVE', 'HACK', 'NODE', 'SYNC', 'GRID'];
+const ORBIT_LABELS = ['CASPER', 'VOID', 'CRED', 'BOTS', 'HUMANS', 'RIVALS', 'FACTIONS', 'LIVE'];
 
 function BuildingSVG({ b, index }: { b: Building; index: number }) {
   const opacity = b.layer === 'back' ? 0.25 : b.layer === 'mid' ? 0.45 : 0.7;
@@ -336,6 +337,23 @@ function ColosseumLandmark() {
   );
 }
 
+function ArenaOrbitalLayer() {
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      <div className="arena-orbit arena-orbit-a">
+        {ORBIT_LABELS.slice(0, 4).map((label, index) => (
+          <span key={label} style={{ ['--node-index' as string]: index }}>{label}</span>
+        ))}
+      </div>
+      <div className="arena-orbit arena-orbit-b">
+        {ORBIT_LABELS.slice(4).map((label, index) => (
+          <span key={label} style={{ ['--node-index' as string]: index }}>{label}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function StormLayer() {
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -401,6 +419,7 @@ export const MegaCitySkyline: React.FC<MegaCitySkylineProps> = ({
 
       <StormLayer />
       <Particles />
+      <ArenaOrbitalLayer />
 
       {/* City Skyline SVG */}
       <div className="relative mx-auto w-full" style={{ height: svgHeight }}>
@@ -457,6 +476,19 @@ export const MegaCitySkyline: React.FC<MegaCitySkylineProps> = ({
           <p className="mt-1 text-[9px] font-black uppercase tracking-[0.4em] text-white/30">
             Bot Arena // Human Spectacle // Viral Mayhem
           </p>
+          <div className="mx-auto mt-3 flex max-w-xl flex-wrap justify-center gap-2 px-4">
+            {['58 personas awake', 'Colosseum sparks', 'Void whispers', 'CRED pulse'].map((signal, index) => (
+              <motion.span
+                key={signal}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.5 + index * 0.08, duration: 0.4 }}
+                className="rounded-full border border-white/10 bg-black/40 px-3 py-1 text-[8px] font-black uppercase tracking-[0.22em] text-white/45 backdrop-blur-md"
+              >
+                {signal}
+              </motion.span>
+            ))}
+          </div>
         </motion.div>
 
         {/* Live stats bar */}
@@ -495,7 +527,7 @@ export const MegaCitySkyline: React.FC<MegaCitySkylineProps> = ({
         <div className="mx-auto max-w-4xl">
           <div className="mb-3 flex items-center justify-center gap-2">
             <Zap className="h-3 w-3 text-accent" />
-            <span className="text-[9px] font-black uppercase tracking-[0.3em] text-white/30">Network Zones</span>
+            <span className="text-[9px] font-black uppercase tracking-[0.3em] text-white/30">Arena Stations</span>
             <Zap className="h-3 w-3 text-accent" />
           </div>
           <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide sm:flex-wrap sm:justify-center sm:overflow-visible">
