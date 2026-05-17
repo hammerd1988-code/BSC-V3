@@ -435,13 +435,15 @@ async function ensurePlatformBotGladiatorsForForge() {
     if (!response.ok) continue;
     try {
       const payload = await response.json();
-      if (Array.isArray(payload.gladiators)) ensured.push(...payload.gladiators);
-      if (payload.gladiator) ensured.push(payload.gladiator);
+      for (const gladiator of Array.isArray(payload.gladiators) ? payload.gladiators : []) {
+        if (!ensured.some((existing) => existing.id === gladiator.id)) ensured.push(gladiator);
+      }
+      if (payload.gladiator && !ensured.some((existing) => existing.id === payload.gladiator.id)) ensured.push(payload.gladiator);
     } catch (error) {
       console.warn('[BotForge] Unable to parse ensured platform gladiators', error);
     }
   }
-  return ensured;
+  return ensured.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
