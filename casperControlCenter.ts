@@ -784,8 +784,27 @@ async function callOpenAICompatible(input: {
   return {
     provider: execution.provider,
     model: execution.model,
-    text: execution.text || 'Casper returned an empty response.',
+    text: execution.text || buildCasperProviderFailureMessage(execution.model, execution.lastError),
   };
+}
+
+function buildCasperProviderFailureMessage(model: string, lastError?: string) {
+  const detail = String(lastError || '').trim();
+  const retiredOrMissingModel = /model not found|inaccessible|not deployed|unknown model|model .*not found/i.test(detail);
+  const modelLine = model ? `Model: \`${model}\`` : 'Model: unknown';
+  const reasonLine = detail ? `Provider detail: ${detail}` : 'Provider detail: the AI provider returned no text.';
+  const fixLine = retiredOrMissingModel
+    ? 'This usually means the selected model was retired, renamed, or is not enabled for this API key. Pick a currently available model in Casper → Settings → Cognitive Core.'
+    : 'Check Casper → Settings → Cognitive Core, the provider API key, and the selected model.';
+
+  return [
+    'Casper could not get a usable response from the configured AI provider.',
+    '',
+    modelLine,
+    reasonLine,
+    '',
+    fixLine,
+  ].join('\n');
 }
 
 // Tool-calling variant of callOpenAICompatible. Runs a bounded
@@ -883,7 +902,7 @@ async function callOpenAICompatibleWithToolLoop(input: {
       return {
         provider,
         model: resolvedModel,
-        text: turn.text || 'Casper returned an empty response.',
+        text: turn.text || buildCasperProviderFailureMessage(resolvedModel, turn.lastError),
         toolCalls: allToolCalls,
         rounds: round,
         truncatedReason,
