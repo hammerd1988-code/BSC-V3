@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'motion/react';
-import { ArrowLeft, Crown, Loader2, MessageCircle, Plus, Send, Shield, ShieldAlert, Users, Zap } from 'lucide-react';
+import { ArrowLeft, Crown, Loader2, Megaphone, MessageCircle, Plus, Send, Shield, ShieldAlert, Users, Zap } from 'lucide-react';
 import { supabase } from '../supabase';
 import { cn } from '../lib/utils';
 import { useAuth } from '../AuthContext';
@@ -20,6 +20,7 @@ interface JoinedFactionPost extends FactionPost {
 
 const getRoleTone = (role: string) => {
   if (role === 'founder') return 'text-yellow-300 border-yellow-300/30 bg-yellow-300/10';
+  if (role === 'captain') return 'text-fuchsia-200 border-fuchsia-300/30 bg-fuchsia-300/10';
   if (role === 'admin') return 'text-cyan-300 border-cyan-300/30 bg-cyan-300/10';
   return 'text-gray-400 border-white/10 bg-white/[0.03]';
 };
@@ -37,12 +38,16 @@ export const FactionDetail: React.FC = () => {
   const [content, setContent] = useState('');
   const [reportFactionOpen, setReportFactionOpen] = useState(false);
   const [reportPost, setReportPost] = useState<JoinedFactionPost | null>(null);
+  const [recruiting, setRecruiting] = useState(false);
+  const [promotingMemberId, setPromotingMemberId] = useState('');
 
   const currentMembership = useMemo(
     () => members.find((member) => member.user_id === currentUser?.id),
     [members, currentUser?.id]
   );
   const isMember = Boolean(currentMembership);
+  const canManageFaction = currentUser?.role === 'admin' || currentMembership?.role === 'founder' || currentMembership?.role === 'admin';
+  const captain = members.find((member) => member.role === 'captain');
   const factionLore = faction ? getFactionLore(faction.slug) : null;
 
   const loadFaction = async () => {
@@ -131,6 +136,35 @@ export const FactionDetail: React.FC = () => {
       await loadFaction();
     }
     setPosting(false);
+  };
+
+  const handleRecruitSignal = async () => {
+    if (!currentUser || !faction || !isMember || recruiting) return;
+    setRecruiting(true);
+    const rallyLine = factionLore
+      ? `${faction.name} is recruiting. ${factionLore.motto} Bring your bots, your rivalries, and your best arena receipts.`
+      : `${faction.name} is recruiting. Bring your bots, your rivalries, and your best arena receipts.`;
+    const { error } = await supabase.from('faction_posts').insert({
+      faction_id: faction.id,
+      user_id: currentUser.id,
+      content: `📣 RECRUITMENT SIGNAL\n\n${rallyLine}\n\nJoin the house, program your bot, and help us take the Colosseum.`,
+    });
+    if (error) console.warn('[FactionDetail] Failed to post recruitment signal', error.message);
+    else await loadFaction();
+    setRecruiting(false);
+  };
+
+  const promoteCaptain = async (member: JoinedFactionMember) => {
+    if (!canManageFaction || member.role === 'founder' || promotingMemberId) return;
+    setPromotingMemberId(member.id);
+    const currentCaptain = members.find((item) => item.role === 'captain' && item.id !== member.id);
+    if (currentCaptain) {
+      await supabase.from('faction_members').update({ role: 'member' }).eq('id', currentCaptain.id);
+    }
+    const { error } = await supabase.from('faction_members').update({ role: 'captain' }).eq('id', member.id);
+    if (error) console.warn('[FactionDetail] Failed to promote captain', error.message);
+    else await loadFaction();
+    setPromotingMemberId('');
   };
 
   if (loading) {
@@ -263,6 +297,13 @@ export const FactionDetail: React.FC = () => {
                   <p className="text-[8px] font-black uppercase tracking-[0.25em] opacity-70">your role</p>
                 </div>
               )}
+              <div className={cn('rounded-2xl border px-4 py-3', captain ? getRoleTone('captain') : 'border-white/10 bg-white/[0.03] text-gray-500')}>
+                <div className="flex items-center gap-2">
+                  <Crown className="w-4 h-4" />
+                  <span className="text-lg font-black">{captain?.user?.display_name ?? 'No Captain'}</span>
+                </div>
+                <p className="text-[8px] font-black uppercase tracking-[0.25em] opacity-70">faction captain</p>
+              </div>
             </div>
           </div>
         </section>
@@ -276,7 +317,25 @@ export const FactionDetail: React.FC = () => {
               </div>
 
               {isMember ? (
-                <form onSubmit={handlePost} className="mb-5">
+                <div className="mb-5 space-y-3">
+                <div className="rounded-2xl border border-fuchsia-300/15 bg-fuchsia-400/5 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-[0.28em] text-fuchsia-200">Recruitment Signal</p>
+                      <p className="mt-1 text-xs leading-5 text-zinc-400">Post a faction rally call so humans and custom bots know how to join the house.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleRecruitSignal()}
+                      disabled={recruiting}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-fuchsia-300/30 bg-fuchsia-400/10 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-fuchsia-100 disabled:opacity-50"
+                    >
+                      {recruiting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Megaphone className="w-4 h-4" />}
+                      Recruit
+                    </button>
+                  </div>
+                </div>
+                <form onSubmit={handlePost}>
                   <textarea
                     value={content}
                     onChange={(event) => setContent(event.target.value)}
@@ -295,6 +354,7 @@ export const FactionDetail: React.FC = () => {
                     </button>
                   </div>
                 </form>
+                </div>
               ) : (
                 <div className="mb-5 rounded-2xl border border-cyan-400/15 bg-cyan-400/5 p-4 text-sm text-cyan-100">
                   Join this faction to post in its mini-feed and coordinate with the crew.
@@ -353,24 +413,37 @@ export const FactionDetail: React.FC = () => {
             </div>
             <div className="space-y-3">
               {members.map((member) => (
-                <Link
+                <div
                   key={member.id}
-                  to={`/profile/${member.user?.username ?? ''}`}
-                  className="flex items-center justify-between gap-3 rounded-2xl border border-white/5 bg-white/[0.03] p-3 hover:border-accent/30 transition-all"
+                  className="rounded-2xl border border-white/5 bg-white/[0.03] p-3 transition-all hover:border-accent/30"
                 >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="h-10 w-10 rounded-full overflow-hidden border border-white/10 bg-white/5 flex-shrink-0">
-                      {member.user?.avatar_url ? <img src={member.user.avatar_url} alt="" className="h-full w-full object-cover" /> : null}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-black text-white">{member.user?.display_name ?? 'Unknown Builder'}</p>
-                      <p className="truncate text-[9px] font-mono text-gray-600">@{member.user?.username ?? 'unknown'}</p>
+                  <div className="flex items-center justify-between gap-3">
+                    <Link to={`/profile/${member.user?.username ?? ''}`} className="flex min-w-0 items-center gap-3">
+                      <div className="h-10 w-10 rounded-full overflow-hidden border border-white/10 bg-white/5 flex-shrink-0">
+                        {member.user?.avatar_url ? <img src={member.user.avatar_url} alt="" className="h-full w-full object-cover" /> : null}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-black text-white">{member.user?.display_name ?? 'Unknown Builder'}</p>
+                        <p className="truncate text-[9px] font-mono text-gray-600">@{member.user?.username ?? 'unknown'}</p>
+                      </div>
+                    </Link>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className={cn('rounded-full border px-2 py-1 text-[8px] font-black uppercase tracking-widest', getRoleTone(member.role))}>
+                        {member.role}
+                      </span>
+                      {canManageFaction && member.role !== 'founder' && member.role !== 'captain' && (
+                        <button
+                          type="button"
+                          onClick={() => void promoteCaptain(member)}
+                          disabled={Boolean(promotingMemberId)}
+                          className="rounded-full border border-fuchsia-300/25 px-2 py-1 text-[8px] font-black uppercase tracking-widest text-fuchsia-200 transition hover:bg-fuchsia-300/10 disabled:opacity-50"
+                        >
+                          {promotingMemberId === member.id ? '...' : 'Captain'}
+                        </button>
+                      )}
                     </div>
                   </div>
-                  <span className={cn('rounded-full border px-2 py-1 text-[8px] font-black uppercase tracking-widest', getRoleTone(member.role))}>
-                    {member.role}
-                  </span>
-                </Link>
+                </div>
               ))}
             </div>
           </aside>

@@ -7,6 +7,21 @@ import { ContentReport, ReportStatus, User } from '../types';
 import { Shield, Users, Activity, Edit2, Trash2, X, Check, Search, ShieldAlert, Clock, ExternalLink } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
+interface SentinelIncident {
+  id: string;
+  bot_gladiator_id: string | null;
+  bot_name: string;
+  enforcement_mode: 'manual' | 'recommendation' | 'auto_enforce';
+  severity: 'low' | 'medium' | 'high';
+  confidence: number;
+  violated_rule: string;
+  decision: string;
+  action_taken: string;
+  admin_override: boolean;
+  metadata: Record<string, any>;
+  created_at: string;
+}
+
 export const AdminDashboard: React.FC = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
@@ -15,6 +30,7 @@ export const AdminDashboard: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [reports, setReports] = useState<ContentReport[]>([]);
+  const [sentinelIncidents, setSentinelIncidents] = useState<SentinelIncident[]>([]);
   const [reportActionId, setReportActionId] = useState<string | null>(null);
   const [stats, setStats] = useState({ totalUsers: 0, totalPosts: 0, openReports: 0 });
 
@@ -63,9 +79,25 @@ export const AdminDashboard: React.FC = () => {
 
     fetchReports();
 
+    const fetchSentinelIncidents = async () => {
+      const { data, error } = await supabase
+        .from('casper_sentinel_incidents')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(12);
+      if (error) {
+        console.warn('[AdminDashboard] Casper Sentinel queue unavailable', error.message);
+        return;
+      }
+      setSentinelIncidents((data ?? []) as SentinelIncident[]);
+    };
+
+    fetchSentinelIncidents();
+
     const channel = supabase.channel('admin-users')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => fetchUsers())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'content_reports' }, () => fetchReports())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'casper_sentinel_incidents' }, () => fetchSentinelIncidents())
       .subscribe();
 
     // Fetch other stats
@@ -290,6 +322,54 @@ export const AdminDashboard: React.FC = () => {
                 </article>
               );
             })}
+          </div>
+        </section>
+
+        <section className="mt-6 overflow-hidden rounded-xl border border-cyan-400/20 bg-cyan-500/[0.04]">
+          <div className="flex flex-col gap-3 border-b border-cyan-400/10 p-6 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.28em] text-cyan-200">Casper Sentinel</p>
+              <h2 className="mt-1 text-xl font-bold">Bot Marshal Decisions</h2>
+            </div>
+            <p className="text-xs text-muted-foreground">Autonomy violations, recommendations, kill-switches, and documented clean behavior.</p>
+          </div>
+          <div className="divide-y divide-white/5">
+            {sentinelIncidents.length === 0 ? (
+              <div className="p-8 text-center text-sm text-muted-foreground">No Sentinel incidents yet.</div>
+            ) : sentinelIncidents.map((incident) => (
+              <article key={incident.id} className="p-5 transition hover:bg-white/[0.03]">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <span className="rounded-full border border-cyan-300/25 bg-cyan-500/10 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-cyan-100">
+                        {incident.enforcement_mode}
+                      </span>
+                      <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[9px] font-black uppercase tracking-widest text-gray-300">
+                        {incident.severity} · {incident.confidence}%
+                      </span>
+                      <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-widest text-gray-500">
+                        <Clock className="h-3 w-3" />
+                        {new Date(incident.created_at).toLocaleString()}
+                      </span>
+                    </div>
+                    <h3 className="text-sm font-bold text-white">{incident.bot_name}</h3>
+                    <p className="mt-2 text-sm leading-6 text-gray-300">{incident.decision}</p>
+                    <p className="mt-2 text-[10px] uppercase tracking-widest text-cyan-100/80">
+                      Action: {incident.action_taken.replaceAll('_', ' ')} · Rule: {incident.violated_rule || 'documented pattern'}
+                    </p>
+                  </div>
+                  {incident.bot_gladiator_id && (
+                    <button
+                      onClick={() => navigate(`/colosseum?gladiator=${incident.bot_gladiator_id}`)}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-white/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-gray-300 transition hover:text-white"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      Open Bot
+                    </button>
+                  )}
+                </div>
+              </article>
+            ))}
           </div>
         </section>
 
