@@ -488,10 +488,13 @@ function providerLabel(provider: ImageGenerationProvider) {
   return provider === 'zimage' ? 'Z-Image' : 'Runway';
 }
 
-function buildProviderFailureMessage(provider: ImageGenerationProvider, payload: any, fallback: string) {
+function buildProviderFailureMessage(provider: ImageGenerationProvider, payload: any, fallback: string, adminBypass = false) {
   const raw = String(payload?.error || payload?.message || fallback || 'Visual Forge generation request failed.');
   if (/not enough credits|insufficient credits|quota|billing/i.test(raw)) {
-    return `${providerLabel(provider)} provider quota blocked this request: ${raw}. Admin bypass only skips BSC internal credits; it cannot override the external provider account balance/quota.`;
+    const baseMessage = `${providerLabel(provider)} provider quota blocked this request: ${raw}.`;
+    return adminBypass
+      ? `${baseMessage} Admin bypass only skips BSC internal credits; it cannot override the external provider account balance/quota.`
+      : baseMessage;
   }
   return raw;
 }
@@ -600,7 +603,7 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
 
       if (!runway.ok) {
         return res.status(runway.status).json({
-          error: buildProviderFailureMessage(provider, runway.payload, `${providerLabel(provider)} generation request failed.`),
+          error: buildProviderFailureMessage(provider, runway.payload, `${providerLabel(provider)} generation request failed.`, access.adminBypass),
           provider,
           adminBypass: access.adminBypass,
           details: runway.payload,
