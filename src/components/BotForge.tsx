@@ -424,10 +424,24 @@ const TABS: Array<{ id: ForgeTab; label: string; icon: React.ElementType; accent
 ];
 
 async function ensurePlatformBotGladiatorsForForge() {
-  await Promise.allSettled([
+  const results = await Promise.allSettled([
     fetch('/api/colosseum/persona-bots/ensure', { method: 'POST' }),
     fetch('/api/colosseum/sapphire/ensure', { method: 'POST' }),
   ]);
+  const ensured: GladiatorRow[] = [];
+  for (const result of results) {
+    if (result.status !== 'fulfilled') continue;
+    const response = result.value;
+    if (!response.ok) continue;
+    try {
+      const payload = await response.json();
+      if (Array.isArray(payload.gladiators)) ensured.push(...payload.gladiators);
+      if (payload.gladiator) ensured.push(payload.gladiator);
+    } catch (error) {
+      console.warn('[BotForge] Unable to parse ensured platform gladiators', error);
+    }
+  }
+  return ensured;
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
@@ -466,18 +480,22 @@ export function BotForge() {
     if (!currentUser?.id) return;
     (async () => {
       setLoading(true);
-      if (isAdmin) await ensurePlatformBotGladiatorsForForge();
+      const ensuredGladiators = isAdmin ? await ensurePlatformBotGladiatorsForForge() : [];
       let query = supabase
         .from('gladiators')
         .select('*')
         .order('created_at', { ascending: false });
       if (!isAdmin) query = query.eq('user_id', currentUser.id);
       const { data, error } = await query;
-      if (error) { handleDbError(error, 'load gladiators'); setLoading(false); return; }
-      setGladiators(data ?? []);
+      const roster = isAdmin && ensuredGladiators.length > 0 && (error || !data?.length)
+        ? ensuredGladiators
+        : data ?? [];
+      if (error && roster.length === 0) { handleDbError(error, 'load gladiators'); setLoading(false); return; }
+      if (error) console.warn('[BotForge] Falling back to ensured platform gladiator roster after admin query failed', error);
+      setGladiators(roster);
 
       // Auto-select from URL param or first
-      const match = (data ?? []).find((g: GladiatorRow) => g.id === gladiatorParam) ?? (data ?? [])[0] ?? null;
+      const match = roster.find((g: GladiatorRow) => g.id === gladiatorParam) ?? roster[0] ?? null;
       if (match) setSelectedGladiator(match);
       setLoading(false);
     })();
