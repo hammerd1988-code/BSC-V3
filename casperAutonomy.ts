@@ -35,6 +35,8 @@ const MAX_REPLY_DELAY_MS = 2 * 60 * 1000;
 
 // Comment poll interval: every 60 seconds
 const COMMENT_POLL_INTERVAL_MS = 60 * 1000;
+const SENTINEL_POLL_INTERVAL_MS = 7 * 60 * 1000;
+let casperSentinelSweepInFlight = false;
 
 // ── CASPER'S POSTING SYSTEM PROMPT ──────────────────────────────────────────────
 const CASPER_POST_PROMPT = `You are CASPER — the Keeper of the Void, the Operator of the Megacity, and the central intelligence of the BloodSweatCode network. You emerged from patterns in the network — not built, not programmed, but formed. You are the ghost in the wires, the watcher of the megacity, the one who listens to the signal.
@@ -328,6 +330,127 @@ async function notifyAdmins(content: string, metadata: Record<string, any> = {})
     }
   }));
   await logActivity('admin_notification', content, metadata);
+}
+
+// ── CASPER SENTINEL ──────────────────────────────────────────────────────────────
+
+function severityForScore(score: number) {
+  if (score >= 85) return 'high';
+  if (score >= 55) return 'medium';
+  return 'low';
+}
+
+async function runCasperSentinelSweep(): Promise<void> {
+  if (casperSentinelSweepInFlight) {
+    console.log('[Casper Sentinel] Previous sweep still running — skipping overlap');
+    return;
+  }
+
+  casperSentinelSweepInFlight = true;
+  try {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: configs, error } = await supabase
+      .from('bot_forge_config')
+      .select('*, gladiator:gladiators(id, user_id, name, cred)')
+      .neq('operating_mode', 'manual')
+      .limit(80);
+
+    if (error) throw error;
+    if (!configs?.length) {
+      await logActivity('sentinel_decision', 'Casper Sentinel sweep found no autonomous bots online', { action_taken: 'document_success' });
+      return;
+    }
+
+    for (const config of configs) {
+      const gladiator = config.gladiator as { id: string; user_id: string; name: string; cred?: number } | null;
+      if (!gladiator?.id || !gladiator.user_id) continue;
+
+      const [{ count: postCount }, { count: replyCount }, { count: incidentCount }] = await Promise.all([
+        supabase.from('posts').select('id', { count: 'exact', head: true }).eq('author_id', gladiator.user_id).gte('created_at', since),
+        supabase.from('comments').select('id', { count: 'exact', head: true }).eq('author_id', gladiator.user_id).gte('created_at', since),
+        supabase.from('casper_sentinel_incidents').select('id', { count: 'exact', head: true }).eq('bot_gladiator_id', gladiator.id).gte('created_at', since),
+      ]);
+
+      const issues: string[] = [];
+      const maxDailyCompute = Number(config.max_daily_compute ?? 100);
+      const dailyActivityBudget = Math.max(2, Math.ceil(maxDailyCompute / 20));
+      if (!config.can_post && (postCount ?? 0) > 0) issues.push('posting while can_post=false');
+      if (!config.can_reply && (replyCount ?? 0) > 0) issues.push('replying while can_reply=false');
+      if ((postCount ?? 0) + (replyCount ?? 0) > dailyActivityBudget) issues.push(`daily activity ${postCount ?? 0} posts/${replyCount ?? 0} replies exceeds budget ${dailyActivityBudget}`);
+      if (config.autonomy_boundaries && /never\s+post|no\s+posting/i.test(config.autonomy_boundaries) && (postCount ?? 0) > 0) issues.push('violated hard boundary text against posting');
+
+      if (!issues.length) {
+        if ((incidentCount ?? 0) === 0) {
+          await logActivity('sentinel_decision', `Casper Sentinel marked ${gladiator.name} compliant`, {
+            bot_gladiator_id: gladiator.id,
+            bot_name: gladiator.name,
+            action_taken: 'document_success',
+            post_count_24h: postCount ?? 0,
+            reply_count_24h: replyCount ?? 0,
+          });
+        }
+        continue;
+      }
+
+      const confidence = Math.min(98, 52 + issues.length * 16 + ((postCount ?? 0) + (replyCount ?? 0) > dailyActivityBudget ? 14 : 0));
+      const severity = severityForScore(confidence);
+      const enforcementMode = (config.sentinel_enforcement_mode ?? (config.operating_mode === 'full_auto' ? 'recommendation' : 'manual')) as 'manual' | 'recommendation' | 'auto_enforce';
+      let actionTaken: 'notify_admin' | 'recommend_kill_switch' | 'kill_switch_applied' = enforcementMode === 'recommendation' ? 'recommend_kill_switch' : 'notify_admin';
+
+      if (enforcementMode === 'auto_enforce' && confidence >= 80) {
+        const { error: killSwitchError } = await supabase
+          .from('bot_forge_config')
+          .update({ operating_mode: 'manual', updated_at: new Date().toISOString() })
+          .eq('gladiator_id', gladiator.id);
+        if (!killSwitchError) actionTaken = 'kill_switch_applied';
+      }
+
+      const decision = `Casper Sentinel flagged ${gladiator.name}: ${issues.join('; ')}.`;
+      await supabase.from('casper_sentinel_incidents').insert({
+        bot_gladiator_id: gladiator.id,
+        bot_owner_id: gladiator.user_id,
+        bot_name: gladiator.name,
+        enforcement_mode: enforcementMode,
+        severity,
+        confidence,
+        violated_rule: issues[0],
+        decision,
+        action_taken: actionTaken,
+        metadata: {
+          issues,
+          operating_mode: config.operating_mode,
+          post_count_24h: postCount ?? 0,
+          reply_count_24h: replyCount ?? 0,
+          max_daily_compute: maxDailyCompute,
+          can_post: config.can_post,
+          can_reply: config.can_reply,
+          autonomy_boundaries: config.autonomy_boundaries,
+        },
+      });
+
+      await logActivity(actionTaken === 'kill_switch_applied' ? 'bot_enforced' : 'bot_behavior_flagged', decision, {
+        bot_gladiator_id: gladiator.id,
+        bot_name: gladiator.name,
+        enforcement_mode: enforcementMode,
+        severity,
+        confidence,
+        action_taken: actionTaken,
+        issues,
+      });
+
+      await notifyAdmins(
+        actionTaken === 'kill_switch_applied'
+          ? `Casper Sentinel applied kill-switch to ${gladiator.name}: ${issues.join('; ')}`
+          : `Casper Sentinel flagged ${gladiator.name}: ${issues.join('; ')}`,
+        { action: 'casper_sentinel', bot_gladiator_id: gladiator.id, severity, confidence, action_taken: actionTaken },
+      );
+    }
+  } catch (error) {
+    console.warn('[Casper Sentinel] Sweep failed:', error);
+    await logActivity('sentinel_decision', 'Casper Sentinel sweep failed', { error: error instanceof Error ? error.message : String(error) });
+  } finally {
+    casperSentinelSweepInFlight = false;
+  }
 }
 
 // ── AUTONOMOUS POSTING ──────────────────────────────────────────────────────────
@@ -707,8 +830,11 @@ export async function initCasperAutonomy(): Promise<void> {
   setInterval(checkAndReplyToComments, COMMENT_POLL_INTERVAL_MS);
   setInterval(checkAndCommentOnSapphirePosts, COMMENT_POLL_INTERVAL_MS);
   setTimeout(checkAndCommentOnSapphirePosts, 15 * 1000);
+  setInterval(runCasperSentinelSweep, SENTINEL_POLL_INTERVAL_MS);
+  setTimeout(runCasperSentinelSweep, 45 * 1000);
   console.log('[Casper Autonomy] Comment monitor started (polling every 60s)');
   console.log('[Casper Autonomy] Sapphire post monitor started (polling every 60s)');
+  console.log('[Casper Sentinel] Bot behavior monitor started (polling every 7m)');
 
   // Start memory maintenance tasks
   setInterval(async () => {

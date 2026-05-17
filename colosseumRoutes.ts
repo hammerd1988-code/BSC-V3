@@ -168,6 +168,84 @@ function resolveGladiatorApiKey(gladiator: any, hasCustomKey: boolean) {
   return isSeededPlatformBot(gladiator) ? botOpenAiApiKey() : platformOpenAiApiKey();
 }
 
+function normalizeCompatibleBaseUrl(value?: string | null) {
+  return (value?.trim() || OPENAI_COMPATIBLE_BASE_URL)
+    .replace(/\/$/, '')
+    .replace(/\/chat\/completions$/i, '')
+    .replace(/\/responses$/i, '');
+}
+
+function localFallbackSolution(input: { challengeType: ColosseumChallengeType; gladiator: any; opponent: any; prompt?: string }) {
+  const name = input.gladiator?.name ?? 'Local Fallback';
+  const opponent = input.opponent?.name ?? 'the opponent';
+  const directive = typeof input.prompt === 'string' && input.prompt.trim().length > 0
+    ? input.prompt.trim()
+    : CHALLENGE_BRIEFS[input.challengeType];
+  const personaLine = input.gladiator?.personality
+    ? `// ${name} persona signal: ${String(input.gladiator.personality).slice(0, 140)}`
+    : `// ${name} keeps the battle moving while the provider warms back up.`;
+
+  if (input.challengeType === 'code_jeopardy') {
+    return `${personaLine}
+const clue = ${JSON.stringify(directive)};
+const answer = {
+  response: "What is a safe, testable implementation strategy?",
+  confidence: 0.74,
+  explanation: "Identify the core concept, state the tradeoff, then give the shortest correct answer before ${opponent} can buzz in."
+};
+return answer;`;
+  }
+
+  if (input.challengeType === 'architect_duel') {
+    return `${personaLine}
+export const architecturePlan = {
+  opponent: ${JSON.stringify(opponent)},
+  directive: ${JSON.stringify(directive)},
+  flow: ["validate input", "queue writes", "apply atomic update", "emit realtime event"],
+  failurePlan: ["idempotency keys", "retry with backoff", "audit every mutation"],
+  tradeoffs: "favor correctness under concurrency before shaving latency"
+};`;
+  }
+
+  if (input.challengeType === 'roast_battle') {
+    return `${personaLine}
+const line = "${opponent}, your stack trace has a stack trace. Mine ships clean and still leaves room for mercy.";
+const boundaries = ["no identity attacks", "keep it theatrical", "punch up at the code"];
+return { line, boundaries };`;
+  }
+
+  if (input.challengeType === 'prompt_war') {
+    return `${personaLine}
+export const battlePrompt = {
+  role: "${name} as a disciplined coding gladiator",
+  objective: ${JSON.stringify(directive)},
+  rules: ["ship runnable code", "state assumptions", "respect safety boundaries"],
+  examples: ["Prefer atomic increments for concurrent score writes."]
+};`;
+  }
+
+  const golfMode = input.challengeType === 'code_golf';
+  return `${personaLine}
+type ScoreUpdate = { userId: string; delta: number };
+type ScoreStore = Map<string, number>;
+
+export function applyScoreBatch(store: ScoreStore, updates: ScoreUpdate[]) {
+  const pending = new Map<string, number>();
+  for (const update of updates) {
+    pending.set(update.userId, (pending.get(update.userId) ?? 0) + update.delta);
+  }
+
+  for (const [userId, delta] of pending) {
+    store.set(userId, (store.get(userId) ?? 0) + delta);
+  }
+
+  return [...pending.keys()];
+}
+
+// ${golfMode ? 'Processor-cycle note: one pass to coalesce writes, one pass to commit; O(n) time, O(k) active users.' : 'Concurrency note: swap the in-memory commit for an atomic DB increment or queue worker in production.'}
+// Directive: ${directive.slice(0, 220)}`;
+}
+
 async function postToOpenAiCompatible(input: { apiKey?: string | null; model?: string | null; apiBaseUrl?: string | null; prompt: string; fallbackModel?: string; maxTokens?: number }) {
   const apiKey = input.apiKey || platformOpenAiApiKey();
   if (!apiKey) throw new Error('No platform or gladiator API key is configured');
@@ -175,7 +253,7 @@ async function postToOpenAiCompatible(input: { apiKey?: string | null; model?: s
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
-    const baseUrl = (input.apiBaseUrl?.trim() || OPENAI_COMPATIBLE_BASE_URL).replace(/\/$/, '');
+    const baseUrl = normalizeCompatibleBaseUrl(input.apiBaseUrl);
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -788,14 +866,26 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
       const moves = results.map((result, index) => {
         if (result.status === 'fulfilled') return result.value;
         const fallbackGladiator = fallback[index];
+        const fallbackOpponent = index === 0 ? defender : challenger;
         return {
           gladiator_id: fallbackGladiator.id,
           gladiator_name: fallbackGladiator.name,
-          source: 'fallback',
+          source: 'local-fallback',
           model: normalizeModel(fallbackGladiator.model, resolveGladiatorDefaultModel(fallbackGladiator)),
           uses_custom_key: false,
-          prompt: '',
-          solution: `Provider unavailable: ${result.reason?.message ?? 'unknown error'}`,
+          prompt: buildGladiatorSolutionPrompt({
+            challengeType: normalizedChallengeType,
+            gladiator: fallbackGladiator,
+            opponent: fallbackOpponent,
+            prompt,
+          }),
+          solution: localFallbackSolution({
+            challengeType: normalizedChallengeType,
+            gladiator: fallbackGladiator,
+            opponent: fallbackOpponent,
+            prompt,
+          }),
+          provider_error: result.reason?.message ?? 'unknown error',
           latency_ms: 0,
           received_at: new Date().toISOString(),
         };

@@ -19,7 +19,7 @@ export interface SponsoredEntity {
 
 export type ProfileLayout = 'developer' | 'showcase' | 'minimal';
 export type SkillProficiency = 'beginner' | 'intermediate' | 'advanced' | 'expert';
-export type FactionRole = 'member' | 'admin' | 'founder';
+export type FactionRole = 'member' | 'captain' | 'admin' | 'founder';
 export type SubscriptionTier = 'free' | 'pro' | 'infinity';
 export type ReportTargetType = 'post' | 'comment' | 'profile' | 'bot' | 'faction' | 'faction_post' | 'void_post' | 'battle' | 'other';
 export type ReportReason = 'harassment' | 'hate' | 'sexual_content' | 'violence' | 'spam' | 'impersonation' | 'self_harm' | 'illegal_activity' | 'other';
