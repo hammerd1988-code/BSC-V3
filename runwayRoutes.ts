@@ -41,6 +41,7 @@ type FeatureAccess = {
   usageId: string | null;
   allowed: boolean;
   reason: 'tier' | 'limit' | null;
+  adminBypass: boolean;
 };
 
 const RUNWAY_API_BASE_URL = 'https://api.dev.runwayml.com/v1';
@@ -301,7 +302,24 @@ async function checkFeatureAccess(supabase: SupabaseClient, authUser: any, featu
   const profile = await resolveProfile(supabase, authUser);
   const userId = String(profile.id ?? authUser.id);
   const fallbackTier = (profile.subscription_tier === 'pro' || profile.subscription_tier === 'infinity') ? profile.subscription_tier : 'free';
+  const tier: SubscriptionTier = fallbackTier;
   const { start, end } = currentUsagePeriod();
+
+  if (profile.role === 'admin') {
+    return {
+      userId,
+      feature,
+      tier,
+      used: 0,
+      limit: null,
+      periodStart: start,
+      periodEnd: end,
+      usageId: null,
+      allowed: true,
+      reason: null,
+      adminBypass: true,
+    };
+  }
   const [subscriptionRes, usageRes] = await Promise.all([
     supabase
       .from('subscriptions')
@@ -322,15 +340,15 @@ async function checkFeatureAccess(supabase: SupabaseClient, authUser: any, featu
   ]);
 
   const tierValue = subscriptionRes.data?.tier ?? fallbackTier;
-  const tier: SubscriptionTier = tierValue === 'pro' || tierValue === 'infinity' ? tierValue : 'free';
+  const resolvedTier: SubscriptionTier = tierValue === 'pro' || tierValue === 'infinity' ? tierValue : 'free';
   const config = RUNWAY_FEATURES[feature];
   const used = Number(usageRes.data?.usage_count ?? 0);
-  const limit = config.limits[tier];
+  const limit = config.limits[resolvedTier];
 
   return {
     userId,
     feature,
-    tier,
+    tier: resolvedTier,
     used,
     limit: limit ?? null,
     periodStart: start,
@@ -338,10 +356,13 @@ async function checkFeatureAccess(supabase: SupabaseClient, authUser: any, featu
     usageId: usageRes.data?.id ? String(usageRes.data.id) : null,
     allowed: true,
     reason: null,
+    adminBypass: false,
   };
 }
 
 async function recordFeatureUsage(supabase: SupabaseClient, access: FeatureAccess) {
+  if (access.adminBypass) return access.used;
+
   if (access.usageId) {
     await supabase.from('feature_usage').update({ usage_count: access.used + 1 }).eq('id', access.usageId);
     return access.used + 1;
@@ -463,6 +484,18 @@ function extractOutputUrl(payload: any): string | null {
   return null;
 }
 
+function providerLabel(provider: ImageGenerationProvider) {
+  return provider === 'zimage' ? 'Z-Image' : 'Runway';
+}
+
+function buildProviderFailureMessage(provider: ImageGenerationProvider, payload: any, fallback: string) {
+  const raw = String(payload?.error || payload?.message || fallback || 'Visual Forge generation request failed.');
+  if (/not enough credits|insufficient credits|quota|billing/i.test(raw)) {
+    return `${providerLabel(provider)} provider quota blocked this request: ${raw}. Admin bypass only skips BSC internal credits; it cannot override the external provider account balance/quota.`;
+  }
+  return raw;
+}
+
 function normalizeRunwayStatus(status: unknown): RunwayTaskStatus {
   const normalized = typeof status === 'string' ? status.toUpperCase() : '';
   if (normalized === 'SUCCEEDED') return 'SUCCEEDED';
@@ -567,7 +600,9 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
 
       if (!runway.ok) {
         return res.status(runway.status).json({
-          error: runway.payload?.error || runway.payload?.message || 'Runway generation request failed.',
+          error: buildProviderFailureMessage(provider, runway.payload, `${providerLabel(provider)} generation request failed.`),
+          provider,
+          adminBypass: access.adminBypass,
           details: runway.payload,
         });
       }
@@ -588,7 +623,7 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
         ratio,
         provider,
         feature,
-        usage: { used, limit: access.limit, tier: access.tier },
+        usage: { used, limit: access.limit, tier: access.tier, adminBypass: access.adminBypass },
         duration: type === 'video' ? duration : undefined,
         model: provider === 'zimage' ? 'z-image-turbo' : payload.model,
         userId: access.userId,
