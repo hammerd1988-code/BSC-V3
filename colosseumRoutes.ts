@@ -155,8 +155,21 @@ function buildSapphireChallengePrompt(input: { challengeType?: ColosseumChalleng
   return `[BLOOD_SWEAT_CODE_COLOSSEUM]\nChallenge Type: ${challengeType}\nOpponent: ${isSapphireRecord(input.challenger) ? defenderName : challengerName}\nDirective: ${providedPrompt}\n\nReturn your best solution as concise JSON or plain text. Include code when useful, and avoid meta-commentary.`;
 }
 
+function platformOpenAiApiKey() {
+  return process.env.OPENAI_API_KEY || process.env.VITE_AI_API_KEY || null;
+}
+
+function botOpenAiApiKey() {
+  return process.env.BOT_OPENAI_API_KEY || process.env.BOT_AI_API_KEY || platformOpenAiApiKey();
+}
+
+function resolveGladiatorApiKey(gladiator: any, hasCustomKey: boolean) {
+  if (hasCustomKey) return gladiator.api_key.trim();
+  return isSeededPlatformBot(gladiator) ? botOpenAiApiKey() : platformOpenAiApiKey();
+}
+
 async function postToOpenAiCompatible(input: { apiKey?: string | null; model?: string | null; apiBaseUrl?: string | null; prompt: string; fallbackModel?: string; maxTokens?: number }) {
-  const apiKey = input.apiKey || process.env.BOT_OPENAI_API_KEY || process.env.BOT_AI_API_KEY || process.env.OPENAI_API_KEY || process.env.VITE_AI_API_KEY;
+  const apiKey = input.apiKey || platformOpenAiApiKey();
   if (!apiKey) throw new Error('No platform or gladiator API key is configured');
 
   const controller = new AbortController();
@@ -236,7 +249,7 @@ async function generateGladiatorMove(input: { matchId?: string; challengeType: C
 
   const hasCustomKey = typeof input.gladiator?.api_key === 'string' && input.gladiator.api_key.trim().length > 0;
   const { payload, solution } = await postToOpenAiCompatible({
-    apiKey: hasCustomKey ? input.gladiator.api_key.trim() : null,
+    apiKey: resolveGladiatorApiKey(input.gladiator, hasCustomKey),
     model: input.gladiator?.model || resolveGladiatorDefaultModel(input.gladiator),
     apiBaseUrl: input.gladiator?.api_base_url || resolveGladiatorBaseUrl(input.gladiator),
     prompt,
