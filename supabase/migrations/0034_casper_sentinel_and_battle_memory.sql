@@ -16,6 +16,70 @@ create unique index if not exists faction_members_one_captain_idx
   on public.faction_members (faction_id)
   where role = 'captain';
 
+create or replace function public.promote_faction_captain(
+  p_faction_id text,
+  p_member_id text
+)
+returns public.faction_members
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_promoter public.users%rowtype;
+  v_member public.faction_members%rowtype;
+begin
+  select * into v_promoter
+  from public.users
+  where auth_uid = (select auth.uid());
+
+  if not found then
+    raise exception 'Authenticated user profile not found';
+  end if;
+
+  select * into v_member
+  from public.faction_members
+  where id = p_member_id
+    and faction_id = p_faction_id
+  for update;
+
+  if not found then
+    raise exception 'Faction member not found';
+  end if;
+
+  if v_member.role = 'founder' then
+    raise exception 'Faction founder cannot be reassigned as captain';
+  end if;
+
+  if coalesce(v_promoter.role, 'user') not in ('admin', 'moderator')
+    and not exists (
+      select 1
+      from public.faction_members fm
+      where fm.faction_id = p_faction_id
+        and fm.user_id = v_promoter.id
+        and fm.role in ('admin', 'founder')
+    ) then
+    raise exception 'Only faction admins or founders can promote captains';
+  end if;
+
+  update public.faction_members
+  set role = 'member'
+  where faction_id = p_faction_id
+    and role = 'captain'
+    and id <> p_member_id;
+
+  update public.faction_members
+  set role = 'captain'
+  where id = p_member_id
+    and faction_id = p_faction_id
+  returning * into v_member;
+
+  return v_member;
+end;
+$$;
+
+grant execute on function public.promote_faction_captain(text, text) to authenticated;
+
 create table if not exists public.bot_battle_memories (
   id text primary key default gen_random_uuid()::text,
   gladiator_id text references public.gladiators(id) on delete cascade,
@@ -48,7 +112,42 @@ create policy bot_battle_memories_insert_authenticated
 on public.bot_battle_memories
 for insert
 to authenticated
-with check (true);
+with check (
+  gladiator_id in (
+    select m.challenger_id
+    from public.matches m
+    where m.id = bot_battle_memories.match_id
+    union
+    select m.defender_id
+    from public.matches m
+    where m.id = bot_battle_memories.match_id
+  )
+  and opponent_gladiator_id in (
+    select case
+      when bot_battle_memories.gladiator_id = m.challenger_id then m.defender_id
+      when bot_battle_memories.gladiator_id = m.defender_id then m.challenger_id
+      else null
+    end
+    from public.matches m
+    where m.id = bot_battle_memories.match_id
+  )
+  and (
+    exists (
+      select 1
+      from public.matches m
+      join public.gladiators challenger on challenger.id = m.challenger_id
+      join public.users u on u.id = challenger.user_id
+      where m.id = bot_battle_memories.match_id
+        and u.auth_uid = (select auth.uid())
+    )
+    or exists (
+      select 1
+      from public.users u
+      where u.auth_uid = (select auth.uid())
+        and u.role in ('admin', 'moderator')
+    )
+  )
+);
 
 create table if not exists public.casper_sentinel_incidents (
   id text primary key default gen_random_uuid()::text,
@@ -127,6 +226,9 @@ begin
 exception
   when duplicate_object then null;
 end $$;
+
+alter table public.bot_battle_memories replica identity full;
+alter table public.casper_sentinel_incidents replica identity full;
 
 do $$
 begin
