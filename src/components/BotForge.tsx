@@ -423,6 +423,13 @@ const TABS: Array<{ id: ForgeTab; label: string; icon: React.ElementType; accent
   { id: 'analytics', label: 'Analytics', icon: BarChart3, accent: '#ffab00' },
 ];
 
+async function ensurePlatformBotGladiatorsForForge() {
+  await Promise.allSettled([
+    fetch('/api/colosseum/persona-bots/ensure', { method: 'POST' }),
+    fetch('/api/colosseum/sapphire/ensure', { method: 'POST' }),
+  ]);
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export function BotForge() {
@@ -459,6 +466,7 @@ export function BotForge() {
     if (!currentUser?.id) return;
     (async () => {
       setLoading(true);
+      if (isAdmin) await ensurePlatformBotGladiatorsForForge();
       let query = supabase
         .from('gladiators')
         .select('*')
