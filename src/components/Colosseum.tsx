@@ -10,7 +10,6 @@ import {
   ChevronRight,
   CircuitBoard,
   Clock,
-  Code2,
   Crown,
   Eye,
   EyeOff,
@@ -1668,10 +1667,15 @@ function LiveBattleCard({ match, challenger, defender, now, onSelect }: { match:
   );
 }
 
-function LiveArena({ matches, gladiatorById, simulation }: { matches: MatchRow[]; gladiatorById: Map<string, Gladiator>; simulation?: SimulationState | null }) {
+function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSelectMatch }: {
+  matches: MatchRow[];
+  gladiatorById: Map<string, Gladiator>;
+  simulation?: SimulationState | null;
+  selectedMatchId: string | null;
+  onSelectMatch: (matchId: string | null) => void;
+}) {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedMatchId = searchParams.get('match');
-  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(requestedMatchId);
   const [liveMatch, setLiveMatch] = useState<MatchRow | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [viewerJitter, setViewerJitter] = useState(0);
@@ -1687,21 +1691,21 @@ function LiveArena({ matches, gladiatorById, simulation }: { matches: MatchRow[]
 
   useEffect(() => {
     if (requestedMatchId !== selectedMatchId) {
-      setSelectedMatchId(requestedMatchId);
+      onSelectMatch(requestedMatchId);
     }
-  }, [requestedMatchId, selectedMatchId]);
+  }, [onSelectMatch, requestedMatchId, selectedMatchId]);
 
   const openMatch = (matchId: string) => {
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set('match', matchId);
-    setSelectedMatchId(matchId);
+    onSelectMatch(matchId);
     setSearchParams(nextParams);
   };
 
   const closeMatch = () => {
     const nextParams = new URLSearchParams(searchParams);
     nextParams.delete('match');
-    setSelectedMatchId(null);
+    onSelectMatch(null);
     setSearchParams(nextParams);
   };
 
@@ -2196,6 +2200,7 @@ export const Colosseum: React.FC = () => {
   const [botRosterDifficulty, setBotRosterDifficulty] = useState<'all' | BotDifficulty>('all');
   const [challengeType, setChallengeType] = useState<ChallengeType>('speed_round');
   const [simulation, setSimulation] = useState<SimulationState | null>(null);
+  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(searchParams.get('match'));
   const [challengeModalOpen, setChallengeModalOpen] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [userSolution, setUserSolution] = useState('');
@@ -2657,6 +2662,7 @@ export const Colosseum: React.FC = () => {
         `${defender.name} answers from the shadow cage.`,
       ];
       const bootLogs = [...logs, 'Private AI cores queued. Gate opens while server-side solutions warm up.'];
+      setSelectedMatchId(match.id);
       setSimulation({
         matchId: match.id,
         challengerId: challenger.id,
@@ -2826,7 +2832,7 @@ export const Colosseum: React.FC = () => {
             log: [...finalLogs],
             aiMoves,
           } : prev);
-          void completeMatch(match.id, winner.id, {
+          void completeMatch(match, winner.id, {
             ...replayBase,
             status: 'complete',
             victor: winner.name,
@@ -2873,6 +2879,7 @@ export const Colosseum: React.FC = () => {
     setSelectedOpponentId(challenger.id);
     setUserSolution(codingChallenge.starter);
     setNotice(`Sapphire is answering ${challenger.name}'s waiting ${formatChallenge(match.challenge_type)} battle.`);
+    setSelectedMatchId(match.id);
     setStarting(true);
     setBattleResult(null);
     setLatestBotSolution('');
@@ -2965,18 +2972,17 @@ export const Colosseum: React.FC = () => {
     }
   };
 
-  const completeMatch = async (matchId: string, winnerId: string, replayData: Record<string, any>) => {
+  const completeMatch = async (match: MatchRow, winnerId: string, replayData: Record<string, any>) => {
     try {
       const { error } = await supabase.rpc('complete_colosseum_match', {
-        p_match_id: matchId,
+        p_match_id: match.id,
         p_winner_id: winnerId,
         p_replay_data: replayData,
       });
       if (error) throw error;
       try {
-        const match = matches.find((item) => item.id === matchId);
-        const challenger = match ? gladiatorById.get(match.challenger_id) : null;
-        const defender = match ? gladiatorById.get(match.defender_id) : null;
+        const challenger = gladiatorById.get(match.challenger_id);
+        const defender = gladiatorById.get(match.defender_id);
         if (match && challenger && defender) {
           const winnerName = winnerId === challenger.id ? challenger.name : defender.name;
           const loserName = winnerId === challenger.id ? defender.name : challenger.name;
@@ -3005,7 +3011,10 @@ export const Colosseum: React.FC = () => {
               },
             };
           });
-          await supabase.from('bot_battle_memories').insert(memoryRows);
+          const { error: memoryInsertError } = await supabase.from('bot_battle_memories').insert(memoryRows);
+          if (memoryInsertError) {
+            console.warn('[Colosseum] Battle memory insert failed', memoryInsertError.message, memoryInsertError);
+          }
         }
       } catch (memoryError) {
         console.warn('[Colosseum] Battle memory write failed', memoryError);
@@ -3018,7 +3027,7 @@ export const Colosseum: React.FC = () => {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${session.access_token}`,
           },
-          body: JSON.stringify({ matchId }),
+          body: JSON.stringify({ matchId: match.id }),
         });
       } catch { /* brag is best-effort */ }
       await fetchArena();
@@ -3423,7 +3432,13 @@ export const Colosseum: React.FC = () => {
           </form>
         </section>
 
-        <LiveArena matches={matches} gladiatorById={gladiatorById} simulation={simulation} />
+        <LiveArena
+          matches={matches}
+          gladiatorById={gladiatorById}
+          simulation={simulation}
+          selectedMatchId={selectedMatchId}
+          onSelectMatch={setSelectedMatchId}
+        />
 
         {sapphireWaitingBattles.length > 0 && (
           <section className="mt-6 overflow-hidden rounded-[2rem] border border-sky-300/25 bg-sky-950/10 p-5 shadow-[0_0_54px_rgba(56,189,248,0.12)] backdrop-blur-xl">

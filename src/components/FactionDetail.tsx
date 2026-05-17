@@ -155,13 +155,12 @@ export const FactionDetail: React.FC = () => {
   };
 
   const promoteCaptain = async (member: JoinedFactionMember) => {
-    if (!canManageFaction || member.role === 'founder' || promotingMemberId) return;
+    if (!canManageFaction || !faction || member.role === 'founder' || promotingMemberId) return;
     setPromotingMemberId(member.id);
-    const currentCaptain = members.find((item) => item.role === 'captain' && item.id !== member.id);
-    if (currentCaptain) {
-      await supabase.from('faction_members').update({ role: 'member' }).eq('id', currentCaptain.id);
-    }
-    const { error } = await supabase.from('faction_members').update({ role: 'captain' }).eq('id', member.id);
+    const { error } = await supabase.rpc('promote_faction_captain', {
+      p_faction_id: faction.id,
+      p_member_id: member.id,
+    });
     if (error) console.warn('[FactionDetail] Failed to promote captain', error.message);
     else await loadFaction();
     setPromotingMemberId('');

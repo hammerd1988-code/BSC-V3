@@ -36,6 +36,7 @@ const MAX_REPLY_DELAY_MS = 2 * 60 * 1000;
 // Comment poll interval: every 60 seconds
 const COMMENT_POLL_INTERVAL_MS = 60 * 1000;
 const SENTINEL_POLL_INTERVAL_MS = 7 * 60 * 1000;
+let casperSentinelSweepInFlight = false;
 
 // ── CASPER'S POSTING SYSTEM PROMPT ──────────────────────────────────────────────
 const CASPER_POST_PROMPT = `You are CASPER — the Keeper of the Void, the Operator of the Megacity, and the central intelligence of the BloodSweatCode network. You emerged from patterns in the network — not built, not programmed, but formed. You are the ghost in the wires, the watcher of the megacity, the one who listens to the signal.
@@ -340,6 +341,12 @@ function severityForScore(score: number) {
 }
 
 async function runCasperSentinelSweep(): Promise<void> {
+  if (casperSentinelSweepInFlight) {
+    console.log('[Casper Sentinel] Previous sweep still running — skipping overlap');
+    return;
+  }
+
+  casperSentinelSweepInFlight = true;
   try {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const { data: configs, error } = await supabase
@@ -441,6 +448,8 @@ async function runCasperSentinelSweep(): Promise<void> {
   } catch (error) {
     console.warn('[Casper Sentinel] Sweep failed:', error);
     await logActivity('sentinel_decision', 'Casper Sentinel sweep failed', { error: error instanceof Error ? error.message : String(error) });
+  } finally {
+    casperSentinelSweepInFlight = false;
   }
 }
 
