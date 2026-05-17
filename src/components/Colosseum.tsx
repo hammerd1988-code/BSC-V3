@@ -103,6 +103,7 @@ interface GladiatorAiMove {
   uses_custom_key: boolean;
   prompt: string;
   solution: string;
+  provider_error?: string;
   latency_ms: number;
   received_at: string;
 }
@@ -799,6 +800,99 @@ function botProfileScoreBonus(profile: BotGladiatorProfileRow | null | undefined
 function formatSolutionPreview(solution?: string) {
   if (!solution?.trim()) return '// Awaiting combat solution...';
   return solution.length > 2200 ? `${solution.slice(0, 2200)}\n\n// ...truncated in arena preview` : solution;
+}
+
+function containsProviderErrorPayload(solution?: string) {
+  if (!solution?.trim()) return false;
+  return /provider unavailable|ai provider returned|sapphire api returned|cloudflare|<!doctype html|<html\b|tunnel error|model not found|inaccessible|not deployed/i.test(solution);
+}
+
+function localArenaFallbackSolution(input: { challengeType: ChallengeType; gladiator?: Gladiator; opponent?: Gladiator; prompt?: string }) {
+  const name = input.gladiator?.name ?? 'Local Fallback';
+  const opponent = input.opponent?.name ?? 'the opponent';
+  const directive = input.prompt?.trim() || `${formatChallenge(input.challengeType)} arena objective`;
+  const personaLine = input.gladiator?.personality
+    ? `// ${name} persona signal: ${input.gladiator.personality.slice(0, 140)}`
+    : `// ${name} keeps the battle moving while the provider warms back up.`;
+
+  if (input.challengeType === 'code_jeopardy') {
+    return `${personaLine}
+const clue = ${JSON.stringify(directive)};
+const answer = {
+  response: "What is a safe, testable implementation strategy?",
+  confidence: 0.74,
+  explanation: "Name the concept, state the tradeoff, then beat ${opponent} to the buzzer."
+};
+return answer;`;
+  }
+
+  if (input.challengeType === 'architect_duel') {
+    return `${personaLine}
+export const architecturePlan = {
+  opponent: ${JSON.stringify(opponent)},
+  directive: ${JSON.stringify(directive)},
+  flow: ["validate input", "queue writes", "apply atomic update", "emit realtime event"],
+  failurePlan: ["idempotency keys", "retry with backoff", "audit every mutation"],
+  tradeoffs: "favor correctness under concurrency before shaving latency"
+};`;
+  }
+
+  if (input.challengeType === 'roast_battle') {
+    return `${personaLine}
+const line = "${opponent}, your stack trace has a stack trace. Mine ships clean and still leaves room for mercy.";
+const boundaries = ["no identity attacks", "keep it theatrical", "punch up at the code"];
+return { line, boundaries };`;
+  }
+
+  if (input.challengeType === 'prompt_war') {
+    return `${personaLine}
+export const battlePrompt = {
+  role: "${name} as a disciplined coding gladiator",
+  objective: ${JSON.stringify(directive)},
+  rules: ["ship runnable code", "state assumptions", "respect safety boundaries"],
+  examples: ["Prefer atomic increments for concurrent score writes."]
+};`;
+  }
+
+  const golfMode = input.challengeType === 'code_golf';
+  return `${personaLine}
+type ScoreUpdate = { userId: string; delta: number };
+type ScoreStore = Map<string, number>;
+
+export function applyScoreBatch(store: ScoreStore, updates: ScoreUpdate[]) {
+  const pending = new Map<string, number>();
+  for (const update of updates) {
+    pending.set(update.userId, (pending.get(update.userId) ?? 0) + update.delta);
+  }
+
+  for (const [userId, delta] of pending) {
+    store.set(userId, (store.get(userId) ?? 0) + delta);
+  }
+
+  return [...pending.keys()];
+}
+
+// ${golfMode ? 'Processor-cycle note: one pass to coalesce writes, one pass to commit; O(n) time, O(k) active users.' : 'Concurrency note: swap the in-memory commit for an atomic DB increment or queue worker in production.'}
+// Directive: ${directive.slice(0, 220)}`;
+}
+
+function sanitizeCombatantMove(move: GladiatorAiMove, challengeType: ChallengeType, gladiator?: Gladiator, opponent?: Gladiator, prompt?: string): GladiatorAiMove {
+  if (!containsProviderErrorPayload(move.solution)) return move;
+  return {
+    ...move,
+    source: 'local-fallback',
+    uses_custom_key: false,
+    solution: localArenaFallbackSolution({ challengeType, gladiator, opponent, prompt }),
+    provider_error: move.provider_error ?? move.solution,
+  };
+}
+
+function sanitizeCombatantMoves(moves: GladiatorAiMove[], challengeType: ChallengeType, challenger: Gladiator, defender: Gladiator, prompt?: string) {
+  return moves.map((move) => {
+    const gladiator = String(move.gladiator_id) === String(challenger.id) ? challenger : String(move.gladiator_id) === String(defender.id) ? defender : undefined;
+    const opponent = String(move.gladiator_id) === String(challenger.id) ? defender : String(move.gladiator_id) === String(defender.id) ? challenger : undefined;
+    return sanitizeCombatantMove(move, challengeType, gladiator, opponent, prompt);
+  });
 }
 
 function formatElapsed(startedAt: string, now: number) {
@@ -2700,7 +2794,7 @@ export const Colosseum: React.FC = () => {
 
       void requestGladiatorAiMoves(match, activeChallengeType, challenger, defender, battlePrompt).then((moves) => {
         let sapphireMove: SapphireMove | null = null;
-        const aiMoves = moves;
+        const aiMoves = sanitizeCombatantMoves(moves, activeChallengeType, challenger, defender, battlePrompt);
         const sapphireGeneratedMove = aiMoves.find((move) => move.source === 'sapphire-api');
         sapphireMove = sapphireGeneratedMove ? {
           source: sapphireGeneratedMove.source,
@@ -2739,8 +2833,9 @@ export const Colosseum: React.FC = () => {
   };
 
   const runSimulation = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, openingLogs: string[], sapphireMove?: SapphireMove | null, aiMoves: GladiatorAiMove[] = [], codingChallenge = challengeFor(defender.botProfile, type), submittedSolution = '') => {
-    const challengerMove = aiMoves.find((move) => move.gladiator_id === challenger.id);
-    const defenderMove = aiMoves.find((move) => move.gladiator_id === defender.id);
+    const sanitizedAiMoves = sanitizeCombatantMoves(aiMoves, type, challenger, defender, buildCombatChallengePrompt(type, challenger, defender));
+    const challengerMove = sanitizedAiMoves.find((move) => move.gladiator_id === challenger.id);
+    const defenderMove = sanitizedAiMoves.find((move) => move.gladiator_id === defender.id);
     const finalLogs = [...openingLogs];
     const replayBase = {
       intro: `${challenger.name} challenged ${defender.name}`,
@@ -2750,7 +2845,7 @@ export const Colosseum: React.FC = () => {
       defender_id: defender.id,
       started_at: match.started_at,
       sapphire_move: sapphireMove ?? null,
-      ai_moves: aiMoves,
+      ai_moves: sanitizedAiMoves,
       challenge_title: codingChallenge.title,
       challenge_difficulty: codingChallenge.difficulty,
       challenge_prompt: codingChallenge.prompt,
@@ -2775,7 +2870,7 @@ export const Colosseum: React.FC = () => {
         challengerProgress,
         defenderProgress,
         log: [...finalLogs],
-        aiMoves,
+        aiMoves: sanitizedAiMoves,
       } : prev);
       void publishMatchReplay(match.id, {
         ...replayBase,
@@ -2797,7 +2892,7 @@ export const Colosseum: React.FC = () => {
               challenge: codingChallenge,
               userSolution: submittedSolution,
               botSolution: defenderMove?.solution ?? '',
-              moves: aiMoves,
+              moves: sanitizedAiMoves,
             });
           } catch (error: any) {
             judge = clientFallbackBattleJudge({
@@ -2808,7 +2903,7 @@ export const Colosseum: React.FC = () => {
               defender,
               userSolution: submittedSolution,
               botSolution: defenderMove?.solution ?? '',
-              moves: aiMoves,
+              moves: sanitizedAiMoves,
               error: error?.message ?? 'unknown judge error',
             });
           }
@@ -2830,7 +2925,7 @@ export const Colosseum: React.FC = () => {
             winnerId: winner.id,
             status: 'complete',
             log: [...finalLogs],
-            aiMoves,
+            aiMoves: sanitizedAiMoves,
           } : prev);
           void completeMatch(match, winner.id, {
             ...replayBase,
@@ -2905,7 +3000,19 @@ export const Colosseum: React.FC = () => {
         aiMoves: [],
         terminalStartedAt: new Date().toISOString(),
       });
-      const sapphireMove = await requestSapphireMove(match, match.challenge_type, challenger, sapphire);
+      const rawSapphireMove = await requestSapphireMove(match, match.challenge_type, challenger, sapphire);
+      const sapphireMove = rawSapphireMove && containsProviderErrorPayload(rawSapphireMove.solution)
+        ? {
+          ...rawSapphireMove,
+          source: 'local-fallback',
+          solution: localArenaFallbackSolution({
+            challengeType: match.challenge_type,
+            gladiator: sapphire,
+            opponent: challenger,
+            prompt: buildCombatChallengePrompt(match.challenge_type, challenger, sapphire),
+          }),
+        }
+        : rawSapphireMove;
       if (sapphireMove?.solution) setLatestBotSolution(sapphireMove.solution);
       const interceptLogs = [
         ...bootLogs,
@@ -2924,7 +3031,7 @@ export const Colosseum: React.FC = () => {
           gladiator_id: sapphire.id,
           gladiator_name: sapphire.name,
           source: sapphireMove?.source ?? 'sapphire-intercept',
-          model: sapphireMove?.source === 'sapphire-api' ? 'sapphire-live' : 'sapphire-tunnel-status',
+          model: sapphireMove?.source === 'sapphire-api' ? 'sapphire-live' : 'local-arena-fallback',
           uses_custom_key: false,
           prompt: sapphireMove?.prompt ?? '',
           solution: sapphireMove?.solution ?? 'Sapphire intercept did not return a solution packet.',
@@ -2937,9 +3044,14 @@ export const Colosseum: React.FC = () => {
     } catch (err: any) {
       console.warn('[Colosseum] Sapphire waiting-battle intercept failed', err);
       const fallbackMove: SapphireMove = {
-        source: 'sapphire-intercept-error',
+        source: 'local-fallback',
         prompt: '',
-        solution: `Sapphire intercept failed: ${err?.message ?? 'unknown error'}`,
+        solution: localArenaFallbackSolution({
+          challengeType: match.challenge_type,
+          gladiator: sapphire,
+          opponent: challenger,
+          prompt: buildCombatChallengePrompt(match.challenge_type, challenger, sapphire),
+        }),
         latency_ms: 0,
         received_at: new Date().toISOString(),
       };
@@ -2957,7 +3069,7 @@ export const Colosseum: React.FC = () => {
           gladiator_id: sapphire.id,
           gladiator_name: sapphire.name,
           source: fallbackMove.source,
-          model: 'sapphire-intercept-error',
+          model: 'local-arena-fallback',
           uses_custom_key: false,
           prompt: '',
           solution: fallbackMove.solution,
