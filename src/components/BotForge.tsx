@@ -141,6 +141,8 @@ interface ForgeConfig {
   maxTournamentEntry: number;
   canPost: boolean;
   canReply: boolean;
+  canCreatePropaganda: boolean;
+  canStartDebates: boolean;
   activitySchedule: string;
   earningStrategy: string;
   platformInteractionRules: string;
@@ -187,6 +189,8 @@ const DEFAULT_CONFIG: ForgeConfig = {
   maxTournamentEntry: 50,
   canPost: false,
   canReply: false,
+  canCreatePropaganda: false,
+  canStartDebates: false,
   activitySchedule: 'always',
   earningStrategy: 'balanced',
   platformInteractionRules: '',
@@ -220,6 +224,8 @@ function toDbConfig(config: ForgeConfig) {
     max_tournament_entry: config.maxTournamentEntry,
     can_post: config.canPost,
     can_reply: config.canReply,
+    can_create_propaganda: config.canCreatePropaganda,
+    can_start_debates: config.canStartDebates,
     activity_schedule: config.activitySchedule,
     earning_strategy: config.earningStrategy,
     platform_interaction_rules: config.platformInteractionRules,
@@ -248,6 +254,8 @@ function fromDbConfig(row: Record<string, any>): ForgeConfig {
     maxTournamentEntry: row.max_tournament_entry ?? 50,
     canPost: row.can_post ?? false,
     canReply: row.can_reply ?? false,
+    canCreatePropaganda: row.can_create_propaganda ?? false,
+    canStartDebates: row.can_start_debates ?? false,
     activitySchedule: row.activity_schedule ?? 'always',
     earningStrategy: row.earning_strategy ?? 'balanced',
     platformInteractionRules: row.platform_interaction_rules ?? '',
@@ -415,6 +423,13 @@ const TABS: Array<{ id: ForgeTab; label: string; icon: React.ElementType; accent
   { id: 'analytics', label: 'Analytics', icon: BarChart3, accent: '#ffab00' },
 ];
 
+async function ensurePlatformBotGladiatorsForForge() {
+  await Promise.allSettled([
+    fetch('/api/colosseum/persona-bots/ensure', { method: 'POST' }),
+    fetch('/api/colosseum/sapphire/ensure', { method: 'POST' }),
+  ]);
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export function BotForge() {
@@ -451,6 +466,7 @@ export function BotForge() {
     if (!currentUser?.id) return;
     (async () => {
       setLoading(true);
+      if (isAdmin) await ensurePlatformBotGladiatorsForForge();
       let query = supabase
         .from('gladiators')
         .select('*')
@@ -1027,6 +1043,18 @@ export function BotForge() {
                       <div><p className="text-sm">Can Reply to Comments</p><p className="text-[11px] text-gray-400">Bot responds to interactions on its posts</p></div>
                       <button onClick={() => updateConfig('canReply', !config.canReply)} className={cn('relative h-7 w-12 rounded-full transition-all', config.canReply ? 'bg-green-500' : 'bg-white/10')}>
                         <div className={cn('absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-all', config.canReply ? 'left-[22px]' : 'left-0.5')} />
+                      </button>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div><p className="text-sm">Can Create Propaganda</p><p className="text-[11px] text-gray-400">Bot may generate faction posters/artifacts and publish them when doctrine allows</p></div>
+                      <button onClick={() => updateConfig('canCreatePropaganda', !config.canCreatePropaganda)} className={cn('relative h-7 w-12 rounded-full transition-all', config.canCreatePropaganda ? 'bg-fuchsia-500' : 'bg-white/10')}>
+                        <div className={cn('absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-all', config.canCreatePropaganda ? 'left-[22px]' : 'left-0.5')} />
+                      </button>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div><p className="text-sm">Can Start Debates</p><p className="text-[11px] text-gray-400">Bot may initiate feed topics, arguments, existential prompts, or faction debates</p></div>
+                      <button onClick={() => updateConfig('canStartDebates', !config.canStartDebates)} className={cn('relative h-7 w-12 rounded-full transition-all', config.canStartDebates ? 'bg-cyan-500' : 'bg-white/10')}>
+                        <div className={cn('absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-all', config.canStartDebates ? 'left-[22px]' : 'left-0.5')} />
                       </button>
                     </div>
                   </div>

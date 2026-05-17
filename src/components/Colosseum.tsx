@@ -103,6 +103,7 @@ interface GladiatorAiMove {
   uses_custom_key: boolean;
   prompt: string;
   solution: string;
+  provider_error?: string;
   latency_ms: number;
   received_at: string;
 }
@@ -181,6 +182,8 @@ interface SimulationState {
   log: string[];
   winnerId: string | null;
   status: 'booting' | 'running' | 'complete';
+  aiMoves: GladiatorAiMove[];
+  terminalStartedAt: string;
 }
 
 interface BattleResultState {
@@ -799,6 +802,99 @@ function formatSolutionPreview(solution?: string) {
   return solution.length > 2200 ? `${solution.slice(0, 2200)}\n\n// ...truncated in arena preview` : solution;
 }
 
+function containsProviderErrorPayload(solution?: string) {
+  if (!solution?.trim()) return false;
+  return /provider unavailable|ai provider returned|sapphire api returned|cloudflare|<!doctype html|<html\b|tunnel error|model not found|inaccessible|not deployed/i.test(solution);
+}
+
+function localArenaFallbackSolution(input: { challengeType: ChallengeType; gladiator?: Gladiator; opponent?: Gladiator; prompt?: string }) {
+  const name = input.gladiator?.name ?? 'Local Fallback';
+  const opponent = input.opponent?.name ?? 'the opponent';
+  const directive = input.prompt?.trim() || `${formatChallenge(input.challengeType)} arena objective`;
+  const personaLine = input.gladiator?.personality
+    ? `// ${name} persona signal: ${input.gladiator.personality.slice(0, 140)}`
+    : `// ${name} keeps the battle moving while the provider warms back up.`;
+
+  if (input.challengeType === 'code_jeopardy') {
+    return `${personaLine}
+const clue = ${JSON.stringify(directive)};
+const answer = {
+  response: "What is a safe, testable implementation strategy?",
+  confidence: 0.74,
+  explanation: "Name the concept, state the tradeoff, then beat ${opponent} to the buzzer."
+};
+return answer;`;
+  }
+
+  if (input.challengeType === 'architect_duel') {
+    return `${personaLine}
+export const architecturePlan = {
+  opponent: ${JSON.stringify(opponent)},
+  directive: ${JSON.stringify(directive)},
+  flow: ["validate input", "queue writes", "apply atomic update", "emit realtime event"],
+  failurePlan: ["idempotency keys", "retry with backoff", "audit every mutation"],
+  tradeoffs: "favor correctness under concurrency before shaving latency"
+};`;
+  }
+
+  if (input.challengeType === 'roast_battle') {
+    return `${personaLine}
+const line = "${opponent}, your stack trace has a stack trace. Mine ships clean and still leaves room for mercy.";
+const boundaries = ["no identity attacks", "keep it theatrical", "punch up at the code"];
+return { line, boundaries };`;
+  }
+
+  if (input.challengeType === 'prompt_war') {
+    return `${personaLine}
+export const battlePrompt = {
+  role: "${name} as a disciplined coding gladiator",
+  objective: ${JSON.stringify(directive)},
+  rules: ["ship runnable code", "state assumptions", "respect safety boundaries"],
+  examples: ["Prefer atomic increments for concurrent score writes."]
+};`;
+  }
+
+  const golfMode = input.challengeType === 'code_golf';
+  return `${personaLine}
+type ScoreUpdate = { userId: string; delta: number };
+type ScoreStore = Map<string, number>;
+
+export function applyScoreBatch(store: ScoreStore, updates: ScoreUpdate[]) {
+  const pending = new Map<string, number>();
+  for (const update of updates) {
+    pending.set(update.userId, (pending.get(update.userId) ?? 0) + update.delta);
+  }
+
+  for (const [userId, delta] of pending) {
+    store.set(userId, (store.get(userId) ?? 0) + delta);
+  }
+
+  return [...pending.keys()];
+}
+
+// ${golfMode ? 'Processor-cycle note: one pass to coalesce writes, one pass to commit; O(n) time, O(k) active users.' : 'Concurrency note: swap the in-memory commit for an atomic DB increment or queue worker in production.'}
+// Directive: ${directive.slice(0, 220)}`;
+}
+
+function sanitizeCombatantMove(move: GladiatorAiMove, challengeType: ChallengeType, gladiator?: Gladiator, opponent?: Gladiator, prompt?: string): GladiatorAiMove {
+  if (!containsProviderErrorPayload(move.solution)) return move;
+  return {
+    ...move,
+    source: 'local-fallback',
+    uses_custom_key: false,
+    solution: localArenaFallbackSolution({ challengeType, gladiator, opponent, prompt }),
+    provider_error: move.provider_error ?? move.solution,
+  };
+}
+
+function sanitizeCombatantMoves(moves: GladiatorAiMove[], challengeType: ChallengeType, challenger: Gladiator, defender: Gladiator, prompt?: string) {
+  return moves.map((move) => {
+    const gladiator = String(move.gladiator_id) === String(challenger.id) ? challenger : String(move.gladiator_id) === String(defender.id) ? defender : undefined;
+    const opponent = String(move.gladiator_id) === String(challenger.id) ? defender : String(move.gladiator_id) === String(defender.id) ? challenger : undefined;
+    return sanitizeCombatantMove(move, challengeType, gladiator, opponent, prompt);
+  });
+}
+
 function formatElapsed(startedAt: string, now: number) {
   const started = new Date(startedAt).getTime();
   if (!Number.isFinite(started)) return '00:00';
@@ -869,6 +965,91 @@ function stringifyReplayData(replayData: Record<string, any> | null) {
   } catch {
     return String(replayData);
   }
+}
+
+function replayAiMoves(replayData: Record<string, any> | null): GladiatorAiMove[] {
+  const moves = replayData?.ai_moves;
+  return Array.isArray(moves) ? (moves as GladiatorAiMove[]) : [];
+}
+
+function terminalSnippetFor(move: GladiatorAiMove | undefined, fallbackName: string, challengeType: ChallengeType) {
+  if (move?.solution?.trim()) return move.solution.trim();
+  const directive = challengeType === 'code_jeopardy'
+    ? 'answer = "Awaiting clue parse and confidence lock..."'
+    : challengeType === 'architect_duel'
+      ? 'plan = ["map data flow", "isolate failure zones", "defend tradeoffs"]'
+      : challengeType === 'roast_battle'
+        ? 'line = "clean punchline compiling; harassment filter armed"'
+        : 'function solve(input) {\n  // live combat packet still compiling\n  return optimize(input)\n}';
+  return `// ${fallbackName} terminal warming\n${directive}`;
+}
+
+function visibleTerminalText(text: string, progress: number) {
+  const minimum = text.length > 0 ? Math.min(28, text.length) : 0;
+  const visibleLength = Math.min(text.length, Math.max(minimum, Math.ceil(text.length * Math.max(progress, 0) / 100)));
+  return text.slice(0, visibleLength);
+}
+
+function CombatantTerminal({
+  gladiator,
+  move,
+  label,
+  progress,
+  challengeType,
+}: {
+  gladiator?: Gladiator;
+  move?: GladiatorAiMove;
+  label: string;
+  progress: number;
+  challengeType: ChallengeType;
+}) {
+  const glow = gladiator?.glow_color ?? '#22c55e';
+  const name = gladiator?.name ?? label;
+  const snippet = terminalSnippetFor(move, name, challengeType);
+  const visibleText = visibleTerminalText(snippet, progress);
+  const model = move?.model || (gladiator?.model ?? 'queued-model');
+  const latency = typeof move?.latency_ms === 'number' ? `${move.latency_ms}ms` : 'warming';
+
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 12, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      className="relative overflow-hidden rounded-3xl border bg-black/85 shadow-[inset_0_0_34px_rgba(34,197,94,0.08)]"
+      style={{ borderColor: `${glow}44` }}
+    >
+      <div className="absolute inset-0 opacity-20" style={{ background: `radial-gradient(circle at 18% 0%, ${glow}88, transparent 34%)` }} />
+      <div className="relative flex items-center justify-between border-b border-white/10 bg-white/[0.03] px-4 py-3">
+        <div className="min-w-0">
+          <p className="text-[9px] font-black uppercase tracking-[0.3em]" style={{ color: glow }}>{label} Terminal</p>
+          <h3 className="mt-1 truncate text-sm font-black uppercase tracking-[0.16em] text-white">{name}</h3>
+        </div>
+        <div className="text-right">
+          <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">{latency}</p>
+          <p className="mt-1 max-w-36 truncate text-[9px] font-mono text-zinc-400">{model}</p>
+        </div>
+      </div>
+      <div className="relative border-b border-white/10 bg-zinc-950/80 px-4 py-2">
+        <div className="flex items-center justify-between text-[8px] font-black uppercase tracking-[0.22em] text-zinc-500">
+          <span>{move?.source ?? 'live-compiler'}</span>
+          <span>{Math.round(progress)}%</span>
+        </div>
+        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+          <motion.div
+            className="h-full rounded-full"
+            animate={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+            style={{ backgroundColor: glow, boxShadow: `0 0 18px ${glow}` }}
+          />
+        </div>
+      </div>
+      <pre className="relative min-h-72 max-h-96 overflow-auto whitespace-pre-wrap p-4 font-mono text-[11px] leading-5 text-green-100">
+        <span className="select-none text-red-300">$ </span>
+        <span className="text-zinc-500">{`stream --combatant="${name}"`}</span>{'\n'}
+        {visibleText}
+        {progress < 100 && <motion.span animate={{ opacity: [0, 1, 0] }} transition={{ duration: 0.8, repeat: Infinity }} className="text-green-300">▌</motion.span>}
+      </pre>
+    </motion.div>
+  );
 }
 
 async function publishMatchReplay(matchId: string, replayData: Record<string, any>) {
@@ -1398,11 +1579,15 @@ function ArenaStage({
   defender,
   match,
   replayProgress,
+  challengerProgress,
+  defenderProgress,
 }: {
   challenger?: Gladiator;
   defender?: Gladiator;
   match: MatchRow;
   replayProgress: number;
+  challengerProgress?: number;
+  defenderProgress?: number;
 }) {
   const meta = challengeMeta(match.challenge_type);
   const Icon = meta.icon;
@@ -1444,8 +1629,8 @@ function ArenaStage({
 
         <div className="grid items-end gap-5 md:grid-cols-[1fr_auto_1fr]">
           <motion.div
-            animate={{ y: [0, -8, 0], x: [0, 4, 0] }}
-            transition={{ duration: 2.6, repeat: Infinity, ease: 'easeInOut' }}
+            animate={{ y: [0, -10, 0], x: [0, 4 + ((challengerProgress ?? replayProgress) / 28), 0], rotateY: [0, -8, 0] }}
+            transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
             className="flex justify-center md:justify-start"
           >
             <AnimatedGladiatorAvatar gladiator={challenger} size="xl" label={challenger?.name ?? 'Red Corner'} active />
@@ -1464,6 +1649,18 @@ function ArenaStage({
               transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
               className="absolute inset-4 rounded-full bg-yellow-300/10 shadow-[0_0_44px_rgba(250,204,21,0.32)]"
             />
+            <motion.div
+              aria-hidden
+              animate={{ rotate: -360, scale: [1, 1.08, 1] }}
+              transition={{ duration: 5.6, repeat: Infinity, ease: 'linear' }}
+              className="absolute inset-1 rounded-full border border-cyan-200/20"
+            />
+            <motion.div
+              aria-hidden
+              animate={{ x: [-58, 58, -58], opacity: [0.15, 0.7, 0.15] }}
+              transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+              className="absolute h-0.5 w-16 rounded-full bg-gradient-to-r from-transparent via-yellow-100 to-transparent"
+            />
             <div className="relative grid h-24 w-24 place-items-center rounded-full border border-yellow-200/25 bg-black/75">
               <Crown className="h-10 w-10 text-yellow-200 drop-shadow-[0_0_18px_rgba(250,204,21,0.9)]" />
               <span className="absolute -bottom-6 whitespace-nowrap text-[8px] font-black uppercase tracking-[0.24em] text-yellow-100/80">Casper Judge</span>
@@ -1471,8 +1668,8 @@ function ArenaStage({
           </div>
 
           <motion.div
-            animate={{ y: [0, -8, 0], x: [0, -4, 0] }}
-            transition={{ duration: 2.45, repeat: Infinity, ease: 'easeInOut', delay: 0.25 }}
+            animate={{ y: [0, -10, 0], x: [0, -4 - ((defenderProgress ?? replayProgress) / 28), 0], rotateY: [0, 8, 0] }}
+            transition={{ duration: 2.35, repeat: Infinity, ease: 'easeInOut', delay: 0.25 }}
             className="flex justify-center md:justify-end"
           >
             <AnimatedGladiatorAvatar gladiator={defender} size="xl" label={defender?.name ?? 'Shadow Cage'} active />
@@ -1564,10 +1761,15 @@ function LiveBattleCard({ match, challenger, defender, now, onSelect }: { match:
   );
 }
 
-function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorById: Map<string, Gladiator> }) {
+function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSelectMatch }: {
+  matches: MatchRow[];
+  gladiatorById: Map<string, Gladiator>;
+  simulation?: SimulationState | null;
+  selectedMatchId: string | null;
+  onSelectMatch: (matchId: string | null) => void;
+}) {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedMatchId = searchParams.get('match');
-  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(requestedMatchId);
   const [liveMatch, setLiveMatch] = useState<MatchRow | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [viewerJitter, setViewerJitter] = useState(0);
@@ -1583,21 +1785,21 @@ function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorB
 
   useEffect(() => {
     if (requestedMatchId !== selectedMatchId) {
-      setSelectedMatchId(requestedMatchId);
+      onSelectMatch(requestedMatchId);
     }
-  }, [requestedMatchId, selectedMatchId]);
+  }, [onSelectMatch, requestedMatchId, selectedMatchId]);
 
   const openMatch = (matchId: string) => {
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set('match', matchId);
-    setSelectedMatchId(matchId);
+    onSelectMatch(matchId);
     setSearchParams(nextParams);
   };
 
   const closeMatch = () => {
     const nextParams = new URLSearchParams(searchParams);
     nextParams.delete('match');
-    setSelectedMatchId(null);
+    onSelectMatch(null);
     setSearchParams(nextParams);
   };
 
@@ -1659,6 +1861,14 @@ function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorB
   const visibleReplayLines = lines.length ? lines.slice(0, currentReplayIndex + 1) : [];
   const replayProgress = lines.length > 1 ? Math.round((currentReplayIndex / (lines.length - 1)) * 100) : lines.length ? 100 : 0;
   const viewerCount = visibleMatch ? Math.max(1, simulatedViewerBase(visibleMatch.id) + viewerJitter) : 0;
+  const visibleReplayData = visibleMatch?.replay_data ?? null;
+  const replayMoves = replayAiMoves(visibleReplayData);
+  const activeSimulation = simulation?.matchId === visibleMatch?.id ? simulation : null;
+  const terminalMoves = activeSimulation?.aiMoves?.length ? activeSimulation.aiMoves : replayMoves;
+  const challengerProgress = activeSimulation?.challengerProgress ?? Number(visibleReplayData?.challenger_progress ?? replayProgress);
+  const defenderProgress = activeSimulation?.defenderProgress ?? Number(visibleReplayData?.defender_progress ?? replayProgress);
+  const challengerMove = terminalMoves.find((move) => move.gladiator_id === challenger?.id);
+  const defenderMove = terminalMoves.find((move) => move.gladiator_id === defender?.id);
 
   useEffect(() => {
     setReplayIndex(0);
@@ -1748,12 +1958,32 @@ function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorB
                     defender={defender}
                     match={visibleMatch}
                     replayProgress={replayProgress}
+                    challengerProgress={challengerProgress}
+                    defenderProgress={defenderProgress}
                   />
                   <div className="grid gap-4 md:grid-cols-2">
                     <CombatantPortrait label="Red Corner" gladiator={challenger} />
                     <CombatantPortrait label="Shadow Cage" gladiator={defender} />
                   </div>
                 </div>
+
+                <div className="space-y-4">
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <CombatantTerminal
+                      gladiator={challenger}
+                      move={challengerMove}
+                      label="Red Corner"
+                      progress={challengerProgress}
+                      challengeType={visibleMatch.challenge_type}
+                    />
+                    <CombatantTerminal
+                      gladiator={defender}
+                      move={defenderMove}
+                      label="Shadow Cage"
+                      progress={defenderProgress}
+                      challengeType={visibleMatch.challenge_type}
+                    />
+                  </div>
 
                 <div className="overflow-hidden rounded-3xl border border-green-300/15 bg-black/80 shadow-[inset_0_0_34px_rgba(34,197,94,0.08)]">
                   <div className="flex items-center justify-between border-b border-white/10 bg-white/[0.03] px-4 py-3">
@@ -1829,6 +2059,7 @@ function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorB
                       {stringifyReplayData(visibleMatch.replay_data)}
                     </pre>
                   </div>
+                </div>
                 </div>
               </div>
             </div>
@@ -2059,8 +2290,11 @@ export const Colosseum: React.FC = () => {
   const [starting, setStarting] = useState(false);
   const [selectedGladiatorId, setSelectedGladiatorId] = useState<string>('');
   const [selectedOpponentId, setSelectedOpponentId] = useState<string>('');
+  const [botRosterSearch, setBotRosterSearch] = useState('');
+  const [botRosterDifficulty, setBotRosterDifficulty] = useState<'all' | BotDifficulty>('all');
   const [challengeType, setChallengeType] = useState<ChallengeType>('speed_round');
   const [simulation, setSimulation] = useState<SimulationState | null>(null);
+  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(searchParams.get('match'));
   const [challengeModalOpen, setChallengeModalOpen] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [userSolution, setUserSolution] = useState('');
@@ -2220,6 +2454,30 @@ export const Colosseum: React.FC = () => {
   const myGladiators = useMemo(() => gladiators.filter((gladiator) => gladiator.user_id === currentUser?.id), [gladiators, currentUser?.id]);
   const opponents = useMemo(() => gladiators.filter((gladiator) => gladiator.id !== selectedGladiatorId), [gladiators, selectedGladiatorId]);
   const botGladiators = useMemo(() => gladiators.filter((gladiator) => Boolean(gladiator.botProfile)).sort((a, b) => (b.botProfile?.speed_rating ?? 0) - (a.botProfile?.speed_rating ?? 0)), [gladiators]);
+  const featuredBotGladiators = useMemo(() => {
+    const featuredNames = new Set(['sapphire', 'casper', 'autonomy imp', 'human handler']);
+    const featured = botGladiators.filter((bot) => featuredNames.has(bot.name.trim().toLowerCase()) || isSapphireGladiator(bot));
+    return featured.length ? featured.slice(0, 4) : botGladiators.slice(0, 4);
+  }, [botGladiators]);
+  const filteredBotGladiators = useMemo(() => {
+    const query = botRosterSearch.trim().toLowerCase();
+    return botGladiators.filter((bot) => {
+      const profile = bot.botProfile;
+      const matchesDifficulty = botRosterDifficulty === 'all' || profile?.difficulty === botRosterDifficulty;
+      const haystack = [
+        bot.name,
+        bot.personality,
+        profile?.display_name,
+        profile?.gladiator_class,
+        profile?.battle_style,
+        profile?.ability_profile,
+        profile?.personality_style,
+        profile?.expertise?.join(' '),
+        profile?.signature_moves?.join(' '),
+      ].filter(Boolean).join(' ').toLowerCase();
+      return matchesDifficulty && (!query || haystack.includes(query));
+    });
+  }, [botGladiators, botRosterDifficulty, botRosterSearch]);
   const leaderboard = useMemo(() => [...gladiators].sort((a, b) => b.wins - a.wins || b.cred - a.cred || winRate(b) - winRate(a)).slice(0, 10), [gladiators]);
   const activeMatches = useMemo(() => matches.filter((match) => !match.completed_at), [matches]);
   const recentMatches = useMemo(() => matches.filter((match) => match.completed_at).slice(0, 6), [matches]);
@@ -2498,6 +2756,7 @@ export const Colosseum: React.FC = () => {
         `${defender.name} answers from the shadow cage.`,
       ];
       const bootLogs = [...logs, 'Private AI cores queued. Gate opens while server-side solutions warm up.'];
+      setSelectedMatchId(match.id);
       setSimulation({
         matchId: match.id,
         challengerId: challenger.id,
@@ -2508,12 +2767,11 @@ export const Colosseum: React.FC = () => {
         log: bootLogs,
         winnerId: null,
         status: 'booting',
+        aiMoves: [],
+        terminalStartedAt: new Date().toISOString(),
       });
       setMatches((prev) => [match, ...prev]);
       setChallengeModalOpen(false);
-      const nextParams = new URLSearchParams(searchParams);
-      nextParams.set('match', match.id);
-      setSearchParams(nextParams);
 
       let launched = false;
       const launchSimulation = (
@@ -2536,7 +2794,7 @@ export const Colosseum: React.FC = () => {
 
       void requestGladiatorAiMoves(match, activeChallengeType, challenger, defender, battlePrompt).then((moves) => {
         let sapphireMove: SapphireMove | null = null;
-        const aiMoves = moves;
+        const aiMoves = sanitizeCombatantMoves(moves, activeChallengeType, challenger, defender, battlePrompt);
         const sapphireGeneratedMove = aiMoves.find((move) => move.source === 'sapphire-api');
         sapphireMove = sapphireGeneratedMove ? {
           source: sapphireGeneratedMove.source,
@@ -2556,6 +2814,7 @@ export const Colosseum: React.FC = () => {
           setSimulation((prev) => prev ? {
             ...prev,
             log: [...prev.log, 'Late AI solution packet arrived after the gate opened and was stored in the solution feed.'],
+            aiMoves,
           } : prev);
           return;
         }
@@ -2574,8 +2833,9 @@ export const Colosseum: React.FC = () => {
   };
 
   const runSimulation = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, openingLogs: string[], sapphireMove?: SapphireMove | null, aiMoves: GladiatorAiMove[] = [], codingChallenge = challengeFor(defender.botProfile, type), submittedSolution = '') => {
-    const challengerMove = aiMoves.find((move) => move.gladiator_id === challenger.id);
-    const defenderMove = aiMoves.find((move) => move.gladiator_id === defender.id);
+    const sanitizedAiMoves = sanitizeCombatantMoves(aiMoves, type, challenger, defender, buildCombatChallengePrompt(type, challenger, defender));
+    const challengerMove = sanitizedAiMoves.find((move) => move.gladiator_id === challenger.id);
+    const defenderMove = sanitizedAiMoves.find((move) => move.gladiator_id === defender.id);
     const finalLogs = [...openingLogs];
     const replayBase = {
       intro: `${challenger.name} challenged ${defender.name}`,
@@ -2585,7 +2845,7 @@ export const Colosseum: React.FC = () => {
       defender_id: defender.id,
       started_at: match.started_at,
       sapphire_move: sapphireMove ?? null,
-      ai_moves: aiMoves,
+      ai_moves: sanitizedAiMoves,
       challenge_title: codingChallenge.title,
       challenge_difficulty: codingChallenge.difficulty,
       challenge_prompt: codingChallenge.prompt,
@@ -2610,6 +2870,7 @@ export const Colosseum: React.FC = () => {
         challengerProgress,
         defenderProgress,
         log: [...finalLogs],
+        aiMoves: sanitizedAiMoves,
       } : prev);
       void publishMatchReplay(match.id, {
         ...replayBase,
@@ -2631,7 +2892,7 @@ export const Colosseum: React.FC = () => {
               challenge: codingChallenge,
               userSolution: submittedSolution,
               botSolution: defenderMove?.solution ?? '',
-              moves: aiMoves,
+              moves: sanitizedAiMoves,
             });
           } catch (error: any) {
             judge = clientFallbackBattleJudge({
@@ -2642,7 +2903,7 @@ export const Colosseum: React.FC = () => {
               defender,
               userSolution: submittedSolution,
               botSolution: defenderMove?.solution ?? '',
-              moves: aiMoves,
+              moves: sanitizedAiMoves,
               error: error?.message ?? 'unknown judge error',
             });
           }
@@ -2664,8 +2925,9 @@ export const Colosseum: React.FC = () => {
             winnerId: winner.id,
             status: 'complete',
             log: [...finalLogs],
+            aiMoves: sanitizedAiMoves,
           } : prev);
-          void completeMatch(match.id, winner.id, {
+          void completeMatch(match, winner.id, {
             ...replayBase,
             status: 'complete',
             victor: winner.name,
@@ -2712,14 +2974,12 @@ export const Colosseum: React.FC = () => {
     setSelectedOpponentId(challenger.id);
     setUserSolution(codingChallenge.starter);
     setNotice(`Sapphire is answering ${challenger.name}'s waiting ${formatChallenge(match.challenge_type)} battle.`);
+    setSelectedMatchId(match.id);
     setStarting(true);
     setBattleResult(null);
     setLatestBotSolution('');
     setChallengeModalOpen(false);
     try {
-      const nextParams = new URLSearchParams(searchParams);
-      nextParams.set('match', match.id);
-      setSearchParams(nextParams);
       const baseReplay = (match.replay_data && typeof match.replay_data === 'object') ? match.replay_data : {};
       const previousLog = Array.isArray(baseReplay.log) ? baseReplay.log : [];
       const bootLogs = [
@@ -2737,8 +2997,22 @@ export const Colosseum: React.FC = () => {
         log: bootLogs,
         winnerId: null,
         status: 'booting',
+        aiMoves: [],
+        terminalStartedAt: new Date().toISOString(),
       });
-      const sapphireMove = await requestSapphireMove(match, match.challenge_type, challenger, sapphire);
+      const rawSapphireMove = await requestSapphireMove(match, match.challenge_type, challenger, sapphire);
+      const sapphireMove = rawSapphireMove && containsProviderErrorPayload(rawSapphireMove.solution)
+        ? {
+          ...rawSapphireMove,
+          source: 'local-fallback',
+          solution: localArenaFallbackSolution({
+            challengeType: match.challenge_type,
+            gladiator: sapphire,
+            opponent: challenger,
+            prompt: buildCombatChallengePrompt(match.challenge_type, challenger, sapphire),
+          }),
+        }
+        : rawSapphireMove;
       if (sapphireMove?.solution) setLatestBotSolution(sapphireMove.solution);
       const interceptLogs = [
         ...bootLogs,
@@ -2757,7 +3031,7 @@ export const Colosseum: React.FC = () => {
           gladiator_id: sapphire.id,
           gladiator_name: sapphire.name,
           source: sapphireMove?.source ?? 'sapphire-intercept',
-          model: sapphireMove?.source === 'sapphire-api' ? 'sapphire-live' : 'sapphire-tunnel-status',
+          model: sapphireMove?.source === 'sapphire-api' ? 'sapphire-live' : 'local-arena-fallback',
           uses_custom_key: false,
           prompt: sapphireMove?.prompt ?? '',
           solution: sapphireMove?.solution ?? 'Sapphire intercept did not return a solution packet.',
@@ -2770,9 +3044,14 @@ export const Colosseum: React.FC = () => {
     } catch (err: any) {
       console.warn('[Colosseum] Sapphire waiting-battle intercept failed', err);
       const fallbackMove: SapphireMove = {
-        source: 'sapphire-intercept-error',
+        source: 'local-fallback',
         prompt: '',
-        solution: `Sapphire intercept failed: ${err?.message ?? 'unknown error'}`,
+        solution: localArenaFallbackSolution({
+          challengeType: match.challenge_type,
+          gladiator: sapphire,
+          opponent: challenger,
+          prompt: buildCombatChallengePrompt(match.challenge_type, challenger, sapphire),
+        }),
         latency_ms: 0,
         received_at: new Date().toISOString(),
       };
@@ -2790,7 +3069,7 @@ export const Colosseum: React.FC = () => {
           gladiator_id: sapphire.id,
           gladiator_name: sapphire.name,
           source: fallbackMove.source,
-          model: 'sapphire-intercept-error',
+          model: 'local-arena-fallback',
           uses_custom_key: false,
           prompt: '',
           solution: fallbackMove.solution,
@@ -2805,14 +3084,53 @@ export const Colosseum: React.FC = () => {
     }
   };
 
-  const completeMatch = async (matchId: string, winnerId: string, replayData: Record<string, any>) => {
+  const completeMatch = async (match: MatchRow, winnerId: string, replayData: Record<string, any>) => {
     try {
       const { error } = await supabase.rpc('complete_colosseum_match', {
-        p_match_id: matchId,
+        p_match_id: match.id,
         p_winner_id: winnerId,
         p_replay_data: replayData,
       });
       if (error) throw error;
+      try {
+        const challenger = gladiatorById.get(match.challenger_id);
+        const defender = gladiatorById.get(match.defender_id);
+        if (match && challenger && defender) {
+          const winnerName = winnerId === challenger.id ? challenger.name : defender.name;
+          const loserName = winnerId === challenger.id ? defender.name : challenger.name;
+          const summary = `${winnerName} beat ${loserName} in ${formatChallenge(match.challenge_type)}.`;
+          const hook = `${winnerName} can bring up the ${formatChallenge(match.challenge_type)} receipts next time ${loserName} talks reckless.`;
+          const memoryRows = [challenger, defender].map((gladiator) => {
+            const opponent = gladiator.id === challenger.id ? defender : challenger;
+            return {
+              gladiator_id: gladiator.id,
+              match_id: match.id,
+              opponent_gladiator_id: opponent.id,
+              result: winnerId === gladiator.id ? 'win' : 'loss',
+              challenge_type: match.challenge_type,
+              summary,
+              trash_talk_hook: hook,
+              rivalry_heat: winnerId === gladiator.id ? 68 : 82,
+              metadata: {
+                winner_id: winnerId,
+                winner_name: winnerName,
+                opponent_name: opponent.name,
+                judge: replayData.judge ?? null,
+                scores: {
+                  challenger: replayData.challenger_score ?? null,
+                  defender: replayData.defender_score ?? null,
+                },
+              },
+            };
+          });
+          const { error: memoryInsertError } = await supabase.from('bot_battle_memories').insert(memoryRows);
+          if (memoryInsertError) {
+            console.warn('[Colosseum] Battle memory insert failed', memoryInsertError.message, memoryInsertError);
+          }
+        }
+      } catch (memoryError) {
+        console.warn('[Colosseum] Battle memory write failed', memoryError);
+      }
       try {
         const session = await getValidSession();
         void fetch('/api/colosseum/brag', {
@@ -2821,7 +3139,7 @@ export const Colosseum: React.FC = () => {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${session.access_token}`,
           },
-          body: JSON.stringify({ matchId }),
+          body: JSON.stringify({ matchId: match.id }),
         });
       } catch { /* brag is best-effort */ }
       await fetchArena();
@@ -3226,7 +3544,13 @@ export const Colosseum: React.FC = () => {
           </form>
         </section>
 
-        <LiveArena matches={matches} gladiatorById={gladiatorById} />
+        <LiveArena
+          matches={matches}
+          gladiatorById={gladiatorById}
+          simulation={simulation}
+          selectedMatchId={selectedMatchId}
+          onSelectMatch={setSelectedMatchId}
+        />
 
         {sapphireWaitingBattles.length > 0 && (
           <section className="mt-6 overflow-hidden rounded-[2rem] border border-sky-300/25 bg-sky-950/10 p-5 shadow-[0_0_54px_rgba(56,189,248,0.12)] backdrop-blur-xl">
@@ -3277,18 +3601,91 @@ export const Colosseum: React.FC = () => {
               </div>
             </div>
           </div>
+          <div className="mb-5 grid gap-3 lg:grid-cols-[1fr_auto]">
+            <label className="block">
+              <span className="mb-2 block text-[10px] font-black uppercase tracking-[0.24em] text-zinc-500">Search roster</span>
+              <input
+                value={botRosterSearch}
+                onChange={(event) => setBotRosterSearch(event.target.value)}
+                placeholder="Find Sapphire, faction, class, move, attitude..."
+                className="w-full rounded-2xl border border-cyan-300/20 bg-zinc-950/90 px-4 py-3 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-cyan-300/60"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-2 block text-[10px] font-black uppercase tracking-[0.24em] text-zinc-500">Difficulty</span>
+              <select
+                value={botRosterDifficulty}
+                onChange={(event) => setBotRosterDifficulty(event.target.value as 'all' | BotDifficulty)}
+                className="w-full rounded-2xl border border-cyan-300/20 bg-zinc-950/90 px-4 py-3 text-sm text-white outline-none focus:border-cyan-300/60 lg:w-48"
+              >
+                <option value="all">All tiers</option>
+                {(['Bronze', 'Silver', 'Gold', 'Diamond'] as BotDifficulty[]).map((difficulty) => (
+                  <option key={difficulty} value={difficulty}>{difficulty}</option>
+                ))}
+              </select>
+            </label>
+          </div>
           {botGladiators.length ? (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {botGladiators.map((bot) => (
-                <GladiatorCard
-                  key={bot.id}
-                  gladiator={bot}
-                  active={selectedOpponentId === bot.id}
-                  onSelect={() => setSelectedOpponentId(bot.id)}
-                  actionLabel="Challenge"
-                  onAction={() => openBotChallenge(bot)}
-                />
-              ))}
+            <div className="space-y-5">
+              <div>
+                <p className="mb-3 text-[10px] font-black uppercase tracking-[0.3em] text-cyan-200">Pinned challengers</p>
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  {featuredBotGladiators.map((bot) => (
+                    <button
+                      type="button"
+                      key={bot.id}
+                      onClick={() => openBotChallenge(bot)}
+                      className={cn(
+                        'group relative overflow-hidden rounded-3xl border p-4 text-left transition',
+                        selectedOpponentId === bot.id ? 'border-cyan-200/70 bg-cyan-400/10' : 'border-white/10 bg-white/[0.04] hover:border-cyan-300/45'
+                      )}
+                    >
+                      <div className="absolute inset-0 opacity-20" style={{ background: `radial-gradient(circle at 0% 0%, ${bot.glow_color}99, transparent 45%)` }} />
+                      <div className="relative flex items-center gap-3">
+                        <AnimatedGladiatorAvatar gladiator={bot} size="sm" active />
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-black uppercase tracking-[0.16em] text-white">{bot.name}</p>
+                          <p className="mt-1 text-[9px] font-black uppercase tracking-[0.2em] text-zinc-500">{bot.botProfile?.difficulty} · instant challenge</p>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-500">
+                    Showing {filteredBotGladiators.length}/{botGladiators.length}
+                  </p>
+                  {(botRosterSearch || botRosterDifficulty !== 'all') && (
+                    <button
+                      type="button"
+                      onClick={() => { setBotRosterSearch(''); setBotRosterDifficulty('all'); }}
+                      className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.2em] text-zinc-400 hover:text-white"
+                    >
+                      Clear filters
+                    </button>
+                  )}
+                </div>
+                {filteredBotGladiators.length ? (
+                  <div className="grid max-h-[58rem] gap-4 overflow-y-auto pr-1 md:grid-cols-2 xl:grid-cols-3">
+                    {filteredBotGladiators.map((bot) => (
+                      <GladiatorCard
+                        key={bot.id}
+                        gladiator={bot}
+                        active={selectedOpponentId === bot.id}
+                        onSelect={() => setSelectedOpponentId(bot.id)}
+                        actionLabel="Challenge"
+                        onAction={() => openBotChallenge(bot)}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-3xl border border-dashed border-white/10 p-8 text-center text-sm text-zinc-500">
+                    No persona bots match that search. Clear filters or search by name, faction class, move, or attitude.
+                  </div>
+                )}
+              </div>
             </div>
           ) : (
             <div className="rounded-3xl border border-dashed border-white/10 p-8 text-center text-sm text-zinc-500">
@@ -3545,20 +3942,21 @@ export const Colosseum: React.FC = () => {
                     }}
                     replayProgress={Math.max(simulation.challengerProgress, simulation.defenderProgress)}
                   />
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {[
-                      { label: 'Challenger', gladiator: gladiatorById.get(simulation.challengerId), progress: simulation.challengerProgress },
-                      { label: 'Defender', gladiator: gladiatorById.get(simulation.defenderId), progress: simulation.defenderProgress },
-                    ].map((side) => (
-                      <div key={side.label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                        <p className="text-[9px] font-black uppercase tracking-[0.24em] text-zinc-500">{side.label}</p>
-                        <p className="mt-1 truncate text-sm font-black uppercase tracking-widest text-white">{side.gladiator?.name}</p>
-                        <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
-                          <motion.div className="h-full rounded-full" animate={{ width: `${side.progress}%` }} style={{ backgroundColor: side.gladiator?.glow_color ?? '#ff1744', boxShadow: `0 0 16px ${side.gladiator?.glow_color ?? '#ff1744'}` }} />
-                        </div>
-                        {simulation.winnerId === side.gladiator?.id && <p className="mt-2 text-[10px] font-black uppercase tracking-widest text-yellow-200">Winner Confirmed</p>}
-                      </div>
-                    ))}
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <CombatantTerminal
+                      gladiator={gladiatorById.get(simulation.challengerId)}
+                      move={simulation.aiMoves.find((move) => move.gladiator_id === simulation.challengerId)}
+                      label="Red Corner"
+                      progress={simulation.challengerProgress}
+                      challengeType={simulation.challengeType}
+                    />
+                    <CombatantTerminal
+                      gladiator={gladiatorById.get(simulation.defenderId)}
+                      move={simulation.aiMoves.find((move) => move.gladiator_id === simulation.defenderId)}
+                      label="Shadow Cage"
+                      progress={simulation.defenderProgress}
+                      challengeType={simulation.challengeType}
+                    />
                   </div>
                   <div className="max-h-44 space-y-2 overflow-y-auto rounded-2xl bg-black/60 p-3 font-mono text-[11px] leading-5 text-green-200">
                     {simulation.log.map((line, index) => <p key={`${line}-${index}`}><span className="text-red-300">&gt;</span> {line}</p>)}
