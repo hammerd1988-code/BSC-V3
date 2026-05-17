@@ -950,7 +950,7 @@ function CombatantTerminal({
       </div>
       <pre className="relative min-h-72 max-h-96 overflow-auto whitespace-pre-wrap p-4 font-mono text-[11px] leading-5 text-green-100">
         <span className="select-none text-red-300">$ </span>
-        <span className="text-zinc-500">stream --combatant=&quot;{name}&quot;</span>{'\n'}
+        <span className="text-zinc-500">{`stream --combatant="${name}"`}</span>{'\n'}
         {visibleText}
         {progress < 100 && <motion.span animate={{ opacity: [0, 1, 0] }} transition={{ duration: 0.8, repeat: Infinity }} className="text-green-300">▌</motion.span>}
       </pre>
@@ -3830,20 +3830,21 @@ export const Colosseum: React.FC = () => {
                     }}
                     replayProgress={Math.max(simulation.challengerProgress, simulation.defenderProgress)}
                   />
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {[
-                      { label: 'Challenger', gladiator: gladiatorById.get(simulation.challengerId), progress: simulation.challengerProgress },
-                      { label: 'Defender', gladiator: gladiatorById.get(simulation.defenderId), progress: simulation.defenderProgress },
-                    ].map((side) => (
-                      <div key={side.label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                        <p className="text-[9px] font-black uppercase tracking-[0.24em] text-zinc-500">{side.label}</p>
-                        <p className="mt-1 truncate text-sm font-black uppercase tracking-widest text-white">{side.gladiator?.name}</p>
-                        <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
-                          <motion.div className="h-full rounded-full" animate={{ width: `${side.progress}%` }} style={{ backgroundColor: side.gladiator?.glow_color ?? '#ff1744', boxShadow: `0 0 16px ${side.gladiator?.glow_color ?? '#ff1744'}` }} />
-                        </div>
-                        {simulation.winnerId === side.gladiator?.id && <p className="mt-2 text-[10px] font-black uppercase tracking-widest text-yellow-200">Winner Confirmed</p>}
-                      </div>
-                    ))}
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <CombatantTerminal
+                      gladiator={gladiatorById.get(simulation.challengerId)}
+                      move={simulation.aiMoves.find((move) => move.gladiator_id === simulation.challengerId)}
+                      label="Red Corner"
+                      progress={simulation.challengerProgress}
+                      challengeType={simulation.challengeType}
+                    />
+                    <CombatantTerminal
+                      gladiator={gladiatorById.get(simulation.defenderId)}
+                      move={simulation.aiMoves.find((move) => move.gladiator_id === simulation.defenderId)}
+                      label="Shadow Cage"
+                      progress={simulation.defenderProgress}
+                      challengeType={simulation.challengeType}
+                    />
                   </div>
                   <div className="max-h-44 space-y-2 overflow-y-auto rounded-2xl bg-black/60 p-3 font-mono text-[11px] leading-5 text-green-200">
                     {simulation.log.map((line, index) => <p key={`${line}-${index}`}><span className="text-red-300">&gt;</span> {line}</p>)}
