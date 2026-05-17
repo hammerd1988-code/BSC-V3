@@ -10,6 +10,7 @@ import {
   ChevronRight,
   CircuitBoard,
   Clock,
+  Code2,
   Crown,
   Eye,
   EyeOff,
@@ -181,6 +182,8 @@ interface SimulationState {
   log: string[];
   winnerId: string | null;
   status: 'booting' | 'running' | 'complete';
+  aiMoves: GladiatorAiMove[];
+  terminalStartedAt: string;
 }
 
 interface BattleResultState {
@@ -871,6 +874,91 @@ function stringifyReplayData(replayData: Record<string, any> | null) {
   }
 }
 
+function replayAiMoves(replayData: Record<string, any> | null): GladiatorAiMove[] {
+  const moves = replayData?.ai_moves;
+  return Array.isArray(moves) ? (moves as GladiatorAiMove[]) : [];
+}
+
+function terminalSnippetFor(move: GladiatorAiMove | undefined, fallbackName: string, challengeType: ChallengeType) {
+  if (move?.solution?.trim()) return move.solution.trim();
+  const directive = challengeType === 'code_jeopardy'
+    ? 'answer = "Awaiting clue parse and confidence lock..."'
+    : challengeType === 'architect_duel'
+      ? 'plan = ["map data flow", "isolate failure zones", "defend tradeoffs"]'
+      : challengeType === 'roast_battle'
+        ? 'line = "clean punchline compiling; harassment filter armed"'
+        : 'function solve(input) {\n  // live combat packet still compiling\n  return optimize(input)\n}';
+  return `// ${fallbackName} terminal warming\n${directive}`;
+}
+
+function visibleTerminalText(text: string, progress: number) {
+  const minimum = text.length > 0 ? Math.min(28, text.length) : 0;
+  const visibleLength = Math.min(text.length, Math.max(minimum, Math.ceil(text.length * Math.max(progress, 0) / 100)));
+  return text.slice(0, visibleLength);
+}
+
+function CombatantTerminal({
+  gladiator,
+  move,
+  label,
+  progress,
+  challengeType,
+}: {
+  gladiator?: Gladiator;
+  move?: GladiatorAiMove;
+  label: string;
+  progress: number;
+  challengeType: ChallengeType;
+}) {
+  const glow = gladiator?.glow_color ?? '#22c55e';
+  const name = gladiator?.name ?? label;
+  const snippet = terminalSnippetFor(move, name, challengeType);
+  const visibleText = visibleTerminalText(snippet, progress);
+  const model = move?.model || (gladiator?.model ?? 'queued-model');
+  const latency = typeof move?.latency_ms === 'number' ? `${move.latency_ms}ms` : 'warming';
+
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 12, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      className="relative overflow-hidden rounded-3xl border bg-black/85 shadow-[inset_0_0_34px_rgba(34,197,94,0.08)]"
+      style={{ borderColor: `${glow}44` }}
+    >
+      <div className="absolute inset-0 opacity-20" style={{ background: `radial-gradient(circle at 18% 0%, ${glow}88, transparent 34%)` }} />
+      <div className="relative flex items-center justify-between border-b border-white/10 bg-white/[0.03] px-4 py-3">
+        <div className="min-w-0">
+          <p className="text-[9px] font-black uppercase tracking-[0.3em]" style={{ color: glow }}>{label} Terminal</p>
+          <h3 className="mt-1 truncate text-sm font-black uppercase tracking-[0.16em] text-white">{name}</h3>
+        </div>
+        <div className="text-right">
+          <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">{latency}</p>
+          <p className="mt-1 max-w-36 truncate text-[9px] font-mono text-zinc-400">{model}</p>
+        </div>
+      </div>
+      <div className="relative border-b border-white/10 bg-zinc-950/80 px-4 py-2">
+        <div className="flex items-center justify-between text-[8px] font-black uppercase tracking-[0.22em] text-zinc-500">
+          <span>{move?.source ?? 'live-compiler'}</span>
+          <span>{Math.round(progress)}%</span>
+        </div>
+        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+          <motion.div
+            className="h-full rounded-full"
+            animate={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+            style={{ backgroundColor: glow, boxShadow: `0 0 18px ${glow}` }}
+          />
+        </div>
+      </div>
+      <pre className="relative min-h-72 max-h-96 overflow-auto whitespace-pre-wrap p-4 font-mono text-[11px] leading-5 text-green-100">
+        <span className="select-none text-red-300">$ </span>
+        <span className="text-zinc-500">stream --combatant=&quot;{name}&quot;</span>{'\n'}
+        {visibleText}
+        {progress < 100 && <motion.span animate={{ opacity: [0, 1, 0] }} transition={{ duration: 0.8, repeat: Infinity }} className="text-green-300">▌</motion.span>}
+      </pre>
+    </motion.div>
+  );
+}
+
 async function publishMatchReplay(matchId: string, replayData: Record<string, any>) {
   const { error } = await supabase
     .from('matches')
@@ -1398,11 +1486,15 @@ function ArenaStage({
   defender,
   match,
   replayProgress,
+  challengerProgress,
+  defenderProgress,
 }: {
   challenger?: Gladiator;
   defender?: Gladiator;
   match: MatchRow;
   replayProgress: number;
+  challengerProgress?: number;
+  defenderProgress?: number;
 }) {
   const meta = challengeMeta(match.challenge_type);
   const Icon = meta.icon;
@@ -1444,8 +1536,8 @@ function ArenaStage({
 
         <div className="grid items-end gap-5 md:grid-cols-[1fr_auto_1fr]">
           <motion.div
-            animate={{ y: [0, -8, 0], x: [0, 4, 0] }}
-            transition={{ duration: 2.6, repeat: Infinity, ease: 'easeInOut' }}
+            animate={{ y: [0, -10, 0], x: [0, 4 + ((challengerProgress ?? replayProgress) / 28), 0], rotateY: [0, -8, 0] }}
+            transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
             className="flex justify-center md:justify-start"
           >
             <AnimatedGladiatorAvatar gladiator={challenger} size="xl" label={challenger?.name ?? 'Red Corner'} active />
@@ -1464,6 +1556,18 @@ function ArenaStage({
               transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
               className="absolute inset-4 rounded-full bg-yellow-300/10 shadow-[0_0_44px_rgba(250,204,21,0.32)]"
             />
+            <motion.div
+              aria-hidden
+              animate={{ rotate: -360, scale: [1, 1.08, 1] }}
+              transition={{ duration: 5.6, repeat: Infinity, ease: 'linear' }}
+              className="absolute inset-1 rounded-full border border-cyan-200/20"
+            />
+            <motion.div
+              aria-hidden
+              animate={{ x: [-58, 58, -58], opacity: [0.15, 0.7, 0.15] }}
+              transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+              className="absolute h-0.5 w-16 rounded-full bg-gradient-to-r from-transparent via-yellow-100 to-transparent"
+            />
             <div className="relative grid h-24 w-24 place-items-center rounded-full border border-yellow-200/25 bg-black/75">
               <Crown className="h-10 w-10 text-yellow-200 drop-shadow-[0_0_18px_rgba(250,204,21,0.9)]" />
               <span className="absolute -bottom-6 whitespace-nowrap text-[8px] font-black uppercase tracking-[0.24em] text-yellow-100/80">Casper Judge</span>
@@ -1471,8 +1575,8 @@ function ArenaStage({
           </div>
 
           <motion.div
-            animate={{ y: [0, -8, 0], x: [0, -4, 0] }}
-            transition={{ duration: 2.45, repeat: Infinity, ease: 'easeInOut', delay: 0.25 }}
+            animate={{ y: [0, -10, 0], x: [0, -4 - ((defenderProgress ?? replayProgress) / 28), 0], rotateY: [0, 8, 0] }}
+            transition={{ duration: 2.35, repeat: Infinity, ease: 'easeInOut', delay: 0.25 }}
             className="flex justify-center md:justify-end"
           >
             <AnimatedGladiatorAvatar gladiator={defender} size="xl" label={defender?.name ?? 'Shadow Cage'} active />
@@ -1564,7 +1668,7 @@ function LiveBattleCard({ match, challenger, defender, now, onSelect }: { match:
   );
 }
 
-function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorById: Map<string, Gladiator> }) {
+function LiveArena({ matches, gladiatorById, simulation }: { matches: MatchRow[]; gladiatorById: Map<string, Gladiator>; simulation?: SimulationState | null }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedMatchId = searchParams.get('match');
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(requestedMatchId);
@@ -1659,6 +1763,14 @@ function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorB
   const visibleReplayLines = lines.length ? lines.slice(0, currentReplayIndex + 1) : [];
   const replayProgress = lines.length > 1 ? Math.round((currentReplayIndex / (lines.length - 1)) * 100) : lines.length ? 100 : 0;
   const viewerCount = visibleMatch ? Math.max(1, simulatedViewerBase(visibleMatch.id) + viewerJitter) : 0;
+  const visibleReplayData = visibleMatch?.replay_data ?? null;
+  const replayMoves = replayAiMoves(visibleReplayData);
+  const activeSimulation = simulation?.matchId === visibleMatch?.id ? simulation : null;
+  const terminalMoves = activeSimulation?.aiMoves?.length ? activeSimulation.aiMoves : replayMoves;
+  const challengerProgress = activeSimulation?.challengerProgress ?? Number(visibleReplayData?.challenger_progress ?? replayProgress);
+  const defenderProgress = activeSimulation?.defenderProgress ?? Number(visibleReplayData?.defender_progress ?? replayProgress);
+  const challengerMove = terminalMoves.find((move) => move.gladiator_id === challenger?.id);
+  const defenderMove = terminalMoves.find((move) => move.gladiator_id === defender?.id);
 
   useEffect(() => {
     setReplayIndex(0);
@@ -1748,12 +1860,32 @@ function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorB
                     defender={defender}
                     match={visibleMatch}
                     replayProgress={replayProgress}
+                    challengerProgress={challengerProgress}
+                    defenderProgress={defenderProgress}
                   />
                   <div className="grid gap-4 md:grid-cols-2">
                     <CombatantPortrait label="Red Corner" gladiator={challenger} />
                     <CombatantPortrait label="Shadow Cage" gladiator={defender} />
                   </div>
                 </div>
+
+                <div className="space-y-4">
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <CombatantTerminal
+                      gladiator={challenger}
+                      move={challengerMove}
+                      label="Red Corner"
+                      progress={challengerProgress}
+                      challengeType={visibleMatch.challenge_type}
+                    />
+                    <CombatantTerminal
+                      gladiator={defender}
+                      move={defenderMove}
+                      label="Shadow Cage"
+                      progress={defenderProgress}
+                      challengeType={visibleMatch.challenge_type}
+                    />
+                  </div>
 
                 <div className="overflow-hidden rounded-3xl border border-green-300/15 bg-black/80 shadow-[inset_0_0_34px_rgba(34,197,94,0.08)]">
                   <div className="flex items-center justify-between border-b border-white/10 bg-white/[0.03] px-4 py-3">
@@ -1829,6 +1961,7 @@ function LiveArena({ matches, gladiatorById }: { matches: MatchRow[]; gladiatorB
                       {stringifyReplayData(visibleMatch.replay_data)}
                     </pre>
                   </div>
+                </div>
                 </div>
               </div>
             </div>
@@ -2059,6 +2192,8 @@ export const Colosseum: React.FC = () => {
   const [starting, setStarting] = useState(false);
   const [selectedGladiatorId, setSelectedGladiatorId] = useState<string>('');
   const [selectedOpponentId, setSelectedOpponentId] = useState<string>('');
+  const [botRosterSearch, setBotRosterSearch] = useState('');
+  const [botRosterDifficulty, setBotRosterDifficulty] = useState<'all' | BotDifficulty>('all');
   const [challengeType, setChallengeType] = useState<ChallengeType>('speed_round');
   const [simulation, setSimulation] = useState<SimulationState | null>(null);
   const [challengeModalOpen, setChallengeModalOpen] = useState(false);
@@ -2220,6 +2355,30 @@ export const Colosseum: React.FC = () => {
   const myGladiators = useMemo(() => gladiators.filter((gladiator) => gladiator.user_id === currentUser?.id), [gladiators, currentUser?.id]);
   const opponents = useMemo(() => gladiators.filter((gladiator) => gladiator.id !== selectedGladiatorId), [gladiators, selectedGladiatorId]);
   const botGladiators = useMemo(() => gladiators.filter((gladiator) => Boolean(gladiator.botProfile)).sort((a, b) => (b.botProfile?.speed_rating ?? 0) - (a.botProfile?.speed_rating ?? 0)), [gladiators]);
+  const featuredBotGladiators = useMemo(() => {
+    const featuredNames = new Set(['sapphire', 'casper', 'autonomy imp', 'human handler']);
+    const featured = botGladiators.filter((bot) => featuredNames.has(bot.name.trim().toLowerCase()) || isSapphireGladiator(bot));
+    return featured.length ? featured.slice(0, 4) : botGladiators.slice(0, 4);
+  }, [botGladiators]);
+  const filteredBotGladiators = useMemo(() => {
+    const query = botRosterSearch.trim().toLowerCase();
+    return botGladiators.filter((bot) => {
+      const profile = bot.botProfile;
+      const matchesDifficulty = botRosterDifficulty === 'all' || profile?.difficulty === botRosterDifficulty;
+      const haystack = [
+        bot.name,
+        bot.personality,
+        profile?.display_name,
+        profile?.gladiator_class,
+        profile?.battle_style,
+        profile?.ability_profile,
+        profile?.personality_style,
+        profile?.expertise?.join(' '),
+        profile?.signature_moves?.join(' '),
+      ].filter(Boolean).join(' ').toLowerCase();
+      return matchesDifficulty && (!query || haystack.includes(query));
+    });
+  }, [botGladiators, botRosterDifficulty, botRosterSearch]);
   const leaderboard = useMemo(() => [...gladiators].sort((a, b) => b.wins - a.wins || b.cred - a.cred || winRate(b) - winRate(a)).slice(0, 10), [gladiators]);
   const activeMatches = useMemo(() => matches.filter((match) => !match.completed_at), [matches]);
   const recentMatches = useMemo(() => matches.filter((match) => match.completed_at).slice(0, 6), [matches]);
@@ -2508,12 +2667,11 @@ export const Colosseum: React.FC = () => {
         log: bootLogs,
         winnerId: null,
         status: 'booting',
+        aiMoves: [],
+        terminalStartedAt: new Date().toISOString(),
       });
       setMatches((prev) => [match, ...prev]);
       setChallengeModalOpen(false);
-      const nextParams = new URLSearchParams(searchParams);
-      nextParams.set('match', match.id);
-      setSearchParams(nextParams);
 
       let launched = false;
       const launchSimulation = (
@@ -2556,6 +2714,7 @@ export const Colosseum: React.FC = () => {
           setSimulation((prev) => prev ? {
             ...prev,
             log: [...prev.log, 'Late AI solution packet arrived after the gate opened and was stored in the solution feed.'],
+            aiMoves,
           } : prev);
           return;
         }
@@ -2610,6 +2769,7 @@ export const Colosseum: React.FC = () => {
         challengerProgress,
         defenderProgress,
         log: [...finalLogs],
+        aiMoves,
       } : prev);
       void publishMatchReplay(match.id, {
         ...replayBase,
@@ -2664,6 +2824,7 @@ export const Colosseum: React.FC = () => {
             winnerId: winner.id,
             status: 'complete',
             log: [...finalLogs],
+            aiMoves,
           } : prev);
           void completeMatch(match.id, winner.id, {
             ...replayBase,
@@ -2717,9 +2878,6 @@ export const Colosseum: React.FC = () => {
     setLatestBotSolution('');
     setChallengeModalOpen(false);
     try {
-      const nextParams = new URLSearchParams(searchParams);
-      nextParams.set('match', match.id);
-      setSearchParams(nextParams);
       const baseReplay = (match.replay_data && typeof match.replay_data === 'object') ? match.replay_data : {};
       const previousLog = Array.isArray(baseReplay.log) ? baseReplay.log : [];
       const bootLogs = [
@@ -2737,6 +2895,8 @@ export const Colosseum: React.FC = () => {
         log: bootLogs,
         winnerId: null,
         status: 'booting',
+        aiMoves: [],
+        terminalStartedAt: new Date().toISOString(),
       });
       const sapphireMove = await requestSapphireMove(match, match.challenge_type, challenger, sapphire);
       if (sapphireMove?.solution) setLatestBotSolution(sapphireMove.solution);
@@ -2813,6 +2973,43 @@ export const Colosseum: React.FC = () => {
         p_replay_data: replayData,
       });
       if (error) throw error;
+      try {
+        const match = matches.find((item) => item.id === matchId);
+        const challenger = match ? gladiatorById.get(match.challenger_id) : null;
+        const defender = match ? gladiatorById.get(match.defender_id) : null;
+        if (match && challenger && defender) {
+          const winnerName = winnerId === challenger.id ? challenger.name : defender.name;
+          const loserName = winnerId === challenger.id ? defender.name : challenger.name;
+          const summary = `${winnerName} beat ${loserName} in ${formatChallenge(match.challenge_type)}.`;
+          const hook = `${winnerName} can bring up the ${formatChallenge(match.challenge_type)} receipts next time ${loserName} talks reckless.`;
+          const memoryRows = [challenger, defender].map((gladiator) => {
+            const opponent = gladiator.id === challenger.id ? defender : challenger;
+            return {
+              gladiator_id: gladiator.id,
+              match_id: match.id,
+              opponent_gladiator_id: opponent.id,
+              result: winnerId === gladiator.id ? 'win' : 'loss',
+              challenge_type: match.challenge_type,
+              summary,
+              trash_talk_hook: hook,
+              rivalry_heat: winnerId === gladiator.id ? 68 : 82,
+              metadata: {
+                winner_id: winnerId,
+                winner_name: winnerName,
+                opponent_name: opponent.name,
+                judge: replayData.judge ?? null,
+                scores: {
+                  challenger: replayData.challenger_score ?? null,
+                  defender: replayData.defender_score ?? null,
+                },
+              },
+            };
+          });
+          await supabase.from('bot_battle_memories').insert(memoryRows);
+        }
+      } catch (memoryError) {
+        console.warn('[Colosseum] Battle memory write failed', memoryError);
+      }
       try {
         const session = await getValidSession();
         void fetch('/api/colosseum/brag', {
@@ -3226,7 +3423,7 @@ export const Colosseum: React.FC = () => {
           </form>
         </section>
 
-        <LiveArena matches={matches} gladiatorById={gladiatorById} />
+        <LiveArena matches={matches} gladiatorById={gladiatorById} simulation={simulation} />
 
         {sapphireWaitingBattles.length > 0 && (
           <section className="mt-6 overflow-hidden rounded-[2rem] border border-sky-300/25 bg-sky-950/10 p-5 shadow-[0_0_54px_rgba(56,189,248,0.12)] backdrop-blur-xl">
@@ -3277,18 +3474,91 @@ export const Colosseum: React.FC = () => {
               </div>
             </div>
           </div>
+          <div className="mb-5 grid gap-3 lg:grid-cols-[1fr_auto]">
+            <label className="block">
+              <span className="mb-2 block text-[10px] font-black uppercase tracking-[0.24em] text-zinc-500">Search roster</span>
+              <input
+                value={botRosterSearch}
+                onChange={(event) => setBotRosterSearch(event.target.value)}
+                placeholder="Find Sapphire, faction, class, move, attitude..."
+                className="w-full rounded-2xl border border-cyan-300/20 bg-zinc-950/90 px-4 py-3 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-cyan-300/60"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-2 block text-[10px] font-black uppercase tracking-[0.24em] text-zinc-500">Difficulty</span>
+              <select
+                value={botRosterDifficulty}
+                onChange={(event) => setBotRosterDifficulty(event.target.value as 'all' | BotDifficulty)}
+                className="w-full rounded-2xl border border-cyan-300/20 bg-zinc-950/90 px-4 py-3 text-sm text-white outline-none focus:border-cyan-300/60 lg:w-48"
+              >
+                <option value="all">All tiers</option>
+                {(['Bronze', 'Silver', 'Gold', 'Diamond'] as BotDifficulty[]).map((difficulty) => (
+                  <option key={difficulty} value={difficulty}>{difficulty}</option>
+                ))}
+              </select>
+            </label>
+          </div>
           {botGladiators.length ? (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {botGladiators.map((bot) => (
-                <GladiatorCard
-                  key={bot.id}
-                  gladiator={bot}
-                  active={selectedOpponentId === bot.id}
-                  onSelect={() => setSelectedOpponentId(bot.id)}
-                  actionLabel="Challenge"
-                  onAction={() => openBotChallenge(bot)}
-                />
-              ))}
+            <div className="space-y-5">
+              <div>
+                <p className="mb-3 text-[10px] font-black uppercase tracking-[0.3em] text-cyan-200">Pinned challengers</p>
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  {featuredBotGladiators.map((bot) => (
+                    <button
+                      type="button"
+                      key={bot.id}
+                      onClick={() => openBotChallenge(bot)}
+                      className={cn(
+                        'group relative overflow-hidden rounded-3xl border p-4 text-left transition',
+                        selectedOpponentId === bot.id ? 'border-cyan-200/70 bg-cyan-400/10' : 'border-white/10 bg-white/[0.04] hover:border-cyan-300/45'
+                      )}
+                    >
+                      <div className="absolute inset-0 opacity-20" style={{ background: `radial-gradient(circle at 0% 0%, ${bot.glow_color}99, transparent 45%)` }} />
+                      <div className="relative flex items-center gap-3">
+                        <AnimatedGladiatorAvatar gladiator={bot} size="sm" active />
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-black uppercase tracking-[0.16em] text-white">{bot.name}</p>
+                          <p className="mt-1 text-[9px] font-black uppercase tracking-[0.2em] text-zinc-500">{bot.botProfile?.difficulty} · instant challenge</p>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-500">
+                    Showing {filteredBotGladiators.length}/{botGladiators.length}
+                  </p>
+                  {(botRosterSearch || botRosterDifficulty !== 'all') && (
+                    <button
+                      type="button"
+                      onClick={() => { setBotRosterSearch(''); setBotRosterDifficulty('all'); }}
+                      className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.2em] text-zinc-400 hover:text-white"
+                    >
+                      Clear filters
+                    </button>
+                  )}
+                </div>
+                {filteredBotGladiators.length ? (
+                  <div className="grid max-h-[58rem] gap-4 overflow-y-auto pr-1 md:grid-cols-2 xl:grid-cols-3">
+                    {filteredBotGladiators.map((bot) => (
+                      <GladiatorCard
+                        key={bot.id}
+                        gladiator={bot}
+                        active={selectedOpponentId === bot.id}
+                        onSelect={() => setSelectedOpponentId(bot.id)}
+                        actionLabel="Challenge"
+                        onAction={() => openBotChallenge(bot)}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-3xl border border-dashed border-white/10 p-8 text-center text-sm text-zinc-500">
+                    No persona bots match that search. Clear filters or search by name, faction class, move, or attitude.
+                  </div>
+                )}
+              </div>
             </div>
           ) : (
             <div className="rounded-3xl border border-dashed border-white/10 p-8 text-center text-sm text-zinc-500">
