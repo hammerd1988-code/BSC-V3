@@ -15,6 +15,22 @@ export interface RunwayGenerateRequest {
   promptImage?: string;
 }
 
+export class RunwayRequestError extends Error {
+  status: number;
+  provider?: string;
+  adminBypass?: boolean;
+  details?: unknown;
+
+  constructor(message: string, status: number, payload: Record<string, unknown>) {
+    super(message);
+    this.name = 'RunwayRequestError';
+    this.status = status;
+    this.provider = typeof payload.provider === 'string' ? payload.provider : undefined;
+    this.adminBypass = typeof payload.adminBypass === 'boolean' ? payload.adminBypass : undefined;
+    this.details = payload.details;
+  }
+}
+
 export interface RunwayTaskResponse {
   id?: string | null;
   taskId?: string | null;
@@ -53,7 +69,7 @@ function apiBaseUrl() {
 async function parseResponse(response: Response) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload?.error || payload?.message || `Runway request failed with ${response.status}`);
+    throw new RunwayRequestError(payload?.error || payload?.message || `Runway request failed with ${response.status}`, response.status, payload);
   }
   return payload as RunwayTaskResponse;
 }

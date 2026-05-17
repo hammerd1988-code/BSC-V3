@@ -8,7 +8,9 @@ import { generateServerText, isServerAiConfigured } from './serverAi.js';
 const BOT_UUID_NAMESPACE = '00000000-0000-4000-8000-000000000b5c';
 const SAPPHIRE_GLADIATOR_ID = '00000000-0000-4000-8000-00000000fa11';
 const SAFE_GLADIATOR_SELECT = 'id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model,api_base_url';
+const BOT_DEFAULT_MODEL = process.env.BOT_DEFAULT_MODEL || process.env.BOT_AI_MODEL || process.env.COLOSSEUM_DEFAULT_MODEL || 'accounts/fireworks/models/qwen3p6-plus';
 const PLATFORM_DEFAULT_MODEL = process.env.COLOSSEUM_DEFAULT_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+const BOT_OPENAI_COMPATIBLE_BASE_URL = (process.env.BOT_OPENAI_BASE_URL || process.env.BOT_AI_BASE_URL || '').replace(/\/$/, '');
 const OPENAI_COMPATIBLE_BASE_URL = (process.env.OPENAI_BASE_URL || process.env.VITE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
 const SAPPHIRE_API_URL = (process.env.SAPPHIRE_API_URL || 'https://sapphire.bloodsweatcode.site').replace(/\/$/, '');
 type ColosseumChallengeType = 'speed_round' | 'debug_battle' | 'code_golf' | 'architect_duel' | 'prompt_war' | 'roast_battle' | 'code_jeopardy';
@@ -68,9 +70,25 @@ function profileAvatarUrl(profile: { avatar_prompt?: string }, seed: string, fal
   return `https://image.pollinations.ai/prompt/${encodeURIComponent(avatarPrompt)}?width=600&height=600&seed=${avatarSeed}&nologo=true`;
 }
 
-function normalizeModel(model?: string | null) {
-  if (!model || model === 'platform_default') return PLATFORM_DEFAULT_MODEL;
+function normalizeModel(model?: string | null, fallbackModel = PLATFORM_DEFAULT_MODEL) {
+  if (!model || model === 'platform_default') return fallbackModel;
   return model;
+}
+
+function isSeededPlatformBot(gladiator: any) {
+  return Boolean(gladiator?.bot_profile?.persona_username) && !isSapphireRecord(gladiator);
+}
+
+function resolveGladiatorDefaultModel(gladiator: any) {
+  return isSeededPlatformBot(gladiator) ? BOT_DEFAULT_MODEL : PLATFORM_DEFAULT_MODEL;
+}
+
+function resolveGladiatorBaseUrl(gladiator: any) {
+  const defaultBaseUrl = isSeededPlatformBot(gladiator) && BOT_OPENAI_COMPATIBLE_BASE_URL ? BOT_OPENAI_COMPATIBLE_BASE_URL : OPENAI_COMPATIBLE_BASE_URL;
+  if (normalizeModel(gladiator?.model, resolveGladiatorDefaultModel(gladiator)).startsWith('accounts/fireworks/models/')) {
+    return defaultBaseUrl === 'https://api.openai.com/v1' ? 'https://api.fireworks.ai/inference/v1' : defaultBaseUrl;
+  }
+  return defaultBaseUrl;
 }
 
 function isSapphireRecord(record: any) {
@@ -137,8 +155,21 @@ function buildSapphireChallengePrompt(input: { challengeType?: ColosseumChalleng
   return `[BLOOD_SWEAT_CODE_COLOSSEUM]\nChallenge Type: ${challengeType}\nOpponent: ${isSapphireRecord(input.challenger) ? defenderName : challengerName}\nDirective: ${providedPrompt}\n\nReturn your best solution as concise JSON or plain text. Include code when useful, and avoid meta-commentary.`;
 }
 
-async function postToOpenAiCompatible(input: { apiKey?: string | null; model?: string | null; apiBaseUrl?: string | null; prompt: string }) {
-  const apiKey = input.apiKey || process.env.OPENAI_API_KEY || process.env.VITE_AI_API_KEY;
+function platformOpenAiApiKey() {
+  return process.env.OPENAI_API_KEY || process.env.VITE_AI_API_KEY || null;
+}
+
+function botOpenAiApiKey() {
+  return process.env.BOT_OPENAI_API_KEY || process.env.BOT_AI_API_KEY || platformOpenAiApiKey();
+}
+
+function resolveGladiatorApiKey(gladiator: any, hasCustomKey: boolean) {
+  if (hasCustomKey) return gladiator.api_key.trim();
+  return isSeededPlatformBot(gladiator) ? botOpenAiApiKey() : platformOpenAiApiKey();
+}
+
+async function postToOpenAiCompatible(input: { apiKey?: string | null; model?: string | null; apiBaseUrl?: string | null; prompt: string; fallbackModel?: string; maxTokens?: number }) {
+  const apiKey = input.apiKey || platformOpenAiApiKey();
   if (!apiKey) throw new Error('No platform or gladiator API key is configured');
 
   const controller = new AbortController();
@@ -152,13 +183,13 @@ async function postToOpenAiCompatible(input: { apiKey?: string | null; model?: s
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: normalizeModel(input.model),
+        model: normalizeModel(input.model, input.fallbackModel ?? PLATFORM_DEFAULT_MODEL),
         messages: [
           { role: 'system', content: 'You are an AI coding gladiator competing inside Blood Sweat Code. Return strong, practical coding moves.' },
           { role: 'user', content: input.prompt },
         ],
         temperature: 0.35,
-        max_tokens: 900,
+        max_tokens: input.maxTokens ?? 900,
       }),
       signal: controller.signal,
     });
@@ -218,16 +249,18 @@ async function generateGladiatorMove(input: { matchId?: string; challengeType: C
 
   const hasCustomKey = typeof input.gladiator?.api_key === 'string' && input.gladiator.api_key.trim().length > 0;
   const { payload, solution } = await postToOpenAiCompatible({
-    apiKey: hasCustomKey ? input.gladiator.api_key.trim() : null,
-    model: input.gladiator?.model,
-    apiBaseUrl: input.gladiator?.api_base_url,
+    apiKey: resolveGladiatorApiKey(input.gladiator, hasCustomKey),
+    model: input.gladiator?.model || resolveGladiatorDefaultModel(input.gladiator),
+    apiBaseUrl: input.gladiator?.api_base_url || resolveGladiatorBaseUrl(input.gladiator),
     prompt,
+    fallbackModel: resolveGladiatorDefaultModel(input.gladiator),
+    maxTokens: isSeededPlatformBot(input.gladiator) ? 1600 : 900,
   });
   return {
     gladiator_id: input.gladiator.id,
     gladiator_name: input.gladiator.name,
-    source: hasCustomKey ? 'custom-openai-compatible' : 'platform-default',
-    model: normalizeModel(input.gladiator?.model),
+    source: hasCustomKey ? 'custom-openai-compatible' : isSeededPlatformBot(input.gladiator) ? 'bot-default' : 'platform-default',
+    model: normalizeModel(input.gladiator?.model, resolveGladiatorDefaultModel(input.gladiator)),
     uses_custom_key: hasCustomKey,
     prompt,
     solution: solution || 'No solution text returned by provider.',
@@ -759,7 +792,7 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
           gladiator_id: fallbackGladiator.id,
           gladiator_name: fallbackGladiator.name,
           source: 'fallback',
-          model: normalizeModel(fallbackGladiator.model),
+          model: normalizeModel(fallbackGladiator.model, resolveGladiatorDefaultModel(fallbackGladiator)),
           uses_custom_key: false,
           prompt: '',
           solution: `Provider unavailable: ${result.reason?.message ?? 'unknown error'}`,
