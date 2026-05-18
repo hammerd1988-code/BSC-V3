@@ -3401,7 +3401,7 @@ export const Colosseum: React.FC = () => {
                   <div className="mt-5 rounded-3xl border border-cyan-300/20 bg-black/60 p-4">
                     <div className="mb-2 flex items-center justify-between">
                       <p className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-200">Your Solution</p>
-                      <p className="text-[9px] font-bold text-zinc-500">{userSolution.trim() ? 'Ready' : 'Write code to enable battle'}</p>
+                      <p className="text-[9px] font-bold text-zinc-500">{userSolution.trim() ? 'Ready' : (selectedGladiator?.model || selectedGladiator?.botProfile) ? 'Bot AI will generate solution' : 'Write code to enable battle'}</p>
                     </div>
                     <textarea
                       value={userSolution}

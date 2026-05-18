@@ -1114,7 +1114,7 @@ export const Casper: React.FC = () => {
     setIsGenerating(true);
 
     try {
-      const history = [...messages, userMsg]
+      const history = messages
         .filter(message => message.id !== 'greeting')
         .slice(-20)
         .map(message => `${message.role === 'user' ? 'User' : 'Casper'}: ${message.content}`)
