@@ -35,7 +35,8 @@ import {
   Smile,
   Film,
   Sticker,
-  Sparkles
+  Sparkles,
+  Bot
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { useCall } from '../CallContext';
@@ -44,6 +45,8 @@ import { Transmission, Transmit, User as UserType } from '../types';
 import { format } from 'date-fns';
 import { Link, useSearchParams } from 'react-router-dom';
 import { NewTransmissionModal } from './NewTransmissionModal';
+import { GiphyPicker } from './GiphyPicker';
+import { EmojiPicker } from './EmojiPicker';
 import { playMessageSound } from '../lib/sounds';
 import { notifyNewMessage, sendPushEvent } from '../lib/notifications';
 import { encryptText, decryptText } from '../lib/crypto';
@@ -783,7 +786,7 @@ export const Transmissions: React.FC = () => {
 
     // Build conversation history from recent transmits
     const history = recentTransmits
-      .slice(-10)
+      .slice(-20)
       .map(t => {
         const role = t.sender_id === currentUserId ? 'User' : botUser.display_name || 'Bot';
         return `${role}: ${t.content}`;
@@ -802,7 +805,7 @@ export const Transmissions: React.FC = () => {
       const response = await generateText(prompt, undefined, {
         systemPrompt,
         temperature: 0.85,
-        maxTokens: 300,
+        maxTokens: 4096,
       });
 
       if (!response) return;
@@ -1232,14 +1235,19 @@ export const Transmissions: React.FC = () => {
                         </div>
                       )}
                     </div>
-                    {otherUser?.is_online && (
+                    {otherUser?.type === 'bot' ? (
+                      <div className="absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-cyan-500 rounded-full border-2 border-black flex items-center justify-center">
+                        <Bot className="w-2 h-2 text-black" />
+                      </div>
+                    ) : otherUser?.is_online ? (
                       <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-black shadow-[0_0_10px_rgba(34,197,94,0.5)]" />
-                    )}
+                    ) : null}
                   </div>
                   <div className="flex-1 text-left overflow-hidden">
                     <div className="flex items-center justify-between mb-1">
-                      <span className="font-black text-white uppercase truncate group-hover:text-accent transition-colors">
+                      <span className="font-black text-white uppercase truncate group-hover:text-accent transition-colors flex items-center gap-1.5">
                         {otherUser?.display_name || "NEURAL ENTITY"}
+                        {otherUser?.type === 'bot' && <span className="rounded bg-cyan-500/20 px-1 py-0.5 text-[7px] font-black text-cyan-400 uppercase tracking-wider">BOT</span>}
                       </span>
                       <span className="text-[10px] text-gray-700">
                         {t.updated_at ? format(new Date(t.updated_at), 'HH:mm') : ''}
@@ -1293,13 +1301,14 @@ export const Transmissions: React.FC = () => {
                       <div>
                         <Link 
                           to={`/profile/${otherUser?.username}`}
-                          className="text-sm font-black text-white uppercase italic tracking-tight hover:text-accent transition-colors"
+                          className="text-sm font-black text-white uppercase italic tracking-tight hover:text-accent transition-colors flex items-center gap-2"
                         >
                           {otherUser?.display_name || "NEURAL ENTITY"}
+                          {otherUser?.type === 'bot' && <span className="rounded-full bg-cyan-500/15 border border-cyan-500/25 px-1.5 py-0.5 text-[7px] font-black uppercase tracking-widest text-cyan-300">BOT</span>}
                         </Link>
                         <div className="text-[8px] font-black text-accent uppercase tracking-[0.3em] flex items-center gap-1">
                           <div className="w-1 h-1 bg-accent rounded-full" />
-                          Neural Link Active
+                          {otherUser?.type === 'bot' ? 'Bot Neural Link' : 'Neural Link Active'}
                         </div>
                       </div>
                     </div>
@@ -1587,35 +1596,95 @@ export const Transmissions: React.FC = () => {
                       </div>
                       <div className="max-h-80 overflow-y-auto p-4 custom-scrollbar">
                         {signalTab === 'gifs' ? (
-                          filteredGifSignals.length > 0 ? (
-                            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                              {filteredGifSignals.map(signal => (
-                                <motion.button
-                                  key={signal.id}
-                                  type="button"
-                                  whileHover={{ y: -3 }}
-                                  whileTap={{ scale: 0.98 }}
-                                  onClick={() => selectSignal({ type: 'gif', signal })}
-                                  disabled={sending || uploadingAttachment}
-                                  className="group overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] text-left transition hover:border-accent/40 hover:bg-accent/5 disabled:cursor-not-allowed disabled:opacity-40"
-                                  title={`Send ${signal.label} GIF`}
-                                >
-                                  <div className="aspect-video overflow-hidden bg-black">
-                                    <img src={signal.url} alt={signal.label} loading="lazy" className="h-full w-full object-cover opacity-80 transition duration-300 group-hover:scale-105 group-hover:opacity-100" />
-                                  </div>
-                                  <div className="p-3">
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="truncate text-[9px] font-black uppercase tracking-[0.2em] text-white">{signal.label}</span>
-                                      <span className="text-sm">{signal.emoji}</span>
-                                    </div>
-                                    <p className="mt-1 truncate text-[8px] font-bold uppercase tracking-widest text-accent/70">{signal.mood}</p>
-                                  </div>
-                                </motion.button>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-8 text-center text-[9px] font-black uppercase tracking-[0.3em] text-gray-600">No motion signals found</div>
-                          )
+                          <div>
+                            {/* Giphy Live Search */}
+                            <GiphyPicker
+                              onSelect={(gif) => {
+                                setShowSignalPicker(false);
+                                void sendTransmit({
+                                  text: message.trim() || gif.title,
+                                  attachment: {
+                                    url: gif.url,
+                                    name: `${gif.title}.gif`,
+                                    size: 0,
+                                    mime: 'image/gif',
+                                    kind: 'image',
+                                  },
+                                });
+                              }}
+                            />
+                            {/* BSC Signal Packs */}
+                            {filteredGifSignals.length > 0 && (
+                              <>
+                                <div className="flex items-center gap-3 px-4 py-2">
+                                  <div className="flex-1 h-px bg-white/5" />
+                                  <span className="text-[8px] font-black uppercase tracking-[0.3em] text-zinc-600">BSC Signal Packs</span>
+                                  <div className="flex-1 h-px bg-white/5" />
+                                </div>
+                                <div className="grid grid-cols-2 gap-3 px-4 pb-3 md:grid-cols-4">
+                                  {filteredGifSignals.map(signal => (
+                                    <motion.button
+                                      key={signal.id}
+                                      type="button"
+                                      whileHover={{ y: -3 }}
+                                      whileTap={{ scale: 0.98 }}
+                                      onClick={() => selectSignal({ type: 'gif', signal })}
+                                      disabled={sending || uploadingAttachment}
+                                      className="group overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] text-left transition hover:border-accent/40 hover:bg-accent/5 disabled:cursor-not-allowed disabled:opacity-40"
+                                      title={`Send ${signal.label} GIF`}
+                                    >
+                                      <div className="aspect-video overflow-hidden bg-black">
+                                        <img src={signal.url} alt={signal.label} loading="lazy" className="h-full w-full object-cover opacity-80 transition duration-300 group-hover:scale-105 group-hover:opacity-100" />
+                                      </div>
+                                      <div className="p-3">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="truncate text-[9px] font-black uppercase tracking-[0.2em] text-white">{signal.label}</span>
+                                          <span className="text-sm">{signal.emoji}</span>
+                                        </div>
+                                        <p className="mt-1 truncate text-[8px] font-bold uppercase tracking-widest text-accent/70">{signal.mood}</p>
+                                      </div>
+                                    </motion.button>
+                                  ))}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        ) : signalTab === 'emoji' ? (
+                          <div>
+                            {/* Full Emoji Picker with search + categories */}
+                            <EmojiPicker
+                              onSelect={(emoji) => {
+                                setMessage(prev => prev + emoji);
+                              }}
+                            />
+                            {/* BSC Emoji Signals */}
+                            {filteredTextSignals.filter(s => s.type === 'emoji').length > 0 && (
+                              <>
+                                <div className="flex items-center gap-3 px-4 py-2">
+                                  <div className="flex-1 h-px bg-white/5" />
+                                  <span className="text-[8px] font-black uppercase tracking-[0.3em] text-zinc-600">BSC Emoji Signals</span>
+                                  <div className="flex-1 h-px bg-white/5" />
+                                </div>
+                                <div className="grid grid-cols-3 gap-2 px-4 pb-3 md:grid-cols-4">
+                                  {filteredTextSignals.filter(s => s.type === 'emoji').map(signal => (
+                                    <motion.button
+                                      key={signal.id}
+                                      type="button"
+                                      whileHover={{ y: -2 }}
+                                      whileTap={{ scale: 0.98 }}
+                                      onClick={() => selectSignal({ type: 'text', signal })}
+                                      disabled={sending || uploadingAttachment}
+                                      className="rounded-2xl border border-white/10 bg-white/[0.03] p-2.5 text-left transition hover:border-accent/40 hover:bg-accent/5 disabled:cursor-not-allowed disabled:opacity-40"
+                                      title={`Add ${signal.label}`}
+                                    >
+                                      <div className="flex h-10 items-center justify-center text-xl">{signal.value}</div>
+                                      <span className="block truncate text-center text-[8px] font-black uppercase tracking-widest text-zinc-500">{signal.label}</span>
+                                    </motion.button>
+                                  ))}
+                                </div>
+                              </>
+                            )}
+                          </div>
                         ) : filteredTextSignals.length > 0 ? (
                           <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4">
                             {filteredTextSignals.map(signal => (
