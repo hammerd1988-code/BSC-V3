@@ -37,8 +37,8 @@ export const GiphyPicker: React.FC<GiphyPickerProps> = ({ onSelect, apiKey }) =>
     setLoading(true);
     try {
       const endpoint = searchQuery.trim()
-        ? `${GIPHY_BASE}/search?api_key=${key}&q=${encodeURIComponent(searchQuery)}&limit=20&offset=${newOffset}&rating=pg-13&lang=en`
-        : `${GIPHY_BASE}/trending?api_key=${key}&limit=20&offset=${newOffset}&rating=pg-13`;
+        ? `${GIPHY_BASE}/search?api_key=${encodeURIComponent(key)}&q=${encodeURIComponent(searchQuery)}&limit=20&offset=${newOffset}&rating=pg-13&lang=en`
+        : `${GIPHY_BASE}/trending?api_key=${encodeURIComponent(key)}&limit=20&offset=${newOffset}&rating=pg-13`;
 
       const res = await fetch(endpoint);
       if (!res.ok) throw new Error('Giphy API error');
