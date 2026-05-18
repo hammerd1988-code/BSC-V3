@@ -2705,8 +2705,9 @@ export const Colosseum: React.FC = () => {
     const activeChallengeType = challengeTypeOverride;
     const codingChallenge = challengeFor(defender.botProfile, activeChallengeType);
     const submittedSolution = (solutionOverride ?? userSolution).trim();
-    if (defender.botProfile && !submittedSolution) {
-      setNotice('Write your code in the arena editor before challenging a persona bot. The bot will answer with its own AI-generated solution.');
+    const challengerHasModel = Boolean(selectedGladiator?.model || selectedGladiator?.botProfile);
+    if (defender.botProfile && !submittedSolution && !challengerHasModel) {
+      setNotice('Write your code in the arena editor before challenging a persona bot — or select your own bot gladiator to let the AI fight for you.');
       return;
     }
     setSelectedOpponentId(defender.id);
@@ -3278,10 +3279,24 @@ export const Colosseum: React.FC = () => {
                     </div>
                   )}
 
+                  <div className="mt-5 rounded-3xl border border-cyan-300/20 bg-black/60 p-4">
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-200">Your Solution</p>
+                      <p className="text-[9px] font-bold text-zinc-500">{userSolution.trim() ? 'Ready' : 'Write code to enable battle'}</p>
+                    </div>
+                    <textarea
+                      value={userSolution}
+                      onChange={(event) => setUserSolution(event.target.value)}
+                      spellCheck={false}
+                      placeholder="Write your solution here..."
+                      className="min-h-36 w-full resize-y rounded-2xl border border-white/10 bg-black/75 p-3 font-mono text-xs leading-5 text-cyan-100 outline-none transition placeholder:text-zinc-600 focus:border-cyan-300/60"
+                    />
+                  </div>
+
                   <button
                     type="button"
                     onClick={() => void startChallenge()}
-                    disabled={!currentUser || countdown > 0 || starting || battleInProgress || !userSolution.trim()}
+                    disabled={!currentUser || countdown > 0 || starting || battleInProgress || (!userSolution.trim() && !selectedGladiator?.model && !selectedGladiator?.botProfile)}
                     className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-red-600 px-4 py-4 text-xs font-black uppercase tracking-[0.24em] text-white shadow-[0_0_28px_rgba(255,23,68,0.35)] transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-45"
                   >
                     {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Swords className="h-4 w-4" />}
