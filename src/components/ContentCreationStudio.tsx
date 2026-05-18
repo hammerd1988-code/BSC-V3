@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Film, Image as ImageIcon, Loader2, Play, Send, Sparkles, Wand2, CalendarClock, Layers, Upload, RefreshCw, Scissors, PanelTop, Zap } from 'lucide-react';
-import { getRunwayTask, requestRunwayGeneration, uploadStudioAsset, type RunwayTaskResponse } from '../lib/runway';
+import { getRunwayTask, requestRunwayGeneration, uploadStudioAsset, RunwayRequestError, type RunwayTaskResponse } from '../lib/runway';
+import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
 import { supabase, toDb } from '../supabase';
 import { useAuth } from '../AuthContext';
 import { cn } from '../lib/utils';
@@ -164,6 +165,7 @@ export function ContentCreationStudio() {
   const [thumbnailColor, setThumbnailColor] = useState('#00FFFF');
   const [customBgPreview, setCustomBgPreview] = useState<string>('');
   const previewRef = useRef<HTMLDivElement>(null);
+  const [providerLabel, setProviderLabel] = useState('Z-Image');
   const hasActiveGeneration = generating || Boolean(progress);
 
   const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? assets[0] ?? null;
@@ -195,17 +197,23 @@ export function ContentCreationStudio() {
         aspectRatio: safeRunwayRatio(ratio),
         ratio: safeRunwayRatio(ratio),
       });
+      const providerName = initial.provider === 'zimage' ? 'Z-Image' : 'Runway';
+      setProviderLabel(providerName);
+      setProgress(`${providerName} render in progress...`);
       const result = await pollRunwayTask(initial, setProgress);
-      if (result.status === 'FAILED') throw new Error('Runway image generation failed.');
-      if (result.status !== 'SUCCEEDED') throw new Error('Runway image generation is still processing. Try again in a moment.');
+      if (result.status === 'FAILED') throw new Error(`${providerName} image generation failed.`);
+      if (result.status !== 'SUCCEEDED') throw new Error(`${providerName} image generation is still processing. Try again in a moment.`);
       const url = getAssetUrl(result);
-      if (!url) throw new Error('Runway returned no image URL.');
+      if (!url) throw new Error(`${providerName} returned no image URL.`);
       if (asThumbnailBg) setThumbnailBg(url);
       const asset: StudioAsset = { id: crypto.randomUUID(), type: asThumbnailBg ? 'thumbnail' : 'image', url, prompt: fullPrompt, ratio, createdAt: new Date().toISOString() };
       addAsset(asset);
-      setStatus(asThumbnailBg ? 'AI background added to thumbnail creator.' : 'Image generated and saved to studio history.');
+      setStatus(asThumbnailBg ? `AI background added via ${providerName}.` : `Image generated via ${providerName} and saved to studio history.`);
     } catch (err: any) {
-      setStatus(err?.message || 'Image generation failed.');
+      const message = err instanceof RunwayRequestError
+        ? err.message
+        : err?.message || 'Image generation failed.';
+      setStatus(message);
     } finally {
       setGenerating(false);
       setProgress('');
@@ -219,15 +227,19 @@ export function ContentCreationStudio() {
     try {
       const fullPrompt = `${prompt}\nVideo preset: ${videoPreset}. Duration: ${duration}s. Format: ${videoRatio}. Cinematic movement, crisp contrast, BSC arena spectacle.`;
       const initial = await requestRunwayGeneration({ prompt: fullPrompt, type: 'video', feature: 'ai_video_generation', duration, aspectRatio: videoRatio, ratio: videoRatio });
+      setProviderLabel('Runway');
       const result = await pollRunwayTask(initial, setProgress);
-      if (result.status === 'FAILED') throw new Error('Runway video generation failed.');
+      if (result.status === 'FAILED') throw new Error('Runway video generation failed. Check your Runway account credits at https://app.runwayml.com');
       if (result.status !== 'SUCCEEDED') throw new Error('Runway video generation is still processing. Try again in a moment.');
       const url = getAssetUrl(result);
       if (!url) throw new Error('Runway returned no video URL.');
       addAsset({ id: crypto.randomUUID(), type: 'video', url, prompt: fullPrompt, ratio: videoRatio, createdAt: new Date().toISOString() });
       setStatus('Video generated and ready for short, project, or download actions.');
     } catch (err: any) {
-      setStatus(err?.message || 'Video generation failed.');
+      const message = err instanceof RunwayRequestError
+        ? err.message
+        : err?.message || 'Video generation failed.';
+      setStatus(message);
     } finally {
       setGenerating(false);
       setProgress('');
@@ -449,7 +461,10 @@ export function ContentCreationStudio() {
           <div className="forge-constellation" />
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.36em] text-cyan-200">BSC Classic // Visual Forge</p>
+              <div className="flex items-center gap-3">
+                <AnimatedCasperAvatar size="md" isActive={generating} showParticles={generating} />
+                <p className="text-[10px] font-black uppercase tracking-[0.36em] text-cyan-200">BSC Classic // Visual Forge</p>
+              </div>
               <h1 className="mt-2 text-4xl font-black uppercase italic tracking-tight md:text-6xl">Make the mayhem visible.</h1>
               <p className="mt-3 max-w-3xl text-sm leading-7 text-zinc-300">A lightweight artifact lab for the social arena: generate images, clips, thumbnails, battle cards, faction propaganda, bot posters, and feed-ready drops. No subscription pitch, no Creator OS workflow—just material for the network.</p>
             </div>
@@ -481,7 +496,7 @@ export function ContentCreationStudio() {
                       <div className="grid grid-cols-4 gap-2">{RATIOS.map((item) => <button key={item} onClick={() => setRatio(item)} className={cn('rounded-xl border px-3 py-2 text-xs font-black', ratio === item ? 'border-fuchsia-300/50 bg-fuchsia-300/15 text-fuchsia-100' : 'border-white/10 text-zinc-500')}>{item}</button>)}</div>
                       <label className="block text-[10px] font-black uppercase tracking-widest text-zinc-500">Style strength / guidance: {guidance}</label>
                       <input type="range" min={10} max={100} value={guidance} onChange={(e) => setGuidance(Number(e.target.value))} className="w-full accent-cyan-300" />
-                      <button onClick={() => void generateImage(false)} disabled={generating} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-cyan-400/20 px-4 py-4 text-xs font-black uppercase tracking-widest text-cyan-100 transition hover:bg-cyan-400/30 disabled:opacity-50">{generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Generate Image</button>
+                      <button onClick={() => void generateImage(false)} disabled={generating} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-cyan-400/20 px-4 py-4 text-xs font-black uppercase tracking-widest text-cyan-100 transition hover:bg-cyan-400/30 disabled:opacity-50">{generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Generate Image (Z-Image)</button>
                     </>
                   ) : (
                     <>
@@ -535,7 +550,7 @@ export function ContentCreationStudio() {
 
             <div className="rounded-[2rem] border border-cyan-300/15 bg-cyan-300/5 p-5">
               <h3 className="mb-3 text-xs font-black uppercase tracking-widest text-cyan-100">Classic Access</h3>
-              <p className="text-xs leading-6 text-zinc-400">Visual Forge, thumbnail creation, feed posting, Shorts, scheduling, and downloads are free-access tools for BSC Classic.</p>
+              <p className="text-xs leading-6 text-zinc-400">Image generation is powered by Z-Image (open-source, Apache 2.0). Video generation uses Runway ML and requires account credits. Thumbnails, feed posting, Shorts, scheduling, and downloads are free-access tools for BSC Classic.</p>
             </div>
           </aside>
 
@@ -550,7 +565,7 @@ export function ContentCreationStudio() {
                 <div className="grid min-h-[430px] place-items-center rounded-[2rem] border border-cyan-300/20 bg-[radial-gradient(circle_at_50%_20%,rgba(0,255,255,0.16),transparent_34%),linear-gradient(135deg,rgba(255,0,255,0.08),rgba(0,0,0,0.92))] text-center">
                   <div className="max-w-md px-6">
                     <Loader2 className="mx-auto mb-5 h-14 w-14 animate-spin text-cyan-200" />
-                    <p className="text-sm font-black uppercase tracking-[0.28em] text-white">Runway render in progress</p>
+                    <p className="text-sm font-black uppercase tracking-[0.28em] text-white">{providerLabel} render in progress</p>
                     <p className="mt-3 text-xs font-bold uppercase tracking-widest text-cyan-100/80">{progress || 'Preparing generation request...'}</p>
                     <div className="mt-6 h-2 overflow-hidden rounded-full bg-white/10">
                       <div className="h-full w-2/3 animate-pulse rounded-full bg-gradient-to-r from-cyan-300 via-fuchsia-400 to-cyan-300" />

@@ -7,6 +7,7 @@ import { ContentReport, ReportStatus, User } from '../types';
 import { Shield, Users, Activity, Edit2, Trash2, X, Check, Search, ShieldAlert, Clock, ExternalLink, Bot, Swords, Ghost, Wand2 } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
 import { DistrictCityBackdrop } from './DistrictCityBackdrop';
+import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
 
 interface SentinelIncident {
   id: string;
@@ -291,7 +292,7 @@ export const AdminDashboard: React.FC = () => {
           </div>
           <div className="grid grid-cols-1 gap-3 p-6 sm:grid-cols-2 lg:grid-cols-4">
             <Link to="/admin/casper" className="group flex items-center gap-4 rounded-xl border border-cyan-300/20 bg-cyan-950/20 p-5 transition hover:border-cyan-300/50 hover:bg-cyan-400/10">
-              <div className="rounded-lg bg-cyan-500/20 p-3 text-cyan-300 transition group-hover:scale-110"><Ghost className="h-6 w-6" /></div>
+              <AnimatedCasperAvatar size="sm" isActive={aiStatus?.agent_status === 'active'} showParticles={false} />
               <div>
                 <p className="text-sm font-black uppercase tracking-wide text-white">CasperOps</p>
                 <p className="mt-1 text-[10px] text-zinc-400">Autonomy, routines, memory</p>
