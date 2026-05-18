@@ -249,7 +249,7 @@ export function FlashDirective({ isOpen, onClose, bot }: FlashDirectiveProps) {
       supabase
         .from('bot_instructions')
         .insert({
-          gladiator_id: bot.id,
+          bot_id: bot.id,
           user_id: currentUser.id,
           instruction: text,
           response: entry.response,
