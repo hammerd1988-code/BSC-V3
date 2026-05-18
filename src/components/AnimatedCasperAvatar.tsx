@@ -5,6 +5,7 @@ import { cn } from '../lib/utils';
 interface AnimatedCasperAvatarProps {
   size?: 'sm' | 'md' | 'lg' | 'xl' | 'hero';
   isActive?: boolean;
+  isSpeaking?: boolean;
   instability?: number;
   className?: string;
   showParticles?: boolean;
@@ -13,6 +14,7 @@ interface AnimatedCasperAvatarProps {
 export const AnimatedCasperAvatar: React.FC<AnimatedCasperAvatarProps> = ({ 
   size = 'md', 
   isActive = false, 
+  isSpeaking = false,
   instability = 10,
   className,
   showParticles = true
@@ -207,6 +209,19 @@ export const AnimatedCasperAvatar: React.FC<AnimatedCasperAvatarProps> = ({
               animate={{ opacity: [0, 0.3, 0] }}
               transition={{ duration: 1.5, repeat: Infinity }}
               style={{ background: `radial-gradient(circle at center, ${glowColor} 0%, transparent 70%)` }}
+            />
+          )}
+          
+          {/* Speaking mouth glow — pulses at bottom of avatar when speaking */}
+          {isSpeaking && (
+            <motion.div
+              className="absolute bottom-0 left-0 right-0 h-[45%] pointer-events-none mix-blend-screen"
+              animate={{ opacity: [0.15, 0.55, 0.2, 0.5, 0.15] }}
+              transition={{ duration: 0.4, repeat: Infinity, ease: 'easeInOut' }}
+              style={{
+                background: 'linear-gradient(to top, rgba(0,229,255,0.6) 0%, rgba(0,229,255,0.2) 40%, transparent 100%)',
+                borderRadius: '0 0 50% 50%',
+              }}
             />
           )}
         </div>

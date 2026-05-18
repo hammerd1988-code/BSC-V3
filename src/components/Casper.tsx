@@ -1162,7 +1162,7 @@ export const Casper: React.FC = () => {
   };
 
   return (
-    <div className="min-h-[100dvh] flex flex-col relative overflow-hidden bg-[#030308] text-white">
+    <div className="min-h-[100dvh] flex flex-col relative overflow-x-hidden bg-[#030308] text-white">
       {/* Background */}
       <div className="absolute inset-0 pointer-events-none z-0">
         <VoidCanvas instability={instability} isActive={isGenerating || isListening || isSpeaking} />
@@ -1176,7 +1176,7 @@ export const Casper: React.FC = () => {
               <ArrowLeft className="w-5 h-5 text-zinc-500" />
             </button>
             <div className="relative">
-              <AnimatedCasperAvatar size="sm" isActive={isGenerating || isListening || isSpeaking} instability={instability} showParticles={isGenerating || isSpeaking} />
+              <AnimatedCasperAvatar size="sm" isActive={isGenerating || isListening || isSpeaking} isSpeaking={isSpeaking} instability={instability} showParticles={isGenerating || isSpeaking} />
               <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-500 border-2 border-[#030308] rounded-full" />
             </div>
             <div>
@@ -1564,6 +1564,7 @@ export const Casper: React.FC = () => {
                     <AnimatedCasperAvatar
                       size="hero"
                       isActive={voiceState === 'thinking' || voiceState === 'speaking'}
+                      isSpeaking={voiceState === 'speaking'}
                       instability={instability}
                       showParticles
                     />
@@ -1639,7 +1640,7 @@ export const Casper: React.FC = () => {
                 )}
               >
                 {msg.role === 'casper' ? (
-                  <div className="flex-shrink-0">
+                  <div className="flex-shrink-0 w-8 h-8 overflow-visible">
                     <AnimatedCasperAvatar size="sm" isActive={false} instability={instability} showParticles={false} />
                   </div>
                 ) : (
@@ -1660,8 +1661,8 @@ export const Casper: React.FC = () => {
           </AnimatePresence>
           {isGenerating && (
             <div className="flex gap-4 mb-6">
-              <div className="flex-shrink-0">
-                <AnimatedCasperAvatar size="sm" isActive={true} instability={instability} showParticles={true} />
+              <div className="flex-shrink-0 w-8 h-8 overflow-visible">
+                <AnimatedCasperAvatar size="sm" isActive={true} isSpeaking={true} instability={instability} showParticles={true} />
               </div>
               <div className="bg-black/40 border border-white/5 px-4 py-3 rounded-2xl rounded-tl-none backdrop-blur-md">
                 <div className="flex gap-1">
