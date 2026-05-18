@@ -1010,7 +1010,7 @@ function terminalSnippetFor(move: GladiatorAiMove | undefined, fallbackName: str
 }
 
 function visibleTerminalText(text: string, progress: number, minimumCharacters = 28) {
-  const minimum = text.length > 0 ? Math.min(28, text.length) : 0;
+  const minimum = text.length > 0 ? Math.min(minimumCharacters, text.length) : 0;
   const visibleLength = Math.min(text.length, Math.max(minimum, minimumCharacters, Math.ceil(text.length * Math.max(progress, 0) / 100)));
   return text.slice(0, visibleLength);
 }
