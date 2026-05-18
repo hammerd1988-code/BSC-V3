@@ -424,10 +424,26 @@ const TABS: Array<{ id: ForgeTab; label: string; icon: React.ElementType; accent
   { id: 'analytics', label: 'Analytics', icon: BarChart3, accent: '#ffab00' },
 ];
 
-async function ensurePlatformBotGladiatorsForForge() {
+function isGladiatorRow(value: unknown): value is GladiatorRow {
+  if (!value || typeof value !== 'object') return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.id === 'string' && typeof row.user_id === 'string' && typeof row.name === 'string';
+}
+
+async function ensurePlatformBotGladiatorsForForge(timeoutMs = 3500) {
+  const fetchWithTimeout = async (url: string) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { method: 'POST', signal: controller.signal });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
   const results = await Promise.allSettled([
-    fetch('/api/colosseum/persona-bots/ensure', { method: 'POST' }),
-    fetch('/api/colosseum/sapphire/ensure', { method: 'POST' }),
+    fetchWithTimeout('/api/colosseum/persona-bots/ensure'),
+    fetchWithTimeout('/api/colosseum/sapphire/ensure'),
   ]);
   const ensured: GladiatorRow[] = [];
   for (const result of results) {
@@ -435,11 +451,12 @@ async function ensurePlatformBotGladiatorsForForge() {
     const response = result.value;
     if (!response.ok) continue;
     try {
-      const payload = await response.json();
-      for (const gladiator of Array.isArray(payload.gladiators) ? payload.gladiators : []) {
+      const payload = await response.json() as { gladiators?: unknown; gladiator?: unknown };
+      for (const gladiator of Array.isArray(payload.gladiators) ? payload.gladiators.filter(isGladiatorRow) : []) {
         if (!ensured.some((existing) => existing.id === gladiator.id)) ensured.push(gladiator);
       }
-      if (payload.gladiator && !ensured.some((existing) => existing.id === payload.gladiator.id)) ensured.push(payload.gladiator);
+      const singleGladiator = payload.gladiator;
+      if (isGladiatorRow(singleGladiator) && !ensured.some((existing) => existing.id === singleGladiator.id)) ensured.push(singleGladiator);
     } catch (error) {
       console.warn('[BotForge] Unable to parse ensured platform gladiators', error);
     }
@@ -480,28 +497,49 @@ export function BotForge() {
 
   // Load gladiators owned by this user, or all gladiators for the admin autonomy console
   useEffect(() => {
-    if (!currentUser?.id) return;
+    if (!currentUser?.id) {
+      setGladiators([]);
+      setSelectedGladiator(null);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
     (async () => {
       setLoading(true);
-      const ensuredGladiators = isAdmin ? await ensurePlatformBotGladiatorsForForge() : [];
-      let query = supabase
-        .from('gladiators')
-        .select('*')
-        .order('created_at', { ascending: false });
-      if (!isAdmin) query = query.eq('user_id', currentUser.id);
-      const { data, error } = await query;
-      const roster = isAdmin && ensuredGladiators.length > 0 && (error || !data?.length)
-        ? ensuredGladiators
-        : data ?? [];
-      if (error && roster.length === 0) { handleDbError(error, 'load gladiators'); setLoading(false); return; }
-      if (error) console.warn('[BotForge] Falling back to ensured platform gladiator roster after admin query failed', error);
-      setGladiators(roster);
+      try {
+        const ensurePromise = isAdmin ? ensurePlatformBotGladiatorsForForge() : Promise.resolve([]);
+        let query = supabase
+          .from('gladiators')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (!isAdmin) query = query.eq('user_id', currentUser.id);
+        const [{ data, error }, ensuredGladiators] = await Promise.all([query, ensurePromise]);
+        if (cancelled) return;
+        const roster = isAdmin && ensuredGladiators.length > 0 && (error || !data?.length)
+          ? ensuredGladiators
+          : data ?? [];
+        if (error && roster.length === 0) {
+          handleDbError(error, 'load gladiators');
+        }
+        if (error && ensuredGladiators.length > 0) console.warn('[BotForge] Falling back to ensured platform gladiator roster after admin query failed', error);
+        setGladiators(roster);
 
-      // Auto-select from URL param or first
-      const match = roster.find((g: GladiatorRow) => g.id === gladiatorParam) ?? roster[0] ?? null;
-      if (match) setSelectedGladiator(match);
-      setLoading(false);
+        // Auto-select from URL param or first
+        const match = roster.find((g: GladiatorRow) => g.id === gladiatorParam) ?? roster[0] ?? null;
+        setSelectedGladiator(match);
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('[BotForge] Unable to load gladiators', error);
+          setGladiators([]);
+          setSelectedGladiator(null);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [currentUser?.id, gladiatorParam, isAdmin]);
 
   // Load forge config when gladiator changes
