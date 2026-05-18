@@ -515,6 +515,38 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
   animation: arena-lattice-pulse 3.2s ease-in-out infinite;
 }
 
+.casper-judge-ray {
+  position: absolute;
+  bottom: -5rem;
+  left: 50%;
+  width: 8rem;
+  height: 18rem;
+  transform-origin: bottom center;
+  background: linear-gradient(to top, rgba(250, 204, 21, 0.38), rgba(34, 211, 238, 0.18), transparent 76%);
+  filter: blur(10px);
+  animation: casper-judge-ray 4.8s ease-in-out infinite;
+}
+
+.casper-verdict-ring {
+  animation: casper-verdict-ring 9s linear infinite;
+}
+
+.terminal-data-rain {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(34, 197, 94, 0.09) 0 1px,
+    transparent 1px 11px
+  );
+  animation: terminal-data-rain 1.8s linear infinite;
+}
+
+.district-city-scan {
+  background:
+    linear-gradient(90deg, transparent 0 32%, rgba(255, 255, 255, 0.055) 48%, transparent 66%),
+    repeating-linear-gradient(to bottom, transparent 0 14px, rgba(255, 255, 255, 0.035) 15px, transparent 16px 31px);
+  animation: district-city-scan 10s linear infinite;
+}
+
 .forge-hero-card {
   position: relative;
 }
@@ -676,6 +708,32 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
 @keyframes arena-lattice-pulse {
   0%, 100% { opacity: 0.38; filter: drop-shadow(0 0 8px rgba(255, 23, 68, 0.2)); }
   50% { opacity: 0.75; filter: drop-shadow(0 0 18px rgba(0, 229, 255, 0.3)); }
+}
+
+@keyframes casper-judge-ray {
+  0%, 100% { transform: rotate(-12deg) scaleY(0.92); opacity: 0.18; }
+  50% { transform: rotate(12deg) scaleY(1.12); opacity: 0.46; }
+}
+
+@keyframes casper-verdict-ring {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes terminal-data-rain {
+  from { background-position: 0 0; }
+  to { background-position: 0 44px; }
+}
+
+@keyframes district-window-flicker {
+  0%, 100% { opacity: 0.34; }
+  18%, 72% { opacity: 0.95; }
+  45% { opacity: 0.55; }
+}
+
+@keyframes district-city-scan {
+  from { background-position: 0 0, 0 0; }
+  to { background-position: 120px 0, 0 72px; }
 }
 
 @keyframes forge-constellation-drift {

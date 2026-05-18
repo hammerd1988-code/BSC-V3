@@ -42,6 +42,7 @@ import { supabase } from '../supabase';
 import { getValidSession } from '../lib/authSession';
 import { handleDbError } from '../lib/errors';
 import { cn } from '../lib/utils';
+import { DistrictCityBackdrop } from './DistrictCityBackdrop';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -658,6 +659,14 @@ export function BotForge() {
         <div className="absolute top-0 right-1/4 w-96 h-96 bg-purple-500/5 rounded-full blur-[120px]" />
 
         <div className="relative mx-auto max-w-7xl px-4 py-8">
+          <DistrictCityBackdrop
+            variant="forge"
+            compact
+            title="Bot Forge District"
+            subtitle="Persona foundry // autonomy labs // gladiator garages"
+            className="mb-6"
+          />
+
           <div className="flex items-center gap-4 mb-6">
             <button onClick={() => navigate('/colosseum')} className="rounded-lg border border-white/10 bg-white/5 p-2 hover:bg-white/10 transition">
               <ArrowLeft className="h-4 w-4" />
