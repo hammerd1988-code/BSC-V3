@@ -2818,8 +2818,10 @@ export const Colosseum: React.FC = () => {
     const submittedSolution = (solutionOverride ?? userSolution).trim();
     const challengerHasModel = Boolean(selectedGladiator?.model || selectedGladiator?.botProfile);
     if (defender.botProfile && !submittedSolution && !challengerHasModel) {
-      setNotice('Write your code in the arena editor before challenging a persona bot — or select your own bot gladiator to let the AI fight for you.');
-      return;
+      const fallback = localArenaFallbackSolution({ challengeType: activeChallengeType, opponent: defender, prompt: codingChallenge.prompt });
+      if (fallback) {
+        return startChallenge(defender, activeChallengeType, fallback);
+      }
     }
     setSelectedOpponentId(defender.id);
     setStarting(true);
@@ -3416,11 +3418,11 @@ export const Colosseum: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => void startChallenge()}
-                    disabled={!currentUser || countdown > 0 || starting || battleInProgress || (!userSolution.trim() && !selectedGladiator?.model && !selectedGladiator?.botProfile)}
+                    disabled={!currentUser || countdown > 0 || starting || battleInProgress}
                     className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-red-600 px-4 py-4 text-xs font-black uppercase tracking-[0.24em] text-white shadow-[0_0_28px_rgba(255,23,68,0.35)] transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-45"
                   >
                     {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Swords className="h-4 w-4" />}
-                    {!currentUser ? 'Sign In To Enter' : countdown > 0 ? 'Gate Charging' : selectedGladiator ? 'Enter Code Battle' : 'Auto-Forge And Enter Code Battle'}
+                    {!currentUser ? 'Sign In To Enter' : countdown > 0 ? 'Gate Charging' : starting ? 'Forging...' : selectedGladiator ? 'Enter Code Battle' : 'Auto-Forge & Fight'}
                   </button>
                 </div>
               </motion.div>

@@ -1176,9 +1176,7 @@ export const Casper: React.FC = () => {
               <ArrowLeft className="w-5 h-5 text-zinc-500" />
             </button>
             <div className="relative">
-              <div className={cn("w-10 h-10 rounded-full border border-cyan-500/30 overflow-hidden", isGenerating && "ring-2 ring-cyan-400/40 ring-offset-1 ring-offset-[#030308]")}>
-                <img src="/casper-runway-128.png" alt="Casper" className="w-full h-full object-cover" />
-              </div>
+              <AnimatedCasperAvatar size="sm" isActive={isGenerating || isListening || isSpeaking} instability={instability} showParticles={isGenerating || isSpeaking} />
               <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-500 border-2 border-[#030308] rounded-full" />
             </div>
             <div>
@@ -1640,16 +1638,15 @@ export const Casper: React.FC = () => {
                   msg.role === 'user' ? "flex-row-reverse" : "flex-row"
                 )}
               >
-                <div className={cn(
-                  "w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 border overflow-hidden",
-                  msg.role === 'casper' 
-                    ? "border-cyan-500/30" 
-                    : "bg-white/5 border-white/10 text-zinc-400"
-                )}>
-                  {msg.role === 'casper'
-                    ? <img src="/casper-runway-128.png" alt="Casper" className="w-full h-full object-cover" />
-                    : <User className="w-4 h-4" />}
-                </div>
+                {msg.role === 'casper' ? (
+                  <div className="flex-shrink-0">
+                    <AnimatedCasperAvatar size="sm" isActive={false} instability={instability} showParticles={false} />
+                  </div>
+                ) : (
+                  <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 border overflow-hidden bg-white/5 border-white/10 text-zinc-400">
+                    <User className="w-4 h-4" />
+                  </div>
+                )}
                 <div className={cn(
                   "max-w-[80%] px-4 py-3 rounded-2xl text-sm leading-relaxed",
                   msg.role === 'user' 
@@ -1663,8 +1660,8 @@ export const Casper: React.FC = () => {
           </AnimatePresence>
           {isGenerating && (
             <div className="flex gap-4 mb-6">
-              <div className="w-8 h-8 rounded-full border border-cyan-500/30 overflow-hidden ring-2 ring-cyan-400/30 ring-offset-1 ring-offset-[#030308]">
-                <img src="/casper-runway-128.png" alt="Casper" className="w-full h-full object-cover animate-pulse" />
+              <div className="flex-shrink-0">
+                <AnimatedCasperAvatar size="sm" isActive={true} instability={instability} showParticles={true} />
               </div>
               <div className="bg-black/40 border border-white/5 px-4 py-3 rounded-2xl rounded-tl-none backdrop-blur-md">
                 <div className="flex gap-1">
