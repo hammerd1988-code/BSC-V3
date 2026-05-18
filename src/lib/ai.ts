@@ -91,7 +91,7 @@ async function callOpenAICompatible(
     model: config.model,
     messages,
     temperature: options.temperature ?? 0.8,
-    max_tokens: options.maxTokens ?? 512,
+    max_tokens: options.maxTokens ?? 4096,
   };
 
   if (options.jsonResponse) {

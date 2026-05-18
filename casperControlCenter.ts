@@ -716,7 +716,7 @@ function buildClientExecutionPayload(
   const temperature = typeof userSettings.temperature === 'number'
     ? userSettings.temperature
     : Number(responseStyle.temperature ?? 0.55);
-  const maxTokens = Number(responseStyle.max_tokens ?? 900);
+  const maxTokens = Number(responseStyle.max_tokens ?? 4096);
   const composedSystemPrompt = userSettings.systemPromptOverride
     ? `${systemPrompt}\n\n---\n\n[User custom instructions]\n${userSettings.systemPromptOverride}`
     : systemPrompt;
@@ -761,7 +761,7 @@ async function callOpenAICompatible(input: {
   const temperature = typeof userSettings.temperature === 'number'
     ? userSettings.temperature
     : Number(responseStyle.temperature ?? 0.55);
-  const maxTokens = Number(responseStyle.max_tokens ?? 900);
+  const maxTokens = Number(responseStyle.max_tokens ?? 4096);
 
   // Compose the final system prompt: surface persona (already in
   // input.systemPrompt) + optional per-user override appended last so
@@ -842,7 +842,7 @@ async function callOpenAICompatibleWithToolLoop(input: {
   const temperature = typeof userSettings.temperature === 'number'
     ? userSettings.temperature
     : Number(responseStyle.temperature ?? 0.55);
-  const maxTokens = Number(responseStyle.max_tokens ?? 1500);
+  const maxTokens = Number(responseStyle.max_tokens ?? 4096);
 
   const systemPrompt = userSettings.systemPromptOverride
     ? `${input.systemPrompt}\n\n---\n\n[User custom instructions]\n${userSettings.systemPromptOverride}`
