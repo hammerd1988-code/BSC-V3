@@ -1717,11 +1717,15 @@ function ArenaStage({
             </h3>
             <p className="mt-2 max-w-xl text-xs leading-6 text-zinc-400">{meta.arena}</p>
           </div>
-          <div className="rounded-2xl border border-white/10 bg-black/55 px-3 py-2 text-right">
-            <p className="text-[8px] font-black uppercase tracking-[0.22em] text-zinc-500">Casper Status</p>
+          <div className="rounded-2xl border border-yellow-200/20 bg-black/65 px-3 py-2 text-right shadow-[0_0_24px_rgba(250,204,21,0.1)]">
+            <p className="text-[8px] font-black uppercase tracking-[0.22em] text-yellow-200">Casper Live Judge</p>
             <p className="mt-1 text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: meta.accent }}>
-              {matchComplete ? 'Thumb Verdict Cast' : 'Thumb Hovering'}
+              {matchComplete ? 'Verdict Presence Online' : 'Watching The Code Build'}
             </p>
+            <div className="mt-2 flex justify-end gap-2 text-[8px] font-black uppercase tracking-[0.18em] text-zinc-400">
+              <span>Code Streams</span>
+              <span className="text-cyan-100">2 visible</span>
+            </div>
           </div>
         </div>
 
