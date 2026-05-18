@@ -819,6 +819,13 @@ export function BotForge() {
               <Phone className="h-4 w-4" />
               Voice Chat
             </button>
+            <button
+              onClick={() => navigate(`/transmissions?target=${selectedGladiator.user_id || selectedGladiator.id}`)}
+              className="flex items-center gap-2 rounded-xl border border-pink-400/30 bg-pink-400/10 px-4 py-2.5 text-xs font-bold text-pink-300 hover:bg-pink-400/20 transition-all"
+            >
+              <Send className="h-4 w-4" />
+              DM via Transmissions
+            </button>
           </div>
 
           {/* Independence Tier Banner */}
