@@ -120,7 +120,7 @@ export async function generateServerText(
 ): Promise<ServerAIResult> {
   const systemPrompt = options.systemPrompt || 'You are Casper, the Blood Sweat Code AI assistant.';
   const temperature = options.temperature ?? 0.8;
-  const maxTokens = options.maxTokens ?? 512;
+  const maxTokens = options.maxTokens ?? 4096;
   const apiKeyOverride = (options.apiKeyOverride || '').trim();
   const baseUrlOverride = (options.baseUrlOverride || '').trim();
   const errors: string[] = [];
