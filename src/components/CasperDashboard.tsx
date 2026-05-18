@@ -42,6 +42,7 @@ import { fromDb, supabase, toDb } from '../supabase';
 import { cn } from '../lib/utils';
 import { casperAuthFetch } from '../lib/casperApi';
 import { sendCasperFollowup } from '../lib/casper';
+import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
 import {
   AVAILABLE_CASPER_INTEGRATIONS,
   CASPER_INTEGRATION_CATEGORIES,
@@ -613,7 +614,10 @@ export const CasperDashboard: React.FC = () => {
         <motion.header initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }} className="mb-8 flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
           <div>
             <div className="mb-4 inline-flex items-center gap-3 rounded-full border border-cyan-300/20 bg-cyan-950/20 px-4 py-2 text-[10px] font-black uppercase tracking-[0.32em] text-cyan-100 shadow-[0_0_30px_rgba(0,229,255,0.12)]"><span className="relative flex h-2.5 w-2.5"><span className="absolute h-full w-full animate-ping rounded-full bg-cyan-300 opacity-75" /><span className="relative h-2.5 w-2.5 rounded-full bg-cyan-200" /></span>BSC Classic Bot Control</div>
-            <h1 className="text-4xl font-black uppercase tracking-[-0.04em] text-white sm:text-7xl">Casper<span className="text-cyan-200 drop-shadow-[0_0_22px_rgba(0,229,255,0.85)]">Ops</span></h1>
+            <div className="flex items-center gap-4">
+              <AnimatedCasperAvatar size="lg" isActive={!loading && runtime?.agent_status !== 'idle'} instability={state.energy_level} showParticles={runtime?.queue_busy === true} />
+              <h1 className="text-4xl font-black uppercase tracking-[-0.04em] text-white sm:text-7xl">Casper<span className="text-cyan-200 drop-shadow-[0_0_22px_rgba(0,229,255,0.85)]">Ops</span></h1>
+            </div>
             <p className="mt-4 max-w-3xl text-sm leading-7 text-zinc-400">Admin control for Casper behavior, bot routines, memory inspection, task orchestration, integrations, and safety boundaries that keep autonomous mayhem entertaining instead of uncontrolled.</p>
           </div>
           <div className="grid gap-3 sm:grid-cols-4">

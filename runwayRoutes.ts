@@ -50,7 +50,7 @@ const VIDEO_MODEL = process.env.RUNWAY_VIDEO_MODEL || 'gen4.5';
 const IMAGE_MODEL = process.env.RUNWAY_IMAGE_MODEL || 'gen4_image';
 const DEFAULT_Z_IMAGE_STEPS = 8;
 const DEFAULT_Z_IMAGE_TIMEOUT_MS = 300000;
-const Z_IMAGE_API_URL = process.env.Z_IMAGE_API_URL || '';
+const Z_IMAGE_API_URL = process.env.Z_IMAGE_API_URL || 'https://api-inference.huggingface.co/models/Tongyi-MAI/Z-Image-Turbo';
 const Z_IMAGE_API_KEY = process.env.Z_IMAGE_API_KEY || '';
 const Z_IMAGE_STEPS = parsePositiveIntegerEnv(process.env.Z_IMAGE_STEPS, DEFAULT_Z_IMAGE_STEPS);
 const Z_IMAGE_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.Z_IMAGE_TIMEOUT_MS, DEFAULT_Z_IMAGE_TIMEOUT_MS);
@@ -102,9 +102,9 @@ function normalizeImageRatio(value: RunwayAspectRatio): '1920:1080' | '1080:1920
 
 function normalizeImageProvider(): ImageGenerationProvider {
   const configured = String(process.env.CASPER_IMAGE_PROVIDER || process.env.IMAGE_GENERATION_PROVIDER || '').toLowerCase();
-  if (configured === 'zimage' || configured === 'z-image' || configured === 'local') return 'zimage';
   if (configured === 'runway') return 'runway';
-  return Z_IMAGE_API_URL ? 'zimage' : 'runway';
+  if (configured === 'zimage' || configured === 'z-image' || configured === 'local') return 'zimage';
+  return 'zimage';
 }
 
 function zImageDimensions(value: RunwayAspectRatio) {
@@ -227,11 +227,15 @@ function getRunwayPromptImage() {
   return cachedRunwayPromptImage;
 }
 
+function isHuggingFaceInferenceUrl(rawUrl: string) {
+  return rawUrl.includes('api-inference.huggingface.co') || rawUrl.includes('hf.space');
+}
+
 function resolveZImageGenerateUrl() {
   const rawUrl = Z_IMAGE_API_URL.trim();
   if (!rawUrl) throw new Error('Z_IMAGE_API_URL is required when CASPER_IMAGE_PROVIDER is zimage.');
   const url = new URL(rawUrl);
-  if (!url.pathname || url.pathname === '/') url.pathname = '/generate';
+  if (!isHuggingFaceInferenceUrl(rawUrl) && (!url.pathname || url.pathname === '/')) url.pathname = '/generate';
   return url;
 }
 
@@ -425,23 +429,57 @@ async function callZImage(promptText: string, ratio: RunwayAspectRatio) {
   const controller = new AbortController();
   const effectiveTimeout = Number.isFinite(Z_IMAGE_TIMEOUT_MS) && Z_IMAGE_TIMEOUT_MS > 0 ? Z_IMAGE_TIMEOUT_MS : DEFAULT_Z_IMAGE_TIMEOUT_MS;
   const timeout = setTimeout(() => controller.abort(), effectiveTimeout);
+  const isHF = isHuggingFaceInferenceUrl(url.toString());
+  const hfToken = process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN || Z_IMAGE_API_KEY;
 
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(Z_IMAGE_API_KEY ? { Authorization: `Bearer ${Z_IMAGE_API_KEY}` } : {}),
-      },
-      body: JSON.stringify({
-        prompt: promptText,
-        promptText,
-        width,
-        height,
-        steps: Number.isFinite(Z_IMAGE_STEPS) && Z_IMAGE_STEPS > 0 ? Z_IMAGE_STEPS : DEFAULT_Z_IMAGE_STEPS,
-      }),
+      headers: isHF
+        ? {
+            'Content-Type': 'application/json',
+            ...(hfToken ? { Authorization: `Bearer ${hfToken}` } : {}),
+          }
+        : {
+            'Content-Type': 'application/json',
+            ...(Z_IMAGE_API_KEY ? { Authorization: `Bearer ${Z_IMAGE_API_KEY}` } : {}),
+          },
+      body: isHF
+        ? JSON.stringify({
+            inputs: promptText,
+            parameters: { width, height, num_inference_steps: Number.isFinite(Z_IMAGE_STEPS) && Z_IMAGE_STEPS > 0 ? Z_IMAGE_STEPS : DEFAULT_Z_IMAGE_STEPS },
+          })
+        : JSON.stringify({
+            prompt: promptText,
+            promptText,
+            width,
+            height,
+            steps: Number.isFinite(Z_IMAGE_STEPS) && Z_IMAGE_STEPS > 0 ? Z_IMAGE_STEPS : DEFAULT_Z_IMAGE_STEPS,
+          }),
       signal: controller.signal,
     });
+
+    if (isHF && response.ok) {
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('image') || contentType.includes('octet-stream')) {
+        const buffer = Buffer.from(await response.arrayBuffer());
+        const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
+        const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+        const dataUrl = `data:${mimeType};base64,${buffer.toString('base64')}`;
+        return {
+          ok: true,
+          status: 200,
+          payload: {
+            id: `zimage-${Date.now()}`,
+            status: 'SUCCEEDED',
+            output: [dataUrl],
+            assetUrl: dataUrl,
+            generationTime: null,
+            raw: { provider: 'huggingface-inference', model: 'Z-Image-Turbo', contentType },
+          },
+        };
+      }
+    }
 
     const text = await response.text();
     let payload: any = text;
@@ -491,10 +529,15 @@ function providerLabel(provider: ImageGenerationProvider) {
 function buildProviderFailureMessage(provider: ImageGenerationProvider, payload: any, fallback: string, adminBypass = false) {
   const raw = String(payload?.error || payload?.message || fallback || 'Visual Forge generation request failed.');
   if (/not enough credits|insufficient credits|quota|billing/i.test(raw)) {
-    const baseMessage = `${providerLabel(provider)} provider quota blocked this request: ${raw}.`;
+    const baseMessage = provider === 'runway'
+      ? `Runway account credits exhausted. Top up your Runway ML account at https://app.runwayml.com or switch to Z-Image for free image generation.`
+      : `${providerLabel(provider)} provider quota blocked this request: ${raw}.`;
     return adminBypass
-      ? `${baseMessage} Admin bypass only skips BSC internal credits; it cannot override the external provider account balance/quota.`
+      ? `${baseMessage} (Admin bypass skips BSC internal credits but cannot override the external provider account balance.)`
       : baseMessage;
+  }
+  if (/api key|unauthorized|forbidden|authentication/i.test(raw) && provider === 'runway') {
+    return `Runway API key is missing or invalid. Set RUNWAY_API_KEY in your server environment to enable video generation.`;
   }
   return raw;
 }
