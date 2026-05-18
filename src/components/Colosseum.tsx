@@ -43,6 +43,8 @@ import { handleDbError } from '../lib/errors';
 import { cn } from '../lib/utils';
 import { BOT_GLADIATOR_PROFILE_BY_USERNAME, type BotDifficulty } from '../lib/botGladiatorProfiles';
 import { ReportModal } from './ReportModal';
+import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
+import { DistrictCityBackdrop } from './DistrictCityBackdrop';
 
 type ChallengeType = 'speed_round' | 'debug_battle' | 'code_golf' | 'architect_duel' | 'prompt_war' | 'roast_battle' | 'code_jeopardy';
 
@@ -895,6 +897,29 @@ function sanitizeCombatantMoves(moves: GladiatorAiMove[], challengeType: Challen
   });
 }
 
+function ensureCombatantTerminalMoves(moves: GladiatorAiMove[], challengeType: ChallengeType, challenger: Gladiator, defender: Gladiator, prompt?: string) {
+  const sanitized = sanitizeCombatantMoves(moves, challengeType, challenger, defender, prompt);
+  const now = new Date().toISOString();
+  const byId = new Map(sanitized.map((move) => [String(move.gladiator_id), move]));
+
+  return [challenger, defender].map((gladiator) => {
+    const existing = byId.get(String(gladiator.id));
+    if (existing?.solution?.trim()) return existing;
+    const opponent = gladiator.id === challenger.id ? defender : challenger;
+    return {
+      gladiator_id: gladiator.id,
+      gladiator_name: gladiator.name,
+      source: 'local-live-terminal',
+      model: gladiator.model ?? 'arena-fallback-compiler',
+      uses_custom_key: false,
+      prompt: prompt ?? buildCombatChallengePrompt(challengeType, challenger, defender),
+      solution: localArenaFallbackSolution({ challengeType, gladiator, opponent, prompt }),
+      latency_ms: 0,
+      received_at: now,
+    };
+  });
+}
+
 function formatElapsed(startedAt: string, now: number) {
   const started = new Date(startedAt).getTime();
   if (!Number.isFinite(started)) return '00:00';
@@ -973,7 +998,7 @@ function replayAiMoves(replayData: Record<string, any> | null): GladiatorAiMove[
 }
 
 function terminalSnippetFor(move: GladiatorAiMove | undefined, fallbackName: string, challengeType: ChallengeType) {
-  if (move?.solution?.trim()) return move.solution.trim();
+  if (move?.solution?.trim() && !containsProviderErrorPayload(move.solution)) return move.solution.trim();
   const directive = challengeType === 'code_jeopardy'
     ? 'answer = "Awaiting clue parse and confidence lock..."'
     : challengeType === 'architect_duel'
@@ -984,9 +1009,9 @@ function terminalSnippetFor(move: GladiatorAiMove | undefined, fallbackName: str
   return `// ${fallbackName} terminal warming\n${directive}`;
 }
 
-function visibleTerminalText(text: string, progress: number) {
-  const minimum = text.length > 0 ? Math.min(28, text.length) : 0;
-  const visibleLength = Math.min(text.length, Math.max(minimum, Math.ceil(text.length * Math.max(progress, 0) / 100)));
+function visibleTerminalText(text: string, progress: number, minimumCharacters = 28) {
+  const minimum = text.length > 0 ? Math.min(minimumCharacters, text.length) : 0;
+  const visibleLength = Math.min(text.length, Math.max(minimum, minimumCharacters, Math.ceil(text.length * Math.max(progress, 0) / 100)));
   return text.slice(0, visibleLength);
 }
 
@@ -1006,9 +1031,10 @@ function CombatantTerminal({
   const glow = gladiator?.glow_color ?? '#22c55e';
   const name = gladiator?.name ?? label;
   const snippet = terminalSnippetFor(move, name, challengeType);
-  const visibleText = visibleTerminalText(snippet, progress);
+  const visibleText = visibleTerminalText(snippet, progress, 120);
   const model = move?.model || (gladiator?.model ?? 'queued-model');
   const latency = typeof move?.latency_ms === 'number' ? `${move.latency_ms}ms` : 'warming';
+  const safeSource = move?.source ?? 'live-compiler';
 
   return (
     <motion.div
@@ -1019,6 +1045,7 @@ function CombatantTerminal({
       style={{ borderColor: `${glow}44` }}
     >
       <div className="absolute inset-0 opacity-20" style={{ background: `radial-gradient(circle at 18% 0%, ${glow}88, transparent 34%)` }} />
+      <div className="terminal-data-rain absolute inset-0 opacity-35" />
       <div className="relative flex items-center justify-between border-b border-white/10 bg-white/[0.03] px-4 py-3">
         <div className="min-w-0">
           <p className="text-[9px] font-black uppercase tracking-[0.3em]" style={{ color: glow }}>{label} Terminal</p>
@@ -1031,7 +1058,7 @@ function CombatantTerminal({
       </div>
       <div className="relative border-b border-white/10 bg-zinc-950/80 px-4 py-2">
         <div className="flex items-center justify-between text-[8px] font-black uppercase tracking-[0.22em] text-zinc-500">
-          <span>{move?.source ?? 'live-compiler'}</span>
+          <span>{safeSource}</span>
           <span>{Math.round(progress)}%</span>
         </div>
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
@@ -1045,6 +1072,8 @@ function CombatantTerminal({
       <pre className="relative min-h-72 max-h-96 overflow-auto whitespace-pre-wrap p-4 font-mono text-[11px] leading-5 text-green-100">
         <span className="select-none text-red-300">$ </span>
         <span className="text-zinc-500">{`stream --combatant="${name}"`}</span>{'\n'}
+        <span className="select-none text-cyan-300">$ </span>
+        <span className="text-zinc-500">{`model=${model} source=${safeSource} latency=${latency}`}</span>{'\n\n'}
         {visibleText}
         {progress < 100 && <motion.span animate={{ opacity: [0, 1, 0] }} transition={{ duration: 0.8, repeat: Infinity }} className="text-green-300">▌</motion.span>}
       </pre>
@@ -1574,6 +1603,75 @@ function CombatantPortrait({ gladiator, label }: { gladiator?: Gladiator; label:
   );
 }
 
+function casperJudgeLine(input: { status: SimulationState['status'] | 'replay'; challenger?: Gladiator; defender?: Gladiator; challengerProgress: number; defenderProgress: number; matchComplete: boolean }) {
+  const challengerName = input.challenger?.name ?? 'Red Corner';
+  const defenderName = input.defender?.name ?? 'Shadow Cage';
+  if (input.matchComplete) return `Verdict sealed. ${challengerName} and ${defenderName} both left receipts in the terminal logs.`;
+  if (input.status === 'booting') return 'Casper is locking the arena, syncing both code streams, and watching for clean execution.';
+  if (input.challengerProgress > input.defenderProgress + 12) return `${challengerName} has tempo. Casper is checking whether speed is still correct.`;
+  if (input.defenderProgress > input.challengerProgress + 12) return `${defenderName} is surging. Casper is scanning for substance behind the flex.`;
+  return 'Casper is judging live: correctness first, then style, speed, and spectacle.';
+}
+
+function CasperJudgePresence({
+  challenger,
+  defender,
+  challengerProgress,
+  defenderProgress,
+  status,
+  matchComplete,
+}: {
+  challenger?: Gladiator;
+  defender?: Gladiator;
+  challengerProgress: number;
+  defenderProgress: number;
+  status: SimulationState['status'] | 'replay';
+  matchComplete: boolean;
+}) {
+  const line = casperJudgeLine({ status, challenger, defender, challengerProgress, defenderProgress, matchComplete });
+  const heat = Math.min(95, Math.max(20, Math.round((challengerProgress + defenderProgress) / 2)));
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16, scale: 0.96 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      className="relative overflow-hidden rounded-[2rem] border border-yellow-200/25 bg-black/75 p-4 shadow-[0_0_48px_rgba(250,204,21,0.13)]"
+    >
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_15%,rgba(250,204,21,0.22),transparent_36%),radial-gradient(circle_at_20%_100%,rgba(0,229,255,0.12),transparent_36%)]" />
+      <div className="casper-judge-ray -translate-x-1/2" />
+      <div className="casper-judge-ray -translate-x-1/2 [animation-delay:-2.4s]" />
+      <div className="relative grid gap-4 sm:grid-cols-[auto_1fr] sm:items-center">
+        <div className="relative mx-auto grid h-32 w-32 place-items-center">
+          <div className="casper-verdict-ring absolute inset-0 rounded-full border border-dashed border-yellow-200/35" />
+          <div className="casper-verdict-ring absolute inset-3 rounded-full border border-cyan-200/20 [animation-direction:reverse] [animation-duration:6s]" />
+          <AnimatedCasperAvatar size="xl" isActive instability={matchComplete ? 28 : 44 + Math.round(heat / 2)} />
+        </div>
+        <div>
+          <p className="text-[9px] font-black uppercase tracking-[0.32em] text-yellow-200">Casper Live Judge</p>
+          <h3 className="mt-1 text-xl font-black uppercase tracking-[0.16em] text-white">
+            {matchComplete ? 'Verdict Presence Online' : 'Watching The Code Build'}
+          </h3>
+          <p className="mt-3 text-sm leading-6 text-zinc-300">{line}</p>
+          <div className="mt-4 grid gap-2 text-[9px] font-black uppercase tracking-[0.2em] text-zinc-500 sm:grid-cols-3">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+              <span className="block text-yellow-100">Signal Heat</span>
+              <span>{heat}%</span>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+              <span className="block text-cyan-100">Code Streams</span>
+              <span>2 visible</span>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+              <span className="block text-red-100">Mode</span>
+              <span>{matchComplete ? 'verdict' : status}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 function ArenaStage({
   challenger,
   defender,
@@ -1619,11 +1717,15 @@ function ArenaStage({
             </h3>
             <p className="mt-2 max-w-xl text-xs leading-6 text-zinc-400">{meta.arena}</p>
           </div>
-          <div className="rounded-2xl border border-white/10 bg-black/55 px-3 py-2 text-right">
-            <p className="text-[8px] font-black uppercase tracking-[0.22em] text-zinc-500">Casper Status</p>
+          <div className="rounded-2xl border border-yellow-200/20 bg-black/65 px-3 py-2 text-right shadow-[0_0_24px_rgba(250,204,21,0.1)]">
+            <p className="text-[8px] font-black uppercase tracking-[0.22em] text-yellow-200">Casper Live Judge</p>
             <p className="mt-1 text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: meta.accent }}>
-              {matchComplete ? 'Thumb Verdict Cast' : 'Thumb Hovering'}
+              {matchComplete ? 'Verdict Presence Online' : 'Watching The Code Build'}
             </p>
+            <div className="mt-2 flex justify-end gap-2 text-[8px] font-black uppercase tracking-[0.18em] text-zinc-400">
+              <span>Code Streams</span>
+              <span className="text-cyan-100">2 visible</span>
+            </div>
           </div>
         </div>
 
@@ -1662,7 +1764,7 @@ function ArenaStage({
               className="absolute h-0.5 w-16 rounded-full bg-gradient-to-r from-transparent via-yellow-100 to-transparent"
             />
             <div className="relative grid h-24 w-24 place-items-center rounded-full border border-yellow-200/25 bg-black/75">
-              <Crown className="h-10 w-10 text-yellow-200 drop-shadow-[0_0_18px_rgba(250,204,21,0.9)]" />
+              <AnimatedCasperAvatar size="lg" isActive instability={matchComplete ? 26 : 58} />
               <span className="absolute -bottom-6 whitespace-nowrap text-[8px] font-black uppercase tracking-[0.24em] text-yellow-100/80">Casper Judge</span>
             </div>
           </div>
@@ -1869,6 +1971,7 @@ function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSele
   const defenderProgress = activeSimulation?.defenderProgress ?? Number(visibleReplayData?.defender_progress ?? replayProgress);
   const challengerMove = terminalMoves.find((move) => move.gladiator_id === challenger?.id);
   const defenderMove = terminalMoves.find((move) => move.gladiator_id === defender?.id);
+  const judgeStatus = activeSimulation?.status ?? (visibleMatch?.completed_at ? 'complete' : 'replay');
 
   useEffect(() => {
     setReplayIndex(0);
@@ -1953,6 +2056,14 @@ function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSele
 
               <div className="grid gap-4 lg:grid-cols-[1.05fr_1fr]">
                 <div className="space-y-4">
+                  <CasperJudgePresence
+                    challenger={challenger}
+                    defender={defender}
+                    challengerProgress={challengerProgress}
+                    defenderProgress={defenderProgress}
+                    status={judgeStatus}
+                    matchComplete={Boolean(visibleMatch.completed_at)}
+                  />
                   <ArenaStage
                     challenger={challenger}
                     defender={defender}
@@ -2768,7 +2879,7 @@ export const Colosseum: React.FC = () => {
         log: bootLogs,
         winnerId: null,
         status: 'booting',
-        aiMoves: [],
+        aiMoves: ensureCombatantTerminalMoves([], activeChallengeType, challenger, defender, battlePrompt),
         terminalStartedAt: new Date().toISOString(),
       });
       setMatches((prev) => [match, ...prev]);
@@ -2795,7 +2906,7 @@ export const Colosseum: React.FC = () => {
 
       void requestGladiatorAiMoves(match, activeChallengeType, challenger, defender, battlePrompt).then((moves) => {
         let sapphireMove: SapphireMove | null = null;
-        const aiMoves = sanitizeCombatantMoves(moves, activeChallengeType, challenger, defender, battlePrompt);
+        const aiMoves = ensureCombatantTerminalMoves(moves, activeChallengeType, challenger, defender, battlePrompt);
         const sapphireGeneratedMove = aiMoves.find((move) => move.source === 'sapphire-api');
         sapphireMove = sapphireGeneratedMove ? {
           source: sapphireGeneratedMove.source,
@@ -2823,7 +2934,8 @@ export const Colosseum: React.FC = () => {
       }).catch((err) => {
         console.warn('[Colosseum] Gladiator AI solution generation failed', err);
         window.clearTimeout(fallbackTimer);
-        launchSimulation([...bootLogs, 'Server-side AI cores did not answer. Local judge will score the submitted code instead of stalling.'], null, []);
+        const aiMoves = ensureCombatantTerminalMoves([], activeChallengeType, challenger, defender, battlePrompt);
+        launchSimulation([...bootLogs, 'Server-side AI cores did not answer. Casper switched both terminals to live-code fallback instead of stalling.'], null, aiMoves);
       });
     } catch (err) {
       handleDbError(err, 'CREATE', 'matches');
@@ -2834,7 +2946,7 @@ export const Colosseum: React.FC = () => {
   };
 
   const runSimulation = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, openingLogs: string[], sapphireMove?: SapphireMove | null, aiMoves: GladiatorAiMove[] = [], codingChallenge = challengeFor(defender.botProfile, type), submittedSolution = '') => {
-    const sanitizedAiMoves = sanitizeCombatantMoves(aiMoves, type, challenger, defender, buildCombatChallengePrompt(type, challenger, defender));
+    const sanitizedAiMoves = ensureCombatantTerminalMoves(aiMoves, type, challenger, defender, buildCombatChallengePrompt(type, challenger, defender));
     const challengerMove = sanitizedAiMoves.find((move) => move.gladiator_id === challenger.id);
     const defenderMove = sanitizedAiMoves.find((move) => move.gladiator_id === defender.id);
     const finalLogs = [...openingLogs];
@@ -2998,7 +3110,7 @@ export const Colosseum: React.FC = () => {
         log: bootLogs,
         winnerId: null,
         status: 'booting',
-        aiMoves: [],
+        aiMoves: ensureCombatantTerminalMoves([], match.challenge_type, challenger, sapphire, buildCombatChallengePrompt(match.challenge_type, challenger, sapphire)),
         terminalStartedAt: new Date().toISOString(),
       });
       const rawSapphireMove = await requestSapphireMove(match, match.challenge_type, challenger, sapphire);
@@ -3178,6 +3290,13 @@ export const Colosseum: React.FC = () => {
             </div>
           </div>
         </motion.header>
+
+        <DistrictCityBackdrop
+          variant="colosseum"
+          title="Colosseum District"
+          subtitle="Arena towers // code pits // Casper judgment rail"
+          className="mb-6"
+        />
 
         <section className="mb-6 overflow-hidden rounded-[2rem] border border-cyan-300/20 bg-cyan-950/10 p-5 shadow-[0_0_42px_rgba(0,229,255,0.1)]">
           <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
