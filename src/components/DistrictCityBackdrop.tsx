@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useId, useMemo } from 'react';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 
@@ -116,12 +116,16 @@ function DistrictBuildingSvg({ building, index, labels }: { building: DistrictBu
 }
 
 export function DistrictCityBackdrop({ variant = 'colosseum', title, subtitle, className, compact = false }: DistrictCityBackdropProps) {
+  const fadeId = useId();
   const theme = DISTRICT_THEME[variant];
   const buildings = useMemo(() => buildDistrictBuildings(theme.seed), [theme.seed]);
   const height = compact ? 150 : 220;
 
   return (
-    <section className={cn('relative overflow-hidden rounded-[2rem] border border-white/10 bg-black/70 shadow-[0_0_58px_rgba(255,23,68,0.1)]', className)}>
+    <section
+      className={cn('relative overflow-hidden rounded-[2rem] border border-white/10 bg-black/70', className)}
+      style={{ boxShadow: `0 0 58px ${theme.glow}` }}
+    >
       <div className="absolute inset-0 bg-gradient-to-b from-[#05000d] via-[#090111] to-black" />
       <div className="district-city-scan absolute inset-0 opacity-50" />
       <div className="absolute -left-20 top-0 h-64 w-64 rounded-full blur-3xl" style={{ backgroundColor: theme.glow }} />
@@ -140,9 +144,9 @@ export function DistrictCityBackdrop({ variant = 'colosseum', title, subtitle, c
               <DistrictBuildingSvg key={`front-${index}`} building={building} index={index} labels={theme.labels} />
             ))}
           </g>
-          <rect y={height - 40} width={820} height={42} fill="url(#fade)" opacity={0.8} />
+          <rect y={height - 40} width={820} height={42} fill={`url(#${fadeId})`} opacity={0.8} />
           <defs>
-            <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id={fadeId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="transparent" />
               <stop offset="100%" stopColor="#000" />
             </linearGradient>
