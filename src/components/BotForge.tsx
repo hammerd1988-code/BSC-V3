@@ -36,6 +36,9 @@ import {
   Wrench,
   X,
   Zap,
+  MessagesSquare,
+  Phone,
+  Image,
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -43,6 +46,8 @@ import { getValidSession } from '../lib/authSession';
 import { handleDbError } from '../lib/errors';
 import { cn } from '../lib/utils';
 import { DistrictCityBackdrop } from './DistrictCityBackdrop';
+import { FlashDirective } from './FlashDirective';
+import { AvatarBuilderModal } from './AvatarBuilderModal';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -164,6 +169,8 @@ interface GladiatorRow {
   losses: number;
   cred: number;
   created_at: string;
+  model: string | null;
+  api_base_url: string | null;
 }
 
 interface SparMessage {
@@ -485,6 +492,10 @@ export function BotForge() {
   const [sparDraft, setSparDraft] = useState('');
   const [sparring, setSparring] = useState(false);
 
+  // Flash Directive & Avatar Builder modal state
+  const [showFlashDirective, setShowFlashDirective] = useState(false);
+  const [showAvatarBuilder, setShowAvatarBuilder] = useState(false);
+
   // Analytics
   const [computeBalance, setComputeBalance] = useState(0);
   const [recentTransactions, setRecentTransactions] = useState<any[]>([]);
@@ -778,6 +789,38 @@ export function BotForge() {
 
       {!selectedGladiator ? null : (
         <div className="mx-auto max-w-7xl px-4 py-6">
+          {/* Quick Actions Bar */}
+          <div className="mb-4 flex flex-wrap gap-2">
+            <button
+              onClick={() => navigate(`/bot/chat?gladiator=${selectedGladiator.id}`)}
+              className="flex items-center gap-2 rounded-xl border border-cyan-400/30 bg-cyan-400/10 px-4 py-2.5 text-xs font-bold text-cyan-300 hover:bg-cyan-400/20 transition-all"
+            >
+              <MessagesSquare className="h-4 w-4" />
+              Chat with Bot
+            </button>
+            <button
+              onClick={() => setShowFlashDirective(true)}
+              className="flex items-center gap-2 rounded-xl border border-yellow-400/30 bg-yellow-400/10 px-4 py-2.5 text-xs font-bold text-yellow-300 hover:bg-yellow-400/20 transition-all"
+            >
+              <Zap className="h-4 w-4" />
+              Flash Directive
+            </button>
+            <button
+              onClick={() => setShowAvatarBuilder(true)}
+              className="flex items-center gap-2 rounded-xl border border-purple-400/30 bg-purple-400/10 px-4 py-2.5 text-xs font-bold text-purple-300 hover:bg-purple-400/20 transition-all"
+            >
+              <Image className="h-4 w-4" />
+              Avatar Builder
+            </button>
+            <button
+              onClick={() => navigate(`/bot/chat?gladiator=${selectedGladiator.id}&voice=1`)}
+              className="flex items-center gap-2 rounded-xl border border-green-400/30 bg-green-400/10 px-4 py-2.5 text-xs font-bold text-green-300 hover:bg-green-400/20 transition-all"
+            >
+              <Phone className="h-4 w-4" />
+              Voice Chat
+            </button>
+          </div>
+
           {/* Independence Tier Banner */}
           <div className="mb-6 rounded-xl border p-4 flex items-center justify-between" style={{ borderColor: `${tier.color}30`, backgroundColor: `${tier.color}08` }}>
             <div className="flex items-center gap-3">
@@ -1387,6 +1430,31 @@ export function BotForge() {
             )}
           </AnimatePresence>
         </div>
+      )}
+
+      {/* Flash Directive Modal */}
+      {selectedGladiator && showFlashDirective && (
+        <FlashDirective
+          isOpen={showFlashDirective}
+          onClose={() => setShowFlashDirective(false)}
+          bot={selectedGladiator}
+        />
+      )}
+
+      {/* Avatar Builder Modal */}
+      {showAvatarBuilder && (
+        <AvatarBuilderModal
+          isOpen={showAvatarBuilder}
+          onClose={() => setShowAvatarBuilder(false)}
+          onApply={(base64) => {
+            if (selectedGladiator) {
+              setSelectedGladiator({ ...selectedGladiator, avatar_url: base64 });
+              setGladiators((prev) => prev.map((g) => g.id === selectedGladiator.id ? { ...g, avatar_url: base64 } : g));
+              supabase.from('gladiators').update({ avatar_url: base64 }).eq('id', selectedGladiator.id).then(() => {});
+            }
+          }}
+          botName={selectedGladiator?.name}
+        />
       )}
     </div>
   );

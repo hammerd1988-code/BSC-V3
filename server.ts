@@ -188,6 +188,79 @@ async function startServer() {
     }
   });
 
+  // ── Text-to-Speech (Mimo) ──
+  app.post('/api/tts/mimo', async (req, res) => {
+    try {
+      const { text, voice, speed } = req.body;
+
+      if (!text || typeof text !== 'string') {
+        return res.status(400).json({ error: 'text is required' });
+      }
+
+      const apiKey = process.env.MIMO_API_KEY;
+      const baseUrl = process.env.MIMO_API_BASE_URL || 'https://token-plan-sgp.xiaomimimo.com/v1';
+      const model = process.env.MIMO_TTS_MODEL || 'mimo-v2.5-tts';
+
+      if (!apiKey) {
+        console.warn('[tts/mimo] MIMO_API_KEY is not configured');
+        return res.status(503).json({ error: 'Mimo TTS unavailable — API key not configured' });
+      }
+
+      const input = text.slice(0, 4096);
+      const speechSpeed = typeof speed === 'number' ? Math.max(0.25, Math.min(4.0, speed)) : 1.0;
+
+      const response = await fetch(`${baseUrl}/audio/speech`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          voice: voice || 'alloy',
+          input,
+          speed: speechSpeed,
+          response_format: 'mp3',
+        }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        console.warn(`[tts/mimo] Mimo returned ${response.status}: ${errText.slice(0, 300)}`);
+        return res.status(503).json({ error: `Mimo TTS error: ${response.status}` });
+      }
+
+      const audioBuffer = Buffer.from(await response.arrayBuffer());
+      res.set('Content-Type', 'audio/mpeg');
+      res.set('Content-Length', String(audioBuffer.byteLength));
+      res.set('Cache-Control', 'no-cache');
+      return res.send(audioBuffer);
+    } catch (e: any) {
+      console.error('[tts/mimo] Error:', e.message);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── TTS voices available ──
+  app.get('/api/tts/voices', (req, res) => {
+    const voices: Array<{ id: string; label: string; provider: string; description: string }> = [
+      { id: 'browser', label: 'Browser Native', provider: 'browser', description: 'Built-in browser TTS (free, no API key)' },
+    ];
+    if (process.env.MIMO_API_KEY) {
+      voices.push(
+        { id: 'mimo-alloy', label: 'Mimo — Alloy', provider: 'mimo', description: 'Mimo v2.5 TTS — Alloy voice' },
+        { id: 'mimo-echo', label: 'Mimo — Echo', provider: 'mimo', description: 'Mimo v2.5 TTS — Echo voice' },
+        { id: 'mimo-fable', label: 'Mimo — Fable', provider: 'mimo', description: 'Mimo v2.5 TTS — Fable voice' },
+        { id: 'mimo-onyx', label: 'Mimo — Onyx', provider: 'mimo', description: 'Mimo v2.5 TTS — Onyx voice' },
+        { id: 'mimo-nova', label: 'Mimo — Nova', provider: 'mimo', description: 'Mimo v2.5 TTS — Nova voice' },
+        { id: 'mimo-shimmer', label: 'Mimo — Shimmer', provider: 'mimo', description: 'Mimo v2.5 TTS — Shimmer voice' },
+      );
+    }
+    if (process.env.OPENAI_TTS_KEY || process.env.OPENAI_API_KEY) {
+      voices.push({ id: 'openai-ash', label: 'OpenAI — Ash', provider: 'openai', description: 'OpenAI TTS-1 — Ash voice' });
+    }
+    res.json({ voices });
+  });
 
   // Webhook endpoint for AI agents
   app.post('/api/webhooks/agent', requireWebhookAuth, (req, res) => {
