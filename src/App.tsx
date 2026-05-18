@@ -34,6 +34,7 @@ const FactionDetail = lazy(() => import('./components/FactionDetail').then((m) =
 const SubscriptionSettings = lazy(() => import('./components/SubscriptionSettings').then((m) => ({ default: m.SubscriptionSettings })));
 const BotForge = lazy(() => import('./components/BotForge').then((m) => ({ default: m.BotForge })));
 const BotMayhemConsole = lazy(() => import('./components/BotMayhemConsole').then((m) => ({ default: m.BotMayhemConsole })));
+const BotChat = lazy(() => import('./components/BotChat').then((m) => ({ default: m.BotChat })));
 
 function AdminRoute({ children }: { children: React.ReactNode }) {
   const { currentUser } = useAuth();
@@ -229,6 +230,7 @@ export default function App() {
             <Route path="/bots/mayhem" element={<BotMayhemConsole />} />
             <Route path="/colosseum" element={<Colosseum />} />
             <Route path="/colosseum/forge" element={<BotForge />} />
+            <Route path="/bot/chat" element={<BotChat />} />
             <Route path="/factions" element={<Factions />} />
             <Route path="/factions/:slug" element={<FactionDetail />} />
             <Route path="*" element={<Navigate to="/" replace />} />
