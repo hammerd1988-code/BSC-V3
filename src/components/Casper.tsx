@@ -1116,13 +1116,14 @@ export const Casper: React.FC = () => {
     try {
       const history = [...messages, userMsg]
         .filter(message => message.id !== 'greeting')
-        .slice(-10)
+        .slice(-20)
         .map(message => `${message.role === 'user' ? 'User' : 'Casper'}: ${message.content}`)
         .join('\n');
       const prompt = history ? `${history}\nUser: ${text}\nCasper:` : text;
       const response = await generateText(prompt, aiSettings, {
         systemPrompt: `${CASPER_SYSTEM_PROMPT}\n\nEnabled Casper integrations for this user:\n${integrationContext}`,
         temperature: 0.8,
+        maxTokens: 2048,
       });
       const casperText = response || "The void is silent. Try again?";
 

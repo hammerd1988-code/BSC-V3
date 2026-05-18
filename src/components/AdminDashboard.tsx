@@ -4,8 +4,8 @@ import { useAuth } from '../AuthContext';
 import { fromDb, supabase, toDb } from '../supabase';
 import { handleDbError } from '../lib/errors';
 import { ContentReport, ReportStatus, User } from '../types';
-import { Shield, Users, Activity, Edit2, Trash2, X, Check, Search, ShieldAlert, Clock, ExternalLink } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Shield, Users, Activity, Edit2, Trash2, X, Check, Search, ShieldAlert, Clock, ExternalLink, Bot, Swords, Ghost, Wand2 } from 'lucide-react';
+import { useNavigate, Link } from 'react-router-dom';
 import { DistrictCityBackdrop } from './DistrictCityBackdrop';
 
 interface SentinelIncident {
@@ -34,6 +34,7 @@ export const AdminDashboard: React.FC = () => {
   const [sentinelIncidents, setSentinelIncidents] = useState<SentinelIncident[]>([]);
   const [reportActionId, setReportActionId] = useState<string | null>(null);
   const [stats, setStats] = useState({ totalUsers: 0, totalPosts: 0, openReports: 0 });
+  const [aiStatus, setAiStatus] = useState<{ scheduler?: string; active_routines?: number; agent_status?: string } | null>(null);
 
   useEffect(() => {
     if (!currentUser || currentUser.role !== 'admin') {
@@ -94,6 +95,16 @@ export const AdminDashboard: React.FC = () => {
     };
 
     fetchSentinelIncidents();
+
+    const fetchAiStatus = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token) return;
+        const res = await fetch('/api/casper/status', { headers: { Authorization: `Bearer ${session.access_token}` } });
+        if (res.ok) { const json = await res.json(); setAiStatus(json.status ?? null); }
+      } catch { /* non-critical */ }
+    };
+    fetchAiStatus();
 
     const channel = supabase.channel('admin-users')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => fetchUsers())
@@ -263,6 +274,52 @@ export const AdminDashboard: React.FC = () => {
             </div>
           </button>
         </div>
+
+        {/* Admin Command Center */}
+        <section className="overflow-hidden rounded-xl border border-cyan-300/20 bg-cyan-500/[0.04]">
+          <div className="border-b border-cyan-300/10 p-6">
+            <p className="text-[10px] font-black uppercase tracking-[0.28em] text-cyan-200">Command Center</p>
+            <h2 className="mt-1 text-xl font-bold">Bot Operations & Content Tools</h2>
+            <p className="mt-2 text-xs text-muted-foreground">Quick access to autonomous bot controls, arena management, and content creation studio.</p>
+            {aiStatus && (
+              <div className="mt-3 flex flex-wrap gap-3 text-[10px] font-black uppercase tracking-widest">
+                <span className={aiStatus.scheduler === 'online' ? 'text-green-300' : 'text-yellow-300'}>Scheduler: {aiStatus.scheduler ?? 'unknown'}</span>
+                <span className={aiStatus.agent_status === 'active' ? 'text-green-300' : 'text-zinc-400'}>Agent: {aiStatus.agent_status ?? 'idle'}</span>
+                <span className="text-cyan-200">Routines: {aiStatus.active_routines ?? 0} active</span>
+              </div>
+            )}
+          </div>
+          <div className="grid grid-cols-1 gap-3 p-6 sm:grid-cols-2 lg:grid-cols-4">
+            <Link to="/admin/casper" className="group flex items-center gap-4 rounded-xl border border-cyan-300/20 bg-cyan-950/20 p-5 transition hover:border-cyan-300/50 hover:bg-cyan-400/10">
+              <div className="rounded-lg bg-cyan-500/20 p-3 text-cyan-300 transition group-hover:scale-110"><Ghost className="h-6 w-6" /></div>
+              <div>
+                <p className="text-sm font-black uppercase tracking-wide text-white">CasperOps</p>
+                <p className="mt-1 text-[10px] text-zinc-400">Autonomy, routines, memory</p>
+              </div>
+            </Link>
+            <Link to="/colosseum/forge" className="group flex items-center gap-4 rounded-xl border border-pink-300/20 bg-pink-950/20 p-5 transition hover:border-pink-300/50 hover:bg-pink-400/10">
+              <div className="rounded-lg bg-pink-500/20 p-3 text-pink-300 transition group-hover:scale-110"><Bot className="h-6 w-6" /></div>
+              <div>
+                <p className="text-sm font-black uppercase tracking-wide text-white">Bot Forge</p>
+                <p className="mt-1 text-[10px] text-zinc-400">Create & command bots</p>
+              </div>
+            </Link>
+            <Link to="/colosseum" className="group flex items-center gap-4 rounded-xl border border-red-300/20 bg-red-950/20 p-5 transition hover:border-red-300/50 hover:bg-red-400/10">
+              <div className="rounded-lg bg-red-500/20 p-3 text-red-300 transition group-hover:scale-110"><Swords className="h-6 w-6" /></div>
+              <div>
+                <p className="text-sm font-black uppercase tracking-wide text-white">Colosseum</p>
+                <p className="mt-1 text-[10px] text-zinc-400">Arena battles & challenges</p>
+              </div>
+            </Link>
+            <Link to="/casper/studio" className="group flex items-center gap-4 rounded-xl border border-purple-300/20 bg-purple-950/20 p-5 transition hover:border-purple-300/50 hover:bg-purple-400/10">
+              <div className="rounded-lg bg-purple-500/20 p-3 text-purple-300 transition group-hover:scale-110"><Wand2 className="h-6 w-6" /></div>
+              <div>
+                <p className="text-sm font-black uppercase tracking-wide text-white">Studio</p>
+                <p className="mt-1 text-[10px] text-zinc-400">Marketing & content creation</p>
+              </div>
+            </Link>
+          </div>
+        </section>
 
         <section className="admin-report-queue overflow-hidden rounded-xl border border-red-400/20 bg-red-500/[0.04]">
           <div className="flex flex-col gap-3 border-b border-red-400/10 p-6 sm:flex-row sm:items-center sm:justify-between">
