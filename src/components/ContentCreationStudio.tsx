@@ -165,6 +165,7 @@ export function ContentCreationStudio() {
   const [thumbnailColor, setThumbnailColor] = useState('#00FFFF');
   const [customBgPreview, setCustomBgPreview] = useState<string>('');
   const previewRef = useRef<HTMLDivElement>(null);
+  const [providerLabel, setProviderLabel] = useState('Z-Image');
   const hasActiveGeneration = generating || Boolean(progress);
 
   const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? assets[0] ?? null;
@@ -197,6 +198,7 @@ export function ContentCreationStudio() {
         ratio: safeRunwayRatio(ratio),
       });
       const providerName = initial.provider === 'zimage' ? 'Z-Image' : 'Runway';
+      setProviderLabel(providerName);
       setProgress(`${providerName} render in progress...`);
       const result = await pollRunwayTask(initial, setProgress);
       if (result.status === 'FAILED') throw new Error(`${providerName} image generation failed.`);
@@ -225,6 +227,7 @@ export function ContentCreationStudio() {
     try {
       const fullPrompt = `${prompt}\nVideo preset: ${videoPreset}. Duration: ${duration}s. Format: ${videoRatio}. Cinematic movement, crisp contrast, BSC arena spectacle.`;
       const initial = await requestRunwayGeneration({ prompt: fullPrompt, type: 'video', feature: 'ai_video_generation', duration, aspectRatio: videoRatio, ratio: videoRatio });
+      setProviderLabel('Runway');
       const result = await pollRunwayTask(initial, setProgress);
       if (result.status === 'FAILED') throw new Error('Runway video generation failed. Check your Runway account credits at https://app.runwayml.com');
       if (result.status !== 'SUCCEEDED') throw new Error('Runway video generation is still processing. Try again in a moment.');
@@ -562,7 +565,7 @@ export function ContentCreationStudio() {
                 <div className="grid min-h-[430px] place-items-center rounded-[2rem] border border-cyan-300/20 bg-[radial-gradient(circle_at_50%_20%,rgba(0,255,255,0.16),transparent_34%),linear-gradient(135deg,rgba(255,0,255,0.08),rgba(0,0,0,0.92))] text-center">
                   <div className="max-w-md px-6">
                     <Loader2 className="mx-auto mb-5 h-14 w-14 animate-spin text-cyan-200" />
-                    <p className="text-sm font-black uppercase tracking-[0.28em] text-white">{mode === 'video' ? 'Runway' : 'Z-Image'} render in progress</p>
+                    <p className="text-sm font-black uppercase tracking-[0.28em] text-white">{providerLabel} render in progress</p>
                     <p className="mt-3 text-xs font-bold uppercase tracking-widest text-cyan-100/80">{progress || 'Preparing generation request...'}</p>
                     <div className="mt-6 h-2 overflow-hidden rounded-full bg-white/10">
                       <div className="h-full w-2/3 animate-pulse rounded-full bg-gradient-to-r from-cyan-300 via-fuchsia-400 to-cyan-300" />
