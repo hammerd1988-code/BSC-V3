@@ -2949,6 +2949,7 @@ export const Colosseum: React.FC = () => {
     const sanitizedAiMoves = ensureCombatantTerminalMoves(aiMoves, type, challenger, defender, buildCombatChallengePrompt(type, challenger, defender));
     const challengerMove = sanitizedAiMoves.find((move) => move.gladiator_id === challenger.id);
     const defenderMove = sanitizedAiMoves.find((move) => move.gladiator_id === defender.id);
+    const effectiveChallengerSolution = submittedSolution || challengerMove?.solution || '';
     const finalLogs = [...openingLogs];
     const replayBase = {
       intro: `${challenger.name} challenged ${defender.name}`,
@@ -2963,10 +2964,10 @@ export const Colosseum: React.FC = () => {
       challenge_difficulty: codingChallenge.difficulty,
       challenge_prompt: codingChallenge.prompt,
       expected_solution_signals: codingChallenge.expected,
-      user_solution: submittedSolution,
+      user_solution: effectiveChallengerSolution,
       bot_solution: defenderMove?.solution ?? '',
     };
-    const initialChallengerScore = clampBattleScore(42 + userSolutionBonus(submittedSolution, codingChallenge, type) + aiMoveBonus(challengerMove, type));
+    const initialChallengerScore = clampBattleScore(42 + userSolutionBonus(effectiveChallengerSolution, codingChallenge, type) + aiMoveBonus(challengerMove, type));
     const initialDefenderScore = clampBattleScore(42 + aiMoveBonus(defenderMove, type) + botProfileScoreBonus(defender.botProfile, type) + (isSapphireGladiator(defender) ? sapphireSolutionBonus(sapphireMove, type) : 0));
     const combatLines = combatLinesFor(type, challenger, defender, codingChallenge);
 
@@ -3003,7 +3004,7 @@ export const Colosseum: React.FC = () => {
               match,
               type,
               challenge: codingChallenge,
-              userSolution: submittedSolution,
+              userSolution: effectiveChallengerSolution,
               botSolution: defenderMove?.solution ?? '',
               moves: sanitizedAiMoves,
             });
@@ -3014,7 +3015,7 @@ export const Colosseum: React.FC = () => {
               challenge: codingChallenge,
               challenger,
               defender,
-              userSolution: submittedSolution,
+              userSolution: effectiveChallengerSolution,
               botSolution: defenderMove?.solution ?? '',
               moves: sanitizedAiMoves,
               error: error?.message ?? 'unknown judge error',
