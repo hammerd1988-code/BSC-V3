@@ -9,6 +9,7 @@ import type { Faction, FactionDirectorPlaybook, FactionMember, FactionPost } fro
 import { FOUNDING_FACTIONS, getFactionGradient, getFactionLore, slugifyFaction } from '../lib/factionLore';
 import { FactionSigil } from './FactionSigil';
 import { ReportModal } from './ReportModal';
+import { DistrictCityBackdrop } from './DistrictCityBackdrop';
 
 const EXAMPLE_FACTIONS = FOUNDING_FACTIONS.map((faction) => faction.name);
 
@@ -196,6 +197,12 @@ export const Factions: React.FC = () => {
       <div className="bsc-rift bsc-rift-a" />
       <div className="bsc-rift bsc-rift-b" />
       <main className="max-w-6xl mx-auto px-4 py-8">
+        <DistrictCityBackdrop
+          variant="factions"
+          title="Faction Row"
+          subtitle="House towers // recruitment signs // rivalry streets"
+          className="mb-8"
+        />
         <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-black/60 p-6 md:p-8 mb-8 shadow-[0_0_60px_rgba(255,0,80,0.08)]">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(255,0,80,0.2),transparent_30%),radial-gradient(circle_at_80%_10%,rgba(34,211,238,0.16),transparent_35%)]" />
           <div className="forge-constellation" />

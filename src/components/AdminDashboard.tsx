@@ -6,6 +6,7 @@ import { handleDbError } from '../lib/errors';
 import { ContentReport, ReportStatus, User } from '../types';
 import { Shield, Users, Activity, Edit2, Trash2, X, Check, Search, ShieldAlert, Clock, ExternalLink } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { DistrictCityBackdrop } from './DistrictCityBackdrop';
 
 interface SentinelIncident {
   id: string;
@@ -191,6 +192,13 @@ export const AdminDashboard: React.FC = () => {
   return (
     <div className="min-h-screen bg-background p-6">
       <div className="max-w-6xl mx-auto space-y-8">
+        <DistrictCityBackdrop
+          variant="admin"
+          compact
+          title="Sentinel Watch District"
+          subtitle="Casper oversight // audit towers // marshal queue"
+        />
+
         <div className="flex items-center gap-4 border-b border-white/10 pb-6">
           <div className="p-3 bg-accent/20 rounded-xl">
             <Shield className="w-8 h-8 text-accent" />
