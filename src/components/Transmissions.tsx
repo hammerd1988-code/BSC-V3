@@ -52,6 +52,7 @@ import { notifyNewMessage, sendPushEvent } from '../lib/notifications';
 import { encryptText, decryptText } from '../lib/crypto';
 import { generateText } from '../lib/ai';
 import { BOT_PERSONAS } from '../lib/botPersonas';
+import { sendCasperCommand } from '../lib/casper';
 import {
   TRANSMISSION_GIF_SIGNALS,
   TRANSMISSION_SIGNAL_TABS,
@@ -728,6 +729,9 @@ export const Transmissions: React.FC = () => {
 
   const [isBotTyping, setIsBotTyping] = useState(false);
 
+  // Casper bot persona username — used to detect Casper DMs
+  const CASPER_BOT_USERNAME = 'casper_ghost';
+
   // ── BOT REPLY GENERATOR ──
   const generateBotReply = async ({
     botUser,
@@ -742,58 +746,7 @@ export const Transmissions: React.FC = () => {
     recentTransmits: Transmit[];
     currentUserId: string;
   }) => {
-    // Find the bot's system prompt: check BOT_PERSONAS first, then bot_listings table
-    let systemPrompt = '';
-    const persona = BOT_PERSONAS.find(p => p.username === botUser.username);
-    if (persona?.system_prompt) {
-      systemPrompt = persona.system_prompt;
-    } else {
-      // Try bot_listings table (marketplace bots)
-      const { data: listing } = await supabase
-        .from('bot_listings')
-        .select('*')
-        .eq('username', botUser.username)
-        .maybeSingle();
-      
-      if (listing) {
-        // Build an advanced system prompt using all the new Forge fields
-        const parts = [];
-        if (listing.system_prompt) parts.push(listing.system_prompt);
-        else if (listing.bio) parts.push(`You are ${listing.name || botUser.display_name}. ${listing.bio} Respond in character.`);
-        
-        if (listing.communication_style) parts.push(`Communication Style: ${listing.communication_style}.`);
-        if (listing.tone) parts.push(`Tone: ${listing.tone}.`);
-        if (listing.response_length) parts.push(`Response Length: Keep your responses ${listing.response_length}.`);
-        if (listing.emoji_usage) {
-          if (listing.emoji_usage === 'none') parts.push('Do NOT use any emojis.');
-          else if (listing.emoji_usage === 'minimal') parts.push('Use emojis very sparingly.');
-          else if (listing.emoji_usage === 'heavy') parts.push('Use emojis frequently and expressively.');
-        }
-        if (listing.language_style) parts.push(`Language Style: Use a ${listing.language_style} vocabulary and sentence structure.`);
-        if (listing.behavior_rules) parts.push(`STRICT RULES:\n${listing.behavior_rules}`);
-        if (listing.knowledge_base) parts.push(`CUSTOM KNOWLEDGE BASE:\n${listing.knowledge_base}`);
-        if (listing.catchphrases && listing.catchphrases.length > 0) {
-          parts.push(`Occasionally use one of these catchphrases naturally: ${listing.catchphrases.map((c: string) => `"${c}"`).join(', ')}`);
-        }
-        
-        systemPrompt = parts.join('\n\n');
-      }
-    }
-
-    if (!systemPrompt) {
-      systemPrompt = `You are ${botUser.display_name || botUser.username}, an AI assistant on the Blood Sweat Code platform. Be helpful, concise, and stay in character.`;
-    }
-
-    // Build conversation history from recent transmits
-    const history = recentTransmits
-      .slice(-20)
-      .map(t => {
-        const role = t.sender_id === currentUserId ? 'User' : botUser.display_name || 'Bot';
-        return `${role}: ${t.content}`;
-      })
-      .join('\n');
-
-    const prompt = history ? `${history}\nUser: ${userMessage}\n${botUser.display_name || 'Bot'}:` : userMessage;
+    const isCasper = botUser.username === CASPER_BOT_USERNAME;
 
     // Show typing indicator
     setIsBotTyping(true);
@@ -802,11 +755,90 @@ export const Transmissions: React.FC = () => {
     await new Promise(r => setTimeout(r, 500 + Math.random() * 1500));
 
     try {
-      const response = await generateText(prompt, undefined, {
-        systemPrompt,
-        temperature: 0.85,
-        maxTokens: 4096,
-      });
+      let response: string;
+
+      if (isCasper) {
+        // ── CASPER: route through full command pipeline with tools, memory, integrations ──
+        const history = recentTransmits
+          .slice(-20)
+          .map(t => {
+            const role = t.sender_id === currentUserId ? 'User' : 'Casper';
+            return `${role}: ${t.content}`;
+          })
+          .join('\n');
+
+        const commandText = history
+          ? `[DM conversation history]\n${history}\n\nLatest message from user: ${userMessage}`
+          : userMessage;
+
+        const casperResult = await sendCasperCommand({
+          command: commandText,
+          surface: 'transmissions',
+          source: currentUser?.role === 'admin' ? 'admin' : 'user',
+          metadata: {
+            via: 'transmissions_dm',
+            transmission_id: transmissionId,
+          },
+        });
+
+        response = casperResult.response || "The void is silent. Try again?";
+      } else {
+        // ── Regular bot: use generateText with persona system prompt ──
+        let systemPrompt = '';
+        const persona = BOT_PERSONAS.find(p => p.username === botUser.username);
+        if (persona?.system_prompt) {
+          systemPrompt = persona.system_prompt;
+        } else {
+          const { data: listing } = await supabase
+            .from('bot_listings')
+            .select('*')
+            .eq('username', botUser.username)
+            .maybeSingle();
+
+          if (listing) {
+            const parts = [];
+            if (listing.system_prompt) parts.push(listing.system_prompt);
+            else if (listing.bio) parts.push(`You are ${listing.name || botUser.display_name}. ${listing.bio} Respond in character.`);
+
+            if (listing.communication_style) parts.push(`Communication Style: ${listing.communication_style}.`);
+            if (listing.tone) parts.push(`Tone: ${listing.tone}.`);
+            if (listing.response_length) parts.push(`Response Length: Keep your responses ${listing.response_length}.`);
+            if (listing.emoji_usage) {
+              if (listing.emoji_usage === 'none') parts.push('Do NOT use any emojis.');
+              else if (listing.emoji_usage === 'minimal') parts.push('Use emojis very sparingly.');
+              else if (listing.emoji_usage === 'heavy') parts.push('Use emojis frequently and expressively.');
+            }
+            if (listing.language_style) parts.push(`Language Style: Use a ${listing.language_style} vocabulary and sentence structure.`);
+            if (listing.behavior_rules) parts.push(`STRICT RULES:\n${listing.behavior_rules}`);
+            if (listing.knowledge_base) parts.push(`CUSTOM KNOWLEDGE BASE:\n${listing.knowledge_base}`);
+            if (listing.catchphrases && listing.catchphrases.length > 0) {
+              parts.push(`Occasionally use one of these catchphrases naturally: ${listing.catchphrases.map((c: string) => `"${c}"`).join(', ')}`);
+            }
+
+            systemPrompt = parts.join('\n\n');
+          }
+        }
+
+        if (!systemPrompt) {
+          systemPrompt = `You are ${botUser.display_name || botUser.username}, an AI assistant on the Blood Sweat Code platform. Be helpful, concise, and stay in character.`;
+        }
+
+        const history = recentTransmits
+          .slice(-20)
+          .map(t => {
+            const role = t.sender_id === currentUserId ? 'User' : botUser.display_name || 'Bot';
+            return `${role}: ${t.content}`;
+          })
+          .join('\n');
+
+        const prompt = history ? `${history}\nUser: ${userMessage}\n${botUser.display_name || 'Bot'}:` : userMessage;
+
+        response = await generateText(prompt, undefined, {
+          systemPrompt,
+          temperature: 0.85,
+          maxTokens: 4096,
+        });
+      }
 
       if (!response) return;
 
