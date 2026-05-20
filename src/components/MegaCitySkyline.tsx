@@ -337,7 +337,6 @@ function ShootingStars() {
       top: `${5 + (i * 7) % 25}%`,
       left: `${10 + (i * 23) % 70}%`,
       angle: -15 - (i * 8) % 20,
-      duration: 1.2 + (i * 0.4),
       delay: i * 4.5 + 2,
       totalCycle: 12 + i * 5,
     })), []);
@@ -351,15 +350,20 @@ function ShootingStars() {
           style={{
             top: s.top,
             left: s.left,
-            width: '80px',
-            height: '1px',
-            background: 'linear-gradient(90deg, rgba(255,255,255,0.9) 0%, rgba(100,200,255,0.6) 30%, transparent 100%)',
-            borderRadius: '1px',
             transform: `rotate(${s.angle}deg)`,
-            boxShadow: '0 0 6px rgba(100,200,255,0.5), 0 0 12px rgba(100,200,255,0.2)',
-            animation: `mega-shooting-star ${s.totalCycle}s ${s.delay}s linear infinite`,
           }}
-        />
+        >
+          <div
+            style={{
+              width: '80px',
+              height: '1px',
+              background: 'linear-gradient(90deg, rgba(255,255,255,0.9) 0%, rgba(100,200,255,0.6) 30%, transparent 100%)',
+              borderRadius: '1px',
+              boxShadow: '0 0 6px rgba(100,200,255,0.5), 0 0 12px rgba(100,200,255,0.2)',
+              animation: `mega-shooting-star ${s.totalCycle}s ${s.delay}s linear infinite`,
+            }}
+          />
+        </div>
       ))}
     </div>
   );
