@@ -162,6 +162,7 @@ export const Profile: React.FC = () => {
   const [loadingProximityNodes, setLoadingProximityNodes] = useState(false);
   const [proximityActionId, setProximityActionId] = useState<string | null>(null);
   const hasIncrementedView = useRef(false);
+  const [fullSizeImage, setFullSizeImage] = useState<string | null>(null);
 
   // Derive friend/request state from DB data
   useEffect(() => {
@@ -1003,8 +1004,9 @@ export const Profile: React.FC = () => {
             <img 
               src={user.cover_url} 
               alt="Cover" 
+              onClick={() => setFullSizeImage(user.cover_url!)}
               className={cn(
-                "w-full h-full object-cover",
+                "w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity",
                 isHighContrast && "grayscale contrast-150 brightness-50"
               )} 
             />
@@ -1028,8 +1030,9 @@ export const Profile: React.FC = () => {
                   <img
                     src={user.avatar_url}
                     alt={user.display_name}
+                    onClick={() => user.avatar_url && setFullSizeImage(user.avatar_url)}
                     className={cn(
-                      "w-24 h-24 rounded-full object-cover border-4 border-background bg-surface",
+                      "w-24 h-24 rounded-full object-cover border-4 border-background bg-surface cursor-pointer hover:opacity-80 transition-opacity",
                       isHighContrast && "grayscale contrast-[2] border-black"
                     )}
                   />
@@ -2095,6 +2098,24 @@ export const Profile: React.FC = () => {
         onClose={() => setShowCreatePostModal(false)}
         onPostCreated={() => {}}
       />
+
+      {/* Full-Size Image Viewer */}
+      <AnimatePresence>
+        {fullSizeImage && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[180] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md"
+            onClick={() => setFullSizeImage(null)}
+          >
+            <button type="button" className="absolute right-5 top-5 rounded-full border border-white/10 bg-white/5 p-2 text-white/60 hover:text-white" onClick={() => setFullSizeImage(null)}>
+              <X className="h-5 w-5" />
+            </button>
+            <img src={fullSizeImage} alt="Full-size" className="max-h-[86vh] max-w-[92vw] rounded-2xl border border-white/10 object-contain shadow-2xl" />
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
