@@ -780,7 +780,74 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
   }
 }
 
-/* Holographic card shimmer for post cards */
+/* ── Shooting star / comet streak ── */
+@keyframes mega-shooting-star {
+  0%, 90%, 100% { transform: translateX(0) translateY(0); opacity: 0; }
+  91%           { opacity: 0; }
+  93%           { opacity: 1; }
+  96%           { opacity: 0.8; }
+  98%           { transform: translateX(200px) translateY(60px); opacity: 0; }
+}
+
+/* ── Hover vehicle traversal ── */
+@keyframes mega-hover-vehicle {
+  0%   { transform: translateX(-20px); opacity: 0; }
+  3%   { opacity: 0.7; }
+  50%  { opacity: 0.9; }
+  97%  { opacity: 0.7; }
+  100% { transform: translateX(calc(100vw + 40px)); opacity: 0; }
+}
+
+/* ── Neon text breathe effect ── */
+@keyframes neon-breathe {
+  0%, 100% { text-shadow: 0 0 7px currentColor, 0 0 20px currentColor; filter: brightness(1); }
+  50%      { text-shadow: 0 0 14px currentColor, 0 0 40px currentColor, 0 0 60px currentColor; filter: brightness(1.15); }
+}
+
+/* ── Holographic scan sweep for panels ── */
+@keyframes cyber-scan {
+  0%   { transform: translateX(-100%); opacity: 0; }
+  20%  { opacity: 0.6; }
+  80%  { opacity: 0.6; }
+  100% { transform: translateX(200%); opacity: 0; }
+}
+
+/* ── Pulse ring emanation ── */
+@keyframes pulse-ring {
+  0%   { transform: scale(1); opacity: 0.5; }
+  100% { transform: scale(1.8); opacity: 0; }
+}
+
+/* ── Data cascade (vertical data stream) ── */
+@keyframes data-cascade {
+  0%   { background-position: 0 0; }
+  100% { background-position: 0 120px; }
+}
+
+/* ── Neon border glow pulse ── */
+@keyframes neon-border-pulse {
+  0%, 100% { border-color: rgba(255, 0, 0, 0.3); box-shadow: 0 0 8px rgba(255, 0, 0, 0.1), inset 0 0 8px rgba(255, 0, 0, 0.05); }
+  50%      { border-color: rgba(255, 0, 0, 0.6); box-shadow: 0 0 20px rgba(255, 0, 0, 0.25), inset 0 0 20px rgba(255, 0, 0, 0.08); }
+}
+
+/* ── Glitch flicker for text/elements ── */
+@keyframes glitch-flicker {
+  0%, 90%, 100% { opacity: 1; transform: translate(0, 0); }
+  91% { opacity: 0.8; transform: translate(-1px, 0); }
+  93% { opacity: 1; transform: translate(1px, -1px); }
+  95% { opacity: 0.9; transform: translate(0, 1px); }
+  97% { opacity: 1; transform: translate(-1px, 0); }
+}
+
+/* ── Circuit trace animation ── */
+@keyframes circuit-trace {
+  0%   { stroke-dashoffset: 100%; opacity: 0; }
+  10%  { opacity: 0.7; }
+  90%  { opacity: 0.7; }
+  100% { stroke-dashoffset: 0%; opacity: 0; }
+}
+
+/* ── Holographic card shimmer for post cards ── */
 .holo-card {
   position: relative;
 }

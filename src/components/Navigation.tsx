@@ -338,22 +338,38 @@ export const Navigation: React.FC = () => {
     return (
       <Link to={path} className="relative p-2 flex flex-col items-center justify-center group w-12 h-12 shrink-0" aria-label={path === '/' ? 'Home feed' : path.replace('/', '')}>
         {active && (
-          <motion.div
-            className="absolute inset-0 rounded-full blur-md"
-            style={{ backgroundColor: hexToRgba(color, 0.22) }}
-            transition={{ type: "spring", stiffness: 400, damping: 30 }}
-          />
+          <>
+            <motion.div
+              className="absolute inset-0 rounded-full blur-md"
+              style={{ backgroundColor: hexToRgba(color, 0.22) }}
+              transition={{ type: "spring", stiffness: 400, damping: 30 }}
+            />
+            {/* Pulse ring emanation on active */}
+            <motion.div
+              className="absolute inset-1 rounded-full border"
+              style={{ borderColor: hexToRgba(color, 0.3) }}
+              animate={{ scale: [1, 1.6], opacity: [0.4, 0] }}
+              transition={{ duration: 2.5, repeat: Infinity, ease: "easeOut" }}
+            />
+          </>
         )}
-        <Icon
-          className={cn(
-            "w-6 h-6 transition-all duration-500 relative z-10 group-hover:scale-105",
-            active && "scale-110"
-          )}
-          style={{
-            color: iconColor,
-            filter: `drop-shadow(0 0 ${active ? '15px' : '7px'} ${glowColor})`,
-          }}
-        />
+        <motion.div
+          whileHover={{ scale: 1.15, rotate: active ? 0 : 6 }}
+          whileTap={{ scale: 0.9 }}
+          transition={{ type: "spring", stiffness: 500, damping: 20 }}
+          className="relative z-10"
+        >
+          <Icon
+            className={cn(
+              "w-6 h-6 transition-colors duration-300",
+              active && "scale-110"
+            )}
+            style={{
+              color: iconColor,
+              filter: `drop-shadow(0 0 ${active ? '15px' : '7px'} ${glowColor})`,
+            }}
+          />
+        </motion.div>
         {badge > 0 && (
           <div className="absolute top-1 right-1 z-20">
             <motion.div
@@ -380,6 +396,7 @@ export const Navigation: React.FC = () => {
           <motion.div
             className="absolute -bottom-2 w-6 h-1 rounded-t-full"
             style={{ backgroundColor: color, boxShadow: `0 0 15px ${glowColor}` }}
+            layoutId="nav-active-indicator"
             transition={{ type: "spring", stiffness: 400, damping: 30 }}
           />
         )}
