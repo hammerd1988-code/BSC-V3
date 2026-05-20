@@ -771,17 +771,30 @@ export const Transmissions: React.FC = () => {
           ? `[DM conversation history]\n${history}\n\nLatest message from user: ${userMessage}`
           : userMessage;
 
-        const casperResult = await sendCasperCommand({
-          command: commandText,
-          surface: 'transmissions',
-          source: currentUser?.role === 'admin' ? 'admin' : 'user',
-          metadata: {
-            via: 'transmissions_dm',
-            transmission_id: transmissionId,
-          },
-        });
-
-        response = casperResult.response || "The void is silent. Try again?";
+        try {
+          const casperResult = await sendCasperCommand({
+            command: commandText,
+            surface: 'transmissions',
+            source: currentUser?.role === 'admin' ? 'admin' : 'user',
+            metadata: {
+              via: 'transmissions_dm',
+              transmission_id: transmissionId,
+            },
+          });
+          response = casperResult.response || "The void is silent. Try again?";
+        } catch (casperErr: any) {
+          console.warn('[Bot DM] Casper command failed, falling back to AI:', casperErr);
+          const fallbackPrompt = history ? `${history}\nUser: ${userMessage}\nCasper:` : userMessage;
+          try {
+            response = await generateText(fallbackPrompt, undefined, {
+              systemPrompt: 'You are Casper, the ghost-in-the-machine AI assistant of Blood Sweat Code. You are witty, helpful, and speak with a cyberpunk edge. Respond conversationally in DM context.',
+              temperature: 0.85,
+              maxTokens: 4096,
+            });
+          } catch {
+            response = "⚠ My neural circuits hit a snag. The command pipeline is offline — an AI API key may need to be configured. Try again or check admin settings.";
+          }
+        }
       } else {
         // ── Regular bot: use generateText with persona system prompt ──
         let systemPrompt = '';
@@ -1258,7 +1271,23 @@ export const Transmissions: React.FC = () => {
                   className={`w-full p-4 flex items-start gap-3 transition-all border-b border-white/5 hover:bg-white/5 relative group ${isActive ? 'bg-white/5 border-l-2 border-l-accent' : ''}`}
                 >
                   <div className="relative flex-shrink-0">
-                    <div className="w-10 h-10 rounded-lg overflow-hidden border border-white/10 bg-white/5">
+                    <div
+                      role={otherUser?.avatar_url ? 'button' : undefined}
+                      tabIndex={otherUser?.avatar_url ? 0 : undefined}
+                      onClick={(e) => {
+                        if (otherUser?.avatar_url) {
+                          e.stopPropagation();
+                          setFullSizeImage(otherUser.avatar_url);
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (otherUser?.avatar_url && (e.key === 'Enter' || e.key === ' ')) {
+                          e.stopPropagation();
+                          setFullSizeImage(otherUser.avatar_url);
+                        }
+                      }}
+                      className={`w-10 h-10 rounded-lg overflow-hidden border border-white/10 bg-white/5 ${otherUser?.avatar_url ? 'cursor-pointer hover:ring-2 hover:ring-accent/50 transition-all' : ''}`}
+                    >
                       {otherUser?.avatar_url ? (
                         <img src={otherUser.avatar_url} alt="" className="w-full h-full object-cover" />
                       ) : (
@@ -1321,7 +1350,11 @@ export const Transmissions: React.FC = () => {
                   const otherUser = otherUserId ? userCache.current[otherUserId] : null;
                   return (
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg border border-white/10 overflow-hidden bg-white/5">
+                      <button
+                        type="button"
+                        onClick={() => otherUser?.avatar_url && setFullSizeImage(otherUser.avatar_url)}
+                        className={`w-8 h-8 rounded-lg border border-white/10 overflow-hidden bg-white/5 ${otherUser?.avatar_url ? 'cursor-pointer hover:ring-2 hover:ring-accent/50 transition-all' : ''}`}
+                      >
                         {otherUser?.avatar_url ? (
                           <img src={otherUser.avatar_url} alt="" className="w-full h-full object-cover" />
                         ) : (
@@ -1329,7 +1362,7 @@ export const Transmissions: React.FC = () => {
                             <User className="w-4 h-4" />
                           </div>
                         )}
-                      </div>
+                      </button>
                       <div>
                         <Link 
                           to={`/profile/${otherUser?.username}`}
@@ -1441,7 +1474,14 @@ export const Transmissions: React.FC = () => {
                     <div className={`max-w-[70%] flex flex-col ${isOwn ? 'items-end' : 'items-start'}`}>
                       <div className="flex items-end gap-2">
                         {!isOwn && showAvatar && (
-                          <div className="w-6 h-6 rounded-md border border-white/10 overflow-hidden flex-shrink-0 bg-white/5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const avatarUrl = userCache.current[t.sender_id]?.avatar_url;
+                              if (avatarUrl) setFullSizeImage(avatarUrl);
+                            }}
+                            className={`w-6 h-6 rounded-md border border-white/10 overflow-hidden flex-shrink-0 bg-white/5 ${userCache.current[t.sender_id]?.avatar_url ? 'cursor-pointer hover:ring-2 hover:ring-accent/50 transition-all' : ''}`}
+                          >
                             {userCache.current[t.sender_id]?.avatar_url ? (
                               <img src={userCache.current[t.sender_id].avatar_url} alt="" className="w-full h-full object-cover" />
                             ) : (
@@ -1449,7 +1489,7 @@ export const Transmissions: React.FC = () => {
                                 <User className="w-3 h-3" />
                               </div>
                             )}
-                          </div>
+                          </button>
                         )}
                         <div className={`relative px-4 py-2.5 rounded-2xl text-[11px] leading-relaxed tracking-tight ${
                           isOwn 
