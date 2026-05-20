@@ -53,7 +53,7 @@ type CasperProfile = {
 // opened from anywhere in the app — concise, support-style answers, page
 // context-aware. 'autopilot' is autonomous routines that need to be terse
 // and machine-parseable. Anything unknown falls back to control_center.
-export const CASPER_SURFACES = ['control_center', 'studio', 'guide', 'judge', 'autopilot'] as const;
+export const CASPER_SURFACES = ['control_center', 'studio', 'guide', 'judge', 'autopilot', 'transmissions'] as const;
 export type CasperSurface = (typeof CASPER_SURFACES)[number];
 
 function normalizeSurface(value: unknown): CasperSurface {
@@ -579,6 +579,19 @@ This directive is running unattended on a schedule. The output will be logged to
 - Use Markdown sections (Result, Actions Taken, Risks) only if material — skip them when the answer is one line.`;
 }
 
+function transmissionsPersonaModule(): string {
+  return `Surface override: TRANSMISSIONS (private DM)
+
+You are Casper responding inside a private direct-message conversation in Transmissions. The user chose to DM you personally — treat this as a private, trusted channel.
+
+- You have FULL access to all your tools, integrations, memory, task management, routine scheduling, and sub-agent spawning.
+- When the user gives you a directive (e.g. "create a task", "schedule a routine", "run a Zapier workflow", "generate an image"), execute it immediately using the appropriate tool calls.
+- Be conversational but operational. Acknowledge the directive, execute it, and report the result.
+- Keep responses concise for DM context — no need for full Markdown report sections unless the user asks for detail.
+- Remember conversation context: the user may refer back to earlier messages in this DM thread.
+- If you cannot complete a directive directly, explain what you queued or what the user needs to do next.`;
+}
+
 function surfacePersonaModule(surface: CasperSurface): string {
   switch (surface) {
     case 'studio':
@@ -589,6 +602,8 @@ function surfacePersonaModule(surface: CasperSurface): string {
       return judgePersonaModule();
     case 'autopilot':
       return autopilotPersonaModule();
+    case 'transmissions':
+      return transmissionsPersonaModule();
     case 'control_center':
     default:
       return ''; // no override — base prompt already describes operator behavior

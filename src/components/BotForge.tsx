@@ -701,7 +701,7 @@ export function BotForge() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-950 via-black to-gray-950 text-white">
       {/* ── Mega City Header ── */}
-      <div className="relative overflow-hidden border-b border-white/10">
+      <div className="sticky top-0 z-30 relative overflow-hidden border-b border-white/10 bg-gray-950">
         {/* Ambient glow */}
         <div className="absolute inset-0 bg-gradient-to-r from-purple-900/20 via-cyan-900/20 to-red-900/20" />
         <div className="absolute top-0 left-1/4 w-96 h-96 bg-cyan-500/5 rounded-full blur-[120px]" />

@@ -148,7 +148,7 @@ async function reportSubagentClientExecution(
 //   studio         → Studio guide (content + engineering dual expert)
 //   guide          → "Ask Casper" floating help popup (concise, page-aware)
 //   autopilot      → autonomous routines (terse, machine-parseable)
-export type CasperSurface = 'control_center' | 'studio' | 'guide' | 'autopilot';
+export type CasperSurface = 'control_center' | 'studio' | 'guide' | 'autopilot' | 'transmissions';
 
 // One tool invocation made by the LLM during a directive. Persisted
 // to casper_tasks.metadata.tool_calls and surfaced in the operator
