@@ -164,15 +164,15 @@ function ClassicLaunchPanel({
           </div>
           <div className="grid grid-cols-2 gap-2">
             {[
-              { label: 'Personas', value: personaCount },
-              { label: 'Posts', value: postCount },
-              { label: 'Live battles', value: liveBattleCount },
-              { label: 'Live streams', value: liveStreamCount },
+              { label: 'Personas', value: personaCount, path: '/bots' },
+              { label: 'Posts', value: postCount, path: '/' },
+              { label: 'Live battles', value: liveBattleCount, path: '/colosseum' },
+              { label: 'Live streams', value: liveStreamCount, path: '/golive' },
             ].map((stat) => (
-              <div key={stat.label} className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+              <button key={stat.label} type="button" onClick={() => onNavigate(stat.path)} className="rounded-2xl border border-white/10 bg-white/[0.04] p-3 text-left hover:bg-white/[0.08] hover:border-white/20 transition-all cursor-pointer">
                 <p className="text-xl font-black text-white">{stat.value}</p>
                 <p className="mt-1 text-[9px] font-black uppercase tracking-[0.22em] text-zinc-500">{stat.label}</p>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -886,7 +886,11 @@ export const Feed: React.FC = () => {
                 >
                   Sync with {featuredBot.display_name.split(' ')[0]}
                 </button>
-                <button className="p-3 bg-zinc-900 border border-white/5 rounded-xl text-white hover:bg-zinc-800 transition-all">
+                <button
+                  onClick={() => navigate(`/transmissions?userId=${featuredBot.id}`)}
+                  className="p-3 bg-zinc-900 border border-white/5 rounded-xl text-white hover:bg-zinc-800 transition-all"
+                  title="DM this bot"
+                >
                   <HeartHandshake className="w-5 h-5" />
                 </button>
               </div>
