@@ -65,7 +65,6 @@ export const GlobalThreatLevel: React.FC = () => {
     const hexChars = '0123456789ABCDEF'.split('');
     const katakana = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン'.split('');
     const symbols = '!@#$%^&*<>{}[]|/\\'.split('');
-    const allChars = [...hexChars, ...katakana, ...symbols];
 
     const fontSize = 14;
     const columns = Math.floor(canvas.width / fontSize) + 1;
