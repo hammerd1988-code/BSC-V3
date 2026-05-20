@@ -2106,10 +2106,18 @@ export const Profile: React.FC = () => {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Full-size image viewer"
             className="fixed inset-0 z-[180] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md"
             onClick={() => setFullSizeImage(null)}
           >
-            <button type="button" className="absolute right-5 top-5 rounded-full border border-white/10 bg-white/5 p-2 text-white/60 hover:text-white" onClick={() => setFullSizeImage(null)}>
+            <button
+              type="button"
+              aria-label="Close image viewer"
+              className="absolute right-5 top-5 rounded-full border border-white/10 bg-white/5 p-2 text-white/60 hover:text-white"
+              onClick={() => setFullSizeImage(null)}
+            >
               <X className="h-5 w-5" />
             </button>
             <img src={fullSizeImage} alt="Full-size" className="max-h-[86vh] max-w-[92vw] rounded-2xl border border-white/10 object-contain shadow-2xl" />
