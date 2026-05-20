@@ -61,19 +61,33 @@ export const GlobalThreatLevel: React.FC = () => {
     window.addEventListener('resize', resize);
     resize();
 
-    const chars = '0123456789ABCDEF!@#$%^&*'.split('');
+    // Mixed character sets: hex, katakana fragments, symbols
+    const hexChars = '0123456789ABCDEF'.split('');
+    const katakana = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン'.split('');
+    const symbols = '!@#$%^&*<>{}[]|/\\'.split('');
+    const allChars = [...hexChars, ...katakana, ...symbols];
+
     const fontSize = 14;
     const columns = Math.floor(canvas.width / fontSize) + 1;
+
+    // Per-column state for depth variation
     const drops: number[] = [];
+    const columnSpeed: number[] = [];
+    const columnSize: number[] = [];
+    const columnBrightness: number[] = [];
+    const columnCharSet: number[] = []; // 0=hex, 1=katakana, 2=symbols
     for (let x = 0; x < columns; x++) {
-      drops[x] = Math.random() * canvas.height; // Random initial Y
+      drops[x] = Math.random() * canvas.height;
+      columnSpeed[x] = 0.6 + Math.random() * 0.8;
+      columnSize[x] = fontSize * (0.7 + Math.random() * 0.6);
+      columnBrightness[x] = 0.4 + Math.random() * 0.6;
+      columnCharSet[x] = Math.floor(Math.random() * 3);
     }
 
     const draw = (timestamp: number) => {
       animationFrameId = requestAnimationFrame(draw);
 
-      // Determine speed based on threat level
-      let fps = 20; // Level 1
+      let fps = 20;
       if (threatLevel === 2) fps = 30;
       if (threatLevel === 3) fps = 45;
       if (threatLevel === 4) fps = 60;
@@ -82,36 +96,66 @@ export const GlobalThreatLevel: React.FC = () => {
       if (timestamp - lastDrawTime < interval) return;
       lastDrawTime = timestamp;
 
-      // Determine colors and trails based on threat level
       let fadeOpacity = 0.1;
-      let color = '#4a0404'; // Dark Burgundy
+      let baseR = 74, baseG = 4, baseB = 4; // Dark burgundy RGB
       
       if (threatLevel === 2) {
         fadeOpacity = 0.08;
-        color = '#8a0808'; // Red
+        baseR = 138; baseG = 8; baseB = 8;
       } else if (threatLevel === 3) {
         fadeOpacity = 0.05;
-        color = '#dc2626'; // Bright Red
+        baseR = 220; baseG = 38; baseB = 38;
       } else if (threatLevel === 4) {
-        fadeOpacity = 0.04;
-        color = Math.random() > 0.9 ? '#ffffff' : '#ff0000'; // Pure Red with white flashes
+        fadeOpacity = 0.035;
+        baseR = 255; baseG = 0; baseB = 0;
       }
 
       ctx.fillStyle = `rgba(0, 0, 0, ${fadeOpacity})`;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      ctx.fillStyle = color;
-      ctx.font = `${fontSize}px monospace`;
-
       for (let i = 0; i < drops.length; i++) {
-        const text = chars[Math.floor(Math.random() * chars.length)];
-        ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+        const bright = columnBrightness[i];
+        const sz = columnSize[i];
+        const charSet = columnCharSet[i] === 0 ? hexChars : columnCharSet[i] === 1 ? katakana : symbols;
+        const text = charSet[Math.floor(Math.random() * charSet.length)];
+        const yPos = drops[i] * fontSize;
 
-        if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) {
-          drops[i] = 0;
+        // Lead character is brighter (phosphor head glow)
+        const isHead = Math.random() < 0.15;
+        let r = baseR, g = baseG, b = baseB;
+        let alpha = bright;
+
+        if (threatLevel === 4 && Math.random() > 0.88) {
+          r = 255; g = 255; b = 255; alpha = 1;
+        } else if (isHead) {
+          r = Math.min(255, baseR + 80);
+          g = Math.min(255, baseG + 60);
+          b = Math.min(255, baseB + 40);
+          alpha = Math.min(1, bright + 0.3);
         }
-        drops[i]++;
+
+        ctx.font = `${sz}px monospace`;
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+
+        if (isHead && threatLevel >= 2) {
+          ctx.shadowBlur = 8 + threatLevel * 3;
+          ctx.shadowColor = `rgba(${baseR}, ${baseG + 20}, ${baseB}, 0.8)`;
+        } else {
+          ctx.shadowBlur = 0;
+        }
+
+        ctx.fillText(text, i * fontSize, yPos);
+
+        if (yPos > canvas.height && Math.random() > 0.975) {
+          drops[i] = 0;
+          columnSpeed[i] = 0.6 + Math.random() * 0.8;
+          columnBrightness[i] = 0.4 + Math.random() * 0.6;
+          columnCharSet[i] = Math.floor(Math.random() * 3);
+        }
+        drops[i] += columnSpeed[i];
       }
+
+      ctx.shadowBlur = 0;
     };
 
     animationFrameId = requestAnimationFrame(draw);
