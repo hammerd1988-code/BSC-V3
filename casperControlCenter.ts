@@ -618,7 +618,7 @@ async function buildCasperSystemPrompt(supabase: SupabaseClient, casperMemory: a
   try {
     if (casperMemory) {
       stateModifier = await casperMemory.getStatePromptModifier();
-      relevantMemories = await casperMemory.getRelevantMemories(userId ?? null, 7);
+      relevantMemories = await casperMemory.getRelevantMemories(userId ?? null, 15);
     }
   } catch (error) {
     console.warn('[casper-control] memory context unavailable:', error);

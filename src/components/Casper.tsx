@@ -1115,14 +1115,32 @@ export const Casper: React.FC = () => {
     setIsGenerating(true);
 
     try {
+      // Fetch persistent memories so Casper remembers the user across sessions
+      let memoryContext = '';
+      if (currentUser?.id) {
+        try {
+          const memRes = await authFetch(`/api/casper/memory?userId=${encodeURIComponent(currentUser.id)}`);
+          const memData = await memRes.json();
+          if (memData.relevantMemories) memoryContext = memData.relevantMemories;
+          if (memData.stateModifier) memoryContext = `${memData.stateModifier}\n${memoryContext}`;
+        } catch (memErr) {
+          console.warn('[Casper] memory recall failed (non-blocking):', memErr);
+        }
+      }
+
       const history = messages
         .filter(message => message.id !== 'greeting')
         .slice(-20)
         .map(message => `${message.role === 'user' ? 'User' : 'Casper'}: ${message.content}`)
         .join('\n');
       const prompt = history ? `${history}\nUser: ${text}\nCasper:` : text;
+
+      const systemPromptParts = [CASPER_SYSTEM_PROMPT];
+      if (memoryContext) systemPromptParts.push(memoryContext);
+      if (integrationContext) systemPromptParts.push(`Enabled Casper integrations for this user:\n${integrationContext}`);
+
       const response = await generateText(prompt, aiSettings, {
-        systemPrompt: `${CASPER_SYSTEM_PROMPT}\n\nEnabled Casper integrations for this user:\n${integrationContext}`,
+        systemPrompt: systemPromptParts.join('\n\n'),
         temperature: 0.8,
         maxTokens: 4096,
       });
@@ -1155,7 +1173,7 @@ export const Casper: React.FC = () => {
       setIsGenerating(false);
       if (ttsEnabled && voiceState !== 'recording') void speakOnce(fallback);
     }
-  }, [input, isGenerating, messages, aiSettings, integrationContext, currentUser?.id, ttsEnabled, voiceState, speakOnce]);
+  }, [input, isGenerating, messages, aiSettings, integrationContext, currentUser?.id, ttsEnabled, voiceState, speakOnce, authFetch]);
 
   const clearChat = () => {
     const greeting = CASPER_GREETINGS[Math.floor(Math.random() * CASPER_GREETINGS.length)];
