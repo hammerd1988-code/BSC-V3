@@ -37,14 +37,12 @@ export const AnimatedCasperAvatar: React.FC<AnimatedCasperAvatarProps> = ({
     return 'rgba(100, 200, 255, 0.5)';
   };
 
-  const getGlowRGB = (): [number, number, number] => {
+  const glowColor = getGlowColor();
+  const glowRGB = useMemo((): [number, number, number] => {
     if (instability > 80) return [255, 60, 60];
     if (instability > 50) return [200, 100, 255];
     return [100, 200, 255];
-  };
-  
-  const glowColor = getGlowColor();
-  const glowRGB = getGlowRGB();
+  }, [instability]);
   const shadowIntensity = isActive ? '30px' : '15px';
   const animationDuration = isActive ? 2 : 4;
 

@@ -841,10 +841,10 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
 
 /* ── Circuit trace animation ── */
 @keyframes circuit-trace {
-  0%   { stroke-dashoffset: 100%; opacity: 0; }
+  0%   { stroke-dashoffset: 60; opacity: 0; }
   10%  { opacity: 0.7; }
   90%  { opacity: 0.7; }
-  100% { stroke-dashoffset: 0%; opacity: 0; }
+  100% { stroke-dashoffset: 0; opacity: 0; }
 }
 
 /* ── Holographic card shimmer for post cards ── */
