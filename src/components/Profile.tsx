@@ -1012,7 +1012,7 @@ export const Profile: React.FC = () => {
             />
           )}
           <div className={cn(
-            "absolute inset-0 bg-gradient-to-t from-black/60 to-transparent",
+            "absolute inset-0 bg-gradient-to-t from-black/60 to-transparent pointer-events-none",
             isHighContrast && "from-black via-black/40 to-transparent"
           )} />
         </div>
