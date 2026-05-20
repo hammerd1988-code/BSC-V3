@@ -117,7 +117,7 @@ async function startServer() {
         return res.json({ stateModifier: '', relevantMemories: '' });
       }
       const stateModifier = await casperMemory.getStatePromptModifier();
-      const relevantMemories = await casperMemory.getRelevantMemories(userId, 5);
+      const relevantMemories = await casperMemory.getRelevantMemories(userId, 15);
       res.json({ stateModifier, relevantMemories });
     } catch (error) {
       console.error('Error fetching Casper memory:', error);
