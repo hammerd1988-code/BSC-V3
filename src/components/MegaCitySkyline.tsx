@@ -299,12 +299,12 @@ function DistrictCard({ district, index }: { district: DistrictInfo; index: numb
 /* ── Floating particles ── */
 function Particles() {
   const particles = useMemo(() =>
-    Array.from({ length: 30 }).map((_, i) => ({
+    Array.from({ length: 40 }).map((_, i) => ({
       id: i,
       left: `${(Math.sin(i * 4.7) * 0.5 + 0.5) * 100}%`,
       delay: (Math.sin(i * 2.3) * 0.5 + 0.5) * 8,
       duration: 6 + (Math.sin(i * 1.1) * 0.5 + 0.5) * 8,
-      size: 1 + (Math.sin(i * 3.7) * 0.5 + 0.5) * 2,
+      size: 1 + (Math.sin(i * 3.7) * 0.5 + 0.5) * 2.5,
       hue: (i * 37) % 360,
     })), []);
 
@@ -322,6 +322,76 @@ function Particles() {
             backgroundColor: `hsla(${p.hue}, 80%, 60%, 0.5)`,
             boxShadow: `0 0 ${p.size * 3}px hsla(${p.hue}, 80%, 60%, 0.4)`,
             animation: `mega-particle-rise ${p.duration}s ${p.delay}s linear infinite`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/* ── Shooting stars / comets ── */
+function ShootingStars() {
+  const stars = useMemo(() =>
+    Array.from({ length: 4 }).map((_, i) => ({
+      id: i,
+      top: `${5 + (i * 7) % 25}%`,
+      left: `${10 + (i * 23) % 70}%`,
+      angle: -15 - (i * 8) % 20,
+      duration: 1.2 + (i * 0.4),
+      delay: i * 4.5 + 2,
+      totalCycle: 12 + i * 5,
+    })), []);
+
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      {stars.map(s => (
+        <div
+          key={s.id}
+          className="absolute"
+          style={{
+            top: s.top,
+            left: s.left,
+            width: '80px',
+            height: '1px',
+            background: 'linear-gradient(90deg, rgba(255,255,255,0.9) 0%, rgba(100,200,255,0.6) 30%, transparent 100%)',
+            borderRadius: '1px',
+            transform: `rotate(${s.angle}deg)`,
+            boxShadow: '0 0 6px rgba(100,200,255,0.5), 0 0 12px rgba(100,200,255,0.2)',
+            animation: `mega-shooting-star ${s.totalCycle}s ${s.delay}s linear infinite`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/* ── Hover vehicles (cyberpunk drones) ── */
+function HoverVehicles() {
+  const vehicles = useMemo(() =>
+    Array.from({ length: 3 }).map((_, i) => ({
+      id: i,
+      top: `${30 + (i * 12) % 35}%`,
+      duration: 18 + i * 7,
+      delay: i * 6,
+      size: 3 - i * 0.5,
+      hue: [0, 190, 280][i],
+    })), []);
+
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      {vehicles.map(v => (
+        <div
+          key={v.id}
+          className="absolute"
+          style={{
+            top: v.top,
+            left: '-4%',
+            width: `${v.size * 3}px`,
+            height: `${v.size}px`,
+            background: `linear-gradient(90deg, transparent 0%, hsla(${v.hue}, 80%, 60%, 0.7) 40%, hsla(${v.hue}, 80%, 70%, 0.9) 50%, hsla(${v.hue}, 80%, 60%, 0.7) 60%, transparent 100%)`,
+            borderRadius: '50%',
+            boxShadow: `0 0 ${v.size * 4}px hsla(${v.hue}, 80%, 50%, 0.5), 0 ${v.size}px ${v.size * 6}px hsla(${v.hue}, 80%, 50%, 0.15)`,
+            animation: `mega-hover-vehicle ${v.duration}s ${v.delay}s linear infinite`,
           }}
         />
       ))}
@@ -437,6 +507,8 @@ export const MegaCitySkyline: React.FC<MegaCitySkylineProps> = ({
 
       <StormLayer />
       <Particles />
+      <ShootingStars />
+      <HoverVehicles />
       <ArenaOrbitalLayer />
 
       {/* City Skyline SVG */}
