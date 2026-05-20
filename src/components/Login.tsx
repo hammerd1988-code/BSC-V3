@@ -316,6 +316,14 @@ export const Login: React.FC = () => {
           />
         ))}
       </div>
+      {/* Circuit trace SVG decoration */}
+      <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-[0.07]" aria-hidden>
+        <path d="M0 200 L120 200 L120 140 L240 140 L240 200 L360 200" stroke="rgba(255,0,0,0.6)" strokeWidth="1" fill="none" strokeDasharray="8 6" style={{ animation: 'circuit-trace 8s linear infinite' }} />
+        <path d="M400 300 L520 300 L520 240 L600 240 L600 180 L720 180" stroke="rgba(255,0,0,0.4)" strokeWidth="1" fill="none" strokeDasharray="6 8" style={{ animation: 'circuit-trace 10s 2s linear infinite' }} />
+        <circle cx="120" cy="140" r="3" fill="rgba(255,0,0,0.5)" style={{ animation: 'pulse-ring 3s ease-out infinite' }} />
+        <circle cx="240" cy="200" r="3" fill="rgba(255,0,0,0.5)" style={{ animation: 'pulse-ring 3s 1s ease-out infinite' }} />
+        <circle cx="600" cy="180" r="3" fill="rgba(255,0,0,0.4)" style={{ animation: 'pulse-ring 3s 2s ease-out infinite' }} />
+      </svg>
       <div className="auth-scanlines" aria-hidden />
       <div className="auth-scanline-sweep" aria-hidden />
       <div className="auth-noise" aria-hidden />

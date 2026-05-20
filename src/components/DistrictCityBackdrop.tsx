@@ -130,6 +130,24 @@ export function DistrictCityBackdrop({ variant = 'colosseum', title, subtitle, c
       <div className="district-city-scan absolute inset-0 opacity-50" />
       <div className="absolute -left-20 top-0 h-64 w-64 rounded-full blur-3xl" style={{ backgroundColor: theme.glow }} />
       <div className="absolute right-0 top-8 h-56 w-56 rounded-full bg-cyan-400/10 blur-3xl" />
+      {/* Atmospheric haze layer */}
+      <div
+        className="pointer-events-none absolute inset-x-0 bottom-[20%] h-[30%] opacity-30"
+        style={{
+          background: `linear-gradient(180deg, transparent, ${theme.glow}, transparent)`,
+          filter: 'blur(20px)',
+          animation: 'mega-smog-drift 16s ease-in-out infinite',
+        }}
+      />
+      {/* Holographic scan line */}
+      <div
+        className="pointer-events-none absolute left-0 right-0 h-[2px] opacity-40"
+        style={{
+          background: `linear-gradient(90deg, transparent 0%, ${theme.accent}80 30%, ${theme.accent} 50%, ${theme.accent}80 70%, transparent 100%)`,
+          boxShadow: `0 0 12px ${theme.glow}`,
+          animation: 'auth-scanline-sweep 6s linear infinite',
+        }}
+      />
       <div className="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-black via-black/60 to-transparent" />
 
       <div className="relative h-full min-h-40">
