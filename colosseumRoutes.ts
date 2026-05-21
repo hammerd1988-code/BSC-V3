@@ -156,7 +156,7 @@ function buildSapphireChallengePrompt(input: { challengeType?: ColosseumChalleng
 }
 
 function platformOpenAiApiKey() {
-  return process.env.OPENAI_API_KEY || process.env.VITE_AI_API_KEY || null;
+  return process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_ADMIN_KEY || process.env.VITE_AI_API_KEY || null;
 }
 
 function botOpenAiApiKey() {
@@ -434,7 +434,7 @@ async function judgeColosseumBattle(input: {
   botSolution?: string;
 }) {
   if (!isServerAiConfigured()) {
-    return fallbackColosseumJudge({ ...input, providerError: 'No GEMINI_API_KEY or OPENAI_API_KEY configured.' });
+    return fallbackColosseumJudge({ ...input, providerError: 'No OPENROUTER_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY configured.' });
   }
   const result = await generateServerText(`Casper is judging this coding battle. Pick the winner from the two gladiator ids and score both 0-100.
 

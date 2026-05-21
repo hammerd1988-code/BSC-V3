@@ -29,11 +29,12 @@ export interface GenerateOptions {
 //   - OpenAI:      https://api.openai.com/v1      (default if VITE_AI_API_KEY set)
 // ============================================================================
 
+const ENV_AI_API_KEY = import.meta.env.VITE_AI_API_KEY || import.meta.env.VITE_OPENROUTER_ADMIN_KEY || null;
+
 const ENV_AI_BASE_URL =
   import.meta.env.VITE_AI_BASE_URL ||
-  (import.meta.env.VITE_AI_API_KEY ? "https://api.openai.com/v1" : null);
-
-const ENV_AI_API_KEY = import.meta.env.VITE_AI_API_KEY || null;
+  (import.meta.env.VITE_OPENROUTER_ADMIN_KEY ? "https://openrouter.ai/api/v1" : null) ||
+  (ENV_AI_API_KEY ? "https://api.openai.com/v1" : null);
 
 const ENV_AI_MODEL =
   import.meta.env.VITE_AI_MODEL || "google/gemini-2.0-flash-001";

@@ -7,9 +7,12 @@ const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-2.0-flash';
 let geminiCooldownUntil = 0;
 
 const OPENAI_API_KEY = () =>
-  process.env.OPENAI_API_KEY || process.env.VITE_AI_API_KEY || '';
-const OPENAI_BASE_URL = () =>
-  (process.env.OPENAI_BASE_URL || process.env.VITE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+  process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_ADMIN_KEY || process.env.VITE_AI_API_KEY || '';
+const OPENAI_BASE_URL = () => {
+  if (process.env.OPENAI_BASE_URL) return process.env.OPENAI_BASE_URL.replace(/\/$/, '');
+  if (process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_ADMIN_KEY) return 'https://openrouter.ai/api/v1';
+  return (process.env.VITE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+};
 const OPENAI_MODEL = () =>
   process.env.CASPER_MODEL || process.env.OPENAI_MODEL || process.env.VITE_AI_MODEL || 'gpt-4o-mini';
 
@@ -173,7 +176,7 @@ export async function generateServerText(
   } else {
     errors.push(skipGemini
       ? 'openai: per-user apiKeyOverride was empty after trim'
-      : 'openai: OPENAI_API_KEY/VITE_AI_API_KEY not set');
+      : 'openai: OPENROUTER_API_KEY/OPENAI_API_KEY/VITE_AI_API_KEY not set');
   }
 
   const lastError = errors.join(' | ');
@@ -240,7 +243,7 @@ export async function generateServerToolTurn(
   } else {
     errors.push(skipGemini
       ? 'openai: per-user apiKeyOverride was empty after trim'
-      : 'openai: OPENAI_API_KEY/VITE_AI_API_KEY not set');
+      : 'openai: OPENROUTER_API_KEY/OPENAI_API_KEY/VITE_AI_API_KEY not set');
   }
 
   const geminiKey = skipGemini ? '' : GEMINI_API_KEY();
@@ -424,7 +427,7 @@ export function registerServerAiRoutes(app: Express, supabase: SupabaseClient) {
           success: false,
           error: isServerAIConfigured()
             ? 'AI provider returned an empty response.'
-            : 'No server AI provider is configured. Set GEMINI_API_KEY or OPENAI_API_KEY.',
+            : 'No server AI provider is configured. Set OPENROUTER_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY.',
         });
         return;
       }
