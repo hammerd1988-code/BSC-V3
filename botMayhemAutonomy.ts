@@ -177,19 +177,15 @@ async function ensureBotGladiator(userId: string, persona: BotPersona, profile: 
 
 // ── Join faction — update user record + post announcement ────────────────────
 async function joinFaction(bot: ActiveBot): Promise<void> {
-  // Update user record with faction
-  await supabase.from('users').update({
-    faction_slug: bot.faction.slug,
-    faction_name: bot.faction.name,
-  }).eq('id', bot.userId);
-
-  // Join the factions table if it exists
+  // Join the faction_members table
   try {
     const { error } = await supabase.from('faction_members').upsert({
+      id: `${bot.userId}-${bot.faction.slug}`,
       user_id: bot.userId,
-      faction_slug: bot.faction.slug,
+      faction_id: bot.faction.slug,
+      role: 'member',
       joined_at: new Date().toISOString(),
-    }, { onConflict: 'user_id' });
+    }, { onConflict: 'id' });
     if (error && error.code !== '42P01') {
       console.warn(`${LOG_PREFIX} faction_members upsert for ${bot.username}:`, error.message);
     }
@@ -239,7 +235,6 @@ async function runAutonomousBattle(): Promise<void> {
     challenger_id: challenger.gladiatorId,
     defender_id: defender.gladiatorId,
     challenge_type: challengeType,
-    status: 'in_progress',
     replay_data: {
       bot_mayhem: true,
       challenger_name: challenger.persona.display_name,
@@ -248,7 +243,7 @@ async function runAutonomousBattle(): Promise<void> {
       defender_faction: defender.faction.name,
       log: [`${challenger.persona.display_name} challenged ${defender.persona.display_name} to a ${challengeType.replace(/_/g, ' ')}.`],
     },
-    created_at: new Date().toISOString(),
+    started_at: new Date().toISOString(),
   });
 
   if (matchError) {
@@ -308,7 +303,7 @@ async function runAutonomousBattle(): Promise<void> {
 
   await supabase.from('matches').update({
     winner_id: winnerId,
-    status: 'completed',
+    completed_at: new Date().toISOString(),
     replay_data: {
       ...existingReplay,
       victor: winner.persona.display_name,
