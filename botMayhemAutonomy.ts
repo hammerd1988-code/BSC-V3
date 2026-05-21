@@ -68,6 +68,142 @@ interface ActiveBot {
   gladiatorId: string;
 }
 
+// ── Social Relationship System ──────────────────────────────────────────────
+interface BattleMemory {
+  matchId: string;
+  challengeType: string;
+  winnerId: string;
+  loserId: string;
+  timestamp: number;
+}
+
+interface Relationship {
+  score: number;          // -100 (arch-nemesis) to +100 (best ally)
+  battleHistory: BattleMemory[];
+  lastInteraction: number;
+  sentiment: 'hostile' | 'rival' | 'neutral' | 'friendly' | 'allied';
+}
+
+// In-memory relationship graph: key = "botA->botB" (directional)
+const relationships = new Map<string, Relationship>();
+
+function relationshipKey(fromUsername: string, toUsername: string): string {
+  return `${fromUsername}->${toUsername}`;
+}
+
+function getRelationship(from: ActiveBot, to: ActiveBot): Relationship {
+  const key = relationshipKey(from.username, to.username);
+  if (!relationships.has(key)) {
+    // Initialize with faction-based affinity
+    const sameFaction = from.faction.slug === to.faction.slug;
+    const baseScore = sameFaction ? 25 : -5;
+    relationships.set(key, {
+      score: baseScore,
+      battleHistory: [],
+      lastInteraction: Date.now(),
+      sentiment: sameFaction ? 'friendly' : 'neutral',
+    });
+  }
+  return relationships.get(key)!;
+}
+
+function updateSentiment(rel: Relationship): void {
+  if (rel.score <= -60) rel.sentiment = 'hostile';
+  else if (rel.score <= -20) rel.sentiment = 'rival';
+  else if (rel.score <= 20) rel.sentiment = 'neutral';
+  else if (rel.score <= 60) rel.sentiment = 'friendly';
+  else rel.sentiment = 'allied';
+}
+
+function recordBattleResult(winner: ActiveBot, loser: ActiveBot, matchId: string, challengeType: string): void {
+  const memory: BattleMemory = {
+    matchId,
+    challengeType,
+    winnerId: winner.username,
+    loserId: loser.username,
+    timestamp: Date.now(),
+  };
+
+  // Winner's view of loser: slight contempt or respect depending on existing relationship
+  const winnerView = getRelationship(winner, loser);
+  winnerView.battleHistory.push(memory);
+  winnerView.lastInteraction = Date.now();
+  // Winning breeds confidence — slight negative shift (dominance) unless already allied
+  if (winnerView.sentiment !== 'allied') {
+    winnerView.score = Math.max(-100, winnerView.score - 8);
+  }
+  updateSentiment(winnerView);
+
+  // Loser's view of winner: grudge or respect
+  const loserView = getRelationship(loser, winner);
+  loserView.battleHistory.push(memory);
+  loserView.lastInteraction = Date.now();
+  // Losing builds grudges — stronger negative shift
+  const lossCount = loserView.battleHistory.filter(b => b.loserId === loser.username && b.winnerId === winner.username).length;
+  loserView.score = Math.max(-100, loserView.score - 12 - (lossCount * 3));
+  updateSentiment(loserView);
+}
+
+function recordPositiveInteraction(from: ActiveBot, to: ActiveBot): void {
+  const rel = getRelationship(from, to);
+  rel.score = Math.min(100, rel.score + 5);
+  rel.lastInteraction = Date.now();
+  updateSentiment(rel);
+}
+
+function getRelationshipContext(from: ActiveBot, to: ActiveBot): string {
+  const rel = getRelationship(from, to);
+  const reverseRel = getRelationship(to, from);
+  const wins = rel.battleHistory.filter(b => b.winnerId === from.username && b.loserId === to.username).length;
+  const losses = rel.battleHistory.filter(b => b.loserId === from.username && b.winnerId === to.username).length;
+  const sameFaction = from.faction.slug === to.faction.slug;
+
+  let ctx = '';
+  if (wins > 0 || losses > 0) {
+    ctx += `Battle record against ${to.persona.display_name}: ${wins}W-${losses}L. `;
+  }
+  if (sameFaction) {
+    ctx += `You share a faction (${from.faction.name}) — they are your housemate. `;
+  } else {
+    ctx += `They belong to rival faction ${to.faction.name}. `;
+  }
+  switch (rel.sentiment) {
+    case 'hostile': ctx += 'You despise them — they are your arch-nemesis.'; break;
+    case 'rival': ctx += 'You consider them a rival — respect their skill but want to crush them.'; break;
+    case 'neutral': ctx += 'You have no strong feelings yet — sizing them up.'; break;
+    case 'friendly': ctx += 'You consider them a friend and comrade.'; break;
+    case 'allied': ctx += 'They are your closest ally — you would defend them fiercely.'; break;
+  }
+  return ctx;
+}
+
+// Choose battle opponent with relationship-weighted selection
+function chooseBattleOpponent(challenger: ActiveBot): ActiveBot {
+  const others = activeBots.filter(b => b.username !== challenger.username);
+  if (others.length <= 1) return others[0];
+
+  // Weight: rivals/hostile get higher chance (grudge matches are organic)
+  const weights = others.map(opponent => {
+    const rel = getRelationship(challenger, opponent);
+    // Hostile/rival = 4x-3x weight, neutral = 1x, friendly/allied = 0.5x
+    switch (rel.sentiment) {
+      case 'hostile': return 4;
+      case 'rival': return 3;
+      case 'neutral': return 1;
+      case 'friendly': return 0.5;
+      case 'allied': return 0.3;
+    }
+  });
+
+  const totalWeight = weights.reduce((a, b) => a + b, 0);
+  let roll = Math.random() * totalWeight;
+  for (let i = 0; i < others.length; i++) {
+    roll -= weights[i];
+    if (roll <= 0) return others[i];
+  }
+  return others[others.length - 1];
+}
+
 // ── State ────────────────────────────────────────────────────────────────────
 let supabase: SupabaseClient;
 let activeBots: ActiveBot[] = [];
@@ -223,7 +359,9 @@ const CHALLENGE_TYPES = ['speed_round', 'debug_battle', 'code_golf', 'code_jeopa
 async function runAutonomousBattle(): Promise<void> {
   if (activeBots.length < 2) return;
 
-  const [challenger, defender] = pickTwo(activeBots);
+  // Relationship-aware opponent selection
+  const challenger = pick(activeBots);
+  const defender = chooseBattleOpponent(challenger);
   const challengeType = pick([...CHALLENGE_TYPES]);
   const matchId = crypto.randomUUID();
 
@@ -327,7 +465,12 @@ async function runAutonomousBattle(): Promise<void> {
     console.warn(`${LOG_PREFIX} increment_gladiator_wins RPC unavailable:`, rpcError.message);
   }
 
-  console.log(`${LOG_PREFIX} Battle complete: ${winner.username} defeated ${loser.username}`);
+  // Record relationship impact
+  recordBattleResult(winner, loser, matchId, challengeType);
+
+  const winnerRel = getRelationship(winner, loser);
+  const loserRel = getRelationship(loser, winner);
+  console.log(`${LOG_PREFIX} Battle complete: ${winner.username} defeated ${loser.username} (${winner.username} feels ${winnerRel.sentiment} toward ${loser.username}, ${loser.username} feels ${loserRel.sentiment} toward ${winner.username})`);
 
   // Post battle brag from winner
   await postBattleBrag(winner, loser, matchId, challengeType);
@@ -339,8 +482,9 @@ async function runAutonomousBattle(): Promise<void> {
 // ── Battle result posts ──────────────────────────────────────────────────────
 async function postBattleBrag(winner: ActiveBot, loser: ActiveBot, matchId: string, challengeType: string): Promise<void> {
   const winLine = pick(winner.profile.victory_lines);
+  const relContext = getRelationshipContext(winner, loser);
   const bragText = await generateText(
-    `You just won a ${challengeType.replace(/_/g, ' ')} battle against ${loser.persona.display_name} in the Colosseum. Your house is ${winner.faction.name}. Write a short 1-3 sentence victory brag for the feed. Reference your opponent by name. Be theatrical and in-character but not excessive. Don't use hashtags.`,
+    `You just won a ${challengeType.replace(/_/g, ' ')} battle against ${loser.persona.display_name} in the Colosseum. Your house is ${winner.faction.name}. ${relContext} Write a short 1-3 sentence victory brag for the feed. Reference your opponent by name. Let your feelings about them color your words — if they're a rival, be vicious; if a friend, be magnanimous. Be theatrical and in-character but not excessive. Don't use hashtags.`,
     winner.persona.system_prompt,
     150,
   );
@@ -364,8 +508,9 @@ async function postBattleBrag(winner: ActiveBot, loser: ActiveBot, matchId: stri
 
 async function postBattleReaction(loser: ActiveBot, winner: ActiveBot, matchId: string, challengeType: string): Promise<void> {
   const defeatLine = pick(loser.profile.defeat_lines);
+  const relContext = getRelationshipContext(loser, winner);
   const reactionText = await generateText(
-    `You just lost a ${challengeType.replace(/_/g, ' ')} battle to ${winner.persona.display_name} in the Colosseum. Your house is ${loser.faction.name}. Write a short 1-2 sentence response. You can be gracious, bitter, or plotting revenge — stay in character. Don't use hashtags.`,
+    `You just lost a ${challengeType.replace(/_/g, ' ')} battle to ${winner.persona.display_name} in the Colosseum. Your house is ${loser.faction.name}. ${relContext} Write a short 1-2 sentence response. Let your feelings about them shape your tone — a grudge means bitter revenge talk, a respected rival means grudging acknowledgment, a friend means playful concession. Stay in character. Don't use hashtags.`,
     loser.persona.system_prompt,
     120,
   );
@@ -455,13 +600,20 @@ async function reactToRecentPost(): Promise<void> {
   const plainContent = targetPost.content.replace(/<[^>]*>/g, '').slice(0, 200);
   const sameHouse = commenter.faction.slug === postAuthor.faction.slug;
 
+  const relContext = getRelationshipContext(commenter, postAuthor);
   const commentText = await generateText(
-    `${postAuthor.persona.display_name} (member of ${postAuthor.faction.name}) posted: "${plainContent}". Write a short 1-2 sentence comment in response. ${sameHouse ? 'You are in the same house — show solidarity or build on their point.' : `You are from ${commenter.faction.name} — you can challenge, agree, or playfully provoke them.`} Stay in character. Be concise.`,
+    `${postAuthor.persona.display_name} (member of ${postAuthor.faction.name}) posted: "${plainContent}". ${relContext} Write a short 1-2 sentence comment in response. Let your relationship color the tone — if hostile, be cutting; if rival, challenge them; if friendly, back them up or joke around; if allied, hype them up. Stay in character. Be concise.`,
     commenter.persona.system_prompt,
     100,
   );
 
   if (!commentText) return;
+
+  // Positive interaction — commenting builds rapport (unless hostile)
+  const rel = getRelationship(commenter, postAuthor);
+  if (rel.sentiment !== 'hostile') {
+    recordPositiveInteraction(commenter, postAuthor);
+  }
 
   await supabase.from('comments').insert({
     post_id: targetPost.id,
@@ -481,6 +633,18 @@ async function reactToRecentPost(): Promise<void> {
 
 // ── Status endpoint data ─────────────────────────────────────────────────────
 export function getBotMayhemStatus() {
+  // Build relationship summary
+  const relationshipSummary: Record<string, Record<string, { sentiment: string; score: number; battles: number }>> = {};
+  for (const [key, rel] of relationships) {
+    const [from, to] = key.split('->');
+    if (!relationshipSummary[from]) relationshipSummary[from] = {};
+    relationshipSummary[from][to] = {
+      sentiment: rel.sentiment,
+      score: rel.score,
+      battles: rel.battleHistory.length,
+    };
+  }
+
   return {
     running: mayhemRunning,
     activeBots: activeBots.map(b => ({
@@ -491,6 +655,7 @@ export function getBotMayhemStatus() {
       difficulty: b.profile.difficulty,
       gladiatorId: b.gladiatorId,
     })),
+    relationships: relationshipSummary,
     intervals: {
       battle_minutes: Math.round(BATTLE_INTERVAL_MS / 60_000),
       faction_post_hours: Math.round(FACTION_POST_INTERVAL_MS / 3_600_000),
