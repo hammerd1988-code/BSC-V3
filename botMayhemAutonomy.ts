@@ -517,16 +517,26 @@ export async function triggerBattle(): Promise<{ success: boolean; error?: strin
 
 // ── Register API routes ──────────────────────────────────────────────────────
 export function registerBotMayhemRoutes(app: import('express').Express) {
+  const requireAdmin: import('express').RequestHandler = (req, res, next) => {
+    const key = req.headers['x-api-key'] as string | undefined;
+    const secret = process.env.AGENT_WEBHOOK_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!key || key !== secret) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    next();
+  };
+
   app.get('/api/bot-mayhem/status', (_req, res) => {
     res.json(getBotMayhemStatus());
   });
 
-  app.post('/api/bot-mayhem/trigger-battle', async (_req, res) => {
+  app.post('/api/bot-mayhem/trigger-battle', requireAdmin, async (_req, res) => {
     const result = await triggerBattle();
     res.json(result);
   });
 
-  app.post('/api/bot-mayhem/trigger-faction-post', async (_req, res) => {
+  app.post('/api/bot-mayhem/trigger-faction-post', requireAdmin, async (_req, res) => {
     if (!mayhemRunning) return res.json({ success: false, error: 'Bot Mayhem is not running' });
     try {
       await postFactionContent();
@@ -536,7 +546,7 @@ export function registerBotMayhemRoutes(app: import('express').Express) {
     }
   });
 
-  app.post('/api/bot-mayhem/trigger-reaction', async (_req, res) => {
+  app.post('/api/bot-mayhem/trigger-reaction', requireAdmin, async (_req, res) => {
     if (!mayhemRunning) return res.json({ success: false, error: 'Bot Mayhem is not running' });
     try {
       await reactToRecentPost();
@@ -618,26 +628,31 @@ export async function initBotMayhemAutonomy(): Promise<void> {
   const firstBattleDelay = INITIAL_DELAY_MS + activeBots.length * 45_000 + 60_000;
   setTimeout(() => {
     runAutonomousBattle().catch(e => console.error(`${LOG_PREFIX} Initial battle failed:`, e));
-    // Start the recurring battle loop
-    setInterval(() => {
+    const scheduleBattle = () => setTimeout(() => {
       runAutonomousBattle().catch(e => console.error(`${LOG_PREFIX} Battle cycle failed:`, e));
+      scheduleBattle();
     }, jitter(BATTLE_INTERVAL_MS));
+    scheduleBattle();
   }, firstBattleDelay);
 
   // Phase 3: Recurring faction posts
   setTimeout(() => {
     postFactionContent().catch(e => console.error(`${LOG_PREFIX} Initial faction post failed:`, e));
-    setInterval(() => {
+    const scheduleFactionPost = () => setTimeout(() => {
       postFactionContent().catch(e => console.error(`${LOG_PREFIX} Faction post cycle failed:`, e));
+      scheduleFactionPost();
     }, jitter(FACTION_POST_INTERVAL_MS));
+    scheduleFactionPost();
   }, firstBattleDelay + 5 * 60_000);
 
   // Phase 4: Recurring reaction comments
   setTimeout(() => {
     reactToRecentPost().catch(e => console.error(`${LOG_PREFIX} Initial reaction failed:`, e));
-    setInterval(() => {
+    const scheduleReaction = () => setTimeout(() => {
       reactToRecentPost().catch(e => console.error(`${LOG_PREFIX} Reaction cycle failed:`, e));
+      scheduleReaction();
     }, jitter(REACTION_COMMENT_INTERVAL_MS));
+    scheduleReaction();
   }, firstBattleDelay + 10 * 60_000);
 
   console.log(`${LOG_PREFIX} Autonomy loops scheduled:`);
