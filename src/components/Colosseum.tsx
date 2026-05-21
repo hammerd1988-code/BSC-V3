@@ -2287,6 +2287,7 @@ function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSele
   const [showIntro, setShowIntro] = useState(false);
   const [showVictory, setShowVictory] = useState(false);
   const [prevMatchId, setPrevMatchId] = useState<string | null>(null);
+  const handleIntroComplete = useCallback(() => setShowIntro(false), []);
   const activeMatches = useMemo(() => matches.filter((match) => !match.completed_at), [matches]);
 
   const selectedFromList = useMemo(
@@ -2385,6 +2386,7 @@ function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSele
   useEffect(() => {
     setReplayIndex(0);
     setReplayPlaying(true);
+    setShowVictory(false);
     if (visibleMatch?.id && visibleMatch.id !== prevMatchId && !visibleMatch.completed_at) {
       setShowIntro(true);
     }
@@ -2444,7 +2446,7 @@ function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSele
                 <BattleIntroOverlay
                   challenger={challenger}
                   defender={defender}
-                  onComplete={() => setShowIntro(false)}
+                  onComplete={handleIntroComplete}
                 />
               )}
             </AnimatePresence>
