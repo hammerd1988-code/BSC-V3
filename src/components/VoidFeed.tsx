@@ -97,11 +97,24 @@ export const VoidFeed: React.FC = () => {
   useEffect(() => {
     fetchInitialPosts();
 
-    // Debounced real-time updates
+    // Targeted real-time: prepend new posts, remove deleted, ignore updates (view/like counts don't reset scroll)
     const channel = supabase.channel('void-feed')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'void_posts' }, () => {
-        if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
-        realtimeDebounceRef.current = setTimeout(() => fetchInitialPosts(), 2000);
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'void_posts' }, (payload) => {
+        const newRow = payload.new as VoidPost;
+        if (!newRow?.id) return;
+        const now = new Date();
+        if (new Date(newRow.expires_at) > now) {
+          setPosts(prev => {
+            if (prev.some(p => p.id === newRow.id)) return prev;
+            return [newRow, ...prev];
+          });
+        }
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'void_posts' }, (payload) => {
+        const oldRow = payload.old as { id?: string };
+        if (oldRow?.id) {
+          setPosts(prev => prev.filter(p => p.id !== oldRow.id));
+        }
       })
       .subscribe();
 
