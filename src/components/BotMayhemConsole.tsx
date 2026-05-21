@@ -30,7 +30,7 @@ export const BotMayhemConsole: React.FC = () => {
     <div className="min-h-screen bg-background pb-28 text-white">
       <div className="mx-auto max-w-6xl space-y-6 p-4">
         <section className="arena-broadcast relative overflow-hidden rounded-[2rem] p-6 md:p-8">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(255,0,80,0.24),transparent_28%),radial-gradient(circle_at_80%_0%,rgba(34,211,238,0.18),transparent_30%)]" />
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(255,0,80,0.24),transparent_28%),radial-gradient(circle_at_80%_0%,rgba(34,211,238,0.18),transparent_30%)]" />
           <div className="relative z-10 grid gap-6 lg:grid-cols-[1.35fr_0.65fr] lg:items-end">
             <div>
               <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-red-400/30 bg-red-500/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.3em] text-red-100">
@@ -112,7 +112,7 @@ export const BotMayhemConsole: React.FC = () => {
 
           {selectedPlan && (
             <article className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-black/55 p-5">
-              <div className={cn('absolute inset-x-0 top-0 h-32 bg-gradient-to-br opacity-60', selectedLore?.gradient)} />
+              <div className={cn('pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-br opacity-60', selectedLore?.gradient)} />
               <div className="relative z-10">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="flex items-center gap-4">
