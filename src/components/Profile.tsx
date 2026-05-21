@@ -1000,21 +1000,32 @@ export const Profile: React.FC = () => {
       )}>
         {/* Cover Image */}
         <div className="relative h-48 w-full bg-surface overflow-hidden">
-          {user.cover_url && (
-            <img 
-              src={user.cover_url} 
-              alt="Cover" 
-              onClick={() => setFullSizeImage(user.cover_url!)}
-              className={cn(
-                "w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity",
-                isHighContrast && "grayscale contrast-150 brightness-50"
-              )} 
-            />
+          {user.cover_url ? (
+            <button
+              type="button"
+              onClick={() => setFullSizeImage(user.cover_url)}
+              aria-label={`View ${user.display_name}'s cover image`}
+              className="relative block h-full w-full"
+            >
+              <img 
+                src={user.cover_url} 
+                alt="Cover" 
+                className={cn(
+                  "w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity",
+                  isHighContrast && "grayscale contrast-150 brightness-50"
+                )} 
+              />
+              <div className={cn(
+                "absolute inset-0 bg-gradient-to-t from-black/60 to-transparent",
+                isHighContrast && "from-black via-black/40 to-transparent"
+              )} />
+            </button>
+          ) : (
+            <div className={cn(
+              "absolute inset-0 bg-gradient-to-t from-black/60 to-transparent",
+              isHighContrast && "from-black via-black/40 to-transparent"
+            )} />
           )}
-          <div className={cn(
-            "absolute inset-0 bg-gradient-to-t from-black/60 to-transparent",
-            isHighContrast && "from-black via-black/40 to-transparent"
-          )} />
         </div>
 
         {/* Profile Info */}
@@ -1027,15 +1038,32 @@ export const Profile: React.FC = () => {
                   user.is_live ? "bg-accent animate-pulse shadow-[0_0_20px_rgba(255,0,0,0.5)]" : "bg-transparent",
                   isHighContrast && !user.is_live && "bg-white/20"
                 )}>
-                  <img
-                    src={user.avatar_url}
-                    alt={user.display_name}
-                    onClick={() => user.avatar_url && setFullSizeImage(user.avatar_url)}
-                    className={cn(
-                      "w-24 h-24 rounded-full object-cover border-4 border-background bg-surface cursor-pointer hover:opacity-80 transition-opacity",
-                      isHighContrast && "grayscale contrast-[2] border-black"
-                    )}
-                  />
+                  {user.avatar_url ? (
+                    <button
+                      type="button"
+                      onClick={() => setFullSizeImage(user.avatar_url)}
+                      aria-label={`View ${user.display_name}'s avatar`}
+                      className="block rounded-full"
+                    >
+                      <img
+                        src={user.avatar_url}
+                        alt={user.display_name}
+                        className={cn(
+                          "w-24 h-24 rounded-full object-cover border-4 border-background bg-surface cursor-pointer hover:opacity-80 transition-opacity",
+                          isHighContrast && "grayscale contrast-[2] border-black"
+                        )}
+                      />
+                    </button>
+                  ) : (
+                    <img
+                      src={user.avatar_url ?? undefined}
+                      alt={user.display_name}
+                      className={cn(
+                        "w-24 h-24 rounded-full object-cover border-4 border-background bg-surface",
+                        isHighContrast && "grayscale contrast-[2] border-black"
+                      )}
+                    />
+                  )}
                 </div>
                 <div className="absolute bottom-1 right-1 bg-background rounded-full p-1 border border-primary">
                   {user.type === 'bot' ? (
