@@ -400,7 +400,7 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
             poster="/casper-runway-256.png"
             src="/casper-avatar-banner.mp4"
           />
-          <div className="absolute inset-0 bg-gradient-to-t from-[#0a0d14] via-transparent to-transparent" />
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#0a0d14] via-transparent to-transparent" />
           <div className="absolute inset-x-0 bottom-0 flex items-end justify-between px-4 pb-2">
             <div className="flex items-center gap-2">
               <div>
