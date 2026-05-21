@@ -1009,7 +1009,7 @@ export const Profile: React.FC = () => {
             >
               <img 
                 src={user.cover_url!} 
-                alt="Cover" 
+                alt="" 
                 className={cn(
                   "w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity",
                   isHighContrast && "grayscale contrast-150 brightness-50"
@@ -1047,7 +1047,7 @@ export const Profile: React.FC = () => {
                     >
                       <img
                         src={user.avatar_url!}
-                        alt={user.display_name}
+                        alt=""
                         className={cn(
                           "w-24 h-24 rounded-full object-cover border-4 border-background bg-surface cursor-pointer hover:opacity-80 transition-opacity",
                           isHighContrast && "grayscale contrast-[2] border-black"
