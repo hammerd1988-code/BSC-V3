@@ -1018,7 +1018,7 @@ export const Profile: React.FC = () => {
               <div className={cn(
                 "pointer-events-none absolute inset-0 bg-gradient-to-t from-black/60 to-transparent",
                 isHighContrast && "from-black via-black/40 to-transparent"
-              )} />
+              )} aria-hidden="true" />
             </button>
           ) : (
             <div className={cn(
