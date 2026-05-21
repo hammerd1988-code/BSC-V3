@@ -202,7 +202,7 @@ export const FactionDetail: React.FC = () => {
             <div className="forge-constellation" />
             {faction.banner_url && <img src={faction.banner_url} alt="" className="h-full w-full object-cover opacity-80" />}
           </div>
-          <div className="absolute inset-0 bg-gradient-to-t from-black via-black/30 to-transparent" />
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black via-black/30 to-transparent" />
           <div className="relative z-10 p-6 md:p-8 -mt-24">
             <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-5">
               <div className="flex items-end gap-4">

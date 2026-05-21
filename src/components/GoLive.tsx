@@ -116,7 +116,7 @@ const StreamCard: React.FC<{ stream: StreamRow; onOpen: (id: string) => void }> 
             <Tv className="h-14 w-14 text-white/20" />
           </div>
         )}
-        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/10 to-transparent" />
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black via-black/10 to-transparent" />
         <div className="absolute left-4 top-4 flex items-center gap-2">
           <span className={cn('inline-flex items-center gap-2 rounded-full px-3 py-1 text-[9px] font-black uppercase tracking-widest', isLive ? 'bg-red-500 text-white shadow-[0_0_18px_rgba(239,68,68,0.45)]' : 'bg-white/10 text-zinc-200')}>
             {isLive && <span className="h-2 w-2 animate-pulse rounded-full bg-white" />}
@@ -805,7 +805,7 @@ export const GoLive: React.FC = () => {
           )}
           <AnimatePresence>
             {hasEnded && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black to-transparent p-8 text-center">
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black to-transparent p-8 text-center">
                 <p className="text-xs font-black uppercase tracking-[0.25em] text-zinc-400">Transmission archived</p>
               </motion.div>
             )}

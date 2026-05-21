@@ -107,7 +107,7 @@ export const VideoDiscovery: React.FC = () => {
         ) : (
           <video src={video.video_url} muted playsInline preload="metadata" className="h-full w-full object-cover opacity-80 transition duration-700 group-hover:scale-105" />
         )}
-        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/10 to-transparent" />
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black via-black/10 to-transparent" />
         <div className="absolute left-3 top-3 flex items-center gap-2">
           <span className={cn('rounded-full px-3 py-1 text-[8px] font-black uppercase tracking-widest', video.is_short ? 'bg-pink-500 text-white' : 'bg-cyan-300/15 text-cyan-100 border border-cyan-300/25')}>{video.is_short ? 'Short' : 'Video'}</span>
           <span className="rounded-full bg-black/70 px-3 py-1 text-[8px] font-black uppercase tracking-widest text-zinc-300">{video.category}</span>

@@ -1044,8 +1044,8 @@ function CombatantTerminal({
       className="relative overflow-hidden rounded-3xl border bg-black/85 shadow-[inset_0_0_34px_rgba(34,197,94,0.08)]"
       style={{ borderColor: `${glow}44` }}
     >
-      <div className="absolute inset-0 opacity-20" style={{ background: `radial-gradient(circle at 18% 0%, ${glow}88, transparent 34%)` }} />
-      <div className="terminal-data-rain absolute inset-0 opacity-35" />
+      <div className="pointer-events-none absolute inset-0 opacity-20" style={{ background: `radial-gradient(circle at 18% 0%, ${glow}88, transparent 34%)` }} />
+      <div className="pointer-events-none terminal-data-rain absolute inset-0 opacity-35" />
       <div className="relative flex items-center justify-between border-b border-white/10 bg-white/[0.03] px-4 py-3">
         <div className="min-w-0">
           <p className="text-[9px] font-black uppercase tracking-[0.3em]" style={{ color: glow }}>{label} Terminal</p>
@@ -1403,7 +1403,7 @@ function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active }: { gl
         className={cn('relative grid place-items-center overflow-hidden rounded-[1.65rem] border border-white/15 bg-zinc-950', sizeClass)}
         style={{ boxShadow: `0 0 34px ${glow}55`, transformStyle: 'preserve-3d' }}
       >
-        <div className="absolute inset-0 opacity-45" style={{ background: `radial-gradient(circle at 50% 0%, ${glow}55, transparent 52%)` }} />
+        <div className="pointer-events-none absolute inset-0 opacity-45" style={{ background: `radial-gradient(circle at 50% 0%, ${glow}55, transparent 52%)` }} />
         {avatarUrl ? (
           <img
             src={avatarUrl}
@@ -1413,7 +1413,7 @@ function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active }: { gl
         ) : (
           <Bot className={iconClass} style={{ color: glow }} />
         )}
-        <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px)] bg-[length:12px_12px] opacity-20" />
+        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px)] bg-[length:12px_12px] opacity-20" />
         <motion.div
           aria-hidden
           animate={{ x: ['-130%', '140%'], opacity: [0, 0.55, 0] }}
@@ -1433,7 +1433,7 @@ function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active }: { gl
             backgroundSize: '100% 240%',
           }}
         />
-        <div className="absolute inset-0 opacity-40" style={{ boxShadow: `inset 0 0 28px ${glow}` }} />
+        <div className="pointer-events-none absolute inset-0 opacity-40" style={{ boxShadow: `inset 0 0 28px ${glow}` }} />
         <div className="absolute inset-x-2 bottom-2 h-1 rounded-full bg-white/35 blur-[1px]" />
       </motion.div>
       <motion.div
@@ -1471,10 +1471,10 @@ function GladiatorCard({ gladiator, active, onSelect, actionLabel, onAction }: {
       )}
       style={{ boxShadow: active ? `0 0 36px ${gladiator.glow_color}55` : `0 0 20px ${gladiator.glow_color}18` }}
     >
-      <div className="absolute inset-0 opacity-30" style={{ background: `radial-gradient(circle at 20% 20%, ${gladiator.glow_color}55, transparent 32%), linear-gradient(135deg, transparent, ${gladiator.glow_color}16)` }} />
+      <div className="pointer-events-none absolute inset-0 opacity-30" style={{ background: `radial-gradient(circle at 20% 20%, ${gladiator.glow_color}55, transparent 32%), linear-gradient(135deg, transparent, ${gladiator.glow_color}16)` }} />
       <div className="absolute -right-12 -top-16 h-32 w-32 rounded-full blur-3xl" style={{ backgroundColor: gladiator.glow_color }} />
       <div className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/55 p-3">
-        <div className="absolute inset-0 opacity-35" style={{ background: `linear-gradient(135deg, ${gladiator.glow_color}33, transparent 45%, rgba(255,255,255,0.08))` }} />
+        <div className="pointer-events-none absolute inset-0 opacity-35" style={{ background: `linear-gradient(135deg, ${gladiator.glow_color}33, transparent 45%, rgba(255,255,255,0.08))` }} />
         <div className="relative flex flex-col items-center gap-3">
           <AnimatedGladiatorAvatar gladiator={gladiator} size="xl" label={gladiator.name} active={active} />
           <div className="rounded-full border border-white/10 bg-black/70 px-3 py-1 text-[8px] font-black uppercase tracking-[0.22em] text-cyan-100">
@@ -1590,7 +1590,7 @@ function CombatantPortrait({ gladiator, label }: { gladiator?: Gladiator; label:
 
   return (
     <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-black/70 p-4">
-      <div className="absolute inset-0 opacity-30" style={{ background: `radial-gradient(circle at 18% 18%, ${glow}66, transparent 34%)` }} />
+      <div className="pointer-events-none absolute inset-0 opacity-30" style={{ background: `radial-gradient(circle at 18% 18%, ${glow}66, transparent 34%)` }} />
       <div className="relative flex items-center gap-4">
         <AnimatedGladiatorAvatar gladiator={gladiator} size="sm" active />
         <div className="min-w-0">
@@ -1695,7 +1695,7 @@ function ArenaStage({
 
   return (
     <div className="relative min-h-[24rem] overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/80 p-5 shadow-[inset_0_0_80px_rgba(255,23,68,0.08)]">
-      <div className="arena-stage-grid absolute inset-0 opacity-60" />
+      <div className="pointer-events-none arena-stage-grid absolute inset-0 opacity-60" />
       <div
         className="absolute -left-24 top-8 h-56 w-56 rounded-full blur-3xl"
         style={{ backgroundColor: `${challengerGlow}55` }}
@@ -1705,7 +1705,7 @@ function ArenaStage({
         style={{ backgroundColor: `${defenderGlow}55` }}
       />
       <div className="absolute inset-x-8 bottom-7 h-28 rounded-[50%] border border-red-300/20 bg-red-500/10 blur-[1px]" />
-      <div className="arena-energy-lattice absolute inset-x-6 bottom-10 h-40 opacity-55" />
+      <div className="pointer-events-none arena-energy-lattice absolute inset-x-6 bottom-10 h-40 opacity-55" />
 
       <div className="relative z-10 flex flex-col gap-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1820,7 +1820,7 @@ function LiveBattleCard({ match, challenger, defender, now, onSelect }: { match:
       whileTap={{ scale: 0.98 }}
       className="group relative min-h-52 overflow-hidden rounded-[1.75rem] border border-red-500/20 bg-black/70 p-5 text-left shadow-[0_0_34px_rgba(255,23,68,0.12)] transition hover:border-red-300/45"
     >
-      <div className="absolute inset-0 opacity-40" style={{ background: `linear-gradient(135deg, ${challengerGlow}26, transparent 42%, ${defenderGlow}24), radial-gradient(circle at 50% 0%, rgba(255,255,255,0.12), transparent 34%)` }} />
+      <div className="pointer-events-none absolute inset-0 opacity-40" style={{ background: `linear-gradient(135deg, ${challengerGlow}26, transparent 42%, ${defenderGlow}24), radial-gradient(circle at 50% 0%, rgba(255,255,255,0.12), transparent 34%)` }} />
       <div className="absolute -left-16 -top-16 h-36 w-36 rounded-full blur-3xl" style={{ backgroundColor: challengerGlow }} />
       <div className="absolute -bottom-20 -right-16 h-40 w-40 rounded-full blur-3xl" style={{ backgroundColor: defenderGlow }} />
 
@@ -2019,7 +2019,7 @@ function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSele
             exit={{ opacity: 0, y: -14 }}
             className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-zinc-950/85 p-4"
           >
-            <div className="absolute inset-0 opacity-35 [background-image:linear-gradient(90deg,rgba(255,255,255,0.07)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px)] [background-size:34px_34px]" />
+            <div className="pointer-events-none absolute inset-0 opacity-35 [background-image:linear-gradient(90deg,rgba(255,255,255,0.07)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px)] [background-size:34px_34px]" />
             <div className="relative">
               <div className="mb-4 flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
                 <button
@@ -2309,7 +2309,7 @@ function TournamentPanel({
           const bracket = Array.isArray(tournament.bracket) ? tournament.bracket : [];
           return (
             <motion.div key={tournament.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-zinc-950/75 p-4">
-              <div className="absolute inset-0 opacity-25 bg-[radial-gradient(circle_at_20%_0%,rgba(0,229,255,0.32),transparent_34%),radial-gradient(circle_at_80%_100%,rgba(255,43,214,0.25),transparent_36%)]" />
+              <div className="pointer-events-none absolute inset-0 opacity-25 bg-[radial-gradient(circle_at_20%_0%,rgba(0,229,255,0.32),transparent_34%),radial-gradient(circle_at_80%_100%,rgba(255,43,214,0.25),transparent_36%)]" />
               <div className="relative">
                 <div className="mb-4 flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -3350,7 +3350,7 @@ export const Colosseum: React.FC = () => {
                 exit={{ scale: 0.94, y: 18 }}
                 className="relative w-full max-w-3xl overflow-hidden rounded-[2rem] border border-red-400/35 bg-zinc-950 p-6 shadow-[0_0_70px_rgba(255,23,68,0.28)]"
               >
-                <div className="absolute inset-0 opacity-35" style={{ background: `radial-gradient(circle at 20% 0%, ${selectedOpponent.glow_color}66, transparent 34%), radial-gradient(circle at 100% 100%, rgba(0,229,255,0.22), transparent 35%)` }} />
+                <div className="pointer-events-none absolute inset-0 opacity-35" style={{ background: `radial-gradient(circle at 20% 0%, ${selectedOpponent.glow_color}66, transparent 34%), radial-gradient(circle at 100% 100%, rgba(0,229,255,0.22), transparent 35%)` }} />
                 <div className="relative">
                   <div className="mb-5 flex items-start justify-between gap-4">
                     <div className="flex items-start gap-5">
@@ -3436,7 +3436,7 @@ export const Colosseum: React.FC = () => {
             animate={{ opacity: 1, y: 0 }}
             className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-black/55 p-6 shadow-2xl backdrop-blur-xl"
           >
-            <div className="absolute inset-0 bg-[linear-gradient(115deg,rgba(255,23,68,0.18),transparent_35%,rgba(0,229,255,0.12)_68%,rgba(255,43,214,0.16))]" />
+            <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(115deg,rgba(255,23,68,0.18),transparent_35%,rgba(0,229,255,0.12)_68%,rgba(255,43,214,0.16))]" />
             <div className="relative grid gap-8 lg:grid-cols-[0.9fr_1.1fr]">
               <div className="flex flex-col justify-between gap-8">
                 <div>
@@ -3465,7 +3465,7 @@ export const Colosseum: React.FC = () => {
               </div>
 
               <div className="relative min-h-[24rem] overflow-hidden rounded-[1.75rem] border border-white/10 bg-zinc-950/70 p-4">
-                <div className="absolute inset-0 opacity-40 [background-image:radial-gradient(circle_at_50%_50%,rgba(255,23,68,0.28),transparent_32%),linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.06)_1px,transparent_1px)] [background-size:100%_100%,36px_36px,36px_36px]" />
+                <div className="pointer-events-none absolute inset-0 opacity-40 [background-image:radial-gradient(circle_at_50%_50%,rgba(255,23,68,0.28),transparent_32%),linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.06)_1px,transparent_1px)] [background-size:100%_100%,36px_36px,36px_36px]" />
                 <div className="absolute left-0 right-0 top-8 flex justify-around opacity-50">
                   {Array.from({ length: 14 }).map((_, index) => (
                     <motion.div
@@ -3777,7 +3777,7 @@ export const Colosseum: React.FC = () => {
                         selectedOpponentId === bot.id ? 'border-cyan-200/70 bg-cyan-400/10' : 'border-white/10 bg-white/[0.04] hover:border-cyan-300/45'
                       )}
                     >
-                      <div className="absolute inset-0 opacity-20" style={{ background: `radial-gradient(circle at 0% 0%, ${bot.glow_color}99, transparent 45%)` }} />
+                      <div className="pointer-events-none absolute inset-0 opacity-20" style={{ background: `radial-gradient(circle at 0% 0%, ${bot.glow_color}99, transparent 45%)` }} />
                       <div className="relative flex items-center gap-3">
                         <AnimatedGladiatorAvatar gladiator={bot} size="sm" active />
                         <div className="min-w-0">
@@ -3959,8 +3959,8 @@ export const Colosseum: React.FC = () => {
                 >
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
                     <div className="relative grid min-h-28 flex-1 place-items-center overflow-hidden rounded-2xl border border-white/10 bg-zinc-950/80">
-                      <div className="arena-stage-grid absolute inset-0 opacity-50" />
-                      <div className="arena-energy-lattice absolute inset-x-4 bottom-0 h-24 opacity-50" />
+                      <div className="pointer-events-none arena-stage-grid absolute inset-0 opacity-50" />
+                      <div className="pointer-events-none arena-energy-lattice absolute inset-x-4 bottom-0 h-24 opacity-50" />
                       <motion.div
                         aria-hidden
                         animate={{ x: ['-34%', '34%', '-34%'], opacity: [0.22, 0.58, 0.22] }}
