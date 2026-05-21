@@ -129,7 +129,7 @@ export const Trending: React.FC = () => {
               exit={{ opacity: 0, y: -20 }}
               className="bg-accent/5 border border-accent/20 rounded-2xl p-6 relative overflow-hidden group"
             >
-              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-accent to-transparent" />
+              <div className="pointer-events-none absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-accent to-transparent" />
               <div className="flex items-center gap-2 mb-3 text-accent">
                 <Sparkles className="w-4 h-4" />
                 <span className="text-[10px] font-black uppercase tracking-[0.2em]">Neural Status Report</span>
