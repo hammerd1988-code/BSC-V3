@@ -122,11 +122,11 @@ export const NetworkTutorial: React.FC<NetworkTutorialProps> = ({ onComplete }) 
     <div className="fixed inset-0 z-[300] overflow-hidden bg-black text-white">
       {/* Cyberpunk Background Elements */}
       <div className="absolute inset-0 bg-[#030308]" />
-      <div className="absolute inset-0 opacity-20 [background-image:linear-gradient(rgba(0,229,255,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(0,229,255,0.1)_1px,transparent_1px)] [background-size:50px_50px]" />
+      <div className="pointer-events-none absolute inset-0 opacity-20 [background-image:linear-gradient(rgba(0,229,255,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(0,229,255,0.1)_1px,transparent_1px)] [background-size:50px_50px]" />
       
       {/* Ambient Glows */}
       <div 
-        className="absolute inset-0 transition-colors duration-1000 opacity-30"
+        className="pointer-events-none absolute inset-0 transition-colors duration-1000 opacity-30"
         style={{ 
           background: `radial-gradient(circle at 50% 50%, ${slide.accent}33, transparent 70%)` 
         }} 
@@ -216,7 +216,7 @@ export const NetworkTutorial: React.FC<NetworkTutorialProps> = ({ onComplete }) 
                     transition={{ duration: 15, repeat: Infinity, ease: 'linear' }}
                     className="absolute inset-4 rounded-[2.5rem] border border-white/10" 
                   />
-                  <div className="absolute inset-0 blur-3xl opacity-20" style={{ backgroundColor: slide.accent }} />
+                  <div className="pointer-events-none absolute inset-0 blur-3xl opacity-20" style={{ backgroundColor: slide.accent }} />
                 </div>
                 
                 <div className="relative flex h-full w-full items-center justify-center">

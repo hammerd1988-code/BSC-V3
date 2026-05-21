@@ -197,7 +197,7 @@ export const VoidFeed: React.FC = () => {
           animate={{ opacity: 1, y: 0 }}
           className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-2xl relative overflow-hidden group"
         >
-          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-primary to-transparent opacity-20 group-hover:opacity-100 transition-opacity" />
+          <div className="pointer-events-none absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-primary to-transparent opacity-20 group-hover:opacity-100 transition-opacity" />
           
           <form onSubmit={handlePostToVoid} className="space-y-4">
             <textarea
