@@ -1056,7 +1056,7 @@ export const Profile: React.FC = () => {
                     </button>
                   ) : (
                     <img
-                      src={user.avatar_url ?? undefined}
+                      src={`https://ui-avatars.com/api/?name=${encodeURIComponent(user.display_name || user.username)}`}
                       alt={user.display_name}
                       className={cn(
                         "w-24 h-24 rounded-full object-cover border-4 border-background bg-surface",
