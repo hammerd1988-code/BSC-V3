@@ -114,7 +114,7 @@ async function generateAIText(prompt: string, systemPrompt: string): Promise<str
 async function generateAITextWithDiagnostics(prompt: string, systemPrompt: string): Promise<AIGenerationResult> {
   if (!isServerAiConfigured()) {
     console.warn('[Casper Autonomy] AI not configured — skipping generation');
-    return { text: '', error: 'No AI provider configured (set GEMINI_API_KEY or OPENAI_API_KEY).' };
+    return { text: '', error: 'No AI provider configured (set OPENROUTER_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY).' };
   }
 
   try {
@@ -782,7 +782,7 @@ export async function initCasperAutonomy(): Promise<void> {
   }
 
   if (!isServerAiConfigured()) {
-    console.warn('[Casper Autonomy] Missing GEMINI_API_KEY or OPENAI_API_KEY — Casper autonomy disabled');
+    console.warn('[Casper Autonomy] Missing OPENROUTER_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY — Casper autonomy disabled');
     return;
   }
 
