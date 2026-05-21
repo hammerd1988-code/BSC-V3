@@ -775,9 +775,166 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
   .forge-constellation,
   .forge-energy-ribbon,
   .faction-sigil__ring,
-  .faction-card-orbit {
+  .faction-card-orbit,
+  .arena-screen-shake,
+  .arena-clash-burst,
+  .arena-ember,
+  .arena-energy-wave,
+  .arena-lightning,
+  .arena-victory-glow,
+  .arena-confetti,
+  .arena-intro-sweep,
+  .casper-colosseum-aura,
+  .casper-chat-bg-avatar {
     animation: none !important;
   }
+}
+
+/* ── Colosseum cinematic battle animations ── */
+
+.arena-screen-shake {
+  animation: arena-screen-shake 0.4s ease-out;
+}
+
+.arena-clash-burst {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(255, 220, 80, 0.6), rgba(255, 23, 68, 0.3) 30%, transparent 60%);
+  animation: arena-clash-burst 0.6s ease-out forwards;
+}
+
+.arena-ember {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  pointer-events: none;
+  animation: arena-ember-rise 2.4s ease-out forwards;
+}
+
+.arena-energy-wave {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 220, 80, 0.5);
+  animation: arena-energy-wave 1.2s ease-out forwards;
+}
+
+.arena-lightning {
+  position: absolute;
+  pointer-events: none;
+  width: 2px;
+  height: 100%;
+  left: 50%;
+  top: 0;
+  background: linear-gradient(to bottom, transparent, rgba(0, 229, 255, 0.9), rgba(255, 220, 80, 0.9), transparent);
+  filter: blur(1px);
+  animation: arena-lightning-strike 0.3s ease-out forwards;
+}
+
+.arena-victory-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 40%, rgba(250, 204, 21, 0.4), transparent 60%);
+  animation: arena-victory-glow 2s ease-in-out infinite;
+}
+
+.arena-confetti {
+  position: absolute;
+  pointer-events: none;
+  animation: arena-confetti-fall 3s ease-out forwards;
+}
+
+.arena-intro-sweep {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
+  animation: arena-intro-sweep 1.2s ease-out forwards;
+}
+
+.casper-colosseum-aura {
+  position: absolute;
+  inset: -20%;
+  pointer-events: none;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(250, 204, 21, 0.15), rgba(0, 229, 255, 0.08) 40%, transparent 70%);
+  animation: casper-colosseum-aura 3s ease-in-out infinite;
+}
+
+.casper-chat-bg-avatar {
+  position: fixed;
+  pointer-events: none;
+  opacity: 0.04;
+  filter: blur(1px);
+  animation: casper-chat-bg-drift 20s ease-in-out infinite;
+}
+
+@keyframes arena-screen-shake {
+  0%, 100% { transform: translate(0, 0); }
+  10% { transform: translate(-4px, 2px); }
+  20% { transform: translate(3px, -3px); }
+  30% { transform: translate(-2px, 4px); }
+  40% { transform: translate(4px, -1px); }
+  50% { transform: translate(-3px, 3px); }
+  60% { transform: translate(2px, -2px); }
+  70% { transform: translate(-1px, 1px); }
+  80% { transform: translate(1px, -1px); }
+}
+
+@keyframes arena-clash-burst {
+  0% { opacity: 0; transform: scale(0.3); }
+  30% { opacity: 1; transform: scale(1.1); }
+  100% { opacity: 0; transform: scale(1.8); }
+}
+
+@keyframes arena-ember-rise {
+  0% { opacity: 1; transform: translateY(0) scale(1); }
+  50% { opacity: 0.8; }
+  100% { opacity: 0; transform: translateY(-120px) translateX(var(--ember-drift, 30px)) scale(0); }
+}
+
+@keyframes arena-energy-wave {
+  0% { opacity: 0.8; transform: scale(0.2); }
+  100% { opacity: 0; transform: scale(2.5); }
+}
+
+@keyframes arena-lightning-strike {
+  0% { opacity: 0; transform: scaleY(0) translateX(-50%); }
+  20% { opacity: 1; transform: scaleY(1) translateX(-50%); }
+  100% { opacity: 0; transform: scaleY(1) translateX(-50%); }
+}
+
+@keyframes arena-victory-glow {
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.05); }
+}
+
+@keyframes arena-confetti-fall {
+  0% { opacity: 1; transform: translateY(0) rotate(0deg) scale(1); }
+  100% { opacity: 0; transform: translateY(300px) rotate(720deg) scale(0.3); }
+}
+
+@keyframes arena-intro-sweep {
+  0% { transform: translateX(-100%); opacity: 0; }
+  30% { opacity: 1; }
+  100% { transform: translateX(100%); opacity: 0; }
+}
+
+@keyframes casper-colosseum-aura {
+  0%, 100% { opacity: 0.4; transform: scale(1) rotate(0deg); }
+  33% { opacity: 0.7; transform: scale(1.1) rotate(3deg); }
+  66% { opacity: 0.5; transform: scale(0.95) rotate(-2deg); }
+}
+
+@keyframes casper-chat-bg-drift {
+  0%, 100% { transform: translate(0, 0) scale(1) rotate(0deg); }
+  25% { transform: translate(3vw, -2vh) scale(1.02) rotate(1deg); }
+  50% { transform: translate(-2vw, 3vh) scale(0.98) rotate(-1deg); }
+  75% { transform: translate(1vw, -1vh) scale(1.01) rotate(0.5deg); }
 }
 
 /* ── Shooting star / comet streak ── */

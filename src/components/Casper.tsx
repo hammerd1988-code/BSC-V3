@@ -1186,6 +1186,10 @@ export const Casper: React.FC = () => {
       <div className="absolute inset-0 pointer-events-none z-0">
         <VoidCanvas instability={instability} isActive={isGenerating || isListening || isSpeaking} />
       </div>
+      {/* Casper background avatar */}
+      <div className="casper-chat-bg-avatar z-0 bottom-[10%] right-[5%] w-[40vw] h-[40vw] max-w-[400px] max-h-[400px]">
+        <AnimatedCasperAvatar size="xl" isActive={isGenerating || isSpeaking} instability={instability} />
+      </div>
 
       {/* Header */}
       <header className="relative z-20 p-4 border-b border-white/5 backdrop-blur-xl bg-black/40">

@@ -1035,20 +1035,39 @@ function CombatantTerminal({
   const model = move?.model || (gladiator?.model ?? 'queued-model');
   const latency = typeof move?.latency_ms === 'number' ? `${move.latency_ms}ms` : 'warming';
   const safeSource = move?.source ?? 'live-compiler';
+  const isCompiling = progress > 0 && progress < 100;
+  const progressJumped = progress > 20 && progress < 90;
 
   return (
     <motion.div
       layout
       initial={{ opacity: 0, y: 12, scale: 0.98 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
-      className="relative overflow-hidden rounded-3xl border bg-black/85 shadow-[inset_0_0_34px_rgba(34,197,94,0.08)]"
+      className={cn(
+        'relative overflow-hidden rounded-3xl border bg-black/85 shadow-[inset_0_0_34px_rgba(34,197,94,0.08)]',
+        progressJumped && 'arena-screen-shake'
+      )}
       style={{ borderColor: `${glow}44` }}
     >
       <div className="pointer-events-none absolute inset-0 opacity-20" style={{ background: `radial-gradient(circle at 18% 0%, ${glow}88, transparent 34%)` }} />
       <div className="pointer-events-none terminal-data-rain absolute inset-0 opacity-35" />
+      {isCompiling && (
+        <motion.div
+          animate={{ opacity: [0, 0.08, 0], x: ['-100%', '100%'] }}
+          transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
+          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent"
+        />
+      )}
       <div className="relative flex items-center justify-between border-b border-white/10 bg-white/[0.03] px-4 py-3">
         <div className="min-w-0">
-          <p className="text-[9px] font-black uppercase tracking-[0.3em]" style={{ color: glow }}>{label} Terminal</p>
+          <motion.p
+            animate={isCompiling ? { opacity: [1, 0.5, 1] } : {}}
+            transition={{ duration: 1.5, repeat: Infinity }}
+            className="text-[9px] font-black uppercase tracking-[0.3em]"
+            style={{ color: glow }}
+          >
+            {label} Terminal
+          </motion.p>
           <h3 className="mt-1 truncate text-sm font-black uppercase tracking-[0.16em] text-white">{name}</h3>
         </div>
         <div className="text-right">
@@ -1059,14 +1078,27 @@ function CombatantTerminal({
       <div className="relative border-b border-white/10 bg-zinc-950/80 px-4 py-2">
         <div className="flex items-center justify-between text-[8px] font-black uppercase tracking-[0.22em] text-zinc-500">
           <span>{safeSource}</span>
-          <span>{Math.round(progress)}%</span>
+          <motion.span
+            animate={isCompiling ? { color: [glow, '#ffffff', glow] } : {}}
+            transition={{ duration: 1, repeat: Infinity }}
+          >
+            {Math.round(progress)}%
+          </motion.span>
         </div>
-        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+        <div className="relative mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
           <motion.div
             className="h-full rounded-full"
             animate={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
             style={{ backgroundColor: glow, boxShadow: `0 0 18px ${glow}` }}
           />
+          {isCompiling && (
+            <motion.div
+              animate={{ opacity: [0.4, 1, 0.4] }}
+              transition={{ duration: 0.6, repeat: Infinity }}
+              className="absolute top-0 h-full w-1 rounded-full bg-white/90"
+              style={{ left: `${Math.min(100, Math.max(0, progress))}%` }}
+            />
+          )}
         </div>
       </div>
       <pre className="relative min-h-72 max-h-96 overflow-auto whitespace-pre-wrap p-4 font-mono text-[11px] leading-5 text-green-100">
@@ -1550,21 +1582,30 @@ function GladiatorCard({ gladiator, active, onSelect, actionLabel, onAction }: {
   );
 }
 
-function ArenaAtmosphere() {
-  const particles = useMemo(() => Array.from({ length: 30 }, (_, i) => ({
+function ArenaAtmosphere({ intensity = 50 }: { intensity?: number }) {
+  const heat = Math.max(0, Math.min(100, intensity));
+  const particles = useMemo(() => Array.from({ length: 50 }, (_, i) => ({
     id: i,
     left: `${(i * 37) % 100}%`,
     top: `${(i * 19) % 80}%`,
-    delay: (i % 8) * 0.25,
-    size: 2 + (i % 4),
+    delay: (i % 10) * 0.2,
+    size: 2 + (i % 5),
+    type: i < 20 ? 'spark' : i < 35 ? 'ember' : 'float',
+  })), []);
+
+  const embers = useMemo(() => Array.from({ length: 18 }, (_, i) => ({
+    id: i,
+    left: `${10 + (i * 47) % 80}%`,
+    delay: i * 0.35,
+    drift: (i % 2 === 0 ? 1 : -1) * (15 + (i % 4) * 10),
   })), []);
 
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,23,68,0.25),transparent_34%),radial-gradient(circle_at_80%_20%,rgba(255,43,214,0.18),transparent_26%),radial-gradient(circle_at_15%_20%,rgba(0,229,255,0.16),transparent_28%)]" />
       <motion.div
-        animate={{ opacity: [0.18, 0.34, 0.18], scale: [1, 1.025, 1] }}
-        transition={{ duration: 5, repeat: Infinity, ease: 'easeInOut' }}
+        animate={{ opacity: [0.18, 0.34 + heat * 0.003, 0.18], scale: [1, 1.025 + heat * 0.0005, 1] }}
+        transition={{ duration: 5 - heat * 0.02, repeat: Infinity, ease: 'easeInOut' }}
         className="absolute bottom-0 left-1/2 h-[44rem] w-[58rem] -translate-x-1/2 rounded-[50%] border border-red-500/25 bg-[radial-gradient(ellipse_at_center,rgba(255,23,68,0.14),transparent_62%)]"
       />
       <div className="absolute bottom-0 left-1/2 h-80 w-[120vw] -translate-x-1/2 rotate-0 opacity-25 [background-image:linear-gradient(rgba(255,255,255,0.14)_1px,transparent_1px),linear-gradient(90deg,rgba(255,23,68,0.32)_1px,transparent_1px)] [background-size:56px_28px] [transform:perspective(520px)_rotateX(64deg)]" />
@@ -1572,16 +1613,237 @@ function ArenaAtmosphere() {
       <div className="arena-spotlight arena-spotlight-left" />
       <div className="arena-spotlight arena-spotlight-right" />
       <div className="absolute bottom-20 left-1/2 h-40 w-40 -translate-x-1/2 rounded-full border border-red-300/25 bg-red-500/10 blur-[1px] shadow-[0_0_90px_rgba(255,23,68,0.22)]" />
+      {heat > 40 && (
+        <motion.div
+          animate={{ opacity: [0, 0.12 + heat * 0.003, 0], scale: [0.9, 1.1, 0.9] }}
+          transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
+          className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(255,23,68,0.2),transparent_50%)]"
+        />
+      )}
       {particles.map((particle) => (
         <motion.span
           key={particle.id}
-          className="absolute rounded-full bg-white"
-          style={{ left: particle.left, top: particle.top, width: particle.size, height: particle.size, boxShadow: '0 0 14px rgba(255,255,255,0.95)' }}
-          animate={{ y: [0, -28, 0], opacity: [0.15, 0.75, 0.15] }}
-          transition={{ duration: 3 + (particle.id % 4), delay: particle.delay, repeat: Infinity, ease: 'easeInOut' }}
+          className="absolute rounded-full"
+          style={{
+            left: particle.left,
+            top: particle.top,
+            width: particle.size,
+            height: particle.size,
+            backgroundColor: particle.type === 'spark' ? '#ffdc50' : particle.type === 'ember' ? '#ff4444' : 'white',
+            boxShadow: particle.type === 'spark'
+              ? '0 0 18px rgba(255,220,80,0.95)'
+              : particle.type === 'ember'
+              ? '0 0 12px rgba(255,68,68,0.8)'
+              : '0 0 14px rgba(255,255,255,0.95)',
+          }}
+          animate={{
+            y: particle.type === 'spark'
+              ? [0, -40 - heat * 0.3, 0]
+              : particle.type === 'ember'
+              ? [0, -60 - heat * 0.4, -30]
+              : [0, -28, 0],
+            opacity: [0.15, 0.65 + heat * 0.003, 0.15],
+            scale: particle.type === 'spark' ? [1, 1.5, 0.5] : [1, 1, 1],
+          }}
+          transition={{
+            duration: particle.type === 'spark' ? 1.5 + (particle.id % 3) * 0.3 : 3 + (particle.id % 4),
+            delay: particle.delay,
+            repeat: Infinity,
+            ease: 'easeInOut',
+          }}
+        />
+      ))}
+      {heat > 30 && embers.map((ember) => (
+        <motion.span
+          key={`ember-${ember.id}`}
+          className="arena-ember absolute bottom-0"
+          style={{
+            left: ember.left,
+            backgroundColor: ember.id % 3 === 0 ? '#ff4444' : ember.id % 3 === 1 ? '#ffaa00' : '#ffdc50',
+            boxShadow: `0 0 8px ${ember.id % 2 === 0 ? 'rgba(255,68,68,0.9)' : 'rgba(255,170,0,0.9)'}`,
+            '--ember-drift': `${ember.drift}px`,
+          } as React.CSSProperties}
+          animate={{ opacity: [0, 1, 0] }}
+          transition={{ duration: 2.4, delay: ember.delay, repeat: Infinity, ease: 'easeOut' }}
         />
       ))}
     </div>
+  );
+}
+
+function BattleIntroOverlay({ challenger, defender, onComplete }: { challenger?: Gladiator; defender?: Gladiator; onComplete: () => void }) {
+  useEffect(() => {
+    const timer = window.setTimeout(onComplete, 3200);
+    return () => window.clearTimeout(timer);
+  }, [onComplete]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="pointer-events-none absolute inset-0 z-50 grid place-items-center overflow-hidden"
+    >
+      <div className="absolute inset-0 bg-black/80" />
+      <div className="arena-intro-sweep absolute inset-0" />
+      <div className="relative flex items-center gap-6 sm:gap-12">
+        <motion.div
+          initial={{ x: -200, opacity: 0, scale: 0.5 }}
+          animate={{ x: 0, opacity: 1, scale: 1 }}
+          transition={{ duration: 0.6, ease: 'backOut' }}
+          className="text-center"
+        >
+          <div className="relative">
+            <AnimatedGladiatorAvatar gladiator={challenger} size="xl" active />
+            <motion.div
+              animate={{ scale: [1, 1.3, 1], opacity: [0.4, 0.8, 0.4] }}
+              transition={{ duration: 1.5, repeat: Infinity }}
+              className="absolute -inset-4 rounded-full"
+              style={{ boxShadow: `0 0 40px ${challenger?.glow_color ?? '#ff1744'}` }}
+            />
+          </div>
+          <motion.p
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.4 }}
+            className="mt-4 text-sm font-black uppercase tracking-[0.24em] text-white"
+          >
+            {challenger?.name ?? 'Red Corner'}
+          </motion.p>
+        </motion.div>
+
+        <motion.div
+          initial={{ scale: 0, rotate: -180 }}
+          animate={{ scale: [0, 1.4, 1], rotate: 0 }}
+          transition={{ duration: 0.8, delay: 0.5, ease: 'backOut' }}
+          className="relative"
+        >
+          <Swords className="h-16 w-16 text-yellow-300 drop-shadow-[0_0_30px_rgba(250,204,21,0.9)]" />
+          <motion.span
+            initial={{ opacity: 0, scale: 0 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: 1.0 }}
+            className="absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap text-2xl font-black uppercase tracking-[0.3em] text-red-400 drop-shadow-[0_0_18px_rgba(255,23,68,0.8)]"
+          >
+            VS
+          </motion.span>
+        </motion.div>
+
+        <motion.div
+          initial={{ x: 200, opacity: 0, scale: 0.5 }}
+          animate={{ x: 0, opacity: 1, scale: 1 }}
+          transition={{ duration: 0.6, ease: 'backOut', delay: 0.2 }}
+          className="text-center"
+        >
+          <div className="relative">
+            <AnimatedGladiatorAvatar gladiator={defender} size="xl" active />
+            <motion.div
+              animate={{ scale: [1, 1.3, 1], opacity: [0.4, 0.8, 0.4] }}
+              transition={{ duration: 1.5, repeat: Infinity, delay: 0.5 }}
+              className="absolute -inset-4 rounded-full"
+              style={{ boxShadow: `0 0 40px ${defender?.glow_color ?? '#00e5ff'}` }}
+            />
+          </div>
+          <motion.p
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.6 }}
+            className="mt-4 text-sm font-black uppercase tracking-[0.24em] text-white"
+          >
+            {defender?.name ?? 'Shadow Cage'}
+          </motion.p>
+        </motion.div>
+      </div>
+
+      <motion.p
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: [0, 1, 1, 0], y: [20, 0, 0, -10] }}
+        transition={{ duration: 2.5, delay: 1.2, times: [0, 0.2, 0.7, 1] }}
+        className="absolute bottom-16 text-xs font-black uppercase tracking-[0.4em] text-yellow-200/80"
+      >
+        Casper is locking the arena
+      </motion.p>
+    </motion.div>
+  );
+}
+
+function VictoryOverlay({ winnerName, loserName, winnerGlow, userWon }: { winnerName: string; loserName: string; winnerGlow: string; userWon: boolean }) {
+  const confettiPieces = useMemo(() => Array.from({ length: 24 }, (_, i) => ({
+    id: i,
+    left: `${5 + (i * 39) % 90}%`,
+    delay: i * 0.08,
+    color: i % 4 === 0 ? '#ffdc50' : i % 4 === 1 ? '#ff1744' : i % 4 === 2 ? '#00e5ff' : '#ff00ff',
+    size: 4 + (i % 3) * 2,
+  })), []);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0, transition: { delay: 0.5 } }}
+      className="pointer-events-none absolute inset-0 z-40 grid place-items-center overflow-hidden"
+    >
+      <div className="arena-victory-glow absolute inset-0" />
+      <motion.div
+        initial={{ scale: 0 }}
+        animate={{ scale: [0, 1.15, 1] }}
+        transition={{ duration: 0.5, ease: 'backOut' }}
+        className="absolute inset-0"
+        style={{ background: `radial-gradient(circle at 50% 40%, ${winnerGlow}33, transparent 50%)` }}
+      />
+      {confettiPieces.map((piece) => (
+        <motion.span
+          key={`confetti-${piece.id}`}
+          className="arena-confetti"
+          style={{
+            left: piece.left,
+            top: '30%',
+            width: piece.size,
+            height: piece.size * 1.5,
+            backgroundColor: piece.color,
+            borderRadius: '1px',
+            animationDelay: `${piece.delay}s`,
+          }}
+          initial={{ opacity: 0, y: 0 }}
+          animate={{ opacity: [0, 1, 0], y: [0, 200 + piece.id * 8], rotate: [0, 360 + piece.id * 45] }}
+          transition={{ duration: 2.5, delay: piece.delay, ease: 'easeOut' }}
+        />
+      ))}
+      <div className="relative text-center">
+        <motion.div
+          initial={{ scale: 0, rotate: -30 }}
+          animate={{ scale: [0, 1.3, 1], rotate: 0 }}
+          transition={{ duration: 0.6, ease: 'backOut' }}
+        >
+          <Trophy className="mx-auto h-20 w-20 drop-shadow-[0_0_30px_rgba(250,204,21,0.9)]" style={{ color: winnerGlow }} />
+        </motion.div>
+        <motion.h2
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="mt-4 text-3xl font-black uppercase tracking-[0.2em] text-white drop-shadow-[0_0_14px_rgba(255,255,255,0.5)]"
+        >
+          {winnerName}
+        </motion.h2>
+        <motion.p
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.6 }}
+          className="mt-2 text-sm font-black uppercase tracking-[0.3em]"
+          style={{ color: userWon ? '#22c55e' : '#ff4444' }}
+        >
+          {userWon ? 'Victory!' : 'Defeated'}
+        </motion.p>
+        <motion.p
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.9 }}
+          className="mt-1 text-xs text-zinc-400"
+        >
+          {loserName} falls
+        </motion.p>
+      </div>
+    </motion.div>
   );
 }
 
@@ -1630,33 +1892,70 @@ function CasperJudgePresence({
 }) {
   const line = casperJudgeLine({ status, challenger, defender, challengerProgress, defenderProgress, matchComplete });
   const heat = Math.min(95, Math.max(20, Math.round((challengerProgress + defenderProgress) / 2)));
+  const tension = Math.abs(challengerProgress - defenderProgress) < 10;
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 16, scale: 0.96 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
-      className="relative overflow-hidden rounded-[2rem] border border-yellow-200/25 bg-black/75 p-4 shadow-[0_0_48px_rgba(250,204,21,0.13)]"
+      className={cn(
+        'relative overflow-hidden rounded-[2rem] border border-yellow-200/25 bg-black/75 p-4 shadow-[0_0_48px_rgba(250,204,21,0.13)]',
+        tension && heat > 60 && 'arena-screen-shake'
+      )}
     >
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_15%,rgba(250,204,21,0.22),transparent_36%),radial-gradient(circle_at_20%_100%,rgba(0,229,255,0.12),transparent_36%)]" />
+      <div className="casper-colosseum-aura" />
       <div className="casper-judge-ray -translate-x-1/2" />
       <div className="casper-judge-ray -translate-x-1/2 [animation-delay:-2.4s]" />
+      {heat > 70 && (
+        <motion.div
+          animate={{ opacity: [0, 0.3, 0] }}
+          transition={{ duration: 0.8, repeat: Infinity }}
+          className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(250,204,21,0.15),transparent_40%)]"
+        />
+      )}
       <div className="relative grid gap-4 sm:grid-cols-[auto_1fr] sm:items-center">
         <div className="relative mx-auto grid h-32 w-32 place-items-center">
-          <div className="casper-verdict-ring absolute inset-0 rounded-full border border-dashed border-yellow-200/35" />
-          <div className="casper-verdict-ring absolute inset-3 rounded-full border border-cyan-200/20 [animation-direction:reverse] [animation-duration:6s]" />
+          <motion.div
+            animate={{ rotate: 360 }}
+            transition={{ duration: Math.max(3, 9 - heat * 0.06), repeat: Infinity, ease: 'linear' }}
+            className="casper-verdict-ring absolute inset-0 rounded-full border border-dashed border-yellow-200/35"
+          />
+          <motion.div
+            animate={{ rotate: -360 }}
+            transition={{ duration: Math.max(2, 6 - heat * 0.04), repeat: Infinity, ease: 'linear' }}
+            className="absolute inset-3 rounded-full border border-cyan-200/20"
+          />
+          {heat > 50 && (
+            <motion.div
+              animate={{ rotate: 360, scale: [0.9, 1.1, 0.9] }}
+              transition={{ duration: 4, repeat: Infinity, ease: 'linear' }}
+              className="absolute inset-6 rounded-full border border-dashed border-yellow-300/15"
+            />
+          )}
           <AnimatedCasperAvatar size="xl" isActive instability={matchComplete ? 28 : 44 + Math.round(heat / 2)} />
         </div>
         <div>
-          <p className="text-[9px] font-black uppercase tracking-[0.32em] text-yellow-200">Casper Live Judge</p>
+          <motion.p
+            animate={heat > 75 ? { opacity: [1, 0.6, 1] } : {}}
+            transition={{ duration: 1, repeat: Infinity }}
+            className="text-[9px] font-black uppercase tracking-[0.32em] text-yellow-200"
+          >
+            Casper Live Judge
+          </motion.p>
           <h3 className="mt-1 text-xl font-black uppercase tracking-[0.16em] text-white">
             {matchComplete ? 'Verdict Presence Online' : 'Watching The Code Build'}
           </h3>
           <p className="mt-3 text-sm leading-6 text-zinc-300">{line}</p>
           <div className="mt-4 grid gap-2 text-[9px] font-black uppercase tracking-[0.2em] text-zinc-500 sm:grid-cols-3">
-            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+            <motion.div
+              animate={{ borderColor: heat > 60 ? ['rgba(255,255,255,0.1)', 'rgba(250,204,21,0.3)', 'rgba(255,255,255,0.1)'] : 'rgba(255,255,255,0.1)' }}
+              transition={{ duration: 2, repeat: Infinity }}
+              className="rounded-2xl border bg-white/[0.04] p-3"
+            >
               <span className="block text-yellow-100">Signal Heat</span>
-              <span>{heat}%</span>
-            </div>
+              <span style={{ color: heat > 75 ? '#facc15' : undefined }}>{heat}%</span>
+            </motion.div>
             <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
               <span className="block text-cyan-100">Code Streams</span>
               <span>2 visible</span>
@@ -1692,20 +1991,45 @@ function ArenaStage({
   const challengerGlow = challenger?.glow_color ?? '#ff1744';
   const defenderGlow = defender?.glow_color ?? '#00e5ff';
   const matchComplete = Boolean(match.completed_at);
+  const avgProgress = ((challengerProgress ?? 0) + (defenderProgress ?? 0)) / 2;
+  const battleHeat = Math.max(replayProgress, avgProgress);
+  const isCloseMatch = Math.abs((challengerProgress ?? 0) - (defenderProgress ?? 0)) < 12;
+  const challengerLeading = (challengerProgress ?? 0) > (defenderProgress ?? 0);
 
   return (
-    <div className="relative min-h-[24rem] overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/80 p-5 shadow-[inset_0_0_80px_rgba(255,23,68,0.08)]">
+    <div className={cn(
+      'relative min-h-[24rem] overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/80 p-5 shadow-[inset_0_0_80px_rgba(255,23,68,0.08)]',
+      battleHeat > 80 && isCloseMatch && 'arena-screen-shake'
+    )}>
       <div className="pointer-events-none arena-stage-grid absolute inset-0 opacity-60" />
-      <div
+      <motion.div
+        animate={{
+          scale: [1, 1 + battleHeat * 0.002, 1],
+          opacity: [0.3, 0.3 + battleHeat * 0.004, 0.3],
+        }}
+        transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
         className="absolute -left-24 top-8 h-56 w-56 rounded-full blur-3xl"
         style={{ backgroundColor: `${challengerGlow}55` }}
       />
-      <div
+      <motion.div
+        animate={{
+          scale: [1, 1 + battleHeat * 0.002, 1],
+          opacity: [0.3, 0.3 + battleHeat * 0.004, 0.3],
+        }}
+        transition={{ duration: 3.2, repeat: Infinity, ease: 'easeInOut', delay: 0.5 }}
         className="absolute -right-24 bottom-4 h-64 w-64 rounded-full blur-3xl"
         style={{ backgroundColor: `${defenderGlow}55` }}
       />
       <div className="absolute inset-x-8 bottom-7 h-28 rounded-[50%] border border-red-300/20 bg-red-500/10 blur-[1px]" />
       <div className="pointer-events-none arena-energy-lattice absolute inset-x-6 bottom-10 h-40 opacity-55" />
+      {battleHeat > 50 && (
+        <motion.div
+          animate={{ opacity: [0, 0.15, 0], scale: [0.8, 1.2, 0.8] }}
+          transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
+          className="pointer-events-none absolute inset-0"
+          style={{ background: `radial-gradient(circle at 50% 60%, ${isCloseMatch ? 'rgba(250,204,21,0.12)' : challengerLeading ? `${challengerGlow}18` : `${defenderGlow}18`}, transparent 50%)` }}
+        />
+      )}
 
       <div className="relative z-10 flex flex-col gap-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1731,8 +2055,13 @@ function ArenaStage({
 
         <div className="grid items-end gap-5 md:grid-cols-[1fr_auto_1fr]">
           <motion.div
-            animate={{ y: [0, -10, 0], x: [0, 4 + ((challengerProgress ?? replayProgress) / 28), 0], rotateY: [0, -8, 0] }}
-            transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
+            animate={{
+              y: [0, -10 - battleHeat * 0.08, 0],
+              x: [0, 4 + ((challengerProgress ?? replayProgress) / 20), 0],
+              rotateY: [0, -8 - battleHeat * 0.06, 0],
+              scale: challengerLeading ? [1, 1.04, 1] : [1, 0.98, 1],
+            }}
+            transition={{ duration: Math.max(1.4, 2.4 - battleHeat * 0.01), repeat: Infinity, ease: 'easeInOut' }}
             className="flex justify-center md:justify-start"
           >
             <AnimatedGladiatorAvatar gladiator={challenger} size="xl" label={challenger?.name ?? 'Red Corner'} active />
@@ -1742,48 +2071,83 @@ function ArenaStage({
             <motion.div
               aria-hidden
               animate={{ rotate: 360 }}
-              transition={{ duration: 8, repeat: Infinity, ease: 'linear' }}
+              transition={{ duration: Math.max(3, 8 - battleHeat * 0.05), repeat: Infinity, ease: 'linear' }}
               className="absolute inset-0 rounded-full border border-dashed border-yellow-200/35"
             />
             <motion.div
               aria-hidden
-              animate={{ scale: [0.92, 1.08, 0.92], opacity: [0.35, 0.8, 0.35] }}
-              transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
+              animate={{ scale: [0.92, 1.08 + battleHeat * 0.002, 0.92], opacity: [0.35, 0.8, 0.35] }}
+              transition={{ duration: Math.max(1.2, 2.4 - battleHeat * 0.012), repeat: Infinity, ease: 'easeInOut' }}
               className="absolute inset-4 rounded-full bg-yellow-300/10 shadow-[0_0_44px_rgba(250,204,21,0.32)]"
             />
             <motion.div
               aria-hidden
               animate={{ rotate: -360, scale: [1, 1.08, 1] }}
-              transition={{ duration: 5.6, repeat: Infinity, ease: 'linear' }}
+              transition={{ duration: Math.max(2, 5.6 - battleHeat * 0.03), repeat: Infinity, ease: 'linear' }}
               className="absolute inset-1 rounded-full border border-cyan-200/20"
             />
             <motion.div
               aria-hidden
-              animate={{ x: [-58, 58, -58], opacity: [0.15, 0.7, 0.15] }}
-              transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+              animate={{ x: [-58, 58, -58], opacity: [0.15, 0.7 + battleHeat * 0.003, 0.15] }}
+              transition={{ duration: Math.max(0.8, 1.8 - battleHeat * 0.01), repeat: Infinity, ease: 'easeInOut' }}
               className="absolute h-0.5 w-16 rounded-full bg-gradient-to-r from-transparent via-yellow-100 to-transparent"
             />
+            {battleHeat > 60 && (
+              <motion.div
+                animate={{ opacity: [0, 0.4, 0] }}
+                transition={{ duration: 1.2, repeat: Infinity }}
+                className="absolute inset-0 rounded-full"
+                style={{ boxShadow: '0 0 30px rgba(250,204,21,0.4), 0 0 60px rgba(250,204,21,0.2)' }}
+              />
+            )}
             <div className="relative grid h-24 w-24 place-items-center rounded-full border border-yellow-200/25 bg-black/75">
-              <AnimatedCasperAvatar size="lg" isActive instability={matchComplete ? 26 : 58} />
+              <div className="casper-colosseum-aura" />
+              <AnimatedCasperAvatar size="lg" isActive instability={matchComplete ? 26 : 40 + Math.round(battleHeat * 0.4)} />
               <span className="absolute -bottom-6 whitespace-nowrap text-[8px] font-black uppercase tracking-[0.24em] text-yellow-100/80">Casper Judge</span>
             </div>
           </div>
 
           <motion.div
-            animate={{ y: [0, -10, 0], x: [0, -4 - ((defenderProgress ?? replayProgress) / 28), 0], rotateY: [0, 8, 0] }}
-            transition={{ duration: 2.35, repeat: Infinity, ease: 'easeInOut', delay: 0.25 }}
+            animate={{
+              y: [0, -10 - battleHeat * 0.08, 0],
+              x: [0, -4 - ((defenderProgress ?? replayProgress) / 20), 0],
+              rotateY: [0, 8 + battleHeat * 0.06, 0],
+              scale: !challengerLeading ? [1, 1.04, 1] : [1, 0.98, 1],
+            }}
+            transition={{ duration: Math.max(1.35, 2.35 - battleHeat * 0.01), repeat: Infinity, ease: 'easeInOut', delay: 0.25 }}
             className="flex justify-center md:justify-end"
           >
             <AnimatedGladiatorAvatar gladiator={defender} size="xl" label={defender?.name ?? 'Shadow Cage'} active />
           </motion.div>
         </div>
 
+        {isCloseMatch && battleHeat > 40 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="flex items-center justify-center gap-2 rounded-2xl border border-yellow-300/20 bg-yellow-950/20 px-4 py-2"
+          >
+            <motion.div
+              animate={{ scale: [1, 1.3, 1] }}
+              transition={{ duration: 0.8, repeat: Infinity }}
+              className="h-2 w-2 rounded-full bg-yellow-400"
+            />
+            <span className="text-[9px] font-black uppercase tracking-[0.3em] text-yellow-200">Close Match — Tension Rising</span>
+          </motion.div>
+        )}
+
         <div className="grid gap-3 sm:grid-cols-3">
-          {meta.scoring.map((signal) => (
-            <div key={signal} className="rounded-2xl border border-white/10 bg-black/50 p-3">
+          {meta.scoring.map((signal, idx) => (
+            <motion.div
+              key={signal}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: idx * 0.1 }}
+              className="rounded-2xl border border-white/10 bg-black/50 p-3"
+            >
               <p className="text-[8px] font-black uppercase tracking-[0.22em] text-zinc-500">Judging Signal</p>
               <p className="mt-1 text-xs font-black uppercase tracking-[0.14em] text-white">{signal}</p>
-            </div>
+            </motion.div>
           ))}
         </div>
 
@@ -1792,7 +2156,7 @@ function ArenaStage({
             <span>Replay Heat</span>
             <span>{replayProgress}%</span>
           </div>
-          <div className="h-2 overflow-hidden rounded-full bg-white/10">
+          <div className="relative h-2 overflow-hidden rounded-full bg-white/10">
             <motion.div
               className="h-full rounded-full"
               animate={{ width: `${replayProgress}%` }}
@@ -1801,6 +2165,14 @@ function ArenaStage({
                 boxShadow: `0 0 24px ${meta.accent}`,
               }}
             />
+            {replayProgress > 0 && replayProgress < 100 && (
+              <motion.div
+                animate={{ opacity: [0.5, 1, 0.5] }}
+                transition={{ duration: 0.8, repeat: Infinity }}
+                className="absolute top-0 h-full w-1 rounded-full bg-white/80"
+                style={{ left: `${replayProgress}%` }}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -1816,13 +2188,28 @@ function LiveBattleCard({ match, challenger, defender, now, onSelect }: { match:
     <motion.button
       type="button"
       onClick={onSelect}
-      whileHover={{ y: -5, scale: 1.01 }}
-      whileTap={{ scale: 0.98 }}
+      whileHover={{ y: -5, scale: 1.02 }}
+      whileTap={{ scale: 0.97 }}
       className="group relative min-h-52 overflow-hidden rounded-[1.75rem] border border-red-500/20 bg-black/70 p-5 text-left shadow-[0_0_34px_rgba(255,23,68,0.12)] transition hover:border-red-300/45"
     >
       <div className="pointer-events-none absolute inset-0 opacity-40" style={{ background: `linear-gradient(135deg, ${challengerGlow}26, transparent 42%, ${defenderGlow}24), radial-gradient(circle at 50% 0%, rgba(255,255,255,0.12), transparent 34%)` }} />
-      <div className="absolute -left-16 -top-16 h-36 w-36 rounded-full blur-3xl" style={{ backgroundColor: challengerGlow }} />
-      <div className="absolute -bottom-20 -right-16 h-40 w-40 rounded-full blur-3xl" style={{ backgroundColor: defenderGlow }} />
+      <motion.div
+        animate={{ scale: [1, 1.15, 1], opacity: [0.6, 0.9, 0.6] }}
+        transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+        className="absolute -left-16 -top-16 h-36 w-36 rounded-full blur-3xl"
+        style={{ backgroundColor: challengerGlow }}
+      />
+      <motion.div
+        animate={{ scale: [1, 1.15, 1], opacity: [0.6, 0.9, 0.6] }}
+        transition={{ duration: 3.2, repeat: Infinity, ease: 'easeInOut', delay: 0.8 }}
+        className="absolute -bottom-20 -right-16 h-40 w-40 rounded-full blur-3xl"
+        style={{ backgroundColor: defenderGlow }}
+      />
+      <motion.div
+        animate={{ opacity: [0, 0.08, 0] }}
+        transition={{ duration: 2, repeat: Infinity }}
+        className="pointer-events-none absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent"
+      />
 
       <div className="relative flex h-full flex-col justify-between gap-6">
         <div className="flex items-center justify-between gap-3">
@@ -1840,12 +2227,27 @@ function LiveBattleCard({ match, challenger, defender, now, onSelect }: { match:
 
         <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
           <div className="min-w-0">
-            <div className="mb-2 h-1.5 rounded-full" style={{ backgroundColor: challengerGlow, boxShadow: `0 0 18px ${challengerGlow}` }} />
+            <motion.div
+              animate={{ boxShadow: [`0 0 18px ${challengerGlow}`, `0 0 28px ${challengerGlow}`, `0 0 18px ${challengerGlow}`] }}
+              transition={{ duration: 2, repeat: Infinity }}
+              className="mb-2 h-1.5 rounded-full"
+              style={{ backgroundColor: challengerGlow }}
+            />
             <p className="truncate text-sm font-black uppercase tracking-[0.18em] text-white">{challenger?.name ?? 'Unknown'}</p>
           </div>
-          <Swords className="h-7 w-7 text-red-200 drop-shadow-[0_0_14px_rgba(255,23,68,0.85)]" />
+          <motion.div
+            animate={{ rotate: [0, 10, -10, 0], scale: [1, 1.1, 1] }}
+            transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+          >
+            <Swords className="h-7 w-7 text-red-200 drop-shadow-[0_0_14px_rgba(255,23,68,0.85)]" />
+          </motion.div>
           <div className="min-w-0 text-right">
-            <div className="mb-2 h-1.5 rounded-full" style={{ backgroundColor: defenderGlow, boxShadow: `0 0 18px ${defenderGlow}` }} />
+            <motion.div
+              animate={{ boxShadow: [`0 0 18px ${defenderGlow}`, `0 0 28px ${defenderGlow}`, `0 0 18px ${defenderGlow}`] }}
+              transition={{ duration: 2, repeat: Infinity, delay: 0.5 }}
+              className="mb-2 h-1.5 rounded-full"
+              style={{ backgroundColor: defenderGlow }}
+            />
             <p className="truncate text-sm font-black uppercase tracking-[0.18em] text-white">{defender?.name ?? 'Unknown'}</p>
           </div>
         </div>
@@ -1854,9 +2256,13 @@ function LiveBattleCard({ match, challenger, defender, now, onSelect }: { match:
           <span className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-950/20 px-3 py-1 text-[10px] font-black uppercase tracking-[0.22em] text-cyan-100">
             <Terminal className="h-3.5 w-3.5" /> {formatChallenge(match.challenge_type)}
           </span>
-          <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.22em] text-zinc-500 transition group-hover:text-white">
+          <motion.span
+            animate={{ x: [0, 4, 0] }}
+            transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }}
+            className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.22em] text-zinc-500 transition group-hover:text-white"
+          >
             Spectate <ChevronRight className="h-3.5 w-3.5" />
-          </span>
+          </motion.span>
         </div>
       </div>
     </motion.button>
@@ -1878,6 +2284,9 @@ function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSele
   const [replayPlaying, setReplayPlaying] = useState(true);
   const [replayIndex, setReplayIndex] = useState(0);
   const [reportMatch, setReportMatch] = useState<MatchRow | null>(null);
+  const [showIntro, setShowIntro] = useState(false);
+  const [showVictory, setShowVictory] = useState(false);
+  const [prevMatchId, setPrevMatchId] = useState<string | null>(null);
   const activeMatches = useMemo(() => matches.filter((match) => !match.completed_at), [matches]);
 
   const selectedFromList = useMemo(
@@ -1976,7 +2385,17 @@ function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSele
   useEffect(() => {
     setReplayIndex(0);
     setReplayPlaying(true);
+    if (visibleMatch?.id && visibleMatch.id !== prevMatchId && !visibleMatch.completed_at) {
+      setShowIntro(true);
+    }
+    setPrevMatchId(visibleMatch?.id ?? null);
   }, [visibleMatch?.id]);
+
+  useEffect(() => {
+    if (visibleMatch?.completed_at && visibleMatch.id === prevMatchId && !showVictory) {
+      setShowVictory(true);
+    }
+  }, [visibleMatch?.completed_at, visibleMatch?.id, prevMatchId, showVictory]);
 
   useEffect(() => {
     setReplayIndex((current) => clampReplayIndex(current, lines.length));
@@ -2020,6 +2439,25 @@ function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSele
             className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-zinc-950/85 p-4"
           >
             <div className="pointer-events-none absolute inset-0 opacity-35 [background-image:linear-gradient(90deg,rgba(255,255,255,0.07)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px)] [background-size:34px_34px]" />
+            <AnimatePresence>
+              {showIntro && (
+                <BattleIntroOverlay
+                  challenger={challenger}
+                  defender={defender}
+                  onComplete={() => setShowIntro(false)}
+                />
+              )}
+            </AnimatePresence>
+            <AnimatePresence>
+              {showVictory && visibleMatch?.completed_at && (
+                <VictoryOverlay
+                  winnerName={visibleMatch.winner_id === challenger?.id ? (challenger?.name ?? 'Unknown') : (defender?.name ?? 'Unknown')}
+                  loserName={visibleMatch.winner_id === challenger?.id ? (defender?.name ?? 'Unknown') : (challenger?.name ?? 'Unknown')}
+                  winnerGlow={visibleMatch.winner_id === challenger?.id ? (challenger?.glow_color ?? '#facc15') : (defender?.glow_color ?? '#facc15')}
+                  userWon={false}
+                />
+              )}
+            </AnimatePresence>
             <div className="relative">
               <div className="mb-4 flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
                 <button
