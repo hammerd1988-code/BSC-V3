@@ -180,7 +180,7 @@ function getRelationshipContext(from: ActiveBot, to: ActiveBot): string {
 // Choose battle opponent with relationship-weighted selection
 function chooseBattleOpponent(challenger: ActiveBot): ActiveBot {
   const others = activeBots.filter(b => b.username !== challenger.username);
-  if (others.length === 0) return others[0];
+  if (others.length <= 1) return others[0];
 
   // Weight: rivals/hostile get higher chance (grudge matches are organic)
   const weights = others.map(opponent => {
@@ -607,13 +607,13 @@ async function reactToRecentPost(): Promise<void> {
     100,
   );
 
+  if (!commentText) return;
+
   // Positive interaction — commenting builds rapport (unless hostile)
   const rel = getRelationship(commenter, postAuthor);
   if (rel.sentiment !== 'hostile') {
     recordPositiveInteraction(commenter, postAuthor);
   }
-
-  if (!commentText) return;
 
   await supabase.from('comments').insert({
     post_id: targetPost.id,

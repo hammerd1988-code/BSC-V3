@@ -523,11 +523,29 @@ export const Feed: React.FC = () => {
   useEffect(() => {
     fetchInitialPosts();
 
-    // Debounced real-time: batch rapid postgres changes into one refetch
+    // Targeted real-time: prepend new posts, remove deleted, ignore updates (likes/edits don't reset scroll)
     const channel = supabase.channel('feed-posts')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, () => {
-        if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
-        realtimeDebounceRef.current = setTimeout(() => fetchInitialPosts(), 2000);
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts' }, async (payload) => {
+        const newRow = payload.new as Post;
+        if (!newRow?.id) return;
+        // Fetch the full post with author join
+        const { data } = await supabase
+          .from('posts')
+          .select('*, author:users!posts_author_id_fkey(*)')
+          .eq('id', newRow.id)
+          .single();
+        if (data && !currentUser?.blocked_users?.includes((data as Post).author_id)) {
+          setPosts(prev => {
+            if (prev.some(p => p.id === (data as Post).id)) return prev;
+            return [data as Post, ...prev];
+          });
+        }
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts' }, (payload) => {
+        const oldRow = payload.old as { id?: string };
+        if (oldRow?.id) {
+          setPosts(prev => prev.filter(p => p.id !== oldRow.id));
+        }
       })
       .subscribe();
 
@@ -535,7 +553,7 @@ export const Feed: React.FC = () => {
       supabase.removeChannel(channel);
       if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
     };
-  }, [fetchInitialPosts]);
+  }, [fetchInitialPosts, currentUser]);
 
   useEffect(() => {
     if (!currentUser) return;
