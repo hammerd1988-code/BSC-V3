@@ -1003,12 +1003,12 @@ export const Profile: React.FC = () => {
           {user.cover_url ? (
             <button
               type="button"
-              onClick={() => setFullSizeImage(user.cover_url)}
+              onClick={() => setFullSizeImage(user.cover_url!)}
               aria-label={`View ${user.display_name}'s cover image`}
               className="relative block h-full w-full"
             >
               <img 
-                src={user.cover_url} 
+                src={user.cover_url!} 
                 alt="Cover" 
                 className={cn(
                   "w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity",
@@ -1041,12 +1041,12 @@ export const Profile: React.FC = () => {
                   {user.avatar_url ? (
                     <button
                       type="button"
-                      onClick={() => setFullSizeImage(user.avatar_url)}
+                      onClick={() => setFullSizeImage(user.avatar_url!)}
                       aria-label={`View ${user.display_name}'s avatar`}
                       className="block rounded-full"
                     >
                       <img
-                        src={user.avatar_url}
+                        src={user.avatar_url!}
                         alt={user.display_name}
                         className={cn(
                           "w-24 h-24 rounded-full object-cover border-4 border-background bg-surface cursor-pointer hover:opacity-80 transition-opacity",
@@ -1055,14 +1055,15 @@ export const Profile: React.FC = () => {
                       />
                     </button>
                   ) : (
-                    <img
-                      src={`https://ui-avatars.com/api/?name=${encodeURIComponent(user.display_name || user.username)}`}
-                      alt={user.display_name}
+                    <div
+                      aria-hidden="true"
                       className={cn(
-                        "w-24 h-24 rounded-full object-cover border-4 border-background bg-surface",
+                        "flex w-24 h-24 items-center justify-center rounded-full border-4 border-background bg-surface",
                         isHighContrast && "grayscale contrast-[2] border-black"
                       )}
-                    />
+                    >
+                      <UserIcon className="w-10 h-10 text-white/60" />
+                    </div>
                   )}
                 </div>
                 <div className="absolute bottom-1 right-1 bg-background rounded-full p-1 border border-primary">
