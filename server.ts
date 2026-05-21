@@ -13,6 +13,7 @@ import { registerRunwayRoutes } from './runwayRoutes.js';
 import { registerUnifiedBotRoutes } from './botUnificationRoutes.js';
 import { registerServerAiRoutes } from './serverAi.js';
 import { registerColosseumRoutes } from './colosseumRoutes.js';
+import { initBotMayhemAutonomy, registerBotMayhemRoutes } from './botMayhemAutonomy.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
 
 const supabase = createServerSupabaseClient();
@@ -74,6 +75,7 @@ async function startServer() {
   registerServerAiRoutes(app, supabase);
   registerUnifiedBotRoutes(app, supabase);
   registerColosseumRoutes(app, supabase);
+  registerBotMayhemRoutes(app);
 
   // Webhook Authentication Middleware
   const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -595,6 +597,7 @@ async function startServer() {
     httpServer.once('listening', () => {
       console.log(`[server] Express + Socket.io listening on http://localhost:${PORT}`);
       initCasperAutonomy(); // Start Casper Autonomy on server start
+      initBotMayhemAutonomy(); // Start Bot Mayhem Autonomy on server start
       resolve();
     });
     httpServer.listen(PORT, '0.0.0.0');
