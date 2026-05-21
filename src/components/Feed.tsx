@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useInView } from 'react-intersection-observer';
+import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Post, User, LiveStream } from '../types';
 import { PostCard } from './PostCard';
@@ -353,12 +354,16 @@ export const Feed: React.FC = () => {
   const [feedType, setFeedType] = useState<'latest' | 'foryou'>('latest');
   const [loading, setLoading] = useState(false);
   const [isRecommending, setIsRecommending] = useState(false);
-  const [limitCount, setLimitCount] = useState(15);
   const [hasMore, setHasMore] = useState(true);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const PAGE_SIZE = 20;
   const { ref, inView } = useInView({
     threshold: 0.5,
     triggerOnce: false
   });
+  const realtimeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { currentUser } = useAuth();
 
   // Real-time state
@@ -468,38 +473,69 @@ export const Feed: React.FC = () => {
     setShowDonationModal(false);
   };
 
-  // Load posts from Supabase
-  useEffect(() => {
+  // Cursor-based pagination: fetch initial page
+  const fetchInitialPosts = useCallback(async () => {
     if (!currentUser) return;
     setLoading(true);
+    const { data, error } = await supabase
+      .from('posts')
+      .select('*, author:users!posts_author_id_fkey(*)')
+      .order('created_at', { ascending: false })
+      .limit(PAGE_SIZE);
+    if (error) { handleDbError(error, 'LIST', 'posts'); setLoading(false); return; }
+    const rows = (data ?? []) as Post[];
+    const filtered = rows
+      .filter(p => !currentUser.blocked_users?.includes(p.author_id))
+      .sort((a, b) => {
+        if (a.is_boosted && !b.is_boosted) return -1;
+        if (!a.is_boosted && b.is_boosted) return 1;
+        return 0;
+      });
+    setPosts(filtered);
+    setLoading(false);
+    setHasMore(rows.length >= PAGE_SIZE);
+    setCursor(rows.length > 0 ? rows[rows.length - 1].created_at : null);
+  }, [currentUser]);
 
-    const fetchPosts = async () => {
-      const { data, error } = await supabase
-        .from('posts')
-        .select('*, author:users!posts_author_id_fkey(*)')
-        .order('created_at', { ascending: false })
-        .limit(limitCount);
-      if (error) { handleDbError(error, 'LIST', 'posts'); setLoading(false); return; }
-      const fetched = ((data ?? []) as Post[])
-        .filter(p => !currentUser.blocked_users?.includes(p.author_id))
-        .sort((a, b) => {
-          if (a.is_boosted && !b.is_boosted) return -1;
-          if (!a.is_boosted && b.is_boosted) return 1;
-          return 0;
-        });
-      setPosts(fetched);
-      setLoading(false);
-      setHasMore((data?.length ?? 0) >= limitCount);
-    };
+  // Cursor-based: load next page
+  const fetchMorePosts = useCallback(async () => {
+    if (!currentUser || !cursor || isLoadingMore || !hasMore) return;
+    setIsLoadingMore(true);
+    const { data, error } = await supabase
+      .from('posts')
+      .select('*, author:users!posts_author_id_fkey(*)')
+      .order('created_at', { ascending: false })
+      .lt('created_at', cursor)
+      .limit(PAGE_SIZE);
+    if (error) { handleDbError(error, 'LIST', 'posts'); setIsLoadingMore(false); return; }
+    const rows = (data ?? []) as Post[];
+    const filtered = rows.filter(p => !currentUser.blocked_users?.includes(p.author_id));
+    setPosts(prev => {
+      const existingIds = new Set(prev.map(p => p.id));
+      const newPosts = filtered.filter(p => !existingIds.has(p.id));
+      return [...prev, ...newPosts];
+    });
+    setHasMore(rows.length >= PAGE_SIZE);
+    setCursor(rows.length > 0 ? rows[rows.length - 1].created_at : null);
+    setIsLoadingMore(false);
+  }, [currentUser, cursor, isLoadingMore, hasMore]);
 
-    fetchPosts();
+  useEffect(() => {
+    fetchInitialPosts();
 
+    // Debounced real-time: batch rapid postgres changes into one refetch
     const channel = supabase.channel('feed-posts')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, () => fetchPosts())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, () => {
+        if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
+        realtimeDebounceRef.current = setTimeout(() => fetchInitialPosts(), 2000);
+      })
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
-  }, [currentUser, limitCount]);
+    return () => {
+      supabase.removeChannel(channel);
+      if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
+    };
+  }, [fetchInitialPosts]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -574,10 +610,10 @@ export const Feed: React.FC = () => {
   }, [fetchLiveBattles]);
 
   const loadMorePosts = useCallback(() => {
-    if (!loading && hasMore) {
-      setLimitCount(prev => prev + 15);
+    if (!loading && !isLoadingMore && hasMore) {
+      fetchMorePosts();
     }
-  }, [loading, hasMore]);
+  }, [loading, isLoadingMore, hasMore, fetchMorePosts]);
 
   useEffect(() => {
     if (inView && feedType === 'latest') {
@@ -1002,11 +1038,25 @@ export const Feed: React.FC = () => {
             <p className="text-gray-400 text-sm">The network is quiet. Be the first to spark a trend today.</p>
           </div>
         ) : (
-          displayPosts.map((post) => (
-            <div key={post.id} className="holo-card">
-              <PostCard post={post} onLike={handleLike} onDelete={handleDeletePost} />
-            </div>
-          ))
+          <Virtuoso
+            ref={virtuosoRef}
+            useWindowScroll
+            data={displayPosts}
+            endReached={() => { if (feedType === 'latest') loadMorePosts(); }}
+            overscan={600}
+            itemContent={(index, post) => (
+              <div className="holo-card mb-4">
+                <PostCard post={post} onLike={handleLike} onDelete={handleDeletePost} />
+              </div>
+            )}
+            components={{
+              Footer: () => isLoadingMore ? (
+                <div className="flex justify-center py-6">
+                  <Loader2 className="w-6 h-6 text-accent animate-spin" />
+                </div>
+              ) : null,
+            }}
+          />
         )}
 
         </div>{/* end main feed column */}
