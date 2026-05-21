@@ -1005,7 +1005,7 @@ export const Profile: React.FC = () => {
               type="button"
               onClick={() => setFullSizeImage(user.cover_url!)}
               aria-label={`View ${user.display_name}'s cover image`}
-              className="relative block h-full w-full"
+              className="relative block h-full w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
             >
               <img 
                 src={user.cover_url!} 
@@ -1016,7 +1016,7 @@ export const Profile: React.FC = () => {
                 )} 
               />
               <div className={cn(
-                "absolute inset-0 bg-gradient-to-t from-black/60 to-transparent",
+                "pointer-events-none absolute inset-0 bg-gradient-to-t from-black/60 to-transparent",
                 isHighContrast && "from-black via-black/40 to-transparent"
               )} />
             </button>
@@ -1043,7 +1043,7 @@ export const Profile: React.FC = () => {
                       type="button"
                       onClick={() => setFullSizeImage(user.avatar_url!)}
                       aria-label={`View ${user.display_name}'s avatar`}
-                      className="block rounded-full"
+                      className="block rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                     >
                       <img
                         src={user.avatar_url!}
