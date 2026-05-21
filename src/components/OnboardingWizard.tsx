@@ -153,7 +153,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
   return (
     <div className="fixed inset-0 z-[200] bg-black flex min-h-dvh flex-col items-center justify-start overflow-y-auto overscroll-contain px-4 py-6 sm:justify-center sm:py-8">
       {/* Animated background grid */}
-      <div className="absolute inset-0 opacity-10"
+      <div className="pointer-events-none absolute inset-0 opacity-10"
         style={{
           backgroundImage: `linear-gradient(rgba(255,0,0,0.3) 1px, transparent 1px), linear-gradient(90deg, rgba(255,0,0,0.3) 1px, transparent 1px)`,
           backgroundSize: '40px 40px',
