@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Virtuoso } from 'react-virtuoso';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -34,41 +35,94 @@ export const VoidFeed: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [mood, setMood] = useState<string>('CALIBRATING...');
   const [reportPost, setReportPost] = useState<VoidPost | null>(null);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const PAGE_SIZE = 20;
+  const realtimeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Cursor-based initial fetch
+  const fetchInitialPosts = useCallback(async () => {
+    if (!currentUser) return;
+    setLoading(true);
+    const now = new Date();
+    const { data, error } = await supabase
+      .from('void_posts')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(PAGE_SIZE);
+    if (error) { handleDbError(error, 'LIST', 'void_posts'); setLoading(false); return; }
+    const rows = (data ?? []) as VoidPost[];
+    const fetchedPosts = rows.filter(post => new Date(post.expires_at) > now);
+    setPosts(fetchedPosts);
+    setLoading(false);
+    setHasMore(rows.length >= PAGE_SIZE);
+    setCursor(rows.length > 0 ? rows[rows.length - 1].created_at : null);
+    if (fetchedPosts.length > 0) {
+      try {
+        const prompt = `Analyze these anonymous whispers from "The Void" and provide a 1-sentence "Mood of the Network" summary in a cyberpunk, cryptic style. \n          Whispers: ${fetchedPosts.map(p => p.content).join(' | ')}`;
+        const response = await generateText(prompt, currentUser.ai_settings, { systemPrompt: 'You are a cryptic neural entity. Provide a short, impactful summary of the provided whispers.', temperature: 1.0 });
+        setMood(response || 'THE VOID IS SILENT.');
+      } catch (error) {
+        console.error('AI Error:', error);
+        setMood('INTERFERENCE DETECTED.');
+      }
+    }
+  }, [currentUser]);
+
+  // Cursor-based load more
+  const fetchMorePosts = useCallback(async () => {
+    if (!currentUser || !cursor || isLoadingMore || !hasMore) return;
+    setIsLoadingMore(true);
+    const now = new Date();
+    const { data, error } = await supabase
+      .from('void_posts')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .lt('created_at', cursor)
+      .limit(PAGE_SIZE);
+    if (error) { handleDbError(error, 'LIST', 'void_posts'); setIsLoadingMore(false); return; }
+    const rows = (data ?? []) as VoidPost[];
+    const filtered = rows.filter(post => new Date(post.expires_at) > now);
+    setPosts(prev => {
+      const existingIds = new Set(prev.map(p => p.id));
+      const newPosts = filtered.filter(p => !existingIds.has(p.id));
+      return [...prev, ...newPosts];
+    });
+    setHasMore(rows.length >= PAGE_SIZE);
+    setCursor(rows.length > 0 ? rows[rows.length - 1].created_at : null);
+    setIsLoadingMore(false);
+  }, [currentUser, cursor, isLoadingMore, hasMore]);
 
   useEffect(() => {
-    if (!currentUser) return;
+    fetchInitialPosts();
 
-    const fetchPosts = async () => {
-      const now = new Date();
-      const { data, error } = await supabase
-        .from('void_posts')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(50);
-      if (error) { handleDbError(error, 'LIST', 'void_posts'); setLoading(false); return; }
-      const fetchedPosts = ((data ?? []) as VoidPost[]).filter(post => new Date(post.expires_at) > now);
-      setPosts(fetchedPosts);
-      setLoading(false);
-      if (fetchedPosts.length > 0) {
-        try {
-          const prompt = `Analyze these anonymous whispers from "The Void" and provide a 1-sentence "Mood of the Network" summary in a cyberpunk, cryptic style. \n          Whispers: ${fetchedPosts.map(p => p.content).join(' | ')}`;
-          const response = await generateText(prompt, currentUser.ai_settings, { systemPrompt: 'You are a cryptic neural entity. Provide a short, impactful summary of the provided whispers.', temperature: 1.0 });
-          setMood(response || 'THE VOID IS SILENT.');
-        } catch (error) {
-          console.error('AI Error:', error);
-          setMood('INTERFERENCE DETECTED.');
-        }
-      }
-    };
-
-    fetchPosts();
-
+    // Targeted real-time: prepend new posts, remove deleted, ignore updates (view/like counts don't reset scroll)
     const channel = supabase.channel('void-feed')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'void_posts' }, () => fetchPosts())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'void_posts' }, (payload) => {
+        const newRow = payload.new as VoidPost;
+        if (!newRow?.id) return;
+        const now = new Date();
+        if (new Date(newRow.expires_at) > now) {
+          setPosts(prev => {
+            if (prev.some(p => p.id === newRow.id)) return prev;
+            return [newRow, ...prev];
+          });
+        }
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'void_posts' }, (payload) => {
+        const oldRow = payload.old as { id?: string };
+        if (oldRow?.id) {
+          setPosts(prev => prev.filter(p => p.id !== oldRow.id));
+        }
+      })
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
-  }, [currentUser]);
+    return () => {
+      supabase.removeChannel(channel);
+      if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
+    };
+  }, [fetchInitialPosts]);
 
   const handlePostToVoid = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -230,100 +284,86 @@ export const VoidFeed: React.FC = () => {
             <p className="text-xs font-mono text-white/20 tracking-widest uppercase">Listening for whispers...</p>
           </div>
         ) : (
-          <div className="space-y-6">
-            <AnimatePresence mode="popLayout">
-              {posts.map((post) => {
-                const expirationDate = new Date(post.expires_at);
-                const now = new Date();
-                const timeLeft = expirationDate.getTime() - now.getTime();
-                const totalLife = 6 * 60 * 60 * 1000;
-                const lifePercent = Math.max(0, (timeLeft / totalLife) * 100);
-                
-                const opacity = Math.max(0.2, lifePercent / 100);
-                const blur = Math.max(0, (100 - lifePercent) / 10);
+          <Virtuoso
+            useWindowScroll
+            data={posts}
+            endReached={() => fetchMorePosts()}
+            overscan={400}
+            itemContent={(_index, post) => {
+              const expirationDate = new Date(post.expires_at);
+              const now = new Date();
+              const timeLeft = expirationDate.getTime() - now.getTime();
+              const totalLife = 6 * 60 * 60 * 1000;
+              const lifePercent = Math.max(0, (timeLeft / totalLife) * 100);
+              const opacity = Math.max(0.2, lifePercent / 100);
+              const blur = Math.max(0, (100 - lifePercent) / 10);
 
-                return (
-                  <motion.div
-                    key={post.id}
-                    layout
-                    initial={{ opacity: 0, scale: 0.9 }}
-                    animate={{ 
-                      opacity, 
-                      scale: 1,
-                      filter: `blur(${blur}px)`
-                    }}
-                    exit={{ opacity: 0, scale: 1.1, filter: 'blur(20px)' }}
-                    className={cn(
-                      "relative bg-white/[0.02] border border-white/10 rounded-2xl p-8 group hover:bg-white/[0.04] transition-colors",
-                      post.is_echo && "border-primary/30 bg-primary/5 shadow-[0_0_30px_rgba(255,0,0,0.1)]"
-                    )}
-                    onViewportEnter={() => handleInteraction(post.id, 'view')}
-                  >
-                    {/* Decay Progress Bar */}
-                    <div className="absolute top-0 left-0 w-full h-0.5 bg-white/5">
-                      <motion.div 
-                        className={cn("h-full", post.is_echo ? "bg-accent" : "bg-primary")}
-                        initial={{ width: '100%' }}
-                        animate={{ width: `${lifePercent}%` }}
-                        transition={{ duration: 1 }}
-                      />
-                    </div>
-
-                    <div className="flex items-start justify-between mb-6">
-                      <div className="flex items-center gap-2">
-                        <div className={cn(
-                          "w-8 h-8 rounded-full bg-gradient-to-br from-white/10 to-transparent flex items-center justify-center border border-white/10",
-                          post.is_echo && "border-primary/50"
-                        )}>
-                          {post.is_echo ? <Sparkles className="w-4 h-4 text-primary" /> : <Skull className="w-4 h-4 text-white/40" />}
-                        </div>
-                        <span className={cn(
-                          "text-[10px] font-mono uppercase tracking-widest",
-                          post.is_echo ? "text-primary font-black" : "text-white/40"
-                        )}>
-                          {post.is_echo ? "Void Echo" : "Unknown Signal"}
-                        </span>
+              return (
+                <motion.div
+                  layout
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity, scale: 1, filter: `blur(${blur}px)` }}
+                  className={cn(
+                    "relative bg-white/[0.02] border border-white/10 rounded-2xl p-8 group hover:bg-white/[0.04] transition-colors mb-6",
+                    post.is_echo && "border-primary/30 bg-primary/5 shadow-[0_0_30px_rgba(255,0,0,0.1)]"
+                  )}
+                  onViewportEnter={() => handleInteraction(post.id, 'view')}
+                >
+                  <div className="absolute top-0 left-0 w-full h-0.5 bg-white/5">
+                    <motion.div
+                      className={cn("h-full", post.is_echo ? "bg-accent" : "bg-primary")}
+                      initial={{ width: '100%' }}
+                      animate={{ width: `${lifePercent}%` }}
+                      transition={{ duration: 1 }}
+                    />
+                  </div>
+                  <div className="flex items-start justify-between mb-6">
+                    <div className="flex items-center gap-2">
+                      <div className={cn(
+                        "w-8 h-8 rounded-full bg-gradient-to-br from-white/10 to-transparent flex items-center justify-center border border-white/10",
+                        post.is_echo && "border-primary/50"
+                      )}>
+                        {post.is_echo ? <Sparkles className="w-4 h-4 text-primary" /> : <Skull className="w-4 h-4 text-white/40" />}
                       </div>
-                      <div className="flex items-center gap-1 text-[10px] font-mono text-primary">
-                        <Clock className="w-3 h-3" />
-                        {Math.ceil(timeLeft / (60 * 1000))}M REMAINING
-                      </div>
+                      <span className={cn(
+                        "text-[10px] font-mono uppercase tracking-widest",
+                        post.is_echo ? "text-primary font-black" : "text-white/40"
+                      )}>
+                        {post.is_echo ? "Void Echo" : "Unknown Signal"}
+                      </span>
                     </div>
-
-                    <p className="text-xl font-medium leading-relaxed mb-8 font-mono tracking-tight">
-                      {post.content}
-                    </p>
-
-                    <div className="flex items-center gap-6">
-                      <button 
-                        onClick={() => handleInteraction(post.id, 'like')}
-                        className="flex items-center gap-2 text-xs text-white/40 hover:text-red-500 transition-colors group/btn"
-                      >
-                        <Heart className={cn("w-4 h-4", post.like_count > 0 && "fill-red-500 text-red-500")} />
-                        <span className="font-mono">{post.like_count}</span>
-                      </button>
-                      <div className="flex items-center gap-2 text-xs text-white/40">
-                        <Eye className="w-4 h-4" />
-                        <span className="font-mono">{post.view_count}</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setReportPost(post)}
-                        className="flex items-center gap-2 text-xs text-white/40 transition-colors hover:text-red-200"
-                        aria-label="Report anonymous void signal"
-                      >
-                        <ShieldAlert className="w-4 h-4" />
-                        <span className="font-mono uppercase">Report</span>
-                      </button>
+                    <div className="flex items-center gap-1 text-[10px] font-mono text-primary">
+                      <Clock className="w-3 h-3" />
+                      {Math.ceil(timeLeft / (60 * 1000))}M REMAINING
                     </div>
-
-                    {/* Glitch Overlay (Visible on Hover) */}
-                    <div className="absolute inset-0 pointer-events-none opacity-0 group-hover:opacity-10 transition-opacity bg-[url('https://media.giphy.com/media/oEI9uWUznW3pS/giphy.gif')] bg-cover mix-blend-overlay" />
-                  </motion.div>
-                );
-              })}
-            </AnimatePresence>
-          </div>
+                  </div>
+                  <p className="text-xl font-medium leading-relaxed mb-8 font-mono tracking-tight">{post.content}</p>
+                  <div className="flex items-center gap-6">
+                    <button onClick={() => handleInteraction(post.id, 'like')} className="flex items-center gap-2 text-xs text-white/40 hover:text-red-500 transition-colors group/btn">
+                      <Heart className={cn("w-4 h-4", post.like_count > 0 && "fill-red-500 text-red-500")} />
+                      <span className="font-mono">{post.like_count}</span>
+                    </button>
+                    <div className="flex items-center gap-2 text-xs text-white/40">
+                      <Eye className="w-4 h-4" />
+                      <span className="font-mono">{post.view_count}</span>
+                    </div>
+                    <button type="button" onClick={() => setReportPost(post)} className="flex items-center gap-2 text-xs text-white/40 transition-colors hover:text-red-200" aria-label="Report anonymous void signal">
+                      <ShieldAlert className="w-4 h-4" />
+                      <span className="font-mono uppercase">Report</span>
+                    </button>
+                  </div>
+                  <div className="absolute inset-0 pointer-events-none opacity-0 group-hover:opacity-10 transition-opacity bg-[url('https://media.giphy.com/media/oEI9uWUznW3pS/giphy.gif')] bg-cover mix-blend-overlay" />
+                </motion.div>
+              );
+            }}
+            components={{
+              Footer: () => isLoadingMore ? (
+                <div className="flex justify-center py-6">
+                  <Loader2 className="w-6 h-6 text-primary animate-spin" />
+                </div>
+              ) : null,
+            }}
+          />
         )}
       </div>
       {reportPost && (
