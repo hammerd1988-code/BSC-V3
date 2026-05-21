@@ -1018,7 +1018,7 @@ export const Profile: React.FC = () => {
               <div className={cn(
                 "pointer-events-none absolute inset-0 bg-gradient-to-t from-black/60 to-transparent",
                 isHighContrast && "from-black via-black/40 to-transparent"
-              )} aria-hidden="true" />
+              )} aria-hidden={true} />
             </button>
           ) : (
             <div className={cn(
@@ -1056,7 +1056,7 @@ export const Profile: React.FC = () => {
                     </button>
                   ) : (
                     <div
-                      aria-hidden="true"
+                      aria-hidden={true}
                       className={cn(
                         "flex w-24 h-24 items-center justify-center rounded-full border-4 border-background bg-surface",
                         isHighContrast && "grayscale contrast-[2] border-black"
