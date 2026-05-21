@@ -761,7 +761,7 @@ async function callOpenAICompatible(input: {
     return {
       provider: 'local-fallback',
       model: 'rule-based-control-plane',
-      text: `## Result\nCasper accepted and analyzed the directive, but no platform AI key is configured on the server, and you have not yet set up a personal OpenAI-compatible provider.\n\n## Actions Taken\nThe command was persisted as a real Casper task and logged to the activity stream.\n\n## Follow-Up\nEither configure GEMINI_API_KEY / OPENAI_API_KEY on the server, or open Casper → Settings → Cognitive Core and paste your own OpenAI / OpenRouter / Together / Groq endpoint + API key.\n\n## Directive\n${input.prompt}`,
+      text: `## Result\nCasper accepted and analyzed the directive, but no platform AI key is configured on the server, and you have not yet set up a personal OpenAI-compatible provider.\n\n## Actions Taken\nThe command was persisted as a real Casper task and logged to the activity stream.\n\n## Follow-Up\nEither configure OPENROUTER_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY on the server, or open Casper → Settings → Cognitive Core and paste your own OpenAI / OpenRouter / Together / Groq endpoint + API key.\n\n## Directive\n${input.prompt}`,
     };
   }
 

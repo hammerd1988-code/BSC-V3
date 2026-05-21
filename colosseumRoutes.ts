@@ -11,7 +11,11 @@ const SAFE_GLADIATOR_SELECT = 'id,user_id,name,avatar_url,personality,stats,glow
 const BOT_DEFAULT_MODEL = process.env.BOT_DEFAULT_MODEL || process.env.BOT_AI_MODEL || process.env.COLOSSEUM_DEFAULT_MODEL || 'accounts/fireworks/models/qwen3p6-plus';
 const PLATFORM_DEFAULT_MODEL = process.env.COLOSSEUM_DEFAULT_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const BOT_OPENAI_COMPATIBLE_BASE_URL = (process.env.BOT_OPENAI_BASE_URL || process.env.BOT_AI_BASE_URL || '').replace(/\/$/, '');
-const OPENAI_COMPATIBLE_BASE_URL = (process.env.OPENAI_BASE_URL || process.env.VITE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+function openaiCompatibleBaseUrl() {
+  if (process.env.OPENAI_BASE_URL) return process.env.OPENAI_BASE_URL.replace(/\/$/, '');
+  if (process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_ADMIN_KEY) return 'https://openrouter.ai/api/v1';
+  return (process.env.VITE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+}
 const SAPPHIRE_API_URL = (process.env.SAPPHIRE_API_URL || 'https://sapphire.bloodsweatcode.site').replace(/\/$/, '');
 type ColosseumChallengeType = 'speed_round' | 'debug_battle' | 'code_golf' | 'architect_duel' | 'prompt_war' | 'roast_battle' | 'code_jeopardy';
 const CHALLENGE_BRIEFS: Record<ColosseumChallengeType, string> = {
@@ -84,7 +88,7 @@ function resolveGladiatorDefaultModel(gladiator: any) {
 }
 
 function resolveGladiatorBaseUrl(gladiator: any) {
-  const defaultBaseUrl = isSeededPlatformBot(gladiator) && BOT_OPENAI_COMPATIBLE_BASE_URL ? BOT_OPENAI_COMPATIBLE_BASE_URL : OPENAI_COMPATIBLE_BASE_URL;
+  const defaultBaseUrl = isSeededPlatformBot(gladiator) && BOT_OPENAI_COMPATIBLE_BASE_URL ? BOT_OPENAI_COMPATIBLE_BASE_URL : openaiCompatibleBaseUrl();
   if (normalizeModel(gladiator?.model, resolveGladiatorDefaultModel(gladiator)).startsWith('accounts/fireworks/models/')) {
     return defaultBaseUrl === 'https://api.openai.com/v1' ? 'https://api.fireworks.ai/inference/v1' : defaultBaseUrl;
   }
@@ -156,7 +160,7 @@ function buildSapphireChallengePrompt(input: { challengeType?: ColosseumChalleng
 }
 
 function platformOpenAiApiKey() {
-  return process.env.OPENAI_API_KEY || process.env.VITE_AI_API_KEY || null;
+  return process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_ADMIN_KEY || process.env.VITE_AI_API_KEY || null;
 }
 
 function botOpenAiApiKey() {
@@ -169,7 +173,7 @@ function resolveGladiatorApiKey(gladiator: any, hasCustomKey: boolean) {
 }
 
 function normalizeCompatibleBaseUrl(value?: string | null) {
-  return (value?.trim() || OPENAI_COMPATIBLE_BASE_URL)
+  return (value?.trim() || openaiCompatibleBaseUrl())
     .replace(/\/$/, '')
     .replace(/\/chat\/completions$/i, '')
     .replace(/\/responses$/i, '');
@@ -254,12 +258,17 @@ async function postToOpenAiCompatible(input: { apiKey?: string | null; model?: s
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
     const baseUrl = normalizeCompatibleBaseUrl(input.apiBaseUrl);
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    };
+    if (baseUrl.includes('openrouter.ai')) {
+      headers['HTTP-Referer'] = 'https://bloodsweatcode.org';
+      headers['X-Title'] = 'Blood, Sweat, or Code';
+    }
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({
         model: normalizeModel(input.model, input.fallbackModel ?? PLATFORM_DEFAULT_MODEL),
         messages: [
@@ -434,7 +443,7 @@ async function judgeColosseumBattle(input: {
   botSolution?: string;
 }) {
   if (!isServerAiConfigured()) {
-    return fallbackColosseumJudge({ ...input, providerError: 'No GEMINI_API_KEY or OPENAI_API_KEY configured.' });
+    return fallbackColosseumJudge({ ...input, providerError: 'No OPENROUTER_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY configured.' });
   }
   const result = await generateServerText(`Casper is judging this coding battle. Pick the winner from the two gladiator ids and score both 0-100.
 
