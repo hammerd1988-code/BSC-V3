@@ -453,8 +453,10 @@ export function registerServerAiRoutes(app: Express, supabase: SupabaseClient) {
       };
 
       const image = typeof body.image === 'string' ? body.image : '';
-      const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : 'What do you see in this image?';
-      const mimeType = typeof body.mimeType === 'string' ? body.mimeType : 'image/jpeg';
+      const rawPrompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
+      const prompt = rawPrompt || 'What do you see in this image?';
+      const allowedMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+      const mimeType = typeof body.mimeType === 'string' && allowedMimeTypes.has(body.mimeType) ? body.mimeType : 'image/jpeg';
       const systemPrompt = typeof body.systemPrompt === 'string' ? body.systemPrompt : undefined;
 
       if (!image) {
