@@ -439,6 +439,176 @@ export function registerServerAiRoutes(app: Express, supabase: SupabaseClient) {
       res.status(502).json({ success: false, error: message });
     }
   });
+
+  app.post('/api/ai/vision', async (req, res) => {
+    try {
+      const authorized = await requireSupabaseUser(req, res, supabase);
+      if (!authorized) return;
+
+      const body = req.body as {
+        image?: unknown;
+        prompt?: unknown;
+        systemPrompt?: unknown;
+        mimeType?: unknown;
+      };
+
+      const image = typeof body.image === 'string' ? body.image : '';
+      const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : 'What do you see in this image?';
+      const mimeType = typeof body.mimeType === 'string' ? body.mimeType : 'image/jpeg';
+      const systemPrompt = typeof body.systemPrompt === 'string' ? body.systemPrompt : undefined;
+
+      if (!image) {
+        res.status(400).json({ success: false, error: 'Base64 image data is required in the "image" field.' });
+        return;
+      }
+
+      const result = await generateVisionText(image, prompt, mimeType, systemPrompt);
+      if (!result) {
+        res.status(isServerAIConfigured() ? 502 : 503).json({
+          success: false,
+          error: isServerAIConfigured()
+            ? 'Vision provider returned an empty response.'
+            : 'No AI provider configured for vision. Set GEMINI_API_KEY or OPENAI_API_KEY.',
+        });
+        return;
+      }
+
+      res.json({ success: true, text: result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Vision analysis failed.';
+      console.error('[serverAi] vision route error:', message);
+      res.status(502).json({ success: false, error: message });
+    }
+  });
+}
+
+async function generateVisionText(
+  imageBase64: string,
+  prompt: string,
+  mimeType: string,
+  systemPrompt?: string,
+): Promise<string> {
+  const system = systemPrompt || 'You are Casper, the Blood Sweat Code AI assistant with vision capabilities. Describe what you see concisely and helpfully.';
+
+  const geminiKey = GEMINI_API_KEY();
+  if (geminiKey && Date.now() > geminiCooldownUntil) {
+    try {
+      const text = await callGeminiVision(geminiKey, geminiModel(), imageBase64, prompt, system, mimeType);
+      if (text) return text;
+    } catch (err: any) {
+      const msg = String(err?.message ?? err).slice(0, 240);
+      console.warn('[serverAi] Gemini vision failed:', msg);
+      if (msg.includes('429')) geminiCooldownUntil = Date.now() + 5 * 60_000;
+    }
+  }
+
+  const oaiKey = OPENAI_API_KEY();
+  const oaiBase = OPENAI_BASE_URL();
+  if (oaiKey) {
+    try {
+      const text = await callOpenAIVision(oaiKey, oaiBase, imageBase64, prompt, system, mimeType);
+      if (text) return text;
+    } catch (err: any) {
+      console.warn('[serverAi] OpenAI vision failed:', String(err?.message ?? err).slice(0, 240));
+    }
+  }
+
+  return '';
+}
+
+async function callGeminiVision(
+  apiKey: string,
+  model: string,
+  imageBase64: string,
+  prompt: string,
+  systemPrompt: string,
+  mimeType: string,
+): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45_000);
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: prompt },
+              { inlineData: { mimeType, data: imageBase64 } },
+            ],
+          }],
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
+        }),
+        signal: controller.signal,
+      },
+    );
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Gemini Vision ${response.status}: ${errText.slice(0, 300)}`);
+    }
+
+    const data = await response.json();
+    return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function callOpenAIVision(
+  apiKey: string,
+  baseUrl: string,
+  imageBase64: string,
+  prompt: string,
+  systemPrompt: string,
+  mimeType: string,
+): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45_000);
+  try {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    };
+    if (baseUrl.includes('openrouter.ai')) {
+      headers['HTTP-Referer'] = 'https://bloodsweatcode.org';
+      headers['X-Title'] = 'Blood, Sweat, or Code';
+    }
+
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: prompt },
+              { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+            ],
+          },
+        ],
+        temperature: 0.7,
+        max_tokens: 2048,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`OpenAI Vision ${response.status}: ${errText.slice(0, 300)}`);
+    }
+
+    const data = await response.json();
+    return data?.choices?.[0]?.message?.content?.trim() || '';
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function geminiModel(preferredModel?: string | null) {

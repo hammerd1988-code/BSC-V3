@@ -5,7 +5,8 @@ import {
   ArrowLeft, Send, Loader2, RefreshCw, Trash2, Copy, Check, 
   AlertTriangle, Activity, Mic, MicOff, Volume2, X, Settings,
   Lock, Eye, EyeOff, Server, BrainCircuit, ChevronDown, Crown, Ghost, User, Cpu,
-  CalendarClock, Puzzle, KeyRound, Play, Pause, Plus, Search, Save, Database, Shield
+  CalendarClock, Puzzle, KeyRound, Play, Pause, Plus, Search, Save, Database, Shield,
+  Camera, CameraOff, SwitchCamera, Scan
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { generateText } from '../lib/ai';
@@ -384,10 +385,18 @@ export const Casper: React.FC = () => {
   const [integrationCategory, setIntegrationCategory] = useState<CasperIntegrationCategory | 'All'>('All');
   const [integrationKeyEntry, setIntegrationKeyEntry] = useState<Record<string, string>>({});
   const [actionBusy, setActionBusy] = useState(false);
+  const [visionActive, setVisionActive] = useState(false);
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [capturedFrame, setCapturedFrame] = useState<string | null>(null);
+  const [visionAnalyzing, setVisionAnalyzing] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const voiceActiveRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraVideoVoiceRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -806,6 +815,69 @@ export const Casper: React.FC = () => {
     }
   }, [stopAudioPlayback]);
 
+  const captureFrame = useCallback((): string | null => {
+    const video = cameraVideoRef.current?.videoWidth ? cameraVideoRef.current : cameraVideoVoiceRef.current;
+    if (!video || !video.videoWidth) return null;
+    const canvas = canvasRef.current || document.createElement('canvas');
+    if (!canvasRef.current) canvasRef.current = canvas;
+    canvas.width = Math.min(video.videoWidth, 1280);
+    canvas.height = Math.round(canvas.width * (video.videoHeight / video.videoWidth));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    const base64 = dataUrl.split(',')[1] || '';
+    setCapturedFrame(dataUrl);
+    return base64;
+  }, []);
+
+  const analyzeWithVision = useCallback(async (prompt: string, imageBase64?: string | null): Promise<string> => {
+    const frame = imageBase64 || captureFrame();
+    if (!frame) return '';
+    setVisionAnalyzing(true);
+    try {
+      let { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        const refreshed = await supabase.auth.refreshSession();
+        session = refreshed.data.session;
+      }
+      if (!session?.access_token) return '';
+
+      const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
+      const systemPromptParts = [
+        CASPER_SYSTEM_PROMPT,
+        'You have vision capabilities. The user is sharing their camera feed with you. Analyze what you see and respond helpfully. Be concise but thorough.',
+      ];
+
+      const response = await fetch(`${serverUrl}/api/ai/vision`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          image: frame,
+          prompt,
+          systemPrompt: systemPromptParts.join('\n\n'),
+          mimeType: 'image/jpeg',
+        }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData?.error || `Vision API returned ${response.status}`);
+      }
+
+      const data = await response.json();
+      return data?.text || '';
+    } catch (err: any) {
+      console.error('[VISION] Analysis failed:', err);
+      return `Vision analysis failed: ${err?.message || 'unknown error'}`;
+    } finally {
+      setVisionAnalyzing(false);
+    }
+  }, [captureFrame]);
+
   const finishListening = useCallback(async () => {
     cancelAnimationFrame(levelFrameRef.current);
     if (silenceTimerRef.current) {
@@ -921,17 +993,24 @@ export const Casper: React.FC = () => {
         .map(message => `${message.role === 'user' ? 'User' : 'Casper'}: ${message.content}`)
         .join('\n');
       const prompt = history ? `${history}\nUser: ${transcript}\nCasper:` : transcript;
-      const response = await generateText(prompt, aiSettings, {
-        systemPrompt: `${CASPER_SYSTEM_PROMPT}\n\nEnabled Casper integrations for this user:\n${integrationContext}`,
-        temperature: 0.8,
-        maxTokens: 4096,
-      });
-      const casperText = response || 'The void swallowed my words. Say that again?';
 
-      if (currentUser?.id && response) {
+      let casperText: string;
+      if (visionActive) {
+        const visionResponse = await analyzeWithVision(prompt);
+        casperText = visionResponse || 'The void swallowed my words. Say that again?';
+      } else {
+        const response = await generateText(prompt, aiSettings, {
+          systemPrompt: `${CASPER_SYSTEM_PROMPT}\n\nEnabled Casper integrations for this user:\n${integrationContext}`,
+          temperature: 0.8,
+          maxTokens: 4096,
+        });
+        casperText = response || 'The void swallowed my words. Say that again?';
+      }
+
+      if (currentUser?.id && casperText) {
         authFetch('/api/casper/memory', {
           method: 'POST',
-          body: JSON.stringify({ userId: currentUser.id, userMessage: transcript, casperReply: response }),
+          body: JSON.stringify({ userId: currentUser.id, userMessage: transcript, casperReply: casperText }),
         }).catch((err: unknown) => console.warn('[Casper] memory persist failed:', err));
       }
 
@@ -952,7 +1031,7 @@ export const Casper: React.FC = () => {
         if (voiceActiveRef.current) window.setTimeout(() => void startListeningSessionRef.current(), 400);
       });
     }
-  }, [aiSettings, currentUser?.id, integrationContext, messages, speakOnce]);
+  }, [aiSettings, currentUser?.id, integrationContext, messages, speakOnce, visionActive, analyzeWithVision]);
 
   const startListeningSession = useCallback(async () => {
     if (!voiceActiveRef.current || voiceState === 'recording') return;
@@ -1074,6 +1153,44 @@ export const Casper: React.FC = () => {
     setAudioLevel(0);
   }, [stopAudioPlayback]);
 
+  const stopCamera = useCallback(() => {
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach(track => track.stop());
+      cameraStreamRef.current = null;
+    }
+    if (cameraVideoRef.current) cameraVideoRef.current.srcObject = null;
+    if (cameraVideoVoiceRef.current) cameraVideoVoiceRef.current.srcObject = null;
+    setVisionActive(false);
+    setCapturedFrame(null);
+  }, []);
+
+  const startCamera = useCallback(async (facing: 'environment' | 'user' = facingMode) => {
+    stopCamera();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } },
+      });
+      cameraStreamRef.current = stream;
+      if (cameraVideoRef.current) cameraVideoRef.current.srcObject = stream;
+      if (cameraVideoVoiceRef.current) cameraVideoVoiceRef.current.srcObject = stream;
+      setFacingMode(facing);
+      setVisionActive(true);
+    } catch (err: any) {
+      console.error('[VISION] Camera access failed:', err);
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        role: 'casper',
+        content: `Camera access denied: ${err?.message || 'permission denied'}. Allow camera in your browser settings.`,
+        timestamp: new Date(),
+      }]);
+    }
+  }, [facingMode, stopCamera]);
+
+  const switchCamera = useCallback(() => {
+    const next = facingMode === 'environment' ? 'user' : 'environment';
+    void startCamera(next);
+  }, [facingMode, startCamera]);
+
   const enterVoiceMode = useCallback(async () => {
     await unlockPersistentAudio();
     try {
@@ -1103,7 +1220,7 @@ export const Casper: React.FC = () => {
     });
   }, [playBooLaugh, speakOnce, unlockPersistentAudio]);
 
-  useEffect(() => () => exitVoiceMode(), [exitVoiceMode]);
+  useEffect(() => () => { exitVoiceMode(); stopCamera(); }, [exitVoiceMode, stopCamera]);
 
   const sendMessage = useCallback(async () => {
     const text = input.trim();
@@ -1139,17 +1256,23 @@ export const Casper: React.FC = () => {
       if (memoryContext) systemPromptParts.push(memoryContext);
       if (integrationContext) systemPromptParts.push(`Enabled Casper integrations for this user:\n${integrationContext}`);
 
-      const response = await generateText(prompt, aiSettings, {
-        systemPrompt: systemPromptParts.join('\n\n'),
-        temperature: 0.8,
-        maxTokens: 4096,
-      });
-      const casperText = response || "The void is silent. Try again?";
+      let casperText: string;
+      if (visionActive) {
+        const visionResponse = await analyzeWithVision(prompt);
+        casperText = visionResponse || "The void is silent. Try again?";
+      } else {
+        const response = await generateText(prompt, aiSettings, {
+          systemPrompt: systemPromptParts.join('\n\n'),
+          temperature: 0.8,
+          maxTokens: 4096,
+        });
+        casperText = response || "The void is silent. Try again?";
+      }
 
-      if (currentUser?.id && response) {
+      if (currentUser?.id && casperText) {
         authFetch('/api/casper/memory', {
           method: 'POST',
-          body: JSON.stringify({ userId: currentUser.id, userMessage: text, casperReply: response }),
+          body: JSON.stringify({ userId: currentUser.id, userMessage: text, casperReply: casperText }),
         }).catch((err: unknown) => console.warn('[Casper] memory persist failed:', err));
       }
 
@@ -1173,7 +1296,7 @@ export const Casper: React.FC = () => {
       setIsGenerating(false);
       if (ttsEnabled && voiceState !== 'recording') void speakOnce(fallback);
     }
-  }, [input, isGenerating, messages, aiSettings, integrationContext, currentUser?.id, ttsEnabled, voiceState, speakOnce, authFetch]);
+  }, [input, isGenerating, messages, aiSettings, integrationContext, currentUser?.id, ttsEnabled, voiceState, speakOnce, authFetch, visionActive, analyzeWithVision]);
 
   const clearChat = () => {
     const greeting = CASPER_GREETINGS[Math.floor(Math.random() * CASPER_GREETINGS.length)];
@@ -1258,6 +1381,19 @@ export const Casper: React.FC = () => {
               aria-label={voiceMode ? 'Exit voice mode' : 'Enter voice mode'}
             >
               {voiceMode ? <Volume2 className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+            </button>
+            <button
+              onClick={() => { visionActive ? stopCamera() : void startCamera(); }}
+              className={cn(
+                "p-2.5 rounded-xl border transition-all",
+                visionActive
+                  ? "bg-emerald-500/20 border-emerald-400/40 text-emerald-100 shadow-[0_0_16px_rgba(16,185,129,0.25)]"
+                  : "bg-white/5 border-white/10 text-zinc-500 hover:text-white hover:border-emerald-500/30"
+              )}
+              title={visionActive ? 'Disable Casper vision' : 'Enable Casper vision (camera)'}
+              aria-label={visionActive ? 'Disable Casper vision' : 'Enable Casper vision (camera)'}
+            >
+              {visionActive ? <Camera className="w-4 h-4" /> : <CameraOff className="w-4 h-4" />}
             </button>
             <button
               onClick={() => setShowAiCore(!showAiCore)}
@@ -1640,9 +1776,56 @@ export const Casper: React.FC = () => {
                     <Mic className="w-4 h-4" /> Tap to Speak
                   </button>
                 )}
+                <button
+                  onClick={() => { visionActive ? stopCamera() : void startCamera(); }}
+                  className={cn(
+                    "flex items-center gap-2 rounded-full border px-5 py-3 text-xs font-black uppercase tracking-widest transition-all hover:scale-105",
+                    visionActive
+                      ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
+                      : "border-white/15 bg-white/5 text-zinc-400"
+                  )}
+                >
+                  {visionActive ? <Camera className="w-4 h-4" /> : <CameraOff className="w-4 h-4" />}
+                  {visionActive ? 'Vision On' : 'Vision'}
+                </button>
+                {visionActive && (
+                  <button
+                    onClick={switchCamera}
+                    className="flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-4 py-3 text-xs font-black uppercase tracking-widest text-zinc-400 transition-all hover:scale-105 hover:text-white"
+                  >
+                    <SwitchCamera className="w-4 h-4" />
+                  </button>
+                )}
               </div>
 
-              {voiceDebug && <div className="max-w-xs truncate text-center font-mono text-[10px] text-white/30">{voiceDebug}</div>}
+              {visionActive && (
+                <div className="relative mt-4 w-full max-w-xs overflow-hidden rounded-2xl border border-emerald-400/30 bg-black/60">
+                  <video
+                    ref={(el) => {
+                      cameraVideoVoiceRef.current = el;
+                      if (el && cameraStreamRef.current) el.srcObject = cameraStreamRef.current;
+                    }}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full rounded-2xl"
+                    style={{ transform: facingMode === 'user' ? 'scaleX(-1)' : 'none' }}
+                  />
+                  <div className="absolute top-2 left-2 flex items-center gap-1.5 rounded-full border border-emerald-400/30 bg-black/60 px-2 py-1">
+                    <div className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="text-[8px] font-black uppercase tracking-widest text-emerald-300">
+                      {visionAnalyzing ? 'Analyzing...' : 'Vision Active'}
+                    </span>
+                  </div>
+                  {capturedFrame && (
+                    <div className="absolute bottom-2 right-2 h-12 w-12 overflow-hidden rounded-lg border border-white/20">
+                      <img src={capturedFrame} alt="Captured" className="h-full w-full object-cover" />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {voiceDebug && <div className="mt-2 max-w-xs truncate text-center font-mono text-[10px] text-white/30">{voiceDebug}</div>}
             </div>
           </motion.div>
         )}
@@ -1704,7 +1887,50 @@ export const Casper: React.FC = () => {
       <div className="relative z-20 p-4 border-t border-white/5 bg-black/40 backdrop-blur-xl">
         <div className="max-w-3xl mx-auto">
           <CasperWaveform isActive={isGenerating || isListening || isSpeaking} instability={instability} />
-          
+
+          {visionActive && !voiceMode && (
+            <div className="relative mt-2 mb-2 overflow-hidden rounded-2xl border border-emerald-400/25 bg-black/50">
+              <video
+                ref={(el) => {
+                  cameraVideoRef.current = el;
+                  if (el && cameraStreamRef.current) el.srcObject = cameraStreamRef.current;
+                }}
+                autoPlay
+                playsInline
+                muted
+                className="h-36 w-full object-cover rounded-2xl"
+                style={{ transform: facingMode === 'user' ? 'scaleX(-1)' : 'none' }}
+              />
+              <div className="absolute top-2 left-2 flex items-center gap-1.5 rounded-full border border-emerald-400/30 bg-black/60 px-2 py-1">
+                <div className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="text-[8px] font-black uppercase tracking-widest text-emerald-300">
+                  {visionAnalyzing ? 'Analyzing...' : 'Casper Vision'}
+                </span>
+              </div>
+              <div className="absolute top-2 right-2 flex gap-1.5">
+                <button
+                  onClick={switchCamera}
+                  className="rounded-full border border-white/15 bg-black/60 p-1.5 text-zinc-300 hover:text-white transition-colors"
+                  title="Switch camera"
+                >
+                  <SwitchCamera className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={stopCamera}
+                  className="rounded-full border border-red-400/30 bg-black/60 p-1.5 text-red-300 hover:text-red-200 transition-colors"
+                  title="Close camera"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              {capturedFrame && (
+                <div className="absolute bottom-2 right-2 h-10 w-10 overflow-hidden rounded-lg border border-white/20">
+                  <img src={capturedFrame} alt="Last capture" className="h-full w-full object-cover" />
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="relative mt-2">
             <textarea
               value={input}
@@ -1715,7 +1941,7 @@ export const Casper: React.FC = () => {
                   sendMessage();
                 }
               }}
-              placeholder="Whisper to Casper..."
+              placeholder={visionActive ? "Ask Casper about what you see..." : "Whisper to Casper..."}
               rows={1}
               className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 pr-16 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-cyan-500/50 transition-all resize-none"
             />
@@ -1731,8 +1957,10 @@ export const Casper: React.FC = () => {
           <div className="flex items-center justify-between mt-3 px-2">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-cyan-500 shadow-[0_0_8px_rgba(0,229,255,0.8)]" />
-                <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Neural Link Active</span>
+                <div className={cn("w-1.5 h-1.5 rounded-full shadow-[0_0_8px]", visionActive ? "bg-emerald-400 shadow-emerald-400/80" : "bg-cyan-500 shadow-cyan-500/80")} />
+                <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">
+                  {visionActive ? 'Vision Link Active' : 'Neural Link Active'}
+                </span>
               </div>
               {aiSettings?.model && aiSettings.model !== 'platform_default' && (
                 <div className="flex items-center gap-2">
