@@ -6,7 +6,7 @@ import {
   AlertTriangle, Activity, Mic, MicOff, Volume2, X, Settings,
   Lock, Eye, EyeOff, Server, BrainCircuit, ChevronDown, Crown, Ghost, User, Cpu,
   CalendarClock, Puzzle, KeyRound, Play, Pause, Plus, Search, Save, Database, Shield,
-  Camera, CameraOff, SwitchCamera, Scan
+  Camera, CameraOff, SwitchCamera
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { generateText } from '../lib/ai';
@@ -831,52 +831,41 @@ export const Casper: React.FC = () => {
     return base64;
   }, []);
 
-  const analyzeWithVision = useCallback(async (prompt: string, imageBase64?: string | null): Promise<string> => {
+  const analyzeWithVision = useCallback(async (prompt: string, systemPrompt?: string, imageBase64?: string | null): Promise<string> => {
     const frame = imageBase64 || captureFrame();
     if (!frame) return '';
     setVisionAnalyzing(true);
     try {
-      let { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
-        const refreshed = await supabase.auth.refreshSession();
-        session = refreshed.data.session;
-      }
-      if (!session?.access_token) return '';
-
-      const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
-      const systemPromptParts = [
-        CASPER_SYSTEM_PROMPT,
+      const visionSystemPrompt = [
+        systemPrompt || CASPER_SYSTEM_PROMPT,
         'You have vision capabilities. The user is sharing their camera feed with you. Analyze what you see and respond helpfully. Be concise but thorough.',
-      ];
+      ].join('\n\n');
 
-      const response = await fetch(`${serverUrl}/api/ai/vision`, {
+      const response = await authFetch('/api/ai/vision', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({
           image: frame,
           prompt,
-          systemPrompt: systemPromptParts.join('\n\n'),
+          systemPrompt: visionSystemPrompt,
           mimeType: 'image/jpeg',
         }),
       });
 
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
+        const errData = await response.json().catch(() => ({})) as { error?: string };
         throw new Error(errData?.error || `Vision API returned ${response.status}`);
       }
 
-      const data = await response.json();
+      const data = await response.json() as { text?: string };
       return data?.text || '';
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'unknown error';
       console.error('[VISION] Analysis failed:', err);
-      return `Vision analysis failed: ${err?.message || 'unknown error'}`;
+      return '';
     } finally {
       setVisionAnalyzing(false);
     }
-  }, [captureFrame]);
+  }, [captureFrame, authFetch]);
 
   const finishListening = useCallback(async () => {
     cancelAnimationFrame(levelFrameRef.current);
@@ -994,23 +983,23 @@ export const Casper: React.FC = () => {
         .join('\n');
       const prompt = history ? `${history}\nUser: ${transcript}\nCasper:` : transcript;
 
-      let casperText: string;
+      let rawResponse: string;
+      const voiceSystemPrompt = `${CASPER_SYSTEM_PROMPT}\n\nEnabled Casper integrations for this user:\n${integrationContext}`;
       if (visionActive) {
-        const visionResponse = await analyzeWithVision(prompt);
-        casperText = visionResponse || 'The void swallowed my words. Say that again?';
+        rawResponse = await analyzeWithVision(prompt, voiceSystemPrompt);
       } else {
-        const response = await generateText(prompt, aiSettings, {
-          systemPrompt: `${CASPER_SYSTEM_PROMPT}\n\nEnabled Casper integrations for this user:\n${integrationContext}`,
+        rawResponse = await generateText(prompt, aiSettings, {
+          systemPrompt: voiceSystemPrompt,
           temperature: 0.8,
           maxTokens: 4096,
-        });
-        casperText = response || 'The void swallowed my words. Say that again?';
+        }) || '';
       }
+      const casperText = rawResponse || 'The void swallowed my words. Say that again?';
 
-      if (currentUser?.id && casperText) {
+      if (currentUser?.id && rawResponse) {
         authFetch('/api/casper/memory', {
           method: 'POST',
-          body: JSON.stringify({ userId: currentUser.id, userMessage: transcript, casperReply: casperText }),
+          body: JSON.stringify({ userId: currentUser.id, userMessage: transcript, casperReply: rawResponse }),
         }).catch((err: unknown) => console.warn('[Casper] memory persist failed:', err));
       }
 
@@ -1256,23 +1245,23 @@ export const Casper: React.FC = () => {
       if (memoryContext) systemPromptParts.push(memoryContext);
       if (integrationContext) systemPromptParts.push(`Enabled Casper integrations for this user:\n${integrationContext}`);
 
-      let casperText: string;
+      let rawResponse: string;
+      const fullSystemPrompt = systemPromptParts.join('\n\n');
       if (visionActive) {
-        const visionResponse = await analyzeWithVision(prompt);
-        casperText = visionResponse || "The void is silent. Try again?";
+        rawResponse = await analyzeWithVision(prompt, fullSystemPrompt);
       } else {
-        const response = await generateText(prompt, aiSettings, {
-          systemPrompt: systemPromptParts.join('\n\n'),
+        rawResponse = await generateText(prompt, aiSettings, {
+          systemPrompt: fullSystemPrompt,
           temperature: 0.8,
           maxTokens: 4096,
-        });
-        casperText = response || "The void is silent. Try again?";
+        }) || '';
       }
+      const casperText = rawResponse || "The void is silent. Try again?";
 
-      if (currentUser?.id && casperText) {
+      if (currentUser?.id && rawResponse) {
         authFetch('/api/casper/memory', {
           method: 'POST',
-          body: JSON.stringify({ userId: currentUser.id, userMessage: text, casperReply: casperText }),
+          body: JSON.stringify({ userId: currentUser.id, userMessage: text, casperReply: rawResponse }),
         }).catch((err: unknown) => console.warn('[Casper] memory persist failed:', err));
       }
 
