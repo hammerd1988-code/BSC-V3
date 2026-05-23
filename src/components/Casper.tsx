@@ -1244,23 +1244,13 @@ export const Casper: React.FC = () => {
         .join('\n');
       const prompt = history ? `${history}\nUser: ${text}\nCasper:` : text;
 
-      // Route through the server-side command path which has tool-calling
-      // (browser, shell, integrations). This gives Casper the ability to
-      // navigate pages, take screenshots, and use all connected tools.
       let casperText: string;
       let imageUrls: string[] = [];
-      try {
-        const cmdRes = await sendCasperCommand({
-          command: prompt,
-          surface: 'control_center',
-          source: 'user',
-          pageContext: { path: '/casper', feature: 'neural_chat' },
-        });
-        casperText = cmdRes.response || '';
-        imageUrls = extractScreenshotUrls(cmdRes.toolCalls);
-      } catch (cmdErr) {
-        console.warn('[Casper] command path failed, falling back to generateText:', cmdErr);
-        // Fallback: fetch memories and use direct generation
+
+      if (visionActive) {
+        // Vision mode: capture camera frame and analyze with multimodal AI.
+        // This path uses the direct vision endpoint and does not go through
+        // tool-calling (keeps the response fast and focused on the image).
         let memoryContext = '';
         if (currentUser?.id) {
           try {
@@ -1273,12 +1263,35 @@ export const Casper: React.FC = () => {
         const systemPromptParts = [CASPER_SYSTEM_PROMPT];
         if (memoryContext) systemPromptParts.push(memoryContext);
         if (integrationContext) systemPromptParts.push(`Enabled Casper integrations for this user:\n${integrationContext}`);
-        const fullSystemPrompt = systemPromptParts.join('\n\n');
-        if (visionActive) {
-          casperText = await analyzeWithVision(prompt, fullSystemPrompt);
-        } else {
+        casperText = await analyzeWithVision(prompt, systemPromptParts.join('\n\n'));
+      } else {
+        // Non-vision: route through the server-side command path which has
+        // tool-calling (browser, shell, integrations).
+        try {
+          const cmdRes = await sendCasperCommand({
+            command: prompt,
+            surface: 'control_center',
+            source: 'user',
+            pageContext: { path: '/casper', feature: 'neural_chat' },
+          });
+          casperText = cmdRes.response || '';
+          imageUrls = extractScreenshotUrls(cmdRes.toolCalls);
+        } catch (cmdErr) {
+          console.warn('[Casper] command path failed, falling back to generateText:', cmdErr);
+          let memoryContext = '';
+          if (currentUser?.id) {
+            try {
+              const memRes = await authFetch(`/api/casper/memory?userId=${encodeURIComponent(currentUser.id)}`);
+              const memData = await memRes.json();
+              if (memData.relevantMemories) memoryContext = memData.relevantMemories;
+              if (memData.stateModifier) memoryContext = `${memData.stateModifier}\n${memoryContext}`;
+            } catch { /* non-blocking */ }
+          }
+          const systemPromptParts = [CASPER_SYSTEM_PROMPT];
+          if (memoryContext) systemPromptParts.push(memoryContext);
+          if (integrationContext) systemPromptParts.push(`Enabled Casper integrations for this user:\n${integrationContext}`);
           casperText = await generateText(prompt, aiSettings, {
-            systemPrompt: fullSystemPrompt,
+            systemPrompt: systemPromptParts.join('\n\n'),
             temperature: 0.8,
             maxTokens: 4096,
           }) || '';

@@ -608,7 +608,7 @@ const playwrightAdapter: CasperIntegrationAdapter = {
         case 'extract_text': {
           const pageId = optionalString(params, 'page_id') || undefined;
           const selector = optionalString(params, 'selector') || undefined;
-          const result = await browserExtractText({ pageId, selector });
+          const result = await browserExtractText(userId, { pageId, selector });
           return { ok: result.ok, data: result, error: result.error, durationMs: result.durationMs };
         }
         case 'go_back': {
@@ -617,12 +617,12 @@ const playwrightAdapter: CasperIntegrationAdapter = {
           return { ok: result.ok, data: result, error: result.error, durationMs: result.durationMs };
         }
         case 'list_tabs': {
-          const tabs = await browserListPages();
+          const tabs = await browserListPages(userId);
           return { ok: true, data: { tabs }, durationMs: Date.now() - start };
         }
         case 'close_tab': {
           const pageId = requireString(params, 'page_id');
-          await browserClosePage(pageId);
+          await browserClosePage(userId, pageId);
           return { ok: true, data: { closed: pageId }, durationMs: Date.now() - start };
         }
         default:
