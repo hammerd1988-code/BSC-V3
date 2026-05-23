@@ -512,6 +512,129 @@ const slackAdapter: CasperIntegrationAdapter = {
 };
 
 // ---------------------------------------------------------------------------
+// Playwright browser adapter
+// ---------------------------------------------------------------------------
+// Unlike other adapters, the browser adapter doesn't need a user API key —
+// it uses the server-side Playwright instance. The apiKey field in
+// credentials is ignored (the integration definition marks it "optional").
+// The adapter delegates to casperBrowser.ts for actual browser operations
+// and receives a Supabase client + userId via the injected config object.
+
+import {
+  browserNavigate,
+  browserScreenshot,
+  browserClick,
+  browserType,
+  browserExtractText,
+  browserGoBack,
+  browserListPages,
+  browserClosePage,
+} from './casperBrowser.js';
+
+const playwrightAdapter: CasperIntegrationAdapter = {
+  id: 'playwright',
+  name: 'Playwright Browser',
+  tools: [
+    { name: 'navigate', description: 'Navigate the browser to a URL and take a screenshot.', params: [
+      { name: 'url', type: 'string', required: true, description: 'The URL to navigate to.' },
+      { name: 'page_id', type: 'string', description: 'Reuse an existing browser tab by ID. Omit to open a new tab.' },
+      { name: 'wait_until', type: 'string', description: 'load | domcontentloaded | networkidle. Default: domcontentloaded.' },
+    ] },
+    { name: 'screenshot', description: 'Take a screenshot of the current page.', params: [
+      { name: 'page_id', type: 'string', description: 'Browser tab ID. Omit to use the most recent tab.' },
+      { name: 'full_page', type: 'boolean', description: 'Capture the entire scrollable page. Default: false (viewport only).' },
+    ] },
+    { name: 'click', description: 'Click an element on the page by CSS selector.', params: [
+      { name: 'selector', type: 'string', required: true, description: 'CSS selector of the element to click.' },
+      { name: 'page_id', type: 'string', description: 'Browser tab ID.' },
+    ] },
+    { name: 'type', description: 'Type text into an input field.', params: [
+      { name: 'selector', type: 'string', required: true, description: 'CSS selector of the input field.' },
+      { name: 'text', type: 'string', required: true, description: 'Text to type.' },
+      { name: 'press_enter', type: 'boolean', description: 'Press Enter after typing. Default: false.' },
+      { name: 'page_id', type: 'string', description: 'Browser tab ID.' },
+    ] },
+    { name: 'extract_text', description: 'Extract text content from the page or a specific element.', params: [
+      { name: 'selector', type: 'string', description: 'CSS selector. Omit to extract all visible text from the page body.' },
+      { name: 'page_id', type: 'string', description: 'Browser tab ID.' },
+    ] },
+    { name: 'go_back', description: 'Navigate back to the previous page.', params: [
+      { name: 'page_id', type: 'string', description: 'Browser tab ID.' },
+    ] },
+    { name: 'list_tabs', description: 'List all open browser tabs.', params: [] },
+    { name: 'close_tab', description: 'Close a browser tab by ID.', params: [
+      { name: 'page_id', type: 'string', required: true, description: 'Browser tab ID to close.' },
+    ] },
+  ],
+  async execute(toolName, params, credentials) {
+    const start = Date.now();
+    // The Supabase client and userId are injected via the config object
+    // by casperTools.ts when it resolves credentials for the playwright
+    // integration. The adapter itself never touches user secrets.
+    const supabase = credentials.config?.supabase as import('@supabase/supabase-js').SupabaseClient | undefined;
+    const userId = credentials.config?.userId as string | undefined;
+    if (!supabase || !userId) {
+      return { ok: false, error: 'Browser tools require server context (supabase + userId).', durationMs: Date.now() - start };
+    }
+    try {
+      switch (toolName) {
+        case 'navigate': {
+          const url = requireString(params, 'url');
+          const pageId = optionalString(params, 'page_id') || undefined;
+          const waitUntil = (optionalString(params, 'wait_until') || 'domcontentloaded') as 'load' | 'domcontentloaded' | 'networkidle';
+          const result = await browserNavigate(url, supabase, userId, { pageId, waitUntil, screenshot: true });
+          return { ok: result.ok, data: result, error: result.error, durationMs: result.durationMs };
+        }
+        case 'screenshot': {
+          const pageId = optionalString(params, 'page_id') || undefined;
+          const fullPage = params.full_page === true;
+          const result = await browserScreenshot(supabase, userId, { pageId, fullPage });
+          return { ok: result.ok, data: result, error: result.error, durationMs: result.durationMs };
+        }
+        case 'click': {
+          const selector = requireString(params, 'selector');
+          const pageId = optionalString(params, 'page_id') || undefined;
+          const result = await browserClick(selector, supabase, userId, { pageId, screenshot: true });
+          return { ok: result.ok, data: result, error: result.error, durationMs: result.durationMs };
+        }
+        case 'type': {
+          const selector = requireString(params, 'selector');
+          const text = requireString(params, 'text');
+          const pageId = optionalString(params, 'page_id') || undefined;
+          const pressEnter = params.press_enter === true;
+          const result = await browserType(selector, text, supabase, userId, { pageId, pressEnter, screenshot: true });
+          return { ok: result.ok, data: result, error: result.error, durationMs: result.durationMs };
+        }
+        case 'extract_text': {
+          const pageId = optionalString(params, 'page_id') || undefined;
+          const selector = optionalString(params, 'selector') || undefined;
+          const result = await browserExtractText(userId, { pageId, selector });
+          return { ok: result.ok, data: result, error: result.error, durationMs: result.durationMs };
+        }
+        case 'go_back': {
+          const pageId = optionalString(params, 'page_id') || undefined;
+          const result = await browserGoBack(supabase, userId, { pageId, screenshot: true });
+          return { ok: result.ok, data: result, error: result.error, durationMs: result.durationMs };
+        }
+        case 'list_tabs': {
+          const tabs = await browserListPages(userId);
+          return { ok: true, data: { tabs }, durationMs: Date.now() - start };
+        }
+        case 'close_tab': {
+          const pageId = requireString(params, 'page_id');
+          await browserClosePage(userId, pageId);
+          return { ok: true, data: { closed: pageId }, durationMs: Date.now() - start };
+        }
+        default:
+          return { ok: false, error: `Unknown Playwright tool: ${toolName}`, durationMs: Date.now() - start };
+      }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'Browser action failed.', durationMs: Date.now() - start };
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
@@ -521,6 +644,7 @@ export const CASPER_ADAPTERS: Record<string, CasperIntegrationAdapter> = {
   discord: discordAdapter,
   stripe: stripeAdapter,
   slack: slackAdapter,
+  playwright: playwrightAdapter,
 };
 
 export function getAdapter(integrationKey: string): CasperIntegrationAdapter | null {
