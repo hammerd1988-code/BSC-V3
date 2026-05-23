@@ -1907,17 +1907,17 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
           result = await browser.browserType(String(selector || ''), String(text || ''), supabase, profile.id, { pageId, pressEnter: pressEnter === true, screenshot: true });
           break;
         case 'extract_text':
-          result = await browser.browserExtractText({ pageId, selector: selector || undefined });
+          result = await browser.browserExtractText(profile.id, { pageId, selector: selector || undefined });
           break;
         case 'go_back':
           result = await browser.browserGoBack(supabase, profile.id, { pageId, screenshot: true });
           break;
         case 'list_tabs': {
-          const tabs = await browser.browserListPages();
+          const tabs = await browser.browserListPages(profile.id);
           return res.json({ success: true, tabs });
         }
         case 'close_tab':
-          await browser.browserClosePage(String(pageId || ''));
+          await browser.browserClosePage(profile.id, String(pageId || ''));
           return res.json({ success: true, closed: pageId });
         default:
           return res.status(400).json({ success: false, error: `Unknown browser action: ${actionStr}` });
