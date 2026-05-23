@@ -123,23 +123,35 @@ export const CasperCoBrowse: React.FC<CoBrowseProps> = ({
   }, [userId]);
 
   const handleViewportClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isActive || !viewportRef.current) return;
-    const rect = viewportRef.current.getBoundingClientRect();
-    const scaleX = VIEWPORT_WIDTH / rect.width;
-    const scaleY = VIEWPORT_HEIGHT / rect.height;
-    const x = Math.round((e.clientX - rect.left) * scaleX);
-    const y = Math.round((e.clientY - rect.top) * scaleY);
+    if (!isActive || controller !== 'user' || !viewportRef.current || !imgRef.current) return;
+    // Account for object-contain letterboxing: compute the actual rendered
+    // image area within the container, then map click coords to that.
+    const containerRect = viewportRef.current.getBoundingClientRect();
+    const imgNaturalW = VIEWPORT_WIDTH;
+    const imgNaturalH = VIEWPORT_HEIGHT;
+    const containerW = containerRect.width;
+    const containerH = containerRect.height;
+    const scaleToFit = Math.min(containerW / imgNaturalW, containerH / imgNaturalH);
+    const renderedW = imgNaturalW * scaleToFit;
+    const renderedH = imgNaturalH * scaleToFit;
+    const offsetX = (containerW - renderedW) / 2;
+    const offsetY = (containerH - renderedH) / 2;
+    const relX = e.clientX - containerRect.left - offsetX;
+    const relY = e.clientY - containerRect.top - offsetY;
+    if (relX < 0 || relY < 0 || relX > renderedW || relY > renderedH) return;
+    const x = Math.round((relX / renderedW) * imgNaturalW);
+    const y = Math.round((relY / renderedH) * imgNaturalH);
     socket.emit('cobrowse:click', { userId, x, y });
-  }, [isActive, userId]);
+  }, [isActive, controller, userId]);
 
   const handleViewportScroll = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
-    if (!isActive) return;
+    if (!isActive || controller !== 'user') return;
     e.preventDefault();
     socket.emit('cobrowse:scroll', { userId, deltaX: e.deltaX, deltaY: e.deltaY });
-  }, [isActive, userId]);
+  }, [isActive, controller, userId]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!isActive) return;
+    if (!isActive || controller !== 'user') return;
     // Don't capture keys when typing in the URL bar
     if ((e.target as HTMLElement).tagName === 'INPUT') return;
     e.preventDefault();
@@ -148,7 +160,7 @@ export const CasperCoBrowse: React.FC<CoBrowseProps> = ({
     } else {
       socket.emit('cobrowse:type', { userId, key: e.key });
     }
-  }, [isActive, userId]);
+  }, [isActive, controller, userId]);
 
   const toggleController = useCallback(() => {
     const next = controller === 'user' ? 'casper' : 'user';
@@ -185,7 +197,7 @@ export const CasperCoBrowse: React.FC<CoBrowseProps> = ({
         {/* Window controls */}
         <div className="flex items-center gap-1.5">
           <button
-            onClick={onClose}
+            onClick={() => { stopSession(); onClose(); }}
             className="h-3 w-3 rounded-full bg-red-500/80 hover:bg-red-400 transition-colors"
             title="Close"
           />
