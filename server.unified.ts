@@ -32,6 +32,7 @@ import { registerUnifiedBotRoutes } from './botUnificationRoutes.js';
 import { registerServerAiRoutes } from './serverAi.js';
 import { registerColosseumRoutes } from './colosseumRoutes.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
+import { registerCoBrowseSocket } from './casperCoBrowse.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -837,6 +838,9 @@ app.post("/api/cred/exchange", async (req, res) => {
     if (!workspaceStates.has(key)) workspaceStates.set(key, { assets: [], checkpoints: [], activity: [] });
     return workspaceStates.get(key)!;
   };
+
+  // Co-browse: register Casper shared browser control events
+  registerCoBrowseSocket(io, supabase);
 
   io.on('connection', (socket) => {
     console.log(`[socket] Connected: ${socket.id} (total: ${io.engine.clientsCount})`);
