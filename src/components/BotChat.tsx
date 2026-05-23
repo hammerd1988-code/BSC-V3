@@ -339,7 +339,7 @@ function InstructionLog({ botId, botName }: { botId: string; botName: string }) 
 // ── Main Component ──────────────────────────────────────────────────────────
 
 export function BotChat() {
-  const { currentUser } = useAuth();
+  const { currentUser, supabaseUser, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const botIdParam = searchParams.get('bot') || searchParams.get('gladiator');
@@ -518,20 +518,46 @@ export function BotChat() {
     if (voiceParam === '1' && !voiceMode) setVoiceMode(true);
   }, [voiceParam]);
 
-  // Load all bots
+  // Load all bots — gate on supabaseUser (session) rather than currentUser (profile)
+  // so bots load as soon as auth is confirmed, even if profile resolution is slow.
   useEffect(() => {
-    if (!currentUser?.id) return;
+    if (authLoading || !supabaseUser?.id) return;
     let cancelled = false;
     (async () => {
       setLoading(true);
-      const [{ data: gladiators }, { data: profiles }] = await Promise.all([
-        supabase.from('gladiators').select('*').order('name'),
-        supabase.from('bot_gladiator_profiles').select('gladiator_id,persona_username,display_name,gladiator_class,expertise,battle_style,signature_moves,pre_battle_lines,victory_lines,defeat_lines,ai_prompt_style,ability_profile,personality_style,avatar_prompt,emotional_hook').then(r => r, () => ({ data: [] as BotProfile[], error: null, count: null, status: 200, statusText: 'OK' })),
-      ]);
+
+      // Ensure the Supabase client's internal auth state is fully hydrated before
+      // querying RLS-protected tables. Without this, the PostgREST request can race
+      // ahead of session restoration and arrive as anon → "permission denied".
+      await supabase.auth.getSession();
+
+      const profileCols = 'gladiator_id,persona_username,display_name,gladiator_class,expertise,battle_style,signature_moves,pre_battle_lines,victory_lines,defeat_lines,ai_prompt_style,ability_profile,personality_style,avatar_prompt,emotional_hook';
+
+      const fetchBots = async (): Promise<{ gladiators: GladiatorRow[]; profiles: BotProfile[] }> => {
+        const [{ data: gladiators, error: gladErr }, { data: profiles }] = await Promise.all([
+          supabase.from('gladiators').select('*').order('name'),
+          supabase.from('bot_gladiator_profiles').select(profileCols).then(r => r, () => ({ data: [] as BotProfile[], error: null, count: null, status: 200, statusText: 'OK' })),
+        ]);
+        if (gladErr) {
+          // Retry both queries on permission denied — session may still be propagating
+          if (gladErr.message?.includes('permission denied')) {
+            await new Promise(r => setTimeout(r, 500));
+            const [retryGlad, retryProf] = await Promise.all([
+              supabase.from('gladiators').select('*').order('name'),
+              supabase.from('bot_gladiator_profiles').select(profileCols).then(r => r, () => ({ data: [] as BotProfile[], error: null, count: null, status: 200, statusText: 'OK' })),
+            ]);
+            if (retryGlad.error) console.error('[BotChat] gladiators fetch retry failed:', retryGlad.error.message);
+            return { gladiators: (retryGlad.data ?? []) as GladiatorRow[], profiles: (retryProf.data ?? []) as BotProfile[] };
+          }
+          console.error('[BotChat] gladiators fetch error:', gladErr.message);
+        }
+        return { gladiators: (gladiators ?? []) as GladiatorRow[], profiles: (profiles ?? []) as BotProfile[] };
+      };
+
+      const { gladiators: allBots, profiles } = await fetchBots();
       if (cancelled) return;
 
-      const profileMap = new Map<string, BotProfile>((profiles ?? []).map((p: BotProfile) => [p.gladiator_id, p] as [string, BotProfile]));
-      const allBots = (gladiators ?? []) as GladiatorRow[];
+      const profileMap = new Map<string, BotProfile>(profiles.map((p) => [p.gladiator_id, p] as [string, BotProfile]));
       setBots(allBots);
 
       // Auto-select from URL or first
@@ -540,7 +566,7 @@ export function BotChat() {
       setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [currentUser?.id]);
+  }, [authLoading, supabaseUser?.id]);
 
   // Select a bot and load its config
   const selectBot = useCallback(async (bot: GladiatorRow, profileMapArg?: Map<string, BotProfile>) => {
