@@ -1875,6 +1875,60 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
     }
   });
 
+  // Direct browser action endpoint. Lets the Casper chat UI trigger a
+  // single browser operation (navigate, screenshot, click, type, etc.)
+  // without going through the full tool-calling loop. Returns the
+  // screenshot URL directly so the chat can render it inline.
+  app.post('/api/casper/browser/action', async (req, res) => {
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+
+      const { action, url, selector, text, pageId, fullPage, pressEnter, waitUntil } = req.body ?? {};
+      const actionStr = String(action || '').trim();
+      if (!actionStr) {
+        return res.status(400).json({ success: false, error: 'action is required (navigate, screenshot, click, type, extract_text, go_back, list_tabs, close_tab).' });
+      }
+
+      // Lazy-import to avoid crashing if playwright isn't installed
+      const browser = await import('./casperBrowser.js');
+      let result;
+      switch (actionStr) {
+        case 'navigate':
+          result = await browser.browserNavigate(String(url || ''), supabase, profile.id, { pageId, waitUntil: waitUntil || 'domcontentloaded', screenshot: true });
+          break;
+        case 'screenshot':
+          result = await browser.browserScreenshot(supabase, profile.id, { pageId, fullPage: fullPage === true });
+          break;
+        case 'click':
+          result = await browser.browserClick(String(selector || ''), supabase, profile.id, { pageId, screenshot: true });
+          break;
+        case 'type':
+          result = await browser.browserType(String(selector || ''), String(text || ''), supabase, profile.id, { pageId, pressEnter: pressEnter === true, screenshot: true });
+          break;
+        case 'extract_text':
+          result = await browser.browserExtractText({ pageId, selector: selector || undefined });
+          break;
+        case 'go_back':
+          result = await browser.browserGoBack(supabase, profile.id, { pageId, screenshot: true });
+          break;
+        case 'list_tabs': {
+          const tabs = await browser.browserListPages();
+          return res.json({ success: true, tabs });
+        }
+        case 'close_tab':
+          await browser.browserClosePage(String(pageId || ''));
+          return res.json({ success: true, closed: pageId });
+        default:
+          return res.status(400).json({ success: false, error: `Unknown browser action: ${actionStr}` });
+      }
+      res.json({ success: result.ok, ...result });
+    } catch (error: any) {
+      console.error('[casper-control:browser]', error);
+      res.status(500).json({ success: false, error: error?.message || 'Browser action failed.' });
+    }
+  });
+
   // Spawn real Casper sub-agents. Each objective is sent to the same
   // OpenAI-compatible LLM as /api/casper/command but with a tighter
   // sub-agent system prompt scoped to a single deliverable. Sub-agents

@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { generateText } from '../lib/ai';
+import { sendCasperCommand, type CasperCommandResponse, type CasperToolCall } from '../lib/casper';
 import { fromDb, supabase, toDb } from '../supabase';
 import { cn } from '../lib/utils';
 import { casperAuthFetch } from '../lib/casperApi';
@@ -32,6 +33,7 @@ interface Message {
   role: 'user' | 'casper';
   content: string;
   timestamp: Date;
+  imageUrls?: string[];
 }
 
 interface UserCasperMemory {
@@ -84,6 +86,17 @@ interface UserCasperIntegration {
 
 type UserPanel = 'missions' | 'routines' | 'memories' | 'integrations';
 type VoiceState = 'idle' | 'recording' | 'transcribing' | 'thinking' | 'speaking';
+
+function extractScreenshotUrls(toolCalls?: CasperToolCall[]): string[] {
+  if (!toolCalls?.length) return [];
+  const urls: string[] = [];
+  for (const tc of toolCalls) {
+    if (!tc.ok || !tc.data) continue;
+    const data = tc.data as Record<string, unknown>;
+    if (typeof data.screenshotUrl === 'string') urls.push(data.screenshotUrl);
+  }
+  return urls;
+}
 
 const CASPER_MODEL_GROUPS = [
   { 
@@ -1223,19 +1236,7 @@ export const Casper: React.FC = () => {
     setIsGenerating(true);
 
     try {
-      // Fetch persistent memories so Casper remembers the user across sessions
-      let memoryContext = '';
-      if (currentUser?.id) {
-        try {
-          const memRes = await authFetch(`/api/casper/memory?userId=${encodeURIComponent(currentUser.id)}`);
-          const memData = await memRes.json();
-          if (memData.relevantMemories) memoryContext = memData.relevantMemories;
-          if (memData.stateModifier) memoryContext = `${memData.stateModifier}\n${memoryContext}`;
-        } catch (memErr) {
-          console.warn('[Casper] memory recall failed (non-blocking):', memErr);
-        }
-      }
-
+      // Build conversation history for context
       const history = messages
         .filter(message => message.id !== 'greeting')
         .slice(-20)
@@ -1243,38 +1244,65 @@ export const Casper: React.FC = () => {
         .join('\n');
       const prompt = history ? `${history}\nUser: ${text}\nCasper:` : text;
 
-      const systemPromptParts = [CASPER_SYSTEM_PROMPT];
-      if (memoryContext) systemPromptParts.push(memoryContext);
-      if (integrationContext) systemPromptParts.push(`Enabled Casper integrations for this user:\n${integrationContext}`);
-
-      let rawResponse: string;
-      const fullSystemPrompt = systemPromptParts.join('\n\n');
-      if (visionActive) {
-        rawResponse = await analyzeWithVision(prompt, fullSystemPrompt);
-      } else {
-        rawResponse = await generateText(prompt, aiSettings, {
-          systemPrompt: fullSystemPrompt,
-          temperature: 0.8,
-          maxTokens: 4096,
-        }) || '';
+      // Route through the server-side command path which has tool-calling
+      // (browser, shell, integrations). This gives Casper the ability to
+      // navigate pages, take screenshots, and use all connected tools.
+      let casperText: string;
+      let imageUrls: string[] = [];
+      try {
+        const cmdRes = await sendCasperCommand({
+          command: prompt,
+          surface: 'control_center',
+          source: 'user',
+          pageContext: { path: '/casper', feature: 'neural_chat' },
+        });
+        casperText = cmdRes.response || '';
+        imageUrls = extractScreenshotUrls(cmdRes.toolCalls);
+      } catch (cmdErr) {
+        console.warn('[Casper] command path failed, falling back to generateText:', cmdErr);
+        // Fallback: fetch memories and use direct generation
+        let memoryContext = '';
+        if (currentUser?.id) {
+          try {
+            const memRes = await authFetch(`/api/casper/memory?userId=${encodeURIComponent(currentUser.id)}`);
+            const memData = await memRes.json();
+            if (memData.relevantMemories) memoryContext = memData.relevantMemories;
+            if (memData.stateModifier) memoryContext = `${memData.stateModifier}\n${memoryContext}`;
+          } catch { /* non-blocking */ }
+        }
+        const systemPromptParts = [CASPER_SYSTEM_PROMPT];
+        if (memoryContext) systemPromptParts.push(memoryContext);
+        if (integrationContext) systemPromptParts.push(`Enabled Casper integrations for this user:\n${integrationContext}`);
+        const fullSystemPrompt = systemPromptParts.join('\n\n');
+        if (visionActive) {
+          casperText = await analyzeWithVision(prompt, fullSystemPrompt);
+        } else {
+          casperText = await generateText(prompt, aiSettings, {
+            systemPrompt: fullSystemPrompt,
+            temperature: 0.8,
+            maxTokens: 4096,
+          }) || '';
+        }
       }
-      const casperText = rawResponse || "The void is silent. Try again?";
 
-      if (currentUser?.id && rawResponse) {
+      const finalText = casperText || "The void is silent. Try again?";
+
+      if (currentUser?.id && casperText) {
         authFetch('/api/casper/memory', {
           method: 'POST',
-          body: JSON.stringify({ userId: currentUser.id, userMessage: text, casperReply: rawResponse }),
+          body: JSON.stringify({ userId: currentUser.id, userMessage: text, casperReply: casperText }),
         }).catch((err: unknown) => console.warn('[Casper] memory persist failed:', err));
       }
 
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),
         role: 'casper',
-        content: casperText,
+        content: finalText,
         timestamp: new Date(),
+        imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
       }]);
       setIsGenerating(false);
-      if (ttsEnabled && voiceState !== 'recording') void speakOnce(casperText);
+      if (ttsEnabled && voiceState !== 'recording') void speakOnce(finalText);
     } catch (err) {
       console.error('[Casper] message generation failed:', err);
       const fallback = "My connection to the grid is flickering. One moment...";
@@ -1852,6 +1880,15 @@ export const Casper: React.FC = () => {
                     : "bg-black/40 border border-white/5 text-zinc-300 rounded-tl-none backdrop-blur-md"
                 )}>
                   {msg.content}
+                  {msg.imageUrls && msg.imageUrls.length > 0 && (
+                    <div className="mt-2 flex flex-col gap-2">
+                      {msg.imageUrls.map((url, i) => (
+                        <a key={i} href={url} target="_blank" rel="noopener noreferrer" className="block overflow-hidden rounded-lg border border-white/10 hover:border-cyan-400/40 transition-colors">
+                          <img src={url} alt={`Browser screenshot ${i + 1}`} className="w-full rounded-lg" loading="lazy" />
+                        </a>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </motion.div>
             ))}
