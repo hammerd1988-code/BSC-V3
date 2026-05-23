@@ -1,12 +1,13 @@
 # nixpacks config v4 - install all deps including devDependencies for build
 [phases.setup]
 nixPkgs = ["nodejs_22", "python3"]
+aptPkgs = ["libnss3", "libatk-bridge2.0-0", "libdrm2", "libxkbcommon0", "libgbm1", "libasound2", "libxshmfence1"]
 
 [phases.install]
 cmds = ["npm ci --include=dev"]
 
 [phases.build]
-cmds = ["npm run build", "ls -la dist/"]
+cmds = ["npx playwright install chromium", "npm run build", "ls -la dist/"]
 
 [start]
 cmd = "npm run start:unified"

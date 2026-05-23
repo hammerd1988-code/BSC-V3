@@ -126,6 +126,13 @@ async function ensureBrowser(): Promise<PlaywrightBrowser> {
     });
     console.log('[casper-browser] Chromium launched.');
     return browser;
+  } catch (err: any) {
+    if (err?.message?.includes("Executable doesn't exist")) {
+      throw new Error(
+        'Chromium is not installed. Run `npx playwright install chromium` during build.',
+      );
+    }
+    throw err;
   } finally {
     launching = false;
   }
