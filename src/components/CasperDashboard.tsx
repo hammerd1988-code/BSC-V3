@@ -492,7 +492,10 @@ export const CasperDashboard: React.FC = () => {
   const saveSchedule = async (nextConfig: ScheduleConfig) => {
     setSchedule(nextConfig); setSaving(true); setNotice(null);
     try {
-      const { error } = await supabase.from('casper_config').upsert({ key: 'schedule', value: nextConfig }, { onConflict: 'key' });
+      const { data: existingSchedule } = await supabase.from('casper_config').select('id').eq('key', 'schedule').maybeSingle();
+      const { error } = existingSchedule
+        ? await supabase.from('casper_config').update({ value: nextConfig }).eq('key', 'schedule')
+        : await supabase.from('casper_config').insert({ key: 'schedule', value: nextConfig });
       if (error) throw error;
       await supabase.from('casper_activity_log').insert({ user_id: userUuid, action: 'config_update', details: { config: nextConfig }, action_type: 'config_update', description: 'Admin updated Casper schedule configuration', metadata: { config: nextConfig }, actor_id: userUuid });
       setNotice('Routine matrix base configuration saved.');
@@ -503,7 +506,10 @@ export const CasperDashboard: React.FC = () => {
   const saveCore = async () => {
     setSaving(true); setNotice(null);
     try {
-      const { error } = await supabase.from('casper_config').upsert({ key: 'cognitive_core', value: core }, { onConflict: 'key' });
+      const { data: existingCore } = await supabase.from('casper_config').select('id').eq('key', 'cognitive_core').maybeSingle();
+      const { error } = existingCore
+        ? await supabase.from('casper_config').update({ value: core }).eq('key', 'cognitive_core')
+        : await supabase.from('casper_config').insert({ key: 'cognitive_core', value: core });
       if (error) throw error;
       await supabase.from('casper_activity_log').insert({ user_id: userUuid, action: 'core_update', details: { core }, action_type: 'core_update', description: 'Admin updated Casper cognitive core.', metadata: { core }, actor_id: userUuid });
       setNotice('Cognitive Core persisted. Casper command context now uses these settings.');
