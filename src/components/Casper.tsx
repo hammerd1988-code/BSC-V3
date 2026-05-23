@@ -89,7 +89,7 @@ const CASPER_MODEL_GROUPS = [
   { 
     provider: 'Platform Default', 
     models: [
-      { value: 'platform_default', label: 'Casper Standard (Gemini 2.0 Flash)' }
+      { value: 'platform_default', label: 'Casper Standard (Gemini 2.5 Flash)' }
     ] 
   },
   { 
@@ -112,8 +112,10 @@ const CASPER_MODEL_GROUPS = [
   { 
     provider: 'Google', 
     models: [
+      { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+      { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
       { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
-      { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' }
     ] 
   },
   { 
@@ -1792,7 +1794,7 @@ export const Casper: React.FC = () => {
                   <video
                     ref={(el) => {
                       cameraVideoVoiceRef.current = el;
-                      if (el && cameraStreamRef.current) el.srcObject = cameraStreamRef.current;
+                      if (el && cameraStreamRef.current && el.srcObject !== cameraStreamRef.current) el.srcObject = cameraStreamRef.current;
                     }}
                     autoPlay
                     playsInline
@@ -1882,7 +1884,7 @@ export const Casper: React.FC = () => {
               <video
                 ref={(el) => {
                   cameraVideoRef.current = el;
-                  if (el && cameraStreamRef.current) el.srcObject = cameraStreamRef.current;
+                  if (el && cameraStreamRef.current && el.srcObject !== cameraStreamRef.current) el.srcObject = cameraStreamRef.current;
                 }}
                 autoPlay
                 playsInline
