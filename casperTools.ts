@@ -373,6 +373,18 @@ export async function loadConnectedIntegrationsForTools(
       config: (row.config as Record<string, any> | null) ?? null,
     });
   }
+
+  // Auto-include the Playwright browser adapter. It doesn't need a user
+  // API key — it runs a server-side headless browser. We inject the
+  // supabase client and userId via config so the adapter can upload
+  // screenshots to Storage.
+  if (CASPER_ADAPTERS['playwright'] && !out.has('playwright')) {
+    out.set('playwright', {
+      apiKey: 'server-managed',
+      config: { supabase, userId },
+    });
+  }
+
   return out;
 }
 
