@@ -6,7 +6,7 @@ import {
   AlertTriangle, Activity, Mic, MicOff, Volume2, X, Settings,
   Lock, Eye, EyeOff, Server, BrainCircuit, ChevronDown, Crown, Ghost, User, Cpu,
   CalendarClock, Puzzle, KeyRound, Play, Pause, Plus, Search, Save, Database, Shield,
-  Camera, CameraOff, SwitchCamera
+  Camera, CameraOff, SwitchCamera, Globe
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { generateText } from '../lib/ai';
@@ -20,6 +20,7 @@ import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
 // (~150kb gz) only ships when a user actually opens voice mode, keeping the
 // main feed/app bundle lean.
 const CasperOrbVisualization = React.lazy(() => import('./CasperOrbVisualization'));
+import { CasperCoBrowse } from './CasperCoBrowse';
 import {
   AVAILABLE_CASPER_INTEGRATIONS,
   CASPER_INTEGRATION_CATEGORIES,
@@ -404,6 +405,8 @@ export const Casper: React.FC = () => {
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [capturedFrame, setCapturedFrame] = useState<string | null>(null);
   const [visionAnalyzing, setVisionAnalyzing] = useState(false);
+  const [showCoBrowse, setShowCoBrowse] = useState(false);
+  const [coBrowseExpanded, setCoBrowseExpanded] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const voiceActiveRef = useRef(false);
@@ -1428,6 +1431,19 @@ export const Casper: React.FC = () => {
               {visionActive ? <Camera className="w-4 h-4" /> : <CameraOff className="w-4 h-4" />}
             </button>
             <button
+              onClick={() => setShowCoBrowse(!showCoBrowse)}
+              className={cn(
+                "p-2.5 rounded-xl border transition-all",
+                showCoBrowse
+                  ? "bg-cyan-500/20 border-cyan-400/40 text-cyan-100 shadow-[0_0_16px_rgba(0,229,255,0.25)]"
+                  : "bg-white/5 border-white/10 text-zinc-500 hover:text-white hover:border-cyan-500/30"
+              )}
+              title={showCoBrowse ? 'Close Ghost Browser' : 'Open Ghost Browser (co-browse)'}
+              aria-label={showCoBrowse ? 'Close Ghost Browser' : 'Open Ghost Browser (co-browse)'}
+            >
+              <Globe className="w-4 h-4" />
+            </button>
+            <button
               onClick={() => setShowAiCore(!showAiCore)}
               className={cn(
                 "p-2.5 rounded-xl border transition-all",
@@ -1860,6 +1876,20 @@ export const Casper: React.FC = () => {
               {voiceDebug && <div className="mt-2 max-w-xs truncate text-center font-mono text-[10px] text-white/30">{voiceDebug}</div>}
             </div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Co-Browse Panel */}
+      <AnimatePresence>
+        {showCoBrowse && currentUser?.id && (
+          <div className={cn("relative z-30", coBrowseExpanded ? "" : "border-b border-white/10")}>
+            <CasperCoBrowse
+              userId={currentUser.id}
+              onClose={() => { setShowCoBrowse(false); setCoBrowseExpanded(false); }}
+              isExpanded={coBrowseExpanded}
+              onToggleExpand={() => setCoBrowseExpanded(!coBrowseExpanded)}
+            />
+          </div>
         )}
       </AnimatePresence>
 
