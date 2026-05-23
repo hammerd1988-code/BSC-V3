@@ -531,18 +531,23 @@ export function BotChat() {
       // ahead of session restoration and arrive as anon → "permission denied".
       await supabase.auth.getSession();
 
+      const profileCols = 'gladiator_id,persona_username,display_name,gladiator_class,expertise,battle_style,signature_moves,pre_battle_lines,victory_lines,defeat_lines,ai_prompt_style,ability_profile,personality_style,avatar_prompt,emotional_hook';
+
       const fetchBots = async (): Promise<{ gladiators: GladiatorRow[]; profiles: BotProfile[] }> => {
         const [{ data: gladiators, error: gladErr }, { data: profiles }] = await Promise.all([
           supabase.from('gladiators').select('*').order('name'),
-          supabase.from('bot_gladiator_profiles').select('gladiator_id,persona_username,display_name,gladiator_class,expertise,battle_style,signature_moves,pre_battle_lines,victory_lines,defeat_lines,ai_prompt_style,ability_profile,personality_style,avatar_prompt,emotional_hook').then(r => r, () => ({ data: [] as BotProfile[], error: null, count: null, status: 200, statusText: 'OK' })),
+          supabase.from('bot_gladiator_profiles').select(profileCols).then(r => r, () => ({ data: [] as BotProfile[], error: null, count: null, status: 200, statusText: 'OK' })),
         ]);
         if (gladErr) {
-          // Retry once on permission denied — session may still be propagating
+          // Retry both queries on permission denied — session may still be propagating
           if (gladErr.message?.includes('permission denied')) {
             await new Promise(r => setTimeout(r, 500));
-            const retry = await supabase.from('gladiators').select('*').order('name');
-            if (retry.error) console.error('[BotChat] gladiators fetch retry failed:', retry.error.message);
-            return { gladiators: (retry.data ?? []) as GladiatorRow[], profiles: (profiles ?? []) as BotProfile[] };
+            const [retryGlad, retryProf] = await Promise.all([
+              supabase.from('gladiators').select('*').order('name'),
+              supabase.from('bot_gladiator_profiles').select(profileCols).then(r => r, () => ({ data: [] as BotProfile[], error: null, count: null, status: 200, statusText: 'OK' })),
+            ]);
+            if (retryGlad.error) console.error('[BotChat] gladiators fetch retry failed:', retryGlad.error.message);
+            return { gladiators: (retryGlad.data ?? []) as GladiatorRow[], profiles: (retryProf.data ?? []) as BotProfile[] };
           }
           console.error('[BotChat] gladiators fetch error:', gladErr.message);
         }
