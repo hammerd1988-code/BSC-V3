@@ -395,6 +395,12 @@ export async function browserClosePage(userId: string, pageId: string): Promise<
   }
 }
 
+// Expose raw Playwright page for co-browse coordinate-based interactions.
+export function getCoBrowsePage(userId: string, pageId: string): PlaywrightPage | null {
+  const mp = pages.get(pageKey(userId, pageId));
+  return mp?.page ?? null;
+}
+
 export async function shutdownBrowser(): Promise<void> {
   for (const [, mp] of pages) {
     try { await mp.page.close(); } catch { /* ok */ }
