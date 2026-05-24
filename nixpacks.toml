@@ -7,7 +7,7 @@ aptPkgs = ["libnss3", "libatk-bridge2.0-0", "libdrm2", "libxkbcommon0", "libgbm1
 cmds = ["npm ci --include=dev"]
 
 [phases.build]
-cmds = ["npx playwright install chromium", "npm run build", "ls -la dist/"]
+cmds = ["npm run build", "ls -la dist/"]
 
 [start]
 cmd = "npm run start:unified"
