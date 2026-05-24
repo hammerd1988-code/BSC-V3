@@ -370,7 +370,7 @@ export const CasperCoBrowse: React.FC<CoBrowseProps> = ({
         "flex flex-col overflow-hidden border backdrop-blur-2xl transition-all duration-300",
         isExpanded
           ? "fixed inset-4 z-50 rounded-2xl border-cyan-500/30 bg-[#030308]/95 shadow-[0_0_60px_rgba(0,229,255,0.15)]"
-          : "relative rounded-2xl border-white/10 bg-black/60"
+          : "relative h-full rounded-2xl border-white/10 bg-black/60"
       )}
     >
       {/* Scanline overlay */}
