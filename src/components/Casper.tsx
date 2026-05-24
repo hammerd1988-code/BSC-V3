@@ -1882,7 +1882,7 @@ export const Casper: React.FC = () => {
       {/* Co-Browse Panel */}
       <AnimatePresence>
         {showCoBrowse && currentUser?.id && (
-          <div className={cn("relative z-30", coBrowseExpanded ? "" : "border-b border-white/10")}>
+          <div className={cn("relative z-30", coBrowseExpanded ? "" : "border-b border-white/10", !coBrowseExpanded && "h-[500px]")}>
             <CasperCoBrowse
               userId={currentUser.id}
               onClose={() => { setShowCoBrowse(false); setCoBrowseExpanded(false); }}
