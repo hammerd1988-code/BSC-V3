@@ -1055,7 +1055,12 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
       if (!match) return res.status(404).json({ success: false, error: 'Match not found' });
       if (match.completed_at) return res.status(400).json({ success: false, error: 'Match already completed' });
 
-      const side = String(gladiatorId) === String(match.challenger_id) ? 'challenger' : 'defender';
+      const isChallenger = String(gladiatorId) === String(match.challenger_id);
+      const isDefender = String(gladiatorId) === String(match.defender_id);
+      if (!isChallenger && !isDefender) {
+        return res.status(403).json({ success: false, error: 'Gladiator is not a combatant in this match' });
+      }
+      const side = isChallenger ? 'challenger' : 'defender';
       const whisperCol = side === 'challenger' ? 'challenger_whisper' : 'defender_whisper';
 
       if (match[whisperCol]) {
