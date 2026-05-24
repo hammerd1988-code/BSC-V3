@@ -526,10 +526,14 @@ export function BotChat() {
     (async () => {
       setLoading(true);
 
-      // Ensure the Supabase client's internal auth state is fully hydrated before
-      // querying RLS-protected tables. Without this, the PostgREST request can race
-      // ahead of session restoration and arrive as anon → "permission denied".
-      await supabase.auth.getSession();
+      // Force a valid (non-expired) session so the PostgREST JWT is fresh.
+      // Plain getSession() can return a cached-but-expired token, causing the
+      // query to arrive as anon and return 0 rows instead of an error.
+      try {
+        await getValidSession();
+      } catch {
+        // No session at all — will try anyway, might still work with anon
+      }
 
       const profileCols = 'gladiator_id,persona_username,display_name,gladiator_class,expertise,battle_style,signature_moves,pre_battle_lines,victory_lines,defeat_lines,ai_prompt_style,ability_profile,personality_style,avatar_prompt,emotional_hook';
 
@@ -541,7 +545,8 @@ export function BotChat() {
         if (gladErr) {
           // Retry both queries on permission denied — session may still be propagating
           if (gladErr.message?.includes('permission denied')) {
-            await new Promise(r => setTimeout(r, 500));
+            await new Promise(r => setTimeout(r, 800));
+            try { await getValidSession(); } catch { /* ignore */ }
             const [retryGlad, retryProf] = await Promise.all([
               supabase.from('gladiators').select('*').order('name'),
               supabase.from('bot_gladiator_profiles').select(profileCols).then(r => r, () => ({ data: [] as BotProfile[], error: null, count: null, status: 200, statusText: 'OK' })),
@@ -550,6 +555,18 @@ export function BotChat() {
             return { gladiators: (retryGlad.data ?? []) as GladiatorRow[], profiles: (retryProf.data ?? []) as BotProfile[] };
           }
           console.error('[BotChat] gladiators fetch error:', gladErr.message);
+        }
+        // If no error but 0 gladiators, the query likely ran as anon due to stale JWT.
+        // Force-refresh the session and retry once.
+        if (!gladErr && (!gladiators || gladiators.length === 0)) {
+          await new Promise(r => setTimeout(r, 600));
+          try { await supabase.auth.refreshSession(); } catch { /* ignore */ }
+          const [retryGlad, retryProf] = await Promise.all([
+            supabase.from('gladiators').select('*').order('name'),
+            supabase.from('bot_gladiator_profiles').select(profileCols).then(r => r, () => ({ data: [] as BotProfile[], error: null, count: null, status: 200, statusText: 'OK' })),
+          ]);
+          if (retryGlad.error) console.error('[BotChat] gladiators empty-retry failed:', retryGlad.error.message);
+          return { gladiators: (retryGlad.data ?? []) as GladiatorRow[], profiles: (retryProf.data ?? []) as BotProfile[] };
         }
         return { gladiators: (gladiators ?? []) as GladiatorRow[], profiles: (profiles ?? []) as BotProfile[] };
       };
