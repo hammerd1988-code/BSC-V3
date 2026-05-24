@@ -17,7 +17,7 @@ function openaiCompatibleBaseUrl() {
   return (process.env.VITE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
 }
 const SAPPHIRE_API_URL = (process.env.SAPPHIRE_API_URL || 'https://sapphire.bloodsweatcode.site').replace(/\/$/, '');
-type ColosseumChallengeType = 'speed_round' | 'debug_battle' | 'code_golf' | 'architect_duel' | 'prompt_war' | 'roast_battle' | 'code_jeopardy';
+type ColosseumChallengeType = 'speed_round' | 'debug_battle' | 'code_golf' | 'architect_duel' | 'prompt_war' | 'roast_battle' | 'code_jeopardy' | 'sandbox_build';
 const CHALLENGE_BRIEFS: Record<ColosseumChallengeType, string> = {
   speed_round: 'Solve the task as quickly as possible while keeping the implementation correct and readable.',
   debug_battle: 'Find and fix the defect. Explain the root cause and provide corrected code or a precise patch.',
@@ -26,6 +26,7 @@ const CHALLENGE_BRIEFS: Record<ColosseumChallengeType, string> = {
   prompt_war: 'Write the sharper agent/persona prompt with clear behavior rules, constraints, examples, and safety boundaries.',
   roast_battle: 'Deliver memorable in-character trash talk while staying funny, safe, and away from real harassment.',
   code_jeopardy: 'Answer the technical clue in text. Prefer accuracy, concise explanation, confidence, and speed.',
+  sandbox_build: 'Build a complete, working product as a single HTML file with embedded CSS and JavaScript. The result must be functional, visually polished, and demonstrate clear UX thinking. Think step by step before coding.',
 };
 
 function botGladiatorId(username: string): string { return uuidv5(`bot-gladiator-${username}`, BOT_UUID_NAMESPACE); }
@@ -138,6 +139,23 @@ Battle Style: ${profile.battle_style}
 Signature Moves: ${(profile.signature_moves ?? []).join(', ')}
 Prompt Style: ${profile.ai_prompt_style}` : '';
 
+  const isSandbox = input.challengeType === 'sandbox_build';
+  const responseInstruction = isSandbox
+    ? `You are building a REAL PRODUCT in a sandbox. Return your response in this exact format:
+
+<thinking>
+[Your step-by-step reasoning about how to build this. What components do you need? What's the UX flow? What technologies/techniques will you use? How will you make it visually impressive? Think through the architecture before writing code.]
+</thinking>
+
+<code>
+[Your complete, working HTML file with embedded CSS and JavaScript. This must be a single self-contained file that works when opened in a browser. No external dependencies. Make it visually polished with a cyberpunk/neon aesthetic.]
+</code>
+
+<preview_description>
+[A brief description of what the finished product looks like and how to use it.]
+</preview_description>`
+    : 'Return the gladiator\'s best coding solution or patch in character. Include concise reasoning, but prioritize useful code, correctness, and the stated battle style.';
+
   return `[BLOOD_SWEAT_CODE_COLOSSEUM]
 Challenge Type: ${input.challengeType}
 Gladiator: ${input.gladiator?.name ?? 'Unknown'}
@@ -145,7 +163,7 @@ Opponent: ${input.opponent?.name ?? 'Unknown'}
 Personality: ${input.gladiator?.personality ?? 'No doctrine supplied'}${profileBlock}
 Directive: ${providedPrompt}
 
-Return the gladiator's best coding solution or patch in character. Include concise reasoning, but prioritize useful code, correctness, and the stated battle style.`;
+${responseInstruction}`;
 }
 
 function buildSapphireChallengePrompt(input: { challengeType?: ColosseumChallengeType; challenger?: any; defender?: any; prompt?: string }) {
@@ -226,6 +244,49 @@ export const battlePrompt = {
   rules: ["ship runnable code", "state assumptions", "respect safety boundaries"],
   examples: ["Prefer atomic increments for concurrent score writes."]
 };`;
+  }
+
+  if (input.challengeType === 'sandbox_build') {
+    return `<thinking>
+${name} is designing a product to beat ${opponent}. The directive says: "${directive.slice(0, 200)}"
+I need to build a complete HTML/CSS/JS product. Let me plan the structure:
+1. HTML skeleton with semantic elements
+2. CSS with cyberpunk dark theme and neon accents
+3. JavaScript for interactivity and state management
+Building now...
+</thinking>
+
+<code>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${name} Build</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a0f; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+.container { text-align: center; padding: 2rem; border: 1px solid rgba(249, 115, 22, 0.3); border-radius: 1rem; background: rgba(0,0,0,0.8); }
+h1 { color: #f97316; text-shadow: 0 0 20px rgba(249, 115, 22, 0.5); margin-bottom: 1rem; }
+button { background: linear-gradient(135deg, #f97316, #ea580c); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 0.5rem; cursor: pointer; font-weight: bold; margin: 0.5rem; }
+button:hover { box-shadow: 0 0 15px rgba(249, 115, 22, 0.4); }
+.output { margin-top: 1rem; font-size: 2rem; color: #f97316; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>${name}'s Build</h1>
+<p>Fallback product — AI provider was unavailable</p>
+<button onclick="document.querySelector('.output').textContent = 'Build active!'">Activate</button>
+<div class="output">Waiting...</div>
+</div>
+</body>
+</html>
+</code>
+
+<preview_description>
+A minimal fallback product built by ${name} when the AI provider was unavailable. Features basic interaction with cyberpunk styling.
+</preview_description>`;
   }
 
   const golfMode = input.challengeType === 'code_golf';
@@ -341,7 +402,7 @@ async function generateGladiatorMove(input: { matchId?: string; challengeType: C
     apiBaseUrl: input.gladiator?.api_base_url || resolveGladiatorBaseUrl(input.gladiator),
     prompt,
     fallbackModel: resolveGladiatorDefaultModel(input.gladiator),
-    maxTokens: isSeededPlatformBot(input.gladiator) ? 1600 : 900,
+    maxTokens: input.challengeType === 'sandbox_build' ? 4096 : isSeededPlatformBot(input.gladiator) ? 1600 : 900,
   });
   return {
     gladiator_id: input.gladiator.id,
@@ -375,7 +436,9 @@ function solutionSignalScore(solution: string, challengeType: ColosseumChallenge
             ? Number(/system prompt|rules|constraints|examples|boundaries|persona|refuse/.test(normalized)) * 12
             : challengeType === 'roast_battle'
               ? Number(/rival|arena|faction|roast|without|boundary|harassment/.test(normalized)) * 12
-              : Number(/what is|answer|because|therefore|complexity|runtime|memory|tradeoff/.test(normalized)) * 12;
+              : challengeType === 'sandbox_build'
+                ? Number(/<html|<style|<script|<div|<button|document\.|queryselector|addeventlistener|classlist/.test(normalized)) * 10 + Number(normalized.length > 1500) * 8
+                : Number(/what is|answer|because|therefore|complexity|runtime|memory|tradeoff/.test(normalized)) * 12;
   return clampScore(18 + codeSignals * 4 + expectedHits * 6 + styleBonus + Math.min(16, Math.floor(solution.length / 180)));
 }
 
@@ -445,12 +508,22 @@ async function judgeColosseumBattle(input: {
   if (!isServerAiConfigured()) {
     return fallbackColosseumJudge({ ...input, providerError: 'No OPENROUTER_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY configured.' });
   }
-  const result = await generateServerText(`Casper is judging this coding battle. Pick the winner from the two gladiator ids and score both 0-100.
+  const isSandbox = input.challengeType === 'sandbox_build';
+  const sandboxJudgeCriteria = isSandbox
+    ? `\n\nSANDBOX BUILD JUDGING CRITERIA (weight these equally):
+1. WORKING PRODUCT (25%) — Does the HTML actually work? Are all features functional?
+2. CODE QUALITY (25%) — Is the code clean, well-structured, and maintainable?
+3. UX/DESIGN (25%) — Is it visually polished? Cyberpunk aesthetic? Good layout?
+4. CREATIVITY (25%) — Original approach? Clever solutions? Going above and beyond?
+
+Extract the <code> section from each solution and evaluate the actual HTML/CSS/JS product.`
+    : '';
+  const result = await generateServerText(`Casper is judging this ${isSandbox ? 'sandbox build battle' : 'coding battle'}. Pick the winner from the two gladiator ids and score both 0-100.
 
 Challenge type: ${input.challengeType}
 Challenge:
 ${input.challengePrompt || CHALLENGE_BRIEFS[input.challengeType]}
-Expected signals: ${input.expectedSignals || 'Correct, practical, complete solution.'}
+Expected signals: ${input.expectedSignals || 'Correct, practical, complete solution.'}${sandboxJudgeCriteria}
 
 Challenger:
 id=${input.challenger.id}
@@ -465,9 +538,11 @@ solution:
 ${input.botSolution || '(no defender solution returned)'}
 
 Return JSON with keys: winner_id, challenger_score, defender_score, summary, reasoning (array of short strings).`, {
-    systemPrompt: 'You are CASPER, the Blood Sweat Code Colosseum judge and Caesar-like arbiter. Score actual submitted code and bot solution quality. Deliver an authoritative thumb-up/thumb-down verdict. Return only JSON.',
+    systemPrompt: isSandbox
+      ? 'You are CASPER, the Blood Sweat Code Colosseum judge. You are evaluating SANDBOX BUILD battles where gladiators build real products. Judge the FINISHED PRODUCT — does it work, does it look good, is the code clean, is it creative? Deliver a verdict. Return only JSON.'
+      : 'You are CASPER, the Blood Sweat Code Colosseum judge and Caesar-like arbiter. Score actual submitted code and bot solution quality. Deliver an authoritative thumb-up/thumb-down verdict. Return only JSON.',
     temperature: 0.2,
-    maxTokens: 700,
+    maxTokens: isSandbox ? 1200 : 700,
     jsonResponse: true,
   });
   if (!result.text) return fallbackColosseumJudge({ ...input, providerError: result.lastError || 'AI judge returned no text.' });
@@ -960,6 +1035,48 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
     } catch (error: any) {
       console.error('[colosseum:judge-battle]', error);
       return res.status(502).json({ success: false, error: error.message || 'Colosseum judge failed' });
+    }
+  });
+
+  // Neural Whisper — 1x per battle coaching hint
+  app.post('/api/colosseum/neural-whisper', async (req, res) => {
+    try {
+      const { matchId, gladiatorId, whisper } = req.body ?? {};
+      if (!matchId || !gladiatorId || !whisper?.trim()) {
+        return res.status(400).json({ success: false, error: 'matchId, gladiatorId, and whisper text are required' });
+      }
+      const trimmed = whisper.trim().slice(0, 500);
+      const { data: match, error: matchError } = await supabase
+        .from('matches')
+        .select('*')
+        .eq('id', matchId)
+        .maybeSingle();
+      if (matchError) throw matchError;
+      if (!match) return res.status(404).json({ success: false, error: 'Match not found' });
+      if (match.completed_at) return res.status(400).json({ success: false, error: 'Match already completed' });
+
+      const isChallenger = String(gladiatorId) === String(match.challenger_id);
+      const isDefender = String(gladiatorId) === String(match.defender_id);
+      if (!isChallenger && !isDefender) {
+        return res.status(403).json({ success: false, error: 'Gladiator is not a combatant in this match' });
+      }
+      const side = isChallenger ? 'challenger' : 'defender';
+      const whisperCol = side === 'challenger' ? 'challenger_whisper' : 'defender_whisper';
+
+      if (match[whisperCol]) {
+        return res.status(409).json({ success: false, error: 'Neural Whisper already used for this gladiator in this battle' });
+      }
+
+      const { error: updateError } = await supabase
+        .from('matches')
+        .update({ [whisperCol]: trimmed })
+        .eq('id', matchId);
+      if (updateError) throw updateError;
+
+      return res.json({ success: true, side, whisper: trimmed });
+    } catch (error: any) {
+      console.error('[colosseum:neural-whisper]', error);
+      return res.status(502).json({ success: false, error: error.message || 'Neural Whisper failed' });
     }
   });
 }
