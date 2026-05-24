@@ -114,6 +114,12 @@ async function ensureBrowser(): Promise<PlaywrightBrowser> {
   }
   launching = true;
   try {
+    // Ensure Playwright looks for browsers inside node_modules (set during
+    // postinstall via PLAYWRIGHT_BROWSERS_PATH=0). This must match the env
+    // used when `npx playwright install chromium` was run.
+    if (!process.env.PLAYWRIGHT_BROWSERS_PATH) {
+      process.env.PLAYWRIGHT_BROWSERS_PATH = '0';
+    }
     const pw = await import('playwright');
     browser = await pw.chromium.launch({
       headless: true,
