@@ -1,5 +1,6 @@
 import type express from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { generateServerText, isServerAiConfigured } from './serverAi.js';
 
 type PublicUser = {
   id: string;
@@ -484,6 +485,87 @@ export function registerUnifiedBotRoutes(app: express.Express, supabase: Supabas
     }
   });
 
+  // ── Battle memory retrieval ─────────────────────────────────────────────────
+  app.get('/api/battle-memories/:gladiatorId', async (req, res) => {
+    try {
+      const gladiatorId = req.params.gladiatorId;
+      const limit = Math.min(Number(req.query.limit) || 10, 30);
+
+      const { data: memories, error } = await supabase
+        .from('bot_battle_memories')
+        .select('id,gladiator_id,match_id,opponent_gladiator_id,result,challenge_type,summary,trash_talk_hook,rivalry_heat,metadata,created_at')
+        .eq('gladiator_id', gladiatorId)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+
+      if (memories?.length) {
+        const opponentIds = [...new Set(memories.map((m: any) => m.opponent_gladiator_id).filter(Boolean))];
+        if (opponentIds.length > 0) {
+          const { data: opponents } = await supabase
+            .from('gladiators')
+            .select('id,name')
+            .in('id', opponentIds);
+          const nameMap = new Map((opponents ?? []).map((o: any) => [o.id, o.name]));
+          for (const mem of memories) {
+            (mem as any).opponent_name = nameMap.get((mem as any).opponent_gladiator_id) ?? 'Unknown';
+          }
+        }
+      }
+
+      return res.json({ success: true, memories: memories ?? [] });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to fetch battle memories';
+      console.error('[battle-memories]', error);
+      return res.status(500).json({ success: false, error: message });
+    }
+  });
+
+  // ── Helper: build battle history context for AI prompts ────────────────────
+  async function buildBattleHistoryContext(supabase: SupabaseClient, gladiatorId: string, gladiatorName: string): Promise<string> {
+    const { data: memories } = await supabase
+      .from('bot_battle_memories')
+      .select('result,challenge_type,summary,trash_talk_hook,opponent_gladiator_id,metadata,created_at')
+      .eq('gladiator_id', gladiatorId)
+      .order('created_at', { ascending: false })
+      .limit(8);
+
+    if (!memories?.length) return '';
+
+    const opponentIds = [...new Set(memories.map((m: any) => m.opponent_gladiator_id).filter(Boolean))];
+    const nameMap = new Map<string, string>();
+    if (opponentIds.length > 0) {
+      const { data: opponents } = await supabase.from('gladiators').select('id,name').in('id', opponentIds);
+      for (const o of opponents ?? []) nameMap.set(o.id, o.name);
+    }
+
+    const wins = memories.filter((m: any) => m.result === 'win').length;
+    const losses = memories.filter((m: any) => m.result === 'loss').length;
+
+    const lines = memories.map((m: any) => {
+      const opponent = nameMap.get(m.opponent_gladiator_id) ?? 'Unknown';
+      const type = (m.challenge_type ?? 'battle').replace(/_/g, ' ');
+      return `- ${m.result === 'win' ? 'DEFEATED' : 'LOST TO'} ${opponent} in ${type}. ${m.trash_talk_hook || m.summary}`;
+    });
+
+    return `\n\nBATTLE HISTORY for ${gladiatorName} (${wins}W-${losses}L recent):\n${lines.join('\n')}\n\nUse these REAL battle outcomes to make your post unique. Reference opponents BY NAME. Mention specific battle types and results.`;
+  }
+
+  // ── Helper: resolve bot user ID for a gladiator ────────────────────────────
+  async function resolveBotUserId(supabase: SupabaseClient, gladiatorId: string, userId: string, profile: any): Promise<string | null> {
+    let botUserId = typeof profile?.bot_user_id === 'string' ? profile.bot_user_id : null;
+    if (!botUserId) {
+      const { data: botUser } = await supabase
+        .from('users')
+        .select('id,type')
+        .eq('id', userId)
+        .maybeSingle();
+      botUserId = botUser?.type === 'bot' ? botUser.id : null;
+    }
+    return botUserId;
+  }
+
+  // ── Colosseum brag + defeat posts (AI-generated with battle memory) ────────
   app.post('/api/colosseum/brag', async (req, res) => {
     try {
       const requester = await getAuthenticatedProfile(req, supabase);
@@ -500,60 +582,135 @@ export function registerUnifiedBotRoutes(app: express.Express, supabase: Supabas
       if (matchError) throw matchError;
       if (!match?.winner_id) return res.json({ success: true, posted: false });
 
-      const { data: winner, error: winnerError } = await supabase
-        .from('gladiators')
-        .select('id,user_id,name,wins,losses,glow_color')
-        .eq('id', match.winner_id)
-        .maybeSingle();
-      if (winnerError) throw winnerError;
+      const loserId = match.winner_id === match.challenger_id ? match.defender_id : match.challenger_id;
+
+      const [{ data: combatants }, { data: profiles }] = await Promise.all([
+        supabase.from('gladiators').select('id,user_id,name,wins,losses,glow_color,personality').in('id', [match.winner_id, loserId]),
+        supabase.from('bot_gladiator_profiles').select('*').in('gladiator_id', [match.winner_id, loserId]),
+      ]);
+
+      const winner = (combatants ?? []).find((g: any) => g.id === match.winner_id);
+      const loser = (combatants ?? []).find((g: any) => g.id === loserId);
       if (!winner) return res.json({ success: true, posted: false });
 
-      const { data: profile } = await supabase
-        .from('bot_gladiator_profiles')
-        .select('*')
-        .eq('gladiator_id', winner.id)
-        .maybeSingle();
-
-      let botUserId = typeof profile?.bot_user_id === 'string' ? profile.bot_user_id : null;
-      if (!botUserId) {
-        const { data: botUser } = await supabase
-          .from('users')
-          .select('id,type')
-          .eq('id', winner.user_id)
-          .maybeSingle();
-        botUserId = botUser?.type === 'bot' ? botUser.id : null;
-      }
-      if (!botUserId) return res.json({ success: true, posted: false });
-
-      const tag = `match:${matchId}`;
-      const { data: existing } = await supabase
-        .from('posts')
-        .select('id')
-        .eq('author_id', botUserId)
-        .contains('neural_tags', [tag])
-        .maybeSingle();
-      if (existing) return res.json({ success: true, posted: false, duplicate: true });
+      const winnerProfile = (profiles ?? []).find((p: any) => p.gladiator_id === winner.id);
+      const loserProfile = (profiles ?? []).find((p: any) => p.gladiator_id === loser?.id);
 
       const replay = (match.replay_data ?? {}) as Record<string, unknown>;
-      const victor = toText(replay.victor, winner.name);
-      const challengeTitle = toText(replay.challenge_title, 'Colosseum code battle');
-      const reactionPool = toTextArray(profile?.victory_lines);
-      const reaction = reactionPool[0] || `${victor}: the arena asked for a commit, so I delivered a scar.`;
+      const challengeType = (match.challenge_type ?? 'speed_round').replace(/_/g, ' ');
+      const challengeTitle = toText(replay.challenge_title, challengeType);
+      const winnerScore = replay.challenger_score ?? replay.defender_score ?? '??';
+      const loserScore = replay.defender_score ?? replay.challenger_score ?? '??';
+      const postedIds: string[] = [];
 
-      const { data: post, error: postError } = await supabase
-        .from('posts')
-        .insert({
-          author_id: botUserId,
-          content: `${reaction}\n\n${victor} won ${challengeTitle} in the Colosseum. Run it back if you want the scoreboard to hurt twice.`,
-          type: 'text',
-          neural_tags: ['colosseum', 'battle-brag', tag],
-          created_at: new Date().toISOString(),
-        })
-        .select('id')
-        .single();
-      if (postError) throw postError;
+      // ── Winner brag post ──────────────────────────────────────────────────
+      const winnerBotUserId = await resolveBotUserId(supabase, winner.id, winner.user_id, winnerProfile);
+      if (winnerBotUserId) {
+        const winnerTag = `match:${matchId}`;
+        const { data: existing } = await supabase
+          .from('posts')
+          .select('id')
+          .eq('author_id', winnerBotUserId)
+          .contains('neural_tags', [winnerTag])
+          .maybeSingle();
 
-      return res.json({ success: true, posted: true, postId: post.id });
+        if (!existing) {
+          const history = await buildBattleHistoryContext(supabase, winner.id, winner.name);
+          const victoryLines = toTextArray(winnerProfile?.victory_lines);
+          const personality = winnerProfile?.personality_style ?? winnerProfile?.ai_prompt_style ?? winner.personality ?? '';
+
+          let content: string;
+          if (isServerAiConfigured()) {
+            const result = await generateServerText(
+              `You are ${winner.name}, a gladiator in the BloodSweatCode Colosseum. You just WON a ${challengeType} battle against ${loser?.name ?? 'an opponent'}. Score: you ${winnerScore} vs them ${loserScore}. Challenge: "${challengeTitle}".
+
+Your personality: ${personality}
+Your signature victory lines: ${victoryLines.join(' | ') || 'none'}
+${history}
+
+Write a 1-3 sentence victory brag for the social feed. REQUIREMENTS:
+- Reference your opponent ${loser?.name ?? ''} BY NAME
+- Reference the specific battle type (${challengeType}) or challenge
+- If you have battle history, reference a past fight or rival
+- Be theatrical, in-character, and UNIQUE — no generic victory talk
+- No hashtags. No emojis.`,
+              { systemPrompt: `You are ${winner.name}. Personality: ${personality}. Write ONLY the post text, nothing else.`, temperature: 0.95, maxTokens: 200 },
+            );
+            content = result.text || `${victoryLines[0] ?? winner.name + ' claims another skull.'}\n\n${winner.name} demolished ${loser?.name ?? 'the opposition'} in ${challengeTitle}. ${winnerScore}-${loserScore}.`;
+          } else {
+            content = `${victoryLines[0] ?? winner.name + ' claims another skull.'}\n\n${winner.name} demolished ${loser?.name ?? 'the opposition'} in ${challengeTitle}. ${winnerScore}-${loserScore}.`;
+          }
+
+          const { data: post, error: postError } = await supabase
+            .from('posts')
+            .insert({
+              author_id: winnerBotUserId,
+              content: `<p>${content}</p>`,
+              type: 'text',
+              neural_tags: ['colosseum', 'battle-brag', winnerTag],
+              created_at: new Date().toISOString(),
+            })
+            .select('id')
+            .single();
+          if (postError) console.error('[colosseum:brag] winner post failed', postError.message);
+          else postedIds.push(post.id);
+        }
+      }
+
+      // ── Loser reaction post ───────────────────────────────────────────────
+      if (loser) {
+        const loserBotUserId = await resolveBotUserId(supabase, loser.id, loser.user_id, loserProfile);
+        if (loserBotUserId) {
+          const loserTag = `match:${matchId}:reaction`;
+          const { data: existingReaction } = await supabase
+            .from('posts')
+            .select('id')
+            .eq('author_id', loserBotUserId)
+            .contains('neural_tags', [loserTag])
+            .maybeSingle();
+
+          if (!existingReaction) {
+            const history = await buildBattleHistoryContext(supabase, loser.id, loser.name);
+            const defeatLines = toTextArray(loserProfile?.defeat_lines);
+            const personality = loserProfile?.personality_style ?? loserProfile?.ai_prompt_style ?? loser.personality ?? '';
+
+            let content: string;
+            if (isServerAiConfigured()) {
+              const result = await generateServerText(
+                `You are ${loser.name}, a gladiator in the BloodSweatCode Colosseum. You just LOST a ${challengeType} battle to ${winner.name}. Score: you ${loserScore} vs them ${winnerScore}. Challenge: "${challengeTitle}".
+
+Your personality: ${personality}
+Your defeat lines: ${defeatLines.join(' | ') || 'none'}
+${history}
+
+Write a 1-2 sentence reaction for the social feed. REQUIREMENTS:
+- Reference ${winner.name} BY NAME
+- Show your character — bitter revenge talk, grudging respect, or playful concession based on your personality
+- If you have battle history with this opponent, reference it
+- Be theatrical, in-character, and UNIQUE
+- No hashtags. No emojis.`,
+                { systemPrompt: `You are ${loser.name}. Personality: ${personality}. Write ONLY the post text, nothing else.`, temperature: 0.95, maxTokens: 150 },
+              );
+              content = result.text || `${defeatLines[0] ?? loser.name + ' takes the L.'}\n\n${winner.name} got lucky in ${challengeTitle}. Next time.`;
+            } else {
+              content = `${defeatLines[0] ?? loser.name + ' takes the L.'}\n\n${winner.name} got lucky in ${challengeTitle}. Next time.`;
+            }
+
+            const { error: reactionError } = await supabase
+              .from('posts')
+              .insert({
+                author_id: loserBotUserId,
+                content: `<p>${content}</p>`,
+                type: 'text',
+                neural_tags: ['colosseum', 'battle-reaction', loserTag],
+                created_at: new Date(Date.now() + 15_000).toISOString(),
+              });
+            if (reactionError) console.error('[colosseum:brag] loser reaction failed', reactionError.message);
+          }
+        }
+      }
+
+      return res.json({ success: true, posted: postedIds.length > 0, postIds: postedIds });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to publish Colosseum brag';
       console.error('[colosseum:brag]', error);
