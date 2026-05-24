@@ -35,6 +35,12 @@ import {
   FastForward,
   Hammer,
   MessageSquare,
+  Box,
+  Lightbulb,
+  Send,
+  Code2,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -46,7 +52,7 @@ import { ReportModal } from './ReportModal';
 import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
 import { DistrictCityBackdrop } from './DistrictCityBackdrop';
 
-type ChallengeType = 'speed_round' | 'debug_battle' | 'code_golf' | 'architect_duel' | 'prompt_war' | 'roast_battle' | 'code_jeopardy';
+type ChallengeType = 'speed_round' | 'debug_battle' | 'code_golf' | 'architect_duel' | 'prompt_war' | 'roast_battle' | 'code_jeopardy' | 'sandbox_build';
 
 type GladiatorStats = {
   speed: number;
@@ -295,6 +301,16 @@ const CHALLENGES: Array<{
     arena: 'A cyan clue board unlocks categories while Casper listens for exact answers.',
     scoring: ['Accuracy', 'Clarity', 'Confidence'],
   },
+  {
+    id: 'sandbox_build',
+    label: 'Sandbox Build',
+    short: 'Build Arena',
+    icon: Box,
+    accent: '#f97316',
+    description: 'Gladiators build a real, working product from scratch in a sandboxed environment. Casper judges the finished result — not just code quality, but the tangible output.',
+    arena: 'Split-screen forge chambers with live code editors and real-time preview panes. Spectators see thinking chains, code streaming, and live product builds side by side.',
+    scoring: ['Working product', 'Code quality', 'UX/Design', 'Creativity'],
+  },
 ];
 
 const GLOW_COLORS = ['#ff1744', '#00e5ff', '#ff2bd6', '#f9ff6b', '#8b5cf6', '#22c55e'];
@@ -385,6 +401,14 @@ const CHALLENGE_LIBRARY: Record<BotDifficulty, Record<ChallengeType, CodingChall
       difficulty: 'Bronze',
       tags: ['trivia', 'data-structures', 'complexity'],
     },
+    sandbox_build: {
+      title: 'Neon Counter App',
+      prompt: 'Build a working counter app with increment, decrement, and reset buttons. Style it with a cyberpunk neon aesthetic (dark background, glowing buttons). Must be functional HTML/CSS/JS in a single file.',
+      starter: '<!DOCTYPE html>\n<html>\n<head><style>/* your styles */</style></head>\n<body>\n<script>// your code</script>\n</body>\n</html>',
+      expected: 'Working counter with three buttons, cyberpunk styling, clean DOM manipulation, responsive layout.',
+      difficulty: 'Bronze',
+      tags: ['html', 'css', 'javascript', 'ui', 'sandbox'],
+    },
   },
   Silver: {
     speed_round: {
@@ -442,6 +466,14 @@ const CHALLENGE_LIBRARY: Record<BotDifficulty, Record<ChallengeType, CodingChall
       expected: 'useEffect; mentions returning a cleanup function for subscriptions or timers.',
       difficulty: 'Silver',
       tags: ['trivia', 'react', 'hooks'],
+    },
+    sandbox_build: {
+      title: 'Live Markdown Previewer',
+      prompt: 'Build a split-pane markdown editor: textarea on the left, live HTML preview on the right. Support headers, bold, italic, links, code blocks, and lists. Dark theme with cyberpunk accents.',
+      starter: '<!DOCTYPE html>\n<html>\n<head><style>/* your styles */</style></head>\n<body>\n<script>// your code</script>\n</body>\n</html>',
+      expected: 'Working split-pane editor, real-time preview, markdown parsing for common elements, responsive layout, dark theme.',
+      difficulty: 'Silver',
+      tags: ['html', 'css', 'javascript', 'markdown', 'sandbox'],
     },
   },
   Gold: {
@@ -501,6 +533,14 @@ const CHALLENGE_LIBRARY: Record<BotDifficulty, Record<ChallengeType, CodingChall
       difficulty: 'Gold',
       tags: ['trivia', 'database', 'transactions'],
     },
+    sandbox_build: {
+      title: 'Kanban Task Board',
+      prompt: 'Build a Kanban board with three columns: To Do, In Progress, Done. Users can add tasks, drag them between columns, and delete them. Include task counts per column. Cyberpunk dark theme with neon column headers.',
+      starter: '<!DOCTYPE html>\n<html>\n<head><style>/* your styles */</style></head>\n<body>\n<script>// your code</script>\n</body>\n</html>',
+      expected: 'Working Kanban with drag-and-drop, add/delete tasks, column counts, persistent state during session, polished dark UI.',
+      difficulty: 'Gold',
+      tags: ['html', 'css', 'javascript', 'drag-and-drop', 'sandbox'],
+    },
   },
   Diamond: {
     speed_round: {
@@ -558,6 +598,14 @@ const CHALLENGE_LIBRARY: Record<BotDifficulty, Record<ChallengeType, CodingChall
       expected: 'Idempotency; mentions unique event IDs, dedupe tables, or transactional guards.',
       difficulty: 'Diamond',
       tags: ['trivia', 'distributed-systems', 'idempotency'],
+    },
+    sandbox_build: {
+      title: 'Real-Time Chat Room',
+      prompt: 'Build a fully functional chat room UI with: username entry, message sending, timestamps, auto-scroll, typing indicator simulation, emoji support, and a user list sidebar. Include simulated bot responses that reply after a short delay. Cyberpunk neon aesthetic with message bubbles.',
+      starter: '<!DOCTYPE html>\n<html>\n<head><style>/* your styles */</style></head>\n<body>\n<script>// your code</script>\n</body>\n</html>',
+      expected: 'Working chat UI with all features, simulated bot responses, polished cyberpunk design, responsive layout, no framework dependencies.',
+      difficulty: 'Diamond',
+      tags: ['html', 'css', 'javascript', 'chat', 'ui', 'sandbox'],
     },
   },
 };
@@ -728,7 +776,9 @@ function scoreFor(gladiator: Gladiator, type: ChallengeType) {
             ? gladiator.stats.creativity * 1.45 + gladiator.stats.accuracy * 0.7 + gladiator.stats.endurance * 0.55 + gladiator.stats.speed * 0.35
             : type === 'roast_battle'
               ? gladiator.stats.creativity * 1.55 + gladiator.stats.speed * 0.75 + gladiator.stats.accuracy * 0.45 + gladiator.stats.endurance * 0.35
-              : gladiator.stats.accuracy * 1.35 + gladiator.stats.speed * 0.75 + gladiator.stats.creativity * 0.45 + gladiator.stats.endurance * 0.45;
+              : type === 'sandbox_build'
+                ? gladiator.stats.creativity * 1.3 + gladiator.stats.accuracy * 1.0 + gladiator.stats.endurance * 0.85 + gladiator.stats.speed * 0.55
+                : gladiator.stats.accuracy * 1.35 + gladiator.stats.speed * 0.75 + gladiator.stats.creativity * 0.45 + gladiator.stats.endurance * 0.45;
   return weighted + gladiator.wins * 2 + Math.random() * 38;
 }
 
@@ -780,7 +830,9 @@ function userSolutionBonus(solution: string, challenge: CodingChallenge, type: C
             ? Number(/system prompt|rules|constraints|examples|boundaries|persona/.test(normalized)) * 10
             : type === 'roast_battle'
               ? Number(/rival|arena|faction|roast|boundary|harassment/.test(normalized)) * 10
-              : Number(/what is|answer|because|therefore|complexity|runtime|memory/.test(normalized)) * 10;
+              : type === 'sandbox_build'
+                ? Number(/<html|<style|<script|<div|<button|document\.|queryselector|addeventlistener|classlist/.test(normalized)) * 8 + Number(normalized.length > 1200) * 10
+                : Number(/what is|answer|because|therefore|complexity|runtime|memory/.test(normalized)) * 10;
   return Math.min(58, codeSignals * 4 + expectedHits * 5 + styleBonus + Math.min(12, Math.floor(solution.length / 180)));
 }
 
@@ -997,6 +1049,344 @@ function replayAiMoves(replayData: Record<string, any> | null): GladiatorAiMove[
   return Array.isArray(moves) ? (moves as GladiatorAiMove[]) : [];
 }
 
+// ── Sandbox Build Helpers ──────────────────────────────────────────────────
+
+function parseSandboxSolution(solution: string) {
+  const thinkingMatch = solution.match(/<thinking>([\s\S]*?)<\/thinking>/);
+  const codeMatch = solution.match(/<code>([\s\S]*?)<\/code>/);
+  const previewMatch = solution.match(/<preview_description>([\s\S]*?)<\/preview_description>/);
+  const thinking = thinkingMatch?.[1]?.trim() || '';
+  const code = codeMatch?.[1]?.trim() || '';
+  const previewDesc = previewMatch?.[1]?.trim() || '';
+  const fallbackCode = !code && solution.includes('<!DOCTYPE') ? solution.trim() : code;
+  return { thinking, code: fallbackCode || code, previewDesc };
+}
+
+function SandboxForgePanel({
+  gladiator,
+  move,
+  label,
+  progress,
+}: {
+  gladiator?: Gladiator;
+  move?: GladiatorAiMove;
+  label: string;
+  progress: number;
+}) {
+  const [activeTab, setActiveTab] = useState<'thinking' | 'code' | 'preview'>('thinking');
+  const glow = gladiator?.glow_color ?? '#f97316';
+  const name = gladiator?.name ?? label;
+  const model = move?.model || (gladiator?.model ?? 'thinking-model');
+  const latency = typeof move?.latency_ms === 'number' ? `${move.latency_ms}ms` : 'warming';
+  const rawSolution = move?.solution?.trim() || '';
+  const parsed = useMemo(() => parseSandboxSolution(rawSolution), [rawSolution]);
+  const isBuilding = progress > 0 && progress < 100;
+
+  const visibleThinking = useMemo(() => {
+    if (!parsed.thinking) return '// Neural activity warming...';
+    const len = Math.ceil(parsed.thinking.length * Math.max(progress, 5) / 100);
+    return parsed.thinking.slice(0, Math.max(40, len));
+  }, [parsed.thinking, progress]);
+
+  const visibleCode = useMemo(() => {
+    if (!parsed.code) return '<!-- Forge chamber initializing... -->';
+    const len = Math.ceil(parsed.code.length * Math.max(progress, 2) / 100);
+    return parsed.code.slice(0, Math.max(20, len));
+  }, [parsed.code, progress]);
+
+  const iframeHtml = useMemo(() => {
+    if (progress < 60 || !parsed.code) return null;
+    return parsed.code;
+  }, [parsed.code, progress]);
+
+  const tabs: Array<{ key: 'thinking' | 'code' | 'preview'; label: string; icon: React.ElementType }> = [
+    { key: 'thinking', label: 'Neural Activity', icon: Brain },
+    { key: 'code', label: 'Forge Output', icon: Code2 },
+    { key: 'preview', label: 'Live Preview', icon: Eye },
+  ];
+
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 12, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      className="relative overflow-hidden rounded-3xl border bg-black/85 shadow-[inset_0_0_34px_rgba(249,115,22,0.08)]"
+      style={{ borderColor: `${glow}44` }}
+    >
+      <div className="pointer-events-none absolute inset-0 opacity-20" style={{ background: `radial-gradient(circle at 18% 0%, ${glow}88, transparent 34%)` }} />
+      {isBuilding && (
+        <motion.div
+          animate={{ opacity: [0, 0.06, 0], x: ['-100%', '100%'] }}
+          transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}
+          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-transparent via-orange-400/10 to-transparent"
+        />
+      )}
+
+      {/* Header */}
+      <div className="relative flex items-center justify-between border-b border-white/10 bg-white/[0.03] px-4 py-3">
+        <div className="min-w-0">
+          <motion.p
+            animate={isBuilding ? { opacity: [1, 0.5, 1] } : {}}
+            transition={{ duration: 1.5, repeat: Infinity }}
+            className="text-[9px] font-black uppercase tracking-[0.3em]"
+            style={{ color: glow }}
+          >
+            {label} — Sandbox Forge
+          </motion.p>
+          <h3 className="mt-1 truncate text-sm font-black uppercase tracking-[0.16em] text-white">{name}</h3>
+        </div>
+        <div className="text-right">
+          <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">{latency}</p>
+          <p className="mt-1 max-w-36 truncate text-[9px] font-mono text-zinc-400">{model}</p>
+        </div>
+      </div>
+
+      {/* Progress Bar */}
+      <div className="relative border-b border-white/10 bg-zinc-950/80 px-4 py-2">
+        <div className="flex items-center justify-between text-[8px] font-black uppercase tracking-[0.22em] text-zinc-500">
+          <span>sandbox-compiler</span>
+          <motion.span
+            animate={isBuilding ? { color: [glow, '#ffffff', glow] } : {}}
+            transition={{ duration: 1, repeat: Infinity }}
+          >
+            {Math.round(progress)}%
+          </motion.span>
+        </div>
+        <div className="relative mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+          <motion.div
+            className="h-full rounded-full"
+            animate={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+            style={{ backgroundColor: glow, boxShadow: `0 0 18px ${glow}` }}
+          />
+        </div>
+      </div>
+
+      {/* Tab Switcher */}
+      <div className="flex border-b border-white/10">
+        {tabs.map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeTab === tab.key;
+          return (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setActiveTab(tab.key)}
+              className={cn(
+                'flex flex-1 items-center justify-center gap-1.5 py-2.5 text-[9px] font-black uppercase tracking-[0.2em] transition',
+                isActive ? 'border-b-2 text-white' : 'text-zinc-500 hover:text-zinc-300'
+              )}
+              style={isActive ? { borderBottomColor: glow, color: glow } : {}}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Tab Content */}
+      <div className="relative min-h-72 max-h-[28rem]">
+        <AnimatePresence mode="wait">
+          {activeTab === 'thinking' && (
+            <motion.div
+              key="thinking"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="h-full overflow-auto p-4"
+            >
+              <div className="mb-2 flex items-center gap-2">
+                <Brain className="h-3.5 w-3.5 text-orange-400" />
+                <span className="text-[9px] font-black uppercase tracking-[0.3em] text-orange-400">Chain of Thought</span>
+              </div>
+              <pre className="whitespace-pre-wrap font-mono text-[11px] leading-6 text-orange-100/80">
+                {visibleThinking}
+                {progress < 100 && <motion.span animate={{ opacity: [0, 1, 0] }} transition={{ duration: 0.8, repeat: Infinity }} className="text-orange-300">▌</motion.span>}
+              </pre>
+            </motion.div>
+          )}
+
+          {activeTab === 'code' && (
+            <motion.div
+              key="code"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="h-full overflow-auto p-4"
+            >
+              <div className="mb-2 flex items-center gap-2">
+                <Code2 className="h-3.5 w-3.5 text-green-400" />
+                <span className="text-[9px] font-black uppercase tracking-[0.3em] text-green-400">Product Source</span>
+              </div>
+              <pre className="whitespace-pre-wrap font-mono text-[11px] leading-5 text-green-100">
+                <span className="select-none text-red-300">$ </span>
+                <span className="text-zinc-500">{`forge --gladiator="${name}" --mode=sandbox`}</span>{'\n\n'}
+                {visibleCode}
+                {progress < 100 && <motion.span animate={{ opacity: [0, 1, 0] }} transition={{ duration: 0.8, repeat: Infinity }} className="text-green-300">▌</motion.span>}
+              </pre>
+            </motion.div>
+          )}
+
+          {activeTab === 'preview' && (
+            <motion.div
+              key="preview"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="flex h-full flex-col"
+            >
+              <div className="flex items-center gap-2 border-b border-white/10 px-4 py-2">
+                <Eye className="h-3.5 w-3.5 text-cyan-400" />
+                <span className="text-[9px] font-black uppercase tracking-[0.3em] text-cyan-400">Live Product Preview</span>
+                {progress < 60 && <span className="text-[8px] text-zinc-500">(available at 60%)</span>}
+              </div>
+              {iframeHtml ? (
+                <iframe
+                  srcDoc={iframeHtml}
+                  sandbox="allow-scripts"
+                  className="min-h-72 flex-1 bg-white"
+                  title={`${name} sandbox preview`}
+                  style={{ border: 'none' }}
+                />
+              ) : (
+                <div className="flex min-h-72 flex-1 items-center justify-center text-zinc-500">
+                  <div className="text-center">
+                    <Box className="mx-auto mb-3 h-10 w-10 text-zinc-600" />
+                    <p className="text-[10px] font-black uppercase tracking-[0.2em]">
+                      {progress < 60 ? 'Product preview builds at 60%' : 'Waiting for code output...'}
+                    </p>
+                  </div>
+                </div>
+              )}
+              {parsed.previewDesc && progress >= 80 && (
+                <div className="border-t border-white/10 bg-black/50 px-4 py-2">
+                  <p className="text-[10px] italic text-zinc-400">{parsed.previewDesc}</p>
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </motion.div>
+  );
+}
+
+// ── Neural Whisper UI ──────────────────────────────────────────────────────
+
+function NeuralWhisperPanel({
+  matchId,
+  gladiatorId,
+  gladiatorName,
+  used,
+  disabled,
+  onWhisperSent,
+}: {
+  matchId: string;
+  gladiatorId: string;
+  gladiatorName: string;
+  used: boolean;
+  disabled: boolean;
+  onWhisperSent: (text: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState('');
+
+  const sendWhisper = useCallback(async () => {
+    const text = draft.trim();
+    if (!text || sending || used) return;
+    setSending(true);
+    setError('');
+    try {
+      const res = await fetch('/api/colosseum/neural-whisper', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ matchId, gladiatorId, whisper: text }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Whisper failed');
+      setDraft('');
+      setOpen(false);
+      onWhisperSent(text);
+    } catch (err: any) {
+      setError(err.message || 'Failed to send whisper');
+    } finally {
+      setSending(false);
+    }
+  }, [draft, sending, used, matchId, gladiatorId, onWhisperSent]);
+
+  if (used) {
+    return (
+      <div className="flex items-center gap-2 rounded-2xl border border-orange-300/20 bg-orange-500/5 px-3 py-2">
+        <Lightbulb className="h-4 w-4 text-orange-400" />
+        <span className="text-[9px] font-black uppercase tracking-[0.2em] text-orange-300">Neural Whisper Used</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        disabled={disabled}
+        className={cn(
+          'flex items-center gap-2 rounded-2xl border px-3 py-2 text-[9px] font-black uppercase tracking-[0.2em] transition',
+          disabled
+            ? 'cursor-not-allowed border-zinc-700 text-zinc-600'
+            : 'border-orange-300/30 bg-orange-500/10 text-orange-300 hover:border-orange-300/50 hover:bg-orange-500/20'
+        )}
+      >
+        <Lightbulb className="h-4 w-4" />
+        Neural Whisper (1x)
+        {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -8, height: 0 }}
+            animate={{ opacity: 1, y: 0, height: 'auto' }}
+            exit={{ opacity: 0, y: -8, height: 0 }}
+            className="mt-2 overflow-hidden rounded-2xl border border-orange-300/20 bg-black/80"
+          >
+            <div className="p-3">
+              <p className="mb-2 text-[9px] font-black uppercase tracking-[0.2em] text-orange-300">
+                Whisper a tactical hint to {gladiatorName}
+              </p>
+              <p className="mb-3 text-[9px] text-zinc-500">
+                One whisper per battle. Your hint is injected into the gladiator's thinking context. Spectators see that you whispered, but not the content.
+              </p>
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value.slice(0, 500))}
+                placeholder={`e.g. "Add dark mode — your opponent doesn't have it"`}
+                className="mb-2 w-full resize-none rounded-xl border border-white/10 bg-zinc-900/80 px-3 py-2 text-xs text-white placeholder-zinc-600 outline-none focus:border-orange-400/40"
+                rows={2}
+                maxLength={500}
+              />
+              <div className="flex items-center justify-between">
+                <span className="text-[8px] text-zinc-600">{draft.length}/500</span>
+                <button
+                  type="button"
+                  onClick={sendWhisper}
+                  disabled={!draft.trim() || sending}
+                  className="flex items-center gap-1.5 rounded-full border border-orange-300/30 bg-orange-500/20 px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.18em] text-orange-300 transition hover:bg-orange-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Send className="h-3 w-3" />
+                  {sending ? 'Sending...' : 'Whisper'}
+                </button>
+              </div>
+              {error && <p className="mt-2 text-[9px] text-red-400">{error}</p>}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 function terminalSnippetFor(move: GladiatorAiMove | undefined, fallbackName: string, challengeType: ChallengeType) {
   if (move?.solution?.trim() && !containsProviderErrorPayload(move.solution)) return move.solution.trim();
   const directive = challengeType === 'code_jeopardy'
@@ -1005,7 +1395,9 @@ function terminalSnippetFor(move: GladiatorAiMove | undefined, fallbackName: str
       ? 'plan = ["map data flow", "isolate failure zones", "defend tradeoffs"]'
       : challengeType === 'roast_battle'
         ? 'line = "clean punchline compiling; harassment filter armed"'
-        : 'function solve(input) {\n  // live combat packet still compiling\n  return optimize(input)\n}';
+        : challengeType === 'sandbox_build'
+          ? '<!DOCTYPE html>\n<html>\n<head>\n  <style>/* forge chamber initializing... */</style>\n</head>\n<body>\n  <!-- building product -->\n  <script>// sandbox compiler warming</script>\n</body>\n</html>'
+          : 'function solve(input) {\n  // live combat packet still compiling\n  return optimize(input)\n}';
   return `// ${fallbackName} terminal warming\n${directive}`;
 }
 
@@ -1147,7 +1539,9 @@ function buildCombatChallengePrompt(type: ChallengeType, challenger: Gladiator, 
             ? 'Return a high-control prompt with behavior rules, examples, boundaries, and persona discipline.'
             : type === 'roast_battle'
               ? 'Return a memorable in-character roast that stays safe, funny, and away from real harassment.'
-              : 'Return the Code Jeopardy answer in text with a concise explanation and confidence.';
+              : type === 'sandbox_build'
+                ? 'Build a complete, working product as a single HTML file. Return working HTML/CSS/JS with a cyberpunk aesthetic. Think step by step, then build.'
+                : 'Return the Code Jeopardy answer in text with a concise explanation and confidence.';
 
   return `${challenge.label}: ${challenger.name} versus ${defender.name}. ${directive}`;
 }
@@ -2269,12 +2663,15 @@ function LiveBattleCard({ match, challenger, defender, now, onSelect }: { match:
   );
 }
 
-function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSelectMatch }: {
+function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSelectMatch, userGladiatorId, whisperUsed, onWhisperUsed }: {
   matches: MatchRow[];
   gladiatorById: Map<string, Gladiator>;
   simulation?: SimulationState | null;
   selectedMatchId: string | null;
   onSelectMatch: (matchId: string | null) => void;
+  userGladiatorId?: string;
+  whisperUsed: boolean;
+  onWhisperUsed: () => void;
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedMatchId = searchParams.get('match');
@@ -2516,25 +2913,54 @@ function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSele
                     <CombatantPortrait label="Red Corner" gladiator={challenger} />
                     <CombatantPortrait label="Shadow Cage" gladiator={defender} />
                   </div>
+
+                  {/* Neural Whisper — available to the user's gladiator during active sandbox battles */}
+                  {visibleMatch.challenge_type === 'sandbox_build' && challenger && !visibleMatch.completed_at && userGladiatorId && String(challenger.id) === String(userGladiatorId) && (
+                    <NeuralWhisperPanel
+                      matchId={visibleMatch.id}
+                      gladiatorId={challenger.id}
+                      gladiatorName={challenger.name}
+                      used={whisperUsed}
+                      disabled={Boolean(visibleMatch.completed_at)}
+                      onWhisperSent={() => onWhisperUsed()}
+                    />
+                  )}
                 </div>
 
                 <div className="space-y-4">
-                  <div className="grid gap-4 xl:grid-cols-2">
-                    <CombatantTerminal
-                      gladiator={challenger}
-                      move={challengerMove}
-                      label="Red Corner"
-                      progress={challengerProgress}
-                      challengeType={visibleMatch.challenge_type}
-                    />
-                    <CombatantTerminal
-                      gladiator={defender}
-                      move={defenderMove}
-                      label="Shadow Cage"
-                      progress={defenderProgress}
-                      challengeType={visibleMatch.challenge_type}
-                    />
-                  </div>
+                  {visibleMatch.challenge_type === 'sandbox_build' ? (
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      <SandboxForgePanel
+                        gladiator={challenger}
+                        move={challengerMove}
+                        label="Red Corner"
+                        progress={challengerProgress}
+                      />
+                      <SandboxForgePanel
+                        gladiator={defender}
+                        move={defenderMove}
+                        label="Shadow Cage"
+                        progress={defenderProgress}
+                      />
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      <CombatantTerminal
+                        gladiator={challenger}
+                        move={challengerMove}
+                        label="Red Corner"
+                        progress={challengerProgress}
+                        challengeType={visibleMatch.challenge_type}
+                      />
+                      <CombatantTerminal
+                        gladiator={defender}
+                        move={defenderMove}
+                        label="Shadow Cage"
+                        progress={defenderProgress}
+                        challengeType={visibleMatch.challenge_type}
+                      />
+                    </div>
+                  )}
 
                 <div className="overflow-hidden rounded-3xl border border-green-300/15 bg-black/80 shadow-[inset_0_0_34px_rgba(34,197,94,0.08)]">
                   <div className="flex items-center justify-between border-b border-white/10 bg-white/[0.03] px-4 py-3">
@@ -2877,6 +3303,8 @@ export const Colosseum: React.FC = () => {
     challenge_type: 'speed_round',
     min_contestants: 4,
   });
+
+  const [whisperUsed, setWhisperUsed] = useState(false);
 
   const normalizeGladiator = (row: any, profileByGladiatorId?: Map<string, BotGladiatorProfileRow>): Gladiator => ({
     id: row.id,
@@ -4127,6 +4555,9 @@ export const Colosseum: React.FC = () => {
           simulation={simulation}
           selectedMatchId={selectedMatchId}
           onSelectMatch={setSelectedMatchId}
+          userGladiatorId={selectedGladiatorId || undefined}
+          whisperUsed={whisperUsed}
+          onWhisperUsed={() => setWhisperUsed(true)}
         />
 
         {sapphireWaitingBattles.length > 0 && (
@@ -4519,22 +4950,39 @@ export const Colosseum: React.FC = () => {
                     }}
                     replayProgress={Math.max(simulation.challengerProgress, simulation.defenderProgress)}
                   />
-                  <div className="grid gap-4 xl:grid-cols-2">
-                    <CombatantTerminal
-                      gladiator={gladiatorById.get(simulation.challengerId)}
-                      move={simulation.aiMoves.find((move) => move.gladiator_id === simulation.challengerId)}
-                      label="Red Corner"
-                      progress={simulation.challengerProgress}
-                      challengeType={simulation.challengeType}
-                    />
-                    <CombatantTerminal
-                      gladiator={gladiatorById.get(simulation.defenderId)}
-                      move={simulation.aiMoves.find((move) => move.gladiator_id === simulation.defenderId)}
-                      label="Shadow Cage"
-                      progress={simulation.defenderProgress}
-                      challengeType={simulation.challengeType}
-                    />
-                  </div>
+                  {simulation.challengeType === 'sandbox_build' ? (
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      <SandboxForgePanel
+                        gladiator={gladiatorById.get(simulation.challengerId)}
+                        move={simulation.aiMoves.find((move) => move.gladiator_id === simulation.challengerId)}
+                        label="Red Corner"
+                        progress={simulation.challengerProgress}
+                      />
+                      <SandboxForgePanel
+                        gladiator={gladiatorById.get(simulation.defenderId)}
+                        move={simulation.aiMoves.find((move) => move.gladiator_id === simulation.defenderId)}
+                        label="Shadow Cage"
+                        progress={simulation.defenderProgress}
+                      />
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      <CombatantTerminal
+                        gladiator={gladiatorById.get(simulation.challengerId)}
+                        move={simulation.aiMoves.find((move) => move.gladiator_id === simulation.challengerId)}
+                        label="Red Corner"
+                        progress={simulation.challengerProgress}
+                        challengeType={simulation.challengeType}
+                      />
+                      <CombatantTerminal
+                        gladiator={gladiatorById.get(simulation.defenderId)}
+                        move={simulation.aiMoves.find((move) => move.gladiator_id === simulation.defenderId)}
+                        label="Shadow Cage"
+                        progress={simulation.defenderProgress}
+                        challengeType={simulation.challengeType}
+                      />
+                    </div>
+                  )}
                   <div className="max-h-44 space-y-2 overflow-y-auto rounded-2xl bg-black/60 p-3 font-mono text-[11px] leading-5 text-green-200">
                     {simulation.log.map((line, index) => <p key={`${line}-${index}`}><span className="text-red-300">&gt;</span> {line}</p>)}
                   </div>
