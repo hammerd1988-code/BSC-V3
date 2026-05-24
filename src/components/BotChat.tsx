@@ -116,12 +116,35 @@ const FIGHTING_STYLES: Record<string, string> = {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+function hashString(str: string): number {
+  return str.split('').reduce((sum, c) => sum + c.charCodeAt(0), 0);
+}
+
 function avatarUrlForBot(gladiator: GladiatorRow, botProfile?: BotProfile | null): string {
   const prompt = botProfile?.avatar_prompt;
   if (!prompt && gladiator.avatar_url) return gladiator.avatar_url;
-  const seed = botProfile?.persona_username ?? gladiator.id;
-  const numericSeed = seed.split('').reduce((sum, c) => sum + c.charCodeAt(0), 0);
-  return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt ?? `${gladiator.name} cyberpunk AI gladiator portrait neon dark background`)}?width=256&height=256&seed=${numericSeed}&nologo=true`;
+  // DiceBear is fast and always available; Pollinations can be slow/unreliable
+  const seed = encodeURIComponent(botProfile?.persona_username ?? gladiator.name ?? gladiator.id);
+  return `https://api.dicebear.com/9.x/bottts-neutral/svg?seed=${seed}&backgroundColor=0a0a0f&size=256`;
+}
+
+const MIMO_VOICE_POOL = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'] as const;
+const PITCH_RANGE = [0.8, 0.9, 1.0, 1.05, 1.1, 1.15] as const;
+const RATE_RANGE = [0.9, 0.95, 1.0, 1.0, 1.05, 1.1] as const;
+
+function getVoiceSettingsForBot(gladiatorId: string, voices: SpeechSynthesisVoice[]): { voice: SpeechSynthesisVoice | null; pitch: number; rate: number } {
+  const h = hashString(gladiatorId);
+  const english = voices.filter((v) => v.lang.startsWith('en'));
+  const pool = english.length > 0 ? english : voices;
+  const voice = pool.length > 0 ? pool[h % pool.length] : null;
+  const pitch = PITCH_RANGE[h % PITCH_RANGE.length];
+  const rate = RATE_RANGE[(h + 3) % RATE_RANGE.length];
+  return { voice, pitch, rate };
+}
+
+function getMimoVoiceForBot(gladiatorId: string): string {
+  const h = hashString(gladiatorId);
+  return MIMO_VOICE_POOL[h % MIMO_VOICE_POOL.length];
 }
 
 function loadConversations(): Record<string, ConversationMeta> {
@@ -447,13 +470,14 @@ export function BotChat() {
     setListening(false);
   }, []);
 
-  // Text-to-speech (browser-native or Mimo server)
+  // Text-to-speech with per-bot voice variety
   const speakText = useCallback((text: string) => {
-    if (!ttsEnabled) return;
+    if (!ttsEnabled || !selectedBot) return;
+    const botId = selectedBot.id;
 
-    // Mimo / server TTS
+    // Mimo / server TTS — use per-bot voice from the pool
     if (voiceProvider !== 'browser') {
-      const mimoVoice = voiceProvider.replace('mimo-', '');
+      const mimoVoice = getMimoVoiceForBot(botId);
       setSpeaking(true);
       fetch('/api/tts/mimo', {
         method: 'POST',
@@ -474,10 +498,13 @@ export function BotChat() {
         })
         .catch(() => {
           setSpeaking(false);
-          // Fallback to browser TTS
-          if (selectedVoice) {
+          // Fallback to browser TTS with per-bot voice
+          const settings = getVoiceSettingsForBot(botId, availableVoices);
+          if (settings.voice) {
             const utterance = new SpeechSynthesisUtterance(text);
-            utterance.voice = selectedVoice;
+            utterance.voice = settings.voice;
+            utterance.pitch = settings.pitch;
+            utterance.rate = settings.rate;
             utterance.onstart = () => setSpeaking(true);
             utterance.onend = () => setSpeaking(false);
             utterance.onerror = () => setSpeaking(false);
@@ -487,19 +514,20 @@ export function BotChat() {
       return;
     }
 
-    // Browser-native TTS
-    if (!selectedVoice) return;
+    // Browser-native TTS with per-bot voice, pitch, and rate
+    const settings = getVoiceSettingsForBot(botId, availableVoices);
+    if (!settings.voice) return;
     speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.voice = selectedVoice;
-    utterance.rate = 1;
-    utterance.pitch = 1;
+    utterance.voice = settings.voice;
+    utterance.rate = settings.rate;
+    utterance.pitch = settings.pitch;
     utterance.onstart = () => setSpeaking(true);
     utterance.onend = () => setSpeaking(false);
     utterance.onerror = () => setSpeaking(false);
     utteranceRef.current = utterance;
     speechSynthesis.speak(utterance);
-  }, [ttsEnabled, selectedVoice, voiceProvider]);
+  }, [ttsEnabled, selectedBot, voiceProvider, availableVoices]);
 
   const stopSpeaking = useCallback(() => {
     speechSynthesis.cancel();
@@ -1121,7 +1149,7 @@ export function BotChat() {
                         {/* Browser voice selector (only shown when browser provider is selected) */}
                         {voiceProvider === 'browser' && (
                           <div>
-                            <p className="text-[9px] font-bold uppercase tracking-widest text-gray-500 mb-1">Browser Voice</p>
+                            <p className="text-[9px] font-bold uppercase tracking-widest text-gray-500 mb-1">Browser Voice (auto-assigned per bot)</p>
                             <select
                               value={selectedVoice?.name ?? ''}
                               onChange={(e) => {
