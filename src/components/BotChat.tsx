@@ -382,6 +382,9 @@ export function BotChat() {
   const [showInstructions, setShowInstructions] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
 
+  // Battle memory
+  const [battleMemory, setBattleMemory] = useState<string>('');
+
   // Voice chat state
   const [voiceMode, setVoiceMode] = useState(false);
   const [listening, setListening] = useState(false);
@@ -581,6 +584,7 @@ export function BotChat() {
     setSelectedBot(bot);
     setBotProfile(null);
     setForgeConfig(null);
+    setBattleMemory('');
 
     // Load conversation from localStorage
     const convos = loadConversations();
@@ -596,13 +600,24 @@ export function BotChat() {
       }]);
     }
 
-    // Fetch forge config
-    const { data: configData } = await supabase
-      .from('bot_forge_config')
-      .select('*')
-      .eq('gladiator_id', bot.id)
-      .maybeSingle();
-    if (configData) setForgeConfig(configData);
+    // Fetch forge config, bot profile, and battle memories in parallel
+    const [configRes, memRes] = await Promise.all([
+      supabase.from('bot_forge_config').select('*').eq('gladiator_id', bot.id).maybeSingle(),
+      fetch(`/api/battle-memories/${bot.id}?limit=8`).then(r => r.ok ? r.json() : { memories: [] }).catch(() => ({ memories: [] })),
+    ]);
+    if (configRes.data) setForgeConfig(configRes.data);
+
+    // Build battle memory context string
+    const memories = (memRes.memories ?? []) as Array<{ result: string; challenge_type: string; opponent_name: string; trash_talk_hook: string; summary: string }>;
+    if (memories.length > 0) {
+      const wins = memories.filter(m => m.result === 'win').length;
+      const losses = memories.filter(m => m.result === 'loss').length;
+      const lines = memories.map(m => {
+        const type = (m.challenge_type ?? 'battle').replace(/_/g, ' ');
+        return `- ${m.result === 'win' ? 'DEFEATED' : 'LOST TO'} ${m.opponent_name} in ${type}. ${m.trash_talk_hook || m.summary}`;
+      });
+      setBattleMemory(`\nBattle record (${wins}W-${losses}L recent):\n${lines.join('\n')}\nReference your battle history when relevant. Brag about wins, plot revenge for losses.`);
+    }
 
     // Fetch bot profile
     if (profileMapArg) {
@@ -629,11 +644,12 @@ export function BotChat() {
     }
   }, [messages, selectedBot]);
 
-  // Build system prompt
+  // Build system prompt (includes battle memory when available)
   const systemPrompt = useMemo(() => {
     if (!selectedBot) return '';
-    return buildSystemPrompt(selectedBot, forgeConfig, botProfile);
-  }, [selectedBot, forgeConfig, botProfile]);
+    const base = buildSystemPrompt(selectedBot, forgeConfig, botProfile);
+    return battleMemory ? `${base}\n${battleMemory}` : base;
+  }, [selectedBot, forgeConfig, botProfile, battleMemory]);
 
   // Send message
   const sendMessage = useCallback(async () => {
