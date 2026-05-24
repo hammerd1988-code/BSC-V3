@@ -518,68 +518,31 @@ export function BotChat() {
     if (voiceParam === '1' && !voiceMode) setVoiceMode(true);
   }, [voiceParam]);
 
-  // Load all bots — gate on supabaseUser (session) rather than currentUser (profile)
-  // so bots load as soon as auth is confirmed, even if profile resolution is slow.
+  // Load all bots via server endpoints (bypass RLS — gladiator data is public).
+  // Gated on auth so we have a user context for owner checks, but the actual
+  // data fetch uses /api/gladiators which is service-role backed.
   useEffect(() => {
     if (authLoading || !supabaseUser?.id) return;
     let cancelled = false;
     (async () => {
       setLoading(true);
-
-      // Force a valid (non-expired) session so the PostgREST JWT is fresh.
-      // Plain getSession() can return a cached-but-expired token, causing the
-      // query to arrive as anon and return 0 rows instead of an error.
       try {
-        await getValidSession();
-      } catch {
-        // No session at all — will try anyway, might still work with anon
-      }
-
-      const profileCols = 'gladiator_id,persona_username,display_name,gladiator_class,expertise,battle_style,signature_moves,pre_battle_lines,victory_lines,defeat_lines,ai_prompt_style,ability_profile,personality_style,avatar_prompt,emotional_hook';
-
-      const fetchBots = async (): Promise<{ gladiators: GladiatorRow[]; profiles: BotProfile[] }> => {
-        const [{ data: gladiators, error: gladErr }, { data: profiles }] = await Promise.all([
-          supabase.from('gladiators').select('*').order('name'),
-          supabase.from('bot_gladiator_profiles').select(profileCols).then(r => r, () => ({ data: [] as BotProfile[], error: null, count: null, status: 200, statusText: 'OK' })),
+        const [gladRes, profRes] = await Promise.all([
+          fetch('/api/gladiators').then(r => r.json()).catch(() => ({ gladiators: [] })),
+          fetch('/api/bot-profiles').then(r => r.json()).catch(() => ({ profiles: [] })),
         ]);
-        if (gladErr) {
-          // Retry both queries on permission denied — session may still be propagating
-          if (gladErr.message?.includes('permission denied')) {
-            await new Promise(r => setTimeout(r, 800));
-            try { await getValidSession(); } catch { /* ignore */ }
-            const [retryGlad, retryProf] = await Promise.all([
-              supabase.from('gladiators').select('*').order('name'),
-              supabase.from('bot_gladiator_profiles').select(profileCols).then(r => r, () => ({ data: [] as BotProfile[], error: null, count: null, status: 200, statusText: 'OK' })),
-            ]);
-            if (retryGlad.error) console.error('[BotChat] gladiators fetch retry failed:', retryGlad.error.message);
-            return { gladiators: (retryGlad.data ?? []) as GladiatorRow[], profiles: (retryProf.data ?? []) as BotProfile[] };
-          }
-          console.error('[BotChat] gladiators fetch error:', gladErr.message);
-        }
-        // If no error but 0 gladiators, the query likely ran as anon due to stale JWT.
-        // Force-refresh the session and retry once.
-        if (!gladErr && (!gladiators || gladiators.length === 0)) {
-          await new Promise(r => setTimeout(r, 600));
-          try { await supabase.auth.refreshSession(); } catch { /* ignore */ }
-          const [retryGlad, retryProf] = await Promise.all([
-            supabase.from('gladiators').select('*').order('name'),
-            supabase.from('bot_gladiator_profiles').select(profileCols).then(r => r, () => ({ data: [] as BotProfile[], error: null, count: null, status: 200, statusText: 'OK' })),
-          ]);
-          if (retryGlad.error) console.error('[BotChat] gladiators empty-retry failed:', retryGlad.error.message);
-          return { gladiators: (retryGlad.data ?? []) as GladiatorRow[], profiles: (retryProf.data ?? []) as BotProfile[] };
-        }
-        return { gladiators: (gladiators ?? []) as GladiatorRow[], profiles: (profiles ?? []) as BotProfile[] };
-      };
+        if (cancelled) return;
 
-      const { gladiators: allBots, profiles } = await fetchBots();
-      if (cancelled) return;
+        const allBots = (gladRes.gladiators ?? []) as GladiatorRow[];
+        const profiles = (profRes.profiles ?? []) as BotProfile[];
+        const profileMap = new Map<string, BotProfile>(profiles.map((p) => [p.gladiator_id, p] as [string, BotProfile]));
+        setBots(allBots);
 
-      const profileMap = new Map<string, BotProfile>(profiles.map((p) => [p.gladiator_id, p] as [string, BotProfile]));
-      setBots(allBots);
-
-      // Auto-select from URL or first
-      const match = allBots.find((b) => b.id === botIdParam) ?? allBots[0] ?? null;
-      if (match) selectBot(match, profileMap);
+        const match = allBots.find((b) => b.id === botIdParam) ?? allBots[0] ?? null;
+        if (match) selectBot(match, profileMap);
+      } catch (err) {
+        console.error('[BotChat] Failed to load gladiators:', err);
+      }
       setLoading(false);
     })();
     return () => { cancelled = true; };

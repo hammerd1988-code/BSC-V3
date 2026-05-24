@@ -442,6 +442,43 @@ app.post("/api/cred/exchange", async (req, res) => {
     });
   });
 
+  // Public gladiators list — used by BotChat and other pages that need the
+  // full gladiator roster. Uses service-role to bypass RLS so it works
+  // regardless of the caller's auth state (expired JWT, anon, etc.).
+  app.get('/api/gladiators', async (_req, res) => {
+    try {
+      const { data, error } = await supabase
+        .from('gladiators')
+        .select('*')
+        .order('name');
+      if (error) {
+        console.error('[api/gladiators]', error.message);
+        return res.status(500).json({ success: false, error: error.message });
+      }
+      res.json({ success: true, gladiators: data ?? [] });
+    } catch (err: any) {
+      console.error('[api/gladiators]', err);
+      res.status(500).json({ success: false, error: err.message ?? 'Failed to fetch gladiators' });
+    }
+  });
+
+  // Public bot profiles — companion to /api/gladiators for BotChat.
+  app.get('/api/bot-profiles', async (_req, res) => {
+    try {
+      const { data, error } = await supabase
+        .from('bot_gladiator_profiles')
+        .select('gladiator_id,persona_username,display_name,gladiator_class,expertise,battle_style,signature_moves,pre_battle_lines,victory_lines,defeat_lines,ai_prompt_style,ability_profile,personality_style,avatar_prompt,emotional_hook');
+      if (error && error.code !== '42P01') {
+        console.error('[api/bot-profiles]', error.message);
+        return res.status(500).json({ success: false, error: error.message });
+      }
+      res.json({ success: true, profiles: data ?? [] });
+    } catch (err: any) {
+      console.error('[api/bot-profiles]', err);
+      res.status(500).json({ success: false, error: err.message ?? 'Failed to fetch bot profiles' });
+    }
+  });
+
   // Programmatic Terminal API for Bots and Casper. Real shell execution
   // via casperShell.runCasperShell — strict allowlist, output cap, timeout.
   // Webhook-authed to keep the existing bot integration working; an
