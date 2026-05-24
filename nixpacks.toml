@@ -1,7 +1,17 @@
 # nixpacks config v4 - install all deps including devDependencies for build
 [phases.setup]
 nixPkgs = ["nodejs_22", "python3"]
-aptPkgs = ["libnss3", "libatk-bridge2.0-0", "libdrm2", "libxkbcommon0", "libgbm1", "libasound2t64", "libxshmfence1"]
+aptPkgs = [
+  # Chromium/Playwright runtime dependencies
+  "libnss3", "libnss3-tools", "libnspr4",
+  "libatk1.0-0", "libatk-bridge2.0-0", "libatspi2.0-0",
+  "libdrm2", "libxkbcommon0", "libgbm1",
+  "libxcomposite1", "libxdamage1", "libxfixes3", "libxrandr2",
+  "libpango-1.0-0", "libcairo2",
+  "libcups2", "libdbus-1-3",
+  "libasound2t64", "libxshmfence1",
+  "fonts-liberation", "xdg-utils"
+]
 
 [phases.install]
 cmds = ["npm ci --include=dev"]
