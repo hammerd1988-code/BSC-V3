@@ -1081,6 +1081,26 @@ function SandboxForgePanel({
   const rawSolution = move?.solution?.trim() || '';
   const parsed = useMemo(() => parseSandboxSolution(rawSolution), [rawSolution]);
   const isBuilding = progress > 0 && progress < 100;
+  const isComplete = progress >= 100;
+
+  // Phase detection for status indicators
+  const phase = useMemo((): 'idle' | 'thinking' | 'coding' | 'building' | 'complete' => {
+    if (progress >= 100) return 'complete';
+    if (progress >= 60) return 'building';
+    if (progress >= 25) return 'coding';
+    if (progress > 0) return 'thinking';
+    return 'idle';
+  }, [progress]);
+
+  const phaseLabel = { idle: 'INITIALIZING', thinking: 'NEURAL PROCESSING', coding: 'WRITING CODE', building: 'ASSEMBLING PRODUCT', complete: 'BUILD COMPLETE' }[phase];
+  const phaseColor = { idle: '#6b7280', thinking: '#f97316', coding: '#22c55e', building: '#06b6d4', complete: '#eab308' }[phase];
+
+  // Auto-switch tabs as phases progress
+  useEffect(() => {
+    if (phase === 'thinking') setActiveTab('thinking');
+    else if (phase === 'coding') setActiveTab('code');
+    else if (phase === 'building' || phase === 'complete') setActiveTab('preview');
+  }, [phase]);
 
   const visibleThinking = useMemo(() => {
     if (!parsed.thinking) return '// Neural activity warming...';
@@ -1093,6 +1113,8 @@ function SandboxForgePanel({
     const len = Math.ceil(parsed.code.length * Math.max(progress, 2) / 100);
     return parsed.code.slice(0, Math.max(20, len));
   }, [parsed.code, progress]);
+
+  const codeLineCount = useMemo(() => visibleCode.split('\n').length, [visibleCode]);
 
   const iframeHtml = useMemo(() => {
     if (progress < 60 || !parsed.code) return null;
@@ -1111,40 +1133,69 @@ function SandboxForgePanel({
       initial={{ opacity: 0, y: 12, scale: 0.98 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       className="relative overflow-hidden rounded-3xl border bg-black/85 shadow-[inset_0_0_34px_rgba(249,115,22,0.08)]"
-      style={{ borderColor: `${glow}44` }}
+      style={{ borderColor: isComplete ? '#eab30888' : `${glow}44` }}
     >
       <div className="pointer-events-none absolute inset-0 opacity-20" style={{ background: `radial-gradient(circle at 18% 0%, ${glow}88, transparent 34%)` }} />
       {isBuilding && (
         <motion.div
-          animate={{ opacity: [0, 0.06, 0], x: ['-100%', '100%'] }}
-          transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}
-          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-transparent via-orange-400/10 to-transparent"
+          animate={{ opacity: [0, 0.08, 0], x: ['-100%', '100%'] }}
+          transition={{ duration: 2.5, repeat: Infinity, ease: 'linear' }}
+          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-transparent via-orange-400/15 to-transparent"
+        />
+      )}
+      {isComplete && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: [0.03, 0.08, 0.03] }}
+          transition={{ duration: 2, repeat: Infinity }}
+          className="pointer-events-none absolute inset-0 bg-gradient-to-br from-yellow-400/10 via-transparent to-green-400/10"
         />
       )}
 
-      {/* Header */}
+      {/* Header with Phase Status */}
       <div className="relative flex items-center justify-between border-b border-white/10 bg-white/[0.03] px-4 py-3">
         <div className="min-w-0">
-          <motion.p
-            animate={isBuilding ? { opacity: [1, 0.5, 1] } : {}}
-            transition={{ duration: 1.5, repeat: Infinity }}
-            className="text-[9px] font-black uppercase tracking-[0.3em]"
-            style={{ color: glow }}
-          >
-            {label} — Sandbox Forge
-          </motion.p>
+          <div className="flex items-center gap-2">
+            <motion.p
+              animate={isBuilding ? { opacity: [1, 0.5, 1] } : {}}
+              transition={{ duration: 1.5, repeat: Infinity }}
+              className="text-[9px] font-black uppercase tracking-[0.3em]"
+              style={{ color: glow }}
+            >
+              {label} — Sandbox Forge
+            </motion.p>
+          </div>
           <h3 className="mt-1 truncate text-sm font-black uppercase tracking-[0.16em] text-white">{name}</h3>
         </div>
-        <div className="text-right">
-          <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">{latency}</p>
-          <p className="mt-1 max-w-36 truncate text-[9px] font-mono text-zinc-400">{model}</p>
+        <div className="flex flex-col items-end gap-1">
+          <motion.div
+            animate={isBuilding ? { scale: [1, 1.05, 1] } : {}}
+            transition={{ duration: 1.2, repeat: Infinity }}
+            className="flex items-center gap-1.5 rounded-full border px-2.5 py-1"
+            style={{ borderColor: `${phaseColor}44`, backgroundColor: `${phaseColor}11` }}
+          >
+            {isBuilding && (
+              <motion.div
+                animate={{ opacity: [1, 0.3, 1] }}
+                transition={{ duration: 0.8, repeat: Infinity }}
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: phaseColor }}
+              />
+            )}
+            {isComplete && <div className="h-1.5 w-1.5 rounded-full bg-yellow-400" />}
+            <span className="text-[8px] font-black uppercase tracking-[0.2em]" style={{ color: phaseColor }}>{phaseLabel}</span>
+          </motion.div>
+          <p className="text-[8px] font-mono text-zinc-500">{model} · {latency}</p>
         </div>
       </div>
 
       {/* Progress Bar */}
       <div className="relative border-b border-white/10 bg-zinc-950/80 px-4 py-2">
         <div className="flex items-center justify-between text-[8px] font-black uppercase tracking-[0.22em] text-zinc-500">
-          <span>sandbox-compiler</span>
+          <span className="flex items-center gap-2">
+            sandbox-compiler
+            {phase === 'coding' && <span className="text-green-500">{codeLineCount} lines</span>}
+          </span>
           <motion.span
             animate={isBuilding ? { color: [glow, '#ffffff', glow] } : {}}
             transition={{ duration: 1, repeat: Infinity }}
@@ -1152,12 +1203,20 @@ function SandboxForgePanel({
             {Math.round(progress)}%
           </motion.span>
         </div>
-        <div className="relative mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+        <div className="relative mt-2 h-2 overflow-hidden rounded-full bg-white/10">
           <motion.div
             className="h-full rounded-full"
             animate={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
-            style={{ backgroundColor: glow, boxShadow: `0 0 18px ${glow}` }}
+            transition={{ type: 'spring', stiffness: 60, damping: 20 }}
+            style={{ backgroundColor: phaseColor, boxShadow: `0 0 24px ${phaseColor}` }}
           />
+          {isBuilding && (
+            <motion.div
+              className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent"
+              animate={{ x: ['-100%', '200%'] }}
+              transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }}
+            />
+          )}
         </div>
       </div>
 
@@ -1166,17 +1225,21 @@ function SandboxForgePanel({
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.key;
+          const isTabPhase = (tab.key === 'thinking' && phase === 'thinking') || (tab.key === 'code' && phase === 'coding') || (tab.key === 'preview' && (phase === 'building' || phase === 'complete'));
           return (
             <button
               key={tab.key}
               type="button"
               onClick={() => setActiveTab(tab.key)}
               className={cn(
-                'flex flex-1 items-center justify-center gap-1.5 py-2.5 text-[9px] font-black uppercase tracking-[0.2em] transition',
+                'relative flex flex-1 items-center justify-center gap-1.5 py-2.5 text-[9px] font-black uppercase tracking-[0.2em] transition',
                 isActive ? 'border-b-2 text-white' : 'text-zinc-500 hover:text-zinc-300'
               )}
               style={isActive ? { borderBottomColor: glow, color: glow } : {}}
             >
+              {isTabPhase && !isActive && (
+                <motion.div animate={{ opacity: [0.3, 0.8, 0.3] }} transition={{ duration: 1, repeat: Infinity }} className="absolute inset-0 rounded-sm" style={{ backgroundColor: `${phaseColor}08` }} />
+              )}
               <Icon className="h-3.5 w-3.5" />
               {tab.label}
             </button>
@@ -1195,13 +1258,20 @@ function SandboxForgePanel({
               exit={{ opacity: 0 }}
               className="h-full overflow-auto p-4"
             >
-              <div className="mb-2 flex items-center gap-2">
-                <Brain className="h-3.5 w-3.5 text-orange-400" />
+              <div className="mb-3 flex items-center gap-2">
+                <motion.div animate={phase === 'thinking' ? { rotate: [0, 10, -10, 0] } : {}} transition={{ duration: 2, repeat: Infinity }}>
+                  <Brain className="h-4 w-4 text-orange-400" />
+                </motion.div>
                 <span className="text-[9px] font-black uppercase tracking-[0.3em] text-orange-400">Chain of Thought</span>
+                {phase === 'thinking' && (
+                  <motion.span animate={{ opacity: [1, 0.4, 1] }} transition={{ duration: 1, repeat: Infinity }} className="ml-auto text-[8px] font-black uppercase tracking-widest text-orange-500">
+                    LIVE
+                  </motion.span>
+                )}
               </div>
               <pre className="whitespace-pre-wrap font-mono text-[11px] leading-6 text-orange-100/80">
                 {visibleThinking}
-                {progress < 100 && <motion.span animate={{ opacity: [0, 1, 0] }} transition={{ duration: 0.8, repeat: Infinity }} className="text-orange-300">▌</motion.span>}
+                {progress < 100 && <motion.span animate={{ opacity: [0, 1, 0] }} transition={{ duration: 0.6, repeat: Infinity }} className="text-orange-300">▌</motion.span>}
               </pre>
             </motion.div>
           )}
@@ -1214,15 +1284,21 @@ function SandboxForgePanel({
               exit={{ opacity: 0 }}
               className="h-full overflow-auto p-4"
             >
-              <div className="mb-2 flex items-center gap-2">
-                <Code2 className="h-3.5 w-3.5 text-green-400" />
+              <div className="mb-3 flex items-center gap-2">
+                <Code2 className="h-4 w-4 text-green-400" />
                 <span className="text-[9px] font-black uppercase tracking-[0.3em] text-green-400">Product Source</span>
+                {phase === 'coding' && (
+                  <motion.span animate={{ opacity: [1, 0.4, 1] }} transition={{ duration: 1, repeat: Infinity }} className="ml-auto text-[8px] font-black uppercase tracking-widest text-green-500">
+                    STREAMING
+                  </motion.span>
+                )}
+                <span className="text-[8px] font-mono text-zinc-600">{codeLineCount} lines</span>
               </div>
               <pre className="whitespace-pre-wrap font-mono text-[11px] leading-5 text-green-100">
                 <span className="select-none text-red-300">$ </span>
                 <span className="text-zinc-500">{`forge --gladiator="${name}" --mode=sandbox`}</span>{'\n\n'}
                 {visibleCode}
-                {progress < 100 && <motion.span animate={{ opacity: [0, 1, 0] }} transition={{ duration: 0.8, repeat: Infinity }} className="text-green-300">▌</motion.span>}
+                {progress < 100 && <motion.span animate={{ opacity: [0, 1, 0] }} transition={{ duration: 0.6, repeat: Infinity }} className="text-green-300">▌</motion.span>}
               </pre>
             </motion.div>
           )}
@@ -1238,30 +1314,40 @@ function SandboxForgePanel({
               <div className="flex items-center gap-2 border-b border-white/10 px-4 py-2">
                 <Eye className="h-3.5 w-3.5 text-cyan-400" />
                 <span className="text-[9px] font-black uppercase tracking-[0.3em] text-cyan-400">Live Product Preview</span>
-                {progress < 60 && <span className="text-[8px] text-zinc-500">(available at 60%)</span>}
+                {phase === 'building' && (
+                  <motion.span animate={{ opacity: [1, 0.4, 1] }} transition={{ duration: 1, repeat: Infinity }} className="ml-auto text-[8px] font-black uppercase tracking-widest text-cyan-500">
+                    RENDERING
+                  </motion.span>
+                )}
+                {isComplete && <span className="ml-auto text-[8px] font-black uppercase tracking-widest text-yellow-400">FINAL BUILD</span>}
               </div>
               {iframeHtml ? (
-                <iframe
-                  srcDoc={iframeHtml}
-                  sandbox="allow-scripts"
-                  className="min-h-72 flex-1 bg-white"
-                  title={`${name} sandbox preview`}
-                  style={{ border: 'none' }}
-                />
+                <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.5 }} className="flex-1">
+                  <iframe
+                    srcDoc={iframeHtml}
+                    sandbox="allow-scripts"
+                    className="min-h-72 w-full flex-1 bg-white"
+                    title={`${name} sandbox preview`}
+                    style={{ border: 'none', minHeight: '18rem' }}
+                  />
+                </motion.div>
               ) : (
                 <div className="flex min-h-72 flex-1 items-center justify-center text-zinc-500">
                   <div className="text-center">
-                    <Box className="mx-auto mb-3 h-10 w-10 text-zinc-600" />
+                    <motion.div animate={{ rotate: isBuilding ? [0, 360] : 0, scale: isBuilding ? [1, 1.1, 1] : 1 }} transition={{ rotate: { duration: 4, repeat: Infinity, ease: 'linear' }, scale: { duration: 1.5, repeat: Infinity } }}>
+                      <Box className="mx-auto mb-3 h-12 w-12 text-zinc-600" />
+                    </motion.div>
                     <p className="text-[10px] font-black uppercase tracking-[0.2em]">
-                      {progress < 60 ? 'Product preview builds at 60%' : 'Waiting for code output...'}
+                      {progress < 20 ? 'Forge chamber warming up...' : progress < 40 ? 'Neural pathways connected...' : progress < 60 ? 'Assembling product scaffold...' : 'Waiting for code output...'}
                     </p>
+                    <p className="mt-2 text-[9px] text-zinc-600">Preview renders at 60% completion</p>
                   </div>
                 </div>
               )}
               {parsed.previewDesc && progress >= 80 && (
-                <div className="border-t border-white/10 bg-black/50 px-4 py-2">
+                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="border-t border-white/10 bg-black/50 px-4 py-2">
                   <p className="text-[10px] italic text-zinc-400">{parsed.previewDesc}</p>
-                </div>
+                </motion.div>
               )}
             </motion.div>
           )}
