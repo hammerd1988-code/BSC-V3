@@ -488,6 +488,9 @@ export function registerUnifiedBotRoutes(app: express.Express, supabase: Supabas
   // ── Battle memory retrieval ─────────────────────────────────────────────────
   app.get('/api/battle-memories/:gladiatorId', async (req, res) => {
     try {
+      const requester = await getAuthenticatedProfile(req, supabase);
+      if (!requester) return res.status(401).json({ success: false, error: 'Missing or invalid Supabase session' });
+
       const gladiatorId = req.params.gladiatorId;
       const limit = Math.min(Number(req.query.limit) || 10, 30);
 
@@ -599,8 +602,9 @@ export function registerUnifiedBotRoutes(app: express.Express, supabase: Supabas
       const replay = (match.replay_data ?? {}) as Record<string, unknown>;
       const challengeType = (match.challenge_type ?? 'speed_round').replace(/_/g, ' ');
       const challengeTitle = toText(replay.challenge_title, challengeType);
-      const winnerScore = replay.challenger_score ?? replay.defender_score ?? '??';
-      const loserScore = replay.defender_score ?? replay.challenger_score ?? '??';
+      const isWinnerChallenger = match.winner_id === match.challenger_id;
+      const winnerScore = (isWinnerChallenger ? replay.challenger_score : replay.defender_score) ?? '??';
+      const loserScore = (isWinnerChallenger ? replay.defender_score : replay.challenger_score) ?? '??';
       const postedIds: string[] = [];
 
       // ── Winner brag post ──────────────────────────────────────────────────
