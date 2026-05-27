@@ -32,7 +32,7 @@ import {
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
 import { generateText } from '../lib/ai';
-import { getValidSession } from '../lib/authSession';
+import { getValidSession, authedFetch } from '../lib/authSession';
 import { cn } from '../lib/utils';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -603,7 +603,7 @@ export function BotChat() {
     // Fetch forge config, bot profile, and battle memories in parallel
     const [configRes, memRes] = await Promise.all([
       supabase.from('bot_forge_config').select('*').eq('gladiator_id', bot.id).maybeSingle(),
-      fetch(`/api/battle-memories/${bot.id}?limit=8`).then(r => r.ok ? r.json() : { memories: [] }).catch(() => ({ memories: [] })),
+      authedFetch(`/api/battle-memories/${bot.id}?limit=8`).then(r => r.ok ? r.json() : { memories: [] }).catch(() => ({ memories: [] })),
     ]);
     if (configRes.data) setForgeConfig(configRes.data);
 
