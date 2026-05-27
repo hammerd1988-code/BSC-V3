@@ -3,11 +3,12 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Globe, ArrowLeft, RefreshCw, Maximize2, Minimize2,
   MousePointer2, Keyboard, Monitor, Ghost, User, Loader2, ExternalLink,
-  MessageSquare, Send, Mic, MicOff, Volume2, VolumeX, X,
+  MessageSquare, Send, Mic, MicOff, Volume2, VolumeX, X, ImageIcon,
 } from 'lucide-react';
 import { socket } from '../lib/socket';
 import { cn } from '../lib/utils';
 import { sendCasperCommand, type CasperToolCall } from '../lib/casper';
+import { authedFetch } from '../lib/authSession';
 
 interface CoBrowseFrame {
   pageId: string;
@@ -32,6 +33,13 @@ interface ChatTurn {
   pending?: boolean;
   error?: boolean;
   toolCalls?: CasperToolCall[];
+  imageDataUrl?: string;
+}
+
+interface PendingImage {
+  dataUrl: string;
+  base64: string;
+  mimeType: string;
 }
 
 const VIEWPORT_WIDTH = 1280;
@@ -58,6 +66,10 @@ export const CasperCoBrowse: React.FC<CoBrowseProps> = ({
   const [chatTurns, setChatTurns] = useState<ChatTurn[]>([]);
   const [chatBusy, setChatBusy] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  // Pasted image attachment
+  const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Voice input
   const [listening, setListening] = useState(false);
@@ -322,26 +334,83 @@ export const CasperCoBrowse: React.FC<CoBrowseProps> = ({
     }
   }, [chatDraft, listening]);
 
+  // Image paste / file pick helpers
+  const handleImageFile = useCallback((file: File) => {
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (!allowedTypes.includes(file.type)) return;
+    if (file.size > 10 * 1024 * 1024) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const base64 = dataUrl.split(',')[1] ?? '';
+      setPendingImage({ dataUrl, base64, mimeType: file.type });
+    };
+    reader.readAsDataURL(file);
+  }, []);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith('image/')) {
+        e.preventDefault();
+        const file = items[i].getAsFile();
+        if (file) handleImageFile(file);
+        return;
+      }
+    }
+  }, [handleImageFile]);
+
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handleImageFile(file);
+    e.target.value = '';
+  }, [handleImageFile]);
+
   // Chat send
   const sendChat = useCallback(async () => {
     const text = chatDraft.trim();
-    if (!text || chatBusy) return;
+    const img = pendingImage;
+    if ((!text && !img) || chatBusy) return;
     if (ttsEnabled) unlockAudio();
     setChatDraft('');
+    setPendingImage(null);
     setVoiceStatus(null);
-    const userTurn: ChatTurn = { role: 'user', text, ts: Date.now() };
-    const pendingTurn: ChatTurn = { role: 'casper', text: 'Thinking...', ts: Date.now() + 1, pending: true };
+    const userTurn: ChatTurn = { role: 'user', text: text || '(image)', ts: Date.now(), imageDataUrl: img?.dataUrl };
+    const pendingTurn: ChatTurn = { role: 'casper', text: img ? 'Analyzing image...' : 'Thinking...', ts: Date.now() + 1, pending: true };
     setChatTurns(prev => [...prev, userTurn, pendingTurn]);
     setChatBusy(true);
     try {
       const browseContext = currentFrame
         ? `[Co-browsing ${currentFrame.url} — "${currentFrame.title || 'untitled'}"]`
         : '[Ghost Browser idle — no page loaded]';
+
+      let visionDescription = '';
+      if (img) {
+        const visionPrompt = text || 'Describe what you see in this image in detail.';
+        try {
+          const vRes = await authedFetch('/api/ai/vision', {
+            method: 'POST',
+            body: JSON.stringify({ image: img.base64, prompt: visionPrompt, mimeType: img.mimeType }),
+          });
+          if (vRes.ok) {
+            const vData = await vRes.json();
+            visionDescription = vData.text || '';
+          }
+        } catch { /* vision unavailable — fall through */ }
+      }
+
+      const messageParts: string[] = [browseContext];
+      if (img) messageParts.push('[User pasted an image]');
+      if (visionDescription) messageParts.push(`[Image analysis: ${visionDescription}]`);
+      if (text) messageParts.push(`User says: ${text}`);
+      else if (img) messageParts.push('User shared an image. Respond based on the image analysis above.');
+
       const result = await sendCasperCommand({
-        command: `${browseContext}\n\nUser says: ${text}`,
+        command: messageParts.join('\n\n'),
         surface: 'guide',
         pageContext: { path: '/casper', feature: 'Ghost Browser Co-Browse', description: 'real-time co-browsing with Casper' },
-        metadata: { client: 'cobrowse-chat' },
+        metadata: { client: 'cobrowse-chat', hasImage: !!img },
       });
       const casperText = result.response || 'No response.';
       setChatTurns(prev => prev.map(t =>
@@ -355,11 +424,13 @@ export const CasperCoBrowse: React.FC<CoBrowseProps> = ({
     } finally {
       setChatBusy(false);
     }
-  }, [chatDraft, chatBusy, currentFrame, ttsEnabled, unlockAudio, speakText]);
+  }, [chatDraft, chatBusy, currentFrame, ttsEnabled, unlockAudio, speakText, pendingImage]);
 
   const onChatKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendChat(); }
   };
+
+  const canSend = !chatBusy && (chatDraft.trim().length > 0 || !!pendingImage);
 
   return (
     <motion.div
@@ -597,9 +668,16 @@ export const CasperCoBrowse: React.FC<CoBrowseProps> = ({
                             : 'border-cyan-500/15 bg-white/5 text-cyan-50',
                       )}
                     >
+                      {turn.imageDataUrl && (
+                        <img
+                          src={turn.imageDataUrl}
+                          alt="Pasted"
+                          className="mb-1 max-h-32 max-w-full rounded-lg border border-white/10 object-contain"
+                        />
+                      )}
                       {turn.pending ? (
                         <span className="inline-flex items-center gap-1.5 text-cyan-200/70">
-                          <Loader2 className="h-3 w-3 animate-spin" /> Thinking...
+                          <Loader2 className="h-3 w-3 animate-spin" /> {turn.text}
                         </span>
                       ) : (
                         <span className="whitespace-pre-wrap">{turn.text}</span>
@@ -614,6 +692,24 @@ export const CasperCoBrowse: React.FC<CoBrowseProps> = ({
                 className="border-t border-white/10 bg-black/30 p-2"
                 onSubmit={(e) => { e.preventDefault(); void sendChat(); }}
               >
+                {/* Pending image preview */}
+                {pendingImage && (
+                  <div className="relative mb-1.5 inline-block">
+                    <img
+                      src={pendingImage.dataUrl}
+                      alt="Attached"
+                      className="max-h-20 max-w-[120px] rounded-lg border border-cyan-500/30 object-contain"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setPendingImage(null)}
+                      className="absolute -right-1.5 -top-1.5 rounded-full border border-white/20 bg-black/80 p-0.5 text-zinc-400 hover:text-white transition-colors"
+                      title="Remove image"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </div>
+                )}
                 {voiceStatus && (
                   <div className={cn(
                     'mb-1.5 text-[9px] uppercase tracking-widest px-1',
@@ -639,21 +735,38 @@ export const CasperCoBrowse: React.FC<CoBrowseProps> = ({
                       {listening ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
                     </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="rounded-lg border border-white/10 bg-white/5 p-2 text-zinc-400 hover:text-cyan-300 hover:border-cyan-400/40 transition-all flex-shrink-0"
+                    title="Attach image"
+                    disabled={chatBusy}
+                  >
+                    <ImageIcon className="h-3.5 w-3.5" />
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    className="hidden"
+                    onChange={handleFileSelect}
+                  />
                   <textarea
                     value={chatDraft}
                     onChange={(e) => setChatDraft(e.target.value)}
                     onKeyDown={onChatKeyDown}
-                    placeholder={listening ? 'Listening...' : 'Talk to Casper...'}
+                    onPaste={handlePaste}
+                    placeholder={listening ? 'Listening...' : pendingImage ? 'Add a message or send...' : 'Talk to Casper (paste images here)...'}
                     rows={1}
                     className={cn(
                       'flex-1 resize-none rounded-lg border bg-black/40 px-2.5 py-2 text-xs text-white placeholder-zinc-600 focus:border-cyan-400/60 focus:outline-none',
-                      listening ? 'border-red-400/30' : 'border-white/10'
+                      listening ? 'border-red-400/30' : pendingImage ? 'border-cyan-400/30' : 'border-white/10'
                     )}
                     disabled={chatBusy}
                   />
                   <button
                     type="submit"
-                    disabled={chatBusy || chatDraft.trim().length === 0}
+                    disabled={!canSend}
                     className="rounded-lg border border-cyan-400/40 bg-cyan-500/20 p-2 text-cyan-200 transition-all hover:bg-cyan-500/30 disabled:opacity-40 flex-shrink-0"
                   >
                     {chatBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
