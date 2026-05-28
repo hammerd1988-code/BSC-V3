@@ -33,6 +33,7 @@ import { registerServerAiRoutes } from './serverAi.js';
 import { registerColosseumRoutes } from './colosseumRoutes.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
 import { registerCoBrowseSocket } from './casperCoBrowse.js';
+import { registerStripeRoutes } from './stripeRoutes.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -90,8 +91,11 @@ async function startServer() {
     apiSecret: process.env.LIVEKIT_API_SECRET ? '✓ set' : '✗ missing',
   });
 
-  // Middleware
-  app.use(express.json({ limit: '12mb' }));
+  // Middleware (skip Stripe webhook — needs raw body for signature verification)
+  app.use((req, res, next) => {
+    if (req.path === '/api/stripe/webhook') return next();
+    express.json({ limit: '12mb' })(req, res, next);
+  });
 
   // CORS middleware for REST endpoints, including Bot API Bearer-token calls.
   app.use((req, res, next) => {
@@ -118,6 +122,7 @@ async function startServer() {
   registerServerAiRoutes(app, supabase);
   registerUnifiedBotRoutes(app, supabase);
   registerColosseumRoutes(app, supabase);
+  registerStripeRoutes(app, supabase);
 
   // Webhook Authentication Middleware
   const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
