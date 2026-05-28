@@ -758,7 +758,7 @@ export function BotChat() {
     } finally {
       setGenerating(false);
     }
-  }, [draft, generating, selectedBot, messages, systemPrompt, instructionMode, isOwner, currentUser, voiceMode, ttsEnabled, speakText]);
+  }, [draft, generating, selectedBot, messages, systemPrompt, instructionMode, isOwner, currentUser, voiceMode, ttsEnabled, speakText, canAccess, recordUsage]);
 
   const clearConversation = useCallback(() => {
     if (!selectedBot) return;

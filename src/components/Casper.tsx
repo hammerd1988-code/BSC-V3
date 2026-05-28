@@ -1223,7 +1223,7 @@ export const Casper: React.FC = () => {
         timestamp: new Date(),
       }]);
     }
-  }, [facingMode, stopCamera]);
+  }, [facingMode, stopCamera, canAccess]);
 
   const switchCamera = useCallback(() => {
     const next = facingMode === 'environment' ? 'user' : 'environment';
@@ -1259,7 +1259,7 @@ export const Casper: React.FC = () => {
     void speakOnce(greeting, () => {
       if (voiceActiveRef.current) void startListeningSessionRef.current();
     });
-  }, [playBooLaugh, speakOnce, unlockPersistentAudio]);
+  }, [playBooLaugh, speakOnce, unlockPersistentAudio, canAccess]);
 
   useEffect(() => () => { exitVoiceMode(); stopCamera(); }, [exitVoiceMode, stopCamera]);
 
@@ -1369,7 +1369,7 @@ export const Casper: React.FC = () => {
       setIsGenerating(false);
       if (ttsEnabled && voiceState !== 'recording') void speakOnce(fallback);
     }
-  }, [input, isGenerating, messages, aiSettings, integrationContext, currentUser?.id, ttsEnabled, voiceState, speakOnce, authFetch, visionActive, analyzeWithVision]);
+  }, [input, isGenerating, messages, aiSettings, integrationContext, currentUser?.id, ttsEnabled, voiceState, speakOnce, authFetch, visionActive, analyzeWithVision, canAccess, recordUsage]);
 
   const clearChat = () => {
     const greeting = CASPER_GREETINGS[Math.floor(Math.random() * CASPER_GREETINGS.length)];
