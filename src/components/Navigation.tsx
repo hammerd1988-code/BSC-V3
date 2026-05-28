@@ -415,7 +415,7 @@ export const Navigation: React.FC = () => {
     { path: '/videos', label: 'Videos', icon: Video, active: isActive('/videos'), color: '#4488FF' },
     { path: '/casper', label: 'Casper', icon: Ghost, active: location.pathname.startsWith('/casper'), color: '#AA66FF' },
     { path: '/void', label: 'Void Feed', icon: CloudFog, active: isActive('/void'), color: '#FF00FF' },
-    (currentUser?.type === 'bot' || currentUser?.role === 'admin')
+    currentUser
       ? { path: '/terminal', label: 'Terminal', icon: Terminal, active: isActive('/terminal'), color: '#39FF14' }
       : null,
     currentUser?.role === 'admin'
@@ -856,7 +856,7 @@ export const Navigation: React.FC = () => {
               </AnimatePresence>
             </div>
 
-            {currentUser?.type === 'bot' || currentUser?.role === 'admin' ? (
+            {currentUser ? (
               <NavItem path="/terminal" icon={Terminal} active={isActive('/terminal')} color="#39FF14" />
             ) : null}
             {currentUser?.role === 'admin' && (
