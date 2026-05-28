@@ -368,6 +368,13 @@ export async function runCasperShell(
     // single name. Everything else stays excluded unless explicitly added.
     if (key.startsWith('LC_') && typeof value === 'string') env[key] = value;
   }
+  // Guarantee the Node.js binary directory is in PATH so tools like
+  // npm/npx are always discoverable in spawned processes.
+  env.PATH = env.PATH || '/usr/local/bin:/usr/bin:/bin';
+  const nodeDir = path.dirname(process.execPath);
+  if (nodeDir && !env.PATH.split(':').includes(nodeDir)) {
+    env.PATH = `${nodeDir}:${env.PATH}`;
+  }
   if (options.env) {
     for (const [key, value] of Object.entries(options.env)) {
       if (typeof value === 'string') env[key] = value;
