@@ -1,8 +1,10 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useAuth } from '../AuthContext';
-import { Terminal, ShieldAlert, Command, GitBranch, Server, FolderOpen, Loader2 } from 'lucide-react';
+import { Terminal, ShieldAlert, Command, GitBranch, Server, FolderOpen, Loader2, Lock } from 'lucide-react';
 import { sendCasperCommand } from '../lib/casper';
 import { supabase } from '../supabase';
+import { useSubscription } from '../lib/subscription';
+import { UpgradePromptModal } from './UpgradePrompt';
 
 interface TerminalLine {
   id: string;
@@ -37,7 +39,32 @@ const HELP_TEXT = `AVAILABLE COMMANDS:
     tool access. Try: "clone https://github.com/expressjs/express
     and tell me about it"`;
 
-export const BotTerminal: React.FC = () => {
+function TerminalGate() {
+  const { canAccess } = useSubscription();
+  const gate = canAccess('neural_terminal');
+
+  if (!gate.allowed) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center p-4">
+        <div className="max-w-md text-center space-y-6">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-500/20 to-fuchsia-500/20 border border-white/10">
+            <Lock className="h-8 w-8 text-cyan-400" />
+          </div>
+          <h2 className="text-2xl font-black uppercase tracking-wider text-white">Neural Terminal</h2>
+          <p className="text-zinc-400 text-sm">{gate.upgradeMessage}</p>
+          <p className="text-zinc-500 text-xs">Clone repos, install dependencies, build projects, and ship PRs — all powered by Casper's 14 Dev Agent tools.</p>
+          <UpgradePromptModal gate={gate} open={true} onClose={() => window.history.back()} />
+        </div>
+      </div>
+    );
+  }
+
+  return <BotTerminalInner />;
+}
+
+export const BotTerminal: React.FC = TerminalGate;
+
+const BotTerminalInner: React.FC = () => {
   const { currentUser } = useAuth();
   const [input, setInput] = useState('');
   const [history, setHistory] = useState<TerminalLine[]>([

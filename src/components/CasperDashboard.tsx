@@ -50,6 +50,8 @@ import {
   maskSecret,
   type CasperIntegrationCategory,
 } from '../lib/casperIntegrations';
+import { useSubscription } from '../lib/subscription';
+import { UpgradeInlineCard } from './UpgradePrompt';
 
 interface CasperStateRow {
   id: number;
@@ -647,7 +649,16 @@ export const CasperDashboard: React.FC = () => {
   const toggleIntegration = async (key: string) => { const record = integrationRecord(key); if (!record) return connectIntegration(key); const enabled = !record.enabled; const { error } = await supabase.from('casper_integrations').update({ enabled, status: enabled ? 'connected' : 'disconnected', connected_at: enabled ? new Date().toISOString() : record.connected_at }).eq('id', record.id); if (error) setNotice(error.message); else await fetchDashboard(); };
   const disconnectIntegration = async (key: string) => { const record = integrationRecord(key); if (!record) return; const { error } = await supabase.from('casper_integrations').update({ enabled: false, status: 'disconnected', api_key_encrypted: null }).eq('id', record.id); if (error) setNotice(error.message); else await fetchDashboard(); };
 
-  if (currentUser?.role !== 'admin') return <div className="grid min-h-screen place-items-center bg-black text-white">Admin clearance required.</div>;
+  const { canAccess } = useSubscription();
+  const dashboardGate = canAccess('ghostops_dashboard');
+  if (!dashboardGate.allowed) return (
+    <div className="grid min-h-screen place-items-center bg-black text-white p-4">
+      <div className="max-w-md space-y-4 text-center">
+        <h2 className="text-xl font-black uppercase tracking-wider">GhostOps Dashboard</h2>
+        <UpgradeInlineCard gate={dashboardGate} />
+      </div>
+    </div>
+  );
 
   return (
     <div className="relative min-h-screen bg-[#020205] pb-32 text-white">

@@ -51,6 +51,8 @@ import { BOT_GLADIATOR_PROFILE_BY_USERNAME, type BotDifficulty } from '../lib/bo
 import { ReportModal } from './ReportModal';
 import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
 import { DistrictCityBackdrop } from './DistrictCityBackdrop';
+import { useSubscription, type FeatureGateResult } from '../lib/subscription';
+import { UpgradePromptModal } from './UpgradePrompt';
 
 type ChallengeType = 'speed_round' | 'debug_battle' | 'code_golf' | 'architect_duel' | 'prompt_war' | 'roast_battle' | 'code_jeopardy' | 'sandbox_build';
 
@@ -3344,6 +3346,8 @@ function TournamentPanel({
 
 export const Colosseum: React.FC = () => {
   const { currentUser } = useAuth();
+  const { canAccess, recordUsage } = useSubscription();
+  const [upgradeGate, setUpgradeGate] = useState<FeatureGateResult | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedGladiatorId = searchParams.get('gladiator');
   const [gladiators, setGladiators] = useState<Gladiator[]>([]);
@@ -3767,6 +3771,10 @@ export const Colosseum: React.FC = () => {
   const startChallenge = async (opponentOverride?: Gladiator, challengeTypeOverride = challengeType, solutionOverride?: string) => {
     const defender = opponentOverride ?? selectedOpponent;
     if (!defender || starting || battleInProgress) return;
+
+    const challengeGate = canAccess('colosseum_challenge');
+    if (!challengeGate.allowed) { setUpgradeGate(challengeGate); return; }
+    void recordUsage('colosseum_challenge');
     const activeChallengeType = challengeTypeOverride;
     const codingChallenge = challengeFor(defender.botProfile, activeChallengeType);
     const submittedSolution = (solutionOverride ?? userSolution).trim();
@@ -5191,6 +5199,7 @@ export const Colosseum: React.FC = () => {
           </div>
         </section>
       </div>
+      <UpgradePromptModal gate={upgradeGate} open={!!upgradeGate} onClose={() => setUpgradeGate(null)} />
     </div>
   );
 };
