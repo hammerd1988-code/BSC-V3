@@ -38,6 +38,11 @@ import {
   runCasperShell,
   type CasperShellMode,
 } from './casperShell.js';
+import {
+  DEV_AGENT_TOOL_SPECS,
+  isDevAgentTool,
+  executeDevAgentTool,
+} from './casperDevAgent.js';
 
 const TOOL_NAME_SEPARATOR = '__';
 const SHELL_TOOL_NAME = `shell${TOOL_NAME_SEPARATOR}exec`;
@@ -209,6 +214,10 @@ export function buildToolSpecs(ctx: ToolExecutionContext): LlmToolSpec[] {
     specs.push(shellToolSpec(ctx.shellMode));
   }
 
+  // Dev Agent tools (clone, install, build, start server, git ops, etc.)
+  // Available on control_center and studio surfaces.
+  specs.push(...DEV_AGENT_TOOL_SPECS);
+
   return specs;
 }
 
@@ -234,6 +243,11 @@ export async function executeTool(
 ): Promise<LlmToolCallResult> {
   const start = Date.now();
   try {
+    // Dev Agent tools — workspace-scoped repo management
+    if (isDevAgentTool(call.name)) {
+      return executeDevAgentTool(call);
+    }
+
     if (call.name === SHELL_TOOL_NAME) {
       if (ctx.shellMode === 'disabled') {
         return {
