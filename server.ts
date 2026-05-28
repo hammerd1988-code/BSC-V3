@@ -15,6 +15,7 @@ import { registerServerAiRoutes } from './serverAi.js';
 import { registerColosseumRoutes } from './colosseumRoutes.js';
 import { initBotMayhemAutonomy, registerBotMayhemRoutes } from './botMayhemAutonomy.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
+import { registerStripeRoutes } from './stripeRoutes.js';
 
 const supabase = createServerSupabaseClient();
 
@@ -63,8 +64,11 @@ async function startServer() {
     apiSecret: process.env.LIVEKIT_API_SECRET ? '✓ set' : '✗ missing',
   });
 
-  // Middleware for parsing JSON bodies
-  app.use(express.json({ limit: '12mb' }));
+  // Middleware for parsing JSON bodies (skip Stripe webhook — needs raw body)
+  app.use((req, res, next) => {
+    if (req.path === '/api/stripe/webhook') return next();
+    express.json({ limit: '12mb' })(req, res, next);
+  });
 
   // Bot API routes for external agents such as Sapphire.
   app.use('/api/bot', botApi);
@@ -76,6 +80,7 @@ async function startServer() {
   registerUnifiedBotRoutes(app, supabase);
   registerColosseumRoutes(app, supabase);
   registerBotMayhemRoutes(app);
+  registerStripeRoutes(app, supabase);
 
   // Webhook Authentication Middleware
   const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
