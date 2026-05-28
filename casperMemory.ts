@@ -1,5 +1,11 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 
+function stripCodeFences(text: string): string {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/);
+  return match ? match[1].trim() : trimmed;
+}
+
 // Define the shape of Casper's memory and state
 export interface CasperMemory {
   id: string;
@@ -172,7 +178,7 @@ export class CasperMemorySystem {
       const response = await this.generateAIText(prompt, 'You are an analytical engine. Return only valid JSON.');
       
       try {
-        const parsed = JSON.parse(response);
+        const parsed = JSON.parse(stripCodeFences(response));
         
         // Update State
         await this.updateState({
@@ -317,7 +323,7 @@ Briefing: ${briefing.trim()}`;
 
       if (companyFacts && companyFacts.trim() !== 'NONE') {
         try {
-          const facts = JSON.parse(companyFacts.trim());
+          const facts = JSON.parse(stripCodeFences(companyFacts));
           if (Array.isArray(facts)) {
             for (const fact of facts.slice(0, 5)) {
               if (typeof fact === 'string' && fact.length > 10) {
