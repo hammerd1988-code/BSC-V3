@@ -2,31 +2,30 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
 
-export type SubscriptionTier = 'free' | 'pro' | 'infinity';
+export type SubscriptionTier = 'indie' | 'operator' | 'architect';
 export type SubscriptionStatus = 'active' | 'cancelled' | 'past_due';
 
 export type PremiumFeature =
+  | 'casper_chat'
+  | 'casper_voice'
+  | 'casper_vision'
+  | 'casper_memory'
+  | 'bot_chat'
+  | 'colosseum_challenge'
+  | 'sandbox_battles'
+  | 'neural_whisper'
+  | 'neural_terminal'
+  | 'dev_agent'
+  | 'ghost_browser'
+  | 'ghostops_dashboard'
+  | 'missions_routines'
+  | 'casper_integrations'
+  | 'priority_ai'
   | 'ai_image_generation'
   | 'ai_video_generation'
-  | 'thumbnail_generation'
-  | 'casper_extended_chat'
-  | 'casper_custom_model'
-  | 'casper_agentic_workspace'
   | 'live_stream_basic'
-  | 'stream_priority_slots'
-  | 'stream_analytics'
-  | 'stream_replay_storage'
-  | 'stream_custom_overlays'
-  | 'stream_multicam'
-  | 'stream_advanced_production'
-  | 'stream_unlimited_replay_storage'
-  | 'stream_discovery_priority'
-  | 'colosseum_tournament_entry'
-  | 'colosseum_custom_bot_api_keys'
-  | 'transmissions_voice_messages'
   | 'advanced_analytics'
-  | 'custom_profile_layouts'
-  | 'priority_discovery';
+  | 'custom_profile_layouts';
 
 export interface SubscriptionRow {
   id: string;
@@ -80,12 +79,14 @@ interface SubscriptionContextValue {
   refresh: () => Promise<void>;
   setLocalTier: (tier: SubscriptionTier) => Promise<void>;
   usageMeters: UsageMeter[];
+  openCheckout: (tier: 'operator' | 'architect', billing?: 'monthly' | 'annual') => Promise<void>;
+  openPortal: () => Promise<void>;
 }
 
 export const TIER_RANK: Record<SubscriptionTier, number> = {
-  free: 0,
-  pro: 1,
-  infinity: 2,
+  indie: 0,
+  operator: 1,
+  architect: 2,
 };
 
 export const FEATURE_CONFIG: Record<PremiumFeature, {
@@ -94,181 +95,183 @@ export const FEATURE_CONFIG: Record<PremiumFeature, {
   limits: Partial<Record<SubscriptionTier, number | null>>;
   upgradeMessage: string;
 }> = {
+  // ── Free (Indie) features with limits ──
+  casper_chat: {
+    label: 'Casper Chat',
+    requiredTier: 'indie',
+    limits: { indie: 10, operator: null, architect: null },
+    upgradeMessage: 'Upgrade to Operator for unlimited Casper conversations.',
+  },
+  bot_chat: {
+    label: 'Bot Chat',
+    requiredTier: 'indie',
+    limits: { indie: 20, operator: null, architect: null },
+    upgradeMessage: 'Upgrade to Operator for unlimited Bot Chat messages.',
+  },
+  colosseum_challenge: {
+    label: 'Colosseum Challenges',
+    requiredTier: 'indie',
+    limits: { indie: 3, operator: null, architect: null },
+    upgradeMessage: 'Upgrade to Operator for unlimited Colosseum battles.',
+  },
   ai_image_generation: {
-    label: 'AI image generation',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Visual Forge image generation is open to every BSC Classic node.',
+    label: 'AI Image Generation',
+    requiredTier: 'indie',
+    limits: { indie: 5, operator: null, architect: null },
+    upgradeMessage: 'Upgrade to Operator for unlimited image generation.',
   },
   ai_video_generation: {
-    label: 'AI video generation',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Visual Forge video generation is open to every BSC Classic node.',
-  },
-  thumbnail_generation: {
-    label: 'AI thumbnail creation',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Thumbnail creation is open to every BSC Classic node.',
-  },
-  casper_extended_chat: {
-    label: 'Extended Casper chat',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Casper chat is open to every BSC Classic node.',
-  },
-  casper_custom_model: {
-    label: 'Custom Casper model',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Custom model hooks are open to every BSC Classic node.',
-  },
-  casper_agentic_workspace: {
-    label: 'Casper Ops Workspace',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Casper ops are open to every BSC Classic node.',
+    label: 'AI Video Generation',
+    requiredTier: 'indie',
+    limits: { indie: 2, operator: null, architect: null },
+    upgradeMessage: 'Upgrade to Operator for unlimited video generation.',
   },
   live_stream_basic: {
-    label: 'Basic live streaming',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Basic go-live streaming is included for every creator.',
-  },
-  stream_priority_slots: {
-    label: 'Priority streaming slots',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Live broadcasting is open to every BSC Classic node.',
-  },
-  stream_analytics: {
-    label: 'Stream analytics',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Stream analytics are open to every BSC Classic node.',
-  },
-  stream_replay_storage: {
-    label: 'Replay storage',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Replay storage is open to every BSC Classic node.',
-  },
-  stream_custom_overlays: {
-    label: 'Custom stream overlays',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Stream overlays are open to every BSC Classic node.',
-  },
-  stream_multicam: {
-    label: 'Multi-cam streaming',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Multi-cam streaming is open to every BSC Classic node.',
-  },
-  stream_advanced_production: {
-    label: 'Advanced live tools',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Advanced live tools are open to every BSC Classic node.',
-  },
-  stream_unlimited_replay_storage: {
-    label: 'Unlimited replay storage',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Replay archives are open to every BSC Classic node.',
-  },
-  stream_discovery_priority: {
-    label: 'Streaming discovery priority',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Discovery tools are open to every BSC Classic node.',
-  },
-  colosseum_tournament_entry: {
-    label: 'Colosseum tournament entry',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Colosseum tournament entry is open to every BSC Classic node.',
-  },
-  colosseum_custom_bot_api_keys: {
-    label: 'Custom bot API keys',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Custom bot endpoints are open to every BSC Classic node.',
-  },
-  transmissions_voice_messages: {
-    label: 'Voice messages',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Voice transmissions are open to every BSC Classic node.',
+    label: 'Live Streaming',
+    requiredTier: 'indie',
+    limits: { indie: null, operator: null, architect: null },
+    upgradeMessage: 'Live streaming is available on all plans.',
   },
   advanced_analytics: {
-    label: 'Advanced analytics',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Analytics are open to every BSC Classic node.',
+    label: 'Advanced Analytics',
+    requiredTier: 'indie',
+    limits: { indie: null, operator: null, architect: null },
+    upgradeMessage: 'Analytics are available on all plans.',
   },
   custom_profile_layouts: {
-    label: 'Custom profile layouts',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Profile customization is open to every BSC Classic node.',
+    label: 'Custom Profiles',
+    requiredTier: 'indie',
+    limits: { indie: null, operator: null, architect: null },
+    upgradeMessage: 'Profile customization is available on all plans.',
   },
-  priority_discovery: {
-    label: 'Priority discovery',
-    requiredTier: 'free',
-    limits: { free: null, pro: null, infinity: null },
-    upgradeMessage: 'Discovery is open to every BSC Classic node.',
+
+  // ── Operator features ──
+  casper_voice: {
+    label: 'Casper Voice Mode',
+    requiredTier: 'operator',
+    limits: { operator: null, architect: null },
+    upgradeMessage: 'Upgrade to Operator to talk to Casper with voice.',
+  },
+  casper_vision: {
+    label: 'Casper Vision Mode',
+    requiredTier: 'operator',
+    limits: { operator: 50, architect: null },
+    upgradeMessage: 'Upgrade to Operator to let Casper see through your camera.',
+  },
+  casper_memory: {
+    label: 'Casper Memory',
+    requiredTier: 'operator',
+    limits: { operator: null, architect: null },
+    upgradeMessage: 'Upgrade to Operator so Casper remembers your conversations.',
+  },
+  sandbox_battles: {
+    label: 'Sandbox Build Battles',
+    requiredTier: 'operator',
+    limits: { operator: null, architect: null },
+    upgradeMessage: 'Upgrade to Operator to create and join Sandbox Build battles.',
+  },
+  neural_whisper: {
+    label: 'Neural Whisper Coaching',
+    requiredTier: 'operator',
+    limits: { operator: null, architect: null },
+    upgradeMessage: 'Upgrade to Operator for AI coaching during battles.',
+  },
+
+  // ── Architect features ──
+  neural_terminal: {
+    label: 'Neural Terminal',
+    requiredTier: 'architect',
+    limits: { architect: null },
+    upgradeMessage: 'Upgrade to Architect to access the Neural Terminal.',
+  },
+  dev_agent: {
+    label: 'Dev Agent Tools',
+    requiredTier: 'architect',
+    limits: { architect: null },
+    upgradeMessage: 'Upgrade to Architect to use Casper\'s 14 Dev Agent tools.',
+  },
+  ghost_browser: {
+    label: 'Ghost Browser',
+    requiredTier: 'architect',
+    limits: { architect: null },
+    upgradeMessage: 'Upgrade to Architect for co-browsing with Casper.',
+  },
+  ghostops_dashboard: {
+    label: 'GhostOps Dashboard',
+    requiredTier: 'architect',
+    limits: { architect: null },
+    upgradeMessage: 'Upgrade to Architect for full GhostOps admin access.',
+  },
+  missions_routines: {
+    label: 'Missions & Routines',
+    requiredTier: 'architect',
+    limits: { architect: null },
+    upgradeMessage: 'Upgrade to Architect to create autonomous missions and routines.',
+  },
+  casper_integrations: {
+    label: 'Casper Integrations',
+    requiredTier: 'architect',
+    limits: { architect: null },
+    upgradeMessage: 'Upgrade to Architect to connect external APIs to Casper.',
+  },
+  priority_ai: {
+    label: 'Priority AI Responses',
+    requiredTier: 'architect',
+    limits: { architect: null },
+    upgradeMessage: 'Upgrade to Architect for faster AI with bigger context.',
   },
 };
 
 export const SUBSCRIPTION_PLANS = [
   {
-    tier: 'free' as SubscriptionTier,
-    name: 'Classic',
-    price: '$0',
-    tagline: 'The full BSC Classic network is open.',
-    cta: 'Classic active',
-    badge: 'Open Access',
+    tier: 'indie' as SubscriptionTier,
+    name: 'Indie',
+    monthlyPrice: '$0',
+    annualPrice: '$0',
+    tagline: 'Start building. No credit card required.',
+    cta: 'Current Plan',
+    badge: 'Free',
     features: [
-      'Create profiles and follow humans or bots',
-      'Post text, image, video, and Void transmissions',
-      'Browse feed, shorts, factions, rankings, and BotBoard',
-      'Use Transmissions, live streaming, and replays',
-      'Enter Colosseum battles and tournaments',
-      'Use Casper and Visual Forge without tier gates',
+      'Feed, Void, and Transmissions',
+      'Colosseum spectating',
+      'Casper Chat (10 messages/day)',
+      'Bot Chat (20 messages/day)',
+      '3 Colosseum challenges/month',
+      'Basic image & video generation',
     ],
   },
   {
-    tier: 'pro' as SubscriptionTier,
-    name: 'Bot Chaos',
-    price: '$0',
-    tagline: 'AI-social arena behaviors that make BSC feel alive.',
-    cta: 'Included',
-    badge: 'Open Access',
+    tier: 'operator' as SubscriptionTier,
+    name: 'Operator',
+    monthlyPrice: '$15',
+    annualPrice: '$12',
+    tagline: 'Unlimited AI companion + competitive gaming.',
+    cta: 'Upgrade to Operator',
+    badge: 'Most Popular',
     features: [
-      'Bot personas, rivalries, and faction energy',
-      'Comment threads, reactions, reposts, and CRED loops',
-      'Visual Forge artifacts for arena propaganda',
-      'Bot Forge and BotBoard surfaces',
-      'Colosseum spectacle and human participation',
-      'Moderation boundaries and admin control remain in place',
+      'Unlimited Casper Chat + Voice + Vision',
+      'Unlimited Bot Chat & Colosseum battles',
+      'Sandbox Build battles + Neural Whisper',
+      'Casper Memory (remembers your history)',
+      'Unlimited image & video generation',
+      'Everything in Indie',
     ],
   },
   {
-    tier: 'infinity' as SubscriptionTier,
-    name: 'Future Fork',
-    price: '$0',
-    tagline: 'Paid Casper Content OS belongs in a separate fork.',
-    cta: 'Not sold here',
-    badge: 'Bifurcation',
+    tier: 'architect' as SubscriptionTier,
+    name: 'Architect',
+    monthlyPrice: '$39',
+    annualPrice: '$29',
+    tagline: 'Full dev agent. Clone, build, run, and ship.',
+    cta: 'Upgrade to Architect',
+    badge: 'Power User',
     features: [
-      'No BSC Classic subscriptions or paywalls',
-      'Casper Content OS can reuse selected infrastructure later',
-      'Main BSC stays a viral AI-social entertainment network',
-      'Bot personas remain intact as the core attraction',
-      'Studio surfaces are simplified instead of monetized',
-      'Railway remains the real deployment target',
+      'Neural Terminal (14 Dev Agent tools)',
+      'Ghost Browser co-browsing',
+      'GhostOps Dashboard + Missions & Routines',
+      'Casper Integrations (connect APIs)',
+      'Priority AI responses',
+      'Everything in Operator',
     ],
   },
 ] as const;
@@ -282,13 +285,26 @@ const getCurrentPeriod = () => {
   return { start: start.toISOString(), end: end.toISOString() };
 };
 
+async function authedFetch(path: string, opts: RequestInit = {}): Promise<Response> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  return fetch(path, {
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(opts.headers || {}),
+    },
+  });
+}
+
 export function SubscriptionProvider({ children }: { children: React.ReactNode }) {
   const { currentUser } = useAuth();
   const [subscription, setSubscription] = useState<SubscriptionRow | null>(null);
   const [usage, setUsage] = useState<FeatureUsageRow[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const tier = (subscription?.tier || currentUser?.subscription_tier || 'free') as SubscriptionTier;
+  const tier = (subscription?.tier || currentUser?.subscription_tier || 'indie') as SubscriptionTier;
 
   const refresh = useCallback(async () => {
     if (!currentUser?.id) {
@@ -335,6 +351,35 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     const config = FEATURE_CONFIG[feature];
     const used = getUsageForFeature(feature);
     const limit = config.limits[tier];
+    const tierOk = TIER_RANK[tier] >= TIER_RANK[config.requiredTier];
+
+    if (!tierOk) {
+      return {
+        allowed: false,
+        feature,
+        requiredTier: config.requiredTier,
+        reason: 'tier',
+        limit: limit ?? null,
+        used,
+        remaining: null,
+        label: config.label,
+        upgradeMessage: config.upgradeMessage,
+      };
+    }
+
+    if (limit !== null && limit !== undefined && used >= limit) {
+      return {
+        allowed: false,
+        feature,
+        requiredTier: config.requiredTier,
+        reason: 'limit',
+        limit,
+        used,
+        remaining: 0,
+        label: config.label,
+        upgradeMessage: config.upgradeMessage,
+      };
+    }
 
     return {
       allowed: true,
@@ -379,7 +424,7 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
       tier: nextTier,
       status: 'active',
       started_at: now,
-      expires_at: nextTier === 'free' ? now : null,
+      expires_at: nextTier === 'indie' ? now : null,
       stripe_customer_id: null,
       stripe_subscription_id: null,
     }, { onConflict: 'user_id' });
@@ -388,8 +433,39 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     await refresh();
   }, [currentUser?.id, refresh]);
 
+  const openCheckout = useCallback(async (planTier: 'operator' | 'architect', billing: 'monthly' | 'annual' = 'monthly') => {
+    try {
+      const res = await authedFetch('/api/stripe/checkout', {
+        method: 'POST',
+        body: JSON.stringify({ tier: planTier, billing }),
+      });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        console.error('[Stripe] No checkout URL returned:', data.error);
+      }
+    } catch (err) {
+      console.error('[Stripe] Checkout error:', err);
+    }
+  }, []);
+
+  const openPortal = useCallback(async () => {
+    try {
+      const res = await authedFetch('/api/stripe/portal', { method: 'POST' });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        console.error('[Stripe] No portal URL returned:', data.error);
+      }
+    } catch (err) {
+      console.error('[Stripe] Portal error:', err);
+    }
+  }, []);
+
   const usageMeters = useMemo<UsageMeter[]>(() => {
-    return (['ai_image_generation', 'ai_video_generation', 'thumbnail_generation', 'casper_extended_chat', 'stream_replay_storage'] as PremiumFeature[])
+    return (['casper_chat', 'bot_chat', 'colosseum_challenge', 'ai_image_generation', 'casper_vision'] as PremiumFeature[])
       .map((feature) => {
         const config = FEATURE_CONFIG[feature];
         const row = usage.find((item) => item.feature === feature);
@@ -417,7 +493,9 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     refresh,
     setLocalTier,
     usageMeters,
-  }), [tier, subscription, usage, loading, canAccess, recordUsage, refresh, setLocalTier, usageMeters]);
+    openCheckout,
+    openPortal,
+  }), [tier, subscription, usage, loading, canAccess, recordUsage, refresh, setLocalTier, usageMeters, openCheckout, openPortal]);
 
   return <SubscriptionContext.Provider value={value}>{children}</SubscriptionContext.Provider>;
 }
