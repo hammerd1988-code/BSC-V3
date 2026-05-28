@@ -2,31 +2,31 @@
 -- Rename subscription tiers: free → indie, pro → operator, infinity → architect
 -- Idempotent — safe to re-paste.
 
--- 1. Migrate existing data in users table
+-- 1. Drop old check constraints FIRST (before updating data)
+ALTER TABLE public.users DROP CONSTRAINT IF EXISTS users_subscription_tier_check;
+ALTER TABLE public.subscriptions DROP CONSTRAINT IF EXISTS subscriptions_tier_check;
+
+-- 2. Migrate existing data
 UPDATE public.users SET subscription_tier = 'indie' WHERE subscription_tier = 'free';
 UPDATE public.users SET subscription_tier = 'operator' WHERE subscription_tier = 'pro';
 UPDATE public.users SET subscription_tier = 'architect' WHERE subscription_tier = 'infinity';
 
--- 2. Migrate existing data in subscriptions table
 UPDATE public.subscriptions SET tier = 'indie' WHERE tier = 'free';
 UPDATE public.subscriptions SET tier = 'operator' WHERE tier = 'pro';
 UPDATE public.subscriptions SET tier = 'architect' WHERE tier = 'infinity';
 
--- 3. Update check constraint on users.subscription_tier
-ALTER TABLE public.users DROP CONSTRAINT IF EXISTS users_subscription_tier_check;
+-- 3. Add new check constraints
 ALTER TABLE public.users ADD CONSTRAINT users_subscription_tier_check
   CHECK (subscription_tier IN ('indie', 'operator', 'architect'));
 
--- 4. Update check constraint on subscriptions.tier
-ALTER TABLE public.subscriptions DROP CONSTRAINT IF EXISTS subscriptions_tier_check;
 ALTER TABLE public.subscriptions ADD CONSTRAINT subscriptions_tier_check
   CHECK (tier IN ('indie', 'operator', 'architect'));
 
--- 5. Set default to 'indie' instead of 'free'
+-- 4. Set defaults
 ALTER TABLE public.users ALTER COLUMN subscription_tier SET DEFAULT 'indie';
 ALTER TABLE public.subscriptions ALTER COLUMN tier SET DEFAULT 'indie';
 
--- 6. Update the sync trigger function to use new tier names
+-- 5. Update the sync trigger function to use new tier names
 CREATE OR REPLACE FUNCTION public.sync_user_subscription_tier()
 RETURNS trigger
 LANGUAGE plpgsql
