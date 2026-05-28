@@ -5,7 +5,7 @@ import { deflateSync } from 'node:zlib';
 type RunwayGenerationType = 'image' | 'video';
 type RunwayVideoDuration = 4 | 5 | 10;
 type RunwayAspectRatio = '16:9' | '9:16' | '1:1' | '4:3';
-type SubscriptionTier = 'free' | 'pro' | 'infinity';
+type SubscriptionTier = 'indie' | 'operator' | 'architect';
 type PremiumRunwayFeature = 'ai_image_generation' | 'ai_video_generation' | 'thumbnail_generation';
 
 type RunwayGenerateRequest = {
@@ -59,9 +59,9 @@ const RUNWAY_FEATURES: Record<PremiumRunwayFeature, {
   requiredTier: SubscriptionTier;
   limits: Partial<Record<SubscriptionTier, number | null>>;
 }> = {
-  ai_image_generation: { requiredTier: 'free', limits: { free: null, pro: null, infinity: null } },
-  ai_video_generation: { requiredTier: 'free', limits: { free: null, pro: null, infinity: null } },
-  thumbnail_generation: { requiredTier: 'free', limits: { free: null, pro: null, infinity: null } },
+  ai_image_generation: { requiredTier: 'indie', limits: { indie: 5, operator: null, architect: null } },
+  ai_video_generation: { requiredTier: 'indie', limits: { indie: 2, operator: null, architect: null } },
+  thumbnail_generation: { requiredTier: 'indie', limits: { indie: 5, operator: null, architect: null } },
 };
 
 function parsePositiveIntegerEnv(value: string | undefined, fallback: number): number {
@@ -299,13 +299,13 @@ async function resolveProfile(supabase: SupabaseClient, authUser: any) {
     if (byEmail.data) return byEmail.data;
   }
 
-  return { id: authUser.id, subscription_tier: 'free', role: 'user' };
+  return { id: authUser.id, subscription_tier: 'indie', role: 'user' };
 }
 
 async function checkFeatureAccess(supabase: SupabaseClient, authUser: any, feature: PremiumRunwayFeature): Promise<FeatureAccess> {
   const profile = await resolveProfile(supabase, authUser);
   const userId = String(profile.id ?? authUser.id);
-  const fallbackTier = (profile.subscription_tier === 'pro' || profile.subscription_tier === 'infinity') ? profile.subscription_tier : 'free';
+  const fallbackTier = (profile.subscription_tier === 'operator' || profile.subscription_tier === 'architect') ? profile.subscription_tier : 'indie';
   const tier: SubscriptionTier = fallbackTier;
   const { start, end } = currentUsagePeriod();
 
@@ -344,7 +344,7 @@ async function checkFeatureAccess(supabase: SupabaseClient, authUser: any, featu
   ]);
 
   const tierValue = subscriptionRes.data?.tier ?? fallbackTier;
-  const resolvedTier: SubscriptionTier = tierValue === 'pro' || tierValue === 'infinity' ? tierValue : 'free';
+  const resolvedTier: SubscriptionTier = tierValue === 'operator' || tierValue === 'architect' ? tierValue : 'indie';
   const config = RUNWAY_FEATURES[feature];
   const used = Number(usageRes.data?.usage_count ?? 0);
   const limit = config.limits[resolvedTier];
