@@ -86,6 +86,14 @@ function buildSafeEnv(extra?: Record<string, string>): Record<string, string> {
   }
   env.HOME = env.HOME || '/root';
   env.PATH = env.PATH || '/usr/local/bin:/usr/bin:/bin';
+  // Ensure the directory containing the running Node.js binary is in PATH
+  // so that npm/npx are always discoverable — fixes exit 127 on Railway
+  // and other containerised runtimes where the inherited PATH may be
+  // incomplete or the process.env.PATH variable was stripped.
+  const nodeDir = path.dirname(process.execPath);
+  if (nodeDir && !env.PATH.split(':').includes(nodeDir)) {
+    env.PATH = `${nodeDir}:${env.PATH}`;
+  }
   if (extra) Object.assign(env, extra);
   return env;
 }
