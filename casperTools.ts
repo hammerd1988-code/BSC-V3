@@ -215,8 +215,10 @@ export function buildToolSpecs(ctx: ToolExecutionContext): LlmToolSpec[] {
   }
 
   // Dev Agent tools (clone, install, build, start server, git ops, etc.)
-  // Available on control_center and studio surfaces.
-  specs.push(...DEV_AGENT_TOOL_SPECS);
+  // Gated by shell mode — only available when shell is enabled.
+  if (ctx.shellMode !== 'disabled') {
+    specs.push(...DEV_AGENT_TOOL_SPECS);
+  }
 
   return specs;
 }

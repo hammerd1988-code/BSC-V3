@@ -27,6 +27,10 @@ const GITHUB_TOKEN = () => process.env.GITHUB_TOKEN || process.env.GH_TOKEN || '
 const TOOL_PREFIX = 'devagent';
 const SEP = '__';
 
+function shellQuote(s: string): string {
+  return s.replace(/'/g, "'\\''");
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type ProjectType = 'node' | 'python' | 'rust' | 'go' | 'ruby' | 'unknown';
@@ -68,6 +72,24 @@ function generateWorkspaceId(repoUrl: string): string {
   return `${name}-${Date.now().toString(36)}`;
 }
 
+// Safe environment variables to pass to child processes. Mirrors the
+// allowlist in casperShell.ts — secrets are stripped by default.
+const SAFE_CHILD_ENV_KEYS = [
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'TERM', 'SHELL',
+  'TZ', 'NODE_ENV', 'PWD', 'TMPDIR',
+];
+
+function buildSafeEnv(extra?: Record<string, string>): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of SAFE_CHILD_ENV_KEYS) {
+    if (process.env[key]) env[key] = process.env[key]!;
+  }
+  env.HOME = env.HOME || '/root';
+  env.PATH = env.PATH || '/usr/local/bin:/usr/bin:/bin';
+  if (extra) Object.assign(env, extra);
+  return env;
+}
+
 // ── Shell Execution (workspace-scoped) ───────────────────────────────────────
 
 function execInWorkspace(
@@ -79,12 +101,7 @@ function execInWorkspace(
     const timeout = Math.min(opts.timeoutMs ?? COMMAND_TIMEOUT_MS, 5 * 60_000);
     const child = spawn('/bin/bash', ['-c', command], {
       cwd: dir,
-      env: {
-        ...process.env,
-        HOME: process.env.HOME || '/root',
-        PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
-        ...(opts.env ?? {}),
-      },
+      env: buildSafeEnv(opts.env),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -184,7 +201,7 @@ async function cloneRepo(args: Record<string, any>): Promise<{ ok: boolean; data
   }
 
   const branch = typeof args.branch === 'string' ? args.branch.trim() : '';
-  const branchFlag = branch ? `--branch ${branch}` : '';
+  const branchFlag = branch ? `--branch '${shellQuote(branch)}'` : '';
 
   const result = await execInWorkspace(WORKSPACES_DIR, `git clone --depth 1 ${branchFlag} '${cloneUrl}' '${id}'`);
   if (!result.ok) {
@@ -285,7 +302,7 @@ async function startServer(args: Record<string, any>): Promise<{ ok: boolean; da
 
   const child = spawn('/bin/bash', ['-c', startCmd], {
     cwd: ws.dir,
-    env: { ...process.env, ...env },
+    env: buildSafeEnv(env),
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
   });
@@ -429,7 +446,7 @@ async function readFile(args: Record<string, any>): Promise<{ ok: boolean; data:
   if (!filePath) return { ok: false, data: null, error: 'file_path is required.' };
 
   const fullPath = path.resolve(ws.dir, filePath);
-  if (!fullPath.startsWith(ws.dir)) return { ok: false, data: null, error: 'Path traversal not allowed.' };
+  if (!fullPath.startsWith(ws.dir + path.sep)) return { ok: false, data: null, error: 'Path traversal not allowed.' };
 
   if (!fs.existsSync(fullPath)) return { ok: false, data: null, error: `File not found: ${filePath}` };
 
@@ -449,7 +466,7 @@ async function writeFile(args: Record<string, any>): Promise<{ ok: boolean; data
   if (!filePath) return { ok: false, data: null, error: 'file_path is required.' };
 
   const fullPath = path.resolve(ws.dir, filePath);
-  if (!fullPath.startsWith(ws.dir)) return { ok: false, data: null, error: 'Path traversal not allowed.' };
+  if (!fullPath.startsWith(ws.dir + path.sep)) return { ok: false, data: null, error: 'Path traversal not allowed.' };
 
   const dir = path.dirname(fullPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -471,7 +488,7 @@ async function gitOps(args: Record<string, any>): Promise<{ ok: boolean; data: a
       command = 'git status --porcelain';
       break;
     case 'diff':
-      command = `git diff ${typeof args.target === 'string' ? args.target : ''}`.trim();
+      command = `git diff ${typeof args.target === 'string' ? `'${shellQuote(args.target)}'` : ''}`.trim();
       break;
     case 'log':
       command = `git log --oneline -${typeof args.count === 'number' ? Math.min(args.count, 50) : 20}`;
@@ -490,7 +507,7 @@ async function gitOps(args: Record<string, any>): Promise<{ ok: boolean; data: a
     }
     case 'add': {
       const files = String(args.files || '.').trim();
-      command = `git add ${files}`;
+      command = `git add '${shellQuote(files)}'`;
       break;
     }
     case 'commit': {
@@ -502,7 +519,7 @@ async function gitOps(args: Record<string, any>): Promise<{ ok: boolean; data: a
     case 'push': {
       const remote = String(args.remote || 'origin').trim();
       const branch = String(args.branch || '').trim();
-      command = branch ? `git push ${remote} ${branch}` : `git push ${remote} HEAD`;
+      command = branch ? `git push '${shellQuote(remote)}' '${shellQuote(branch)}'` : `git push '${shellQuote(remote)}' HEAD`;
       break;
     }
     default:
