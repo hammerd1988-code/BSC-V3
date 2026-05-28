@@ -507,7 +507,7 @@ export function BotForge() {
   const gladiatorParam = searchParams.get('gladiator');
 
   // Load gladiators owned by this user, or all gladiators for the admin autonomy console.
-  // Admin flow: ensure platform bots exist first, then query so the results include them.
+  // Admin flow: ensure platform bots first, then query, then merge results so nothing is lost.
   useEffect(() => {
     if (!currentUser?.id) {
       setGladiators([]);
@@ -519,9 +519,10 @@ export function BotForge() {
     (async () => {
       setLoading(true);
       try {
-        // For admin, ensure platform bots exist BEFORE querying so they show up
+        // For admin, ensure platform bots exist then merge with query results
+        let ensuredGladiators: GladiatorRow[] = [];
         if (isAdmin) {
-          await ensurePlatformBotGladiatorsForForge().catch(() => {});
+          ensuredGladiators = await ensurePlatformBotGladiatorsForForge().catch(() => [] as GladiatorRow[]);
         }
         if (cancelled) return;
 
@@ -532,7 +533,16 @@ export function BotForge() {
         if (!isAdmin) query = query.eq('user_id', currentUser.id);
         const { data, error } = await query;
         if (cancelled) return;
-        const roster = data ?? [];
+
+        // Merge: start with query results, add any ensured bots the query missed
+        const queryResults = data ?? [];
+        const seen = new Set(queryResults.map((g: GladiatorRow) => g.id));
+        const merged = [...queryResults];
+        for (const g of ensuredGladiators) {
+          if (!seen.has(g.id)) merged.push(g);
+        }
+        const roster = merged;
+
         if (error && roster.length === 0) {
           handleDbError(error, 'load gladiators');
         }
