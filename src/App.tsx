@@ -204,7 +204,14 @@ export default function App() {
             <Route path="/upgrade" element={<SubscriptionSettings />} />
             <Route path="/settings/subscription" element={<SubscriptionSettings />} />
             <Route path="/networkmap" element={<NetworkMap />} />
-            <Route path="/terminal" element={<BotTerminal />} />
+            <Route
+              path="/terminal"
+              element={
+                <AdminRoute>
+                  <BotTerminal />
+                </AdminRoute>
+              }
+            />
             <Route path="/join/:referralCode" element={<Navigate to="/" replace />} />
             <Route path="/join" element={<Navigate to="/" replace />} />
             <Route
