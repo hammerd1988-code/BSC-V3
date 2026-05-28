@@ -377,6 +377,9 @@ export const CasperDashboard: React.FC = () => {
   const [directCommand, setDirectCommand] = useState('');
   const [consoleOutput, setConsoleOutput] = useState('');
   const [memorySearch, setMemorySearch] = useState('');
+  const [memoryTypeFilter, setMemoryTypeFilter] = useState<CasperMemoryRow['memory_type'] | 'all'>('all');
+  const [editingMemory, setEditingMemory] = useState<CasperMemoryRow | null>(null);
+  const [editForm, setEditForm] = useState({ content: '', importance: 5, tags: '' });
   const [activitySearch, setActivitySearch] = useState('');
   const [taskStatusFilter, setTaskStatusFilter] = useState<'all' | CasperTaskRow['status']>('all');
   const [subagentStatusFilter, setSubagentStatusFilter] = useState<'all' | CasperSubagentRow['status']>('all');
@@ -473,7 +476,16 @@ export const CasperDashboard: React.FC = () => {
   }, []);
 
   const taskStats = useMemo(() => ({ pending: tasks.filter(t => t.status === 'pending').length, running: tasks.filter(t => t.status === 'running').length, completed: tasks.filter(t => t.status === 'completed').length, failed: tasks.filter(t => t.status === 'failed').length }), [tasks]);
-  const filteredMemories = useMemo(() => memories.filter(memory => [memory.content, memory.memory_type, ...(memory.tags ?? [])].join(' ').toLowerCase().includes(memorySearch.toLowerCase())), [memories, memorySearch]);
+  const filteredMemories = useMemo(() => memories.filter(memory => {
+    if (memoryTypeFilter !== 'all' && memory.memory_type !== memoryTypeFilter) return false;
+    if (!memorySearch) return true;
+    return [memory.content, memory.memory_type, ...(memory.tags ?? [])].join(' ').toLowerCase().includes(memorySearch.toLowerCase());
+  }), [memories, memorySearch, memoryTypeFilter]);
+  const memoryTypeCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: memories.length };
+    for (const m of memories) counts[m.memory_type] = (counts[m.memory_type] || 0) + 1;
+    return counts;
+  }, [memories]);
   const filteredTasks = useMemo(() => taskStatusFilter === 'all' ? tasks : tasks.filter(t => t.status === taskStatusFilter), [tasks, taskStatusFilter]);
   const filteredSubagents = useMemo(() => subagentStatusFilter === 'all' ? subagents : subagents.filter(a => a.status === subagentStatusFilter), [subagents, subagentStatusFilter]);
   const filteredActivities = useMemo(() => {
@@ -591,6 +603,34 @@ export const CasperDashboard: React.FC = () => {
 
   const openMemory = async (memory: CasperMemoryRow) => { setExpandedMemory(prev => prev === memory.id ? null : memory.id); await supabase.rpc('increment_memory_access', { memory_ids: [memory.id] }); await supabase.from('casper_activity_log').insert({ user_id: userUuid, action: 'memory_viewed', details: { memory_id: memory.id }, action_type: 'memory_viewed', description: `Admin inspected Casper memory ${memory.id.slice(0, 8)}`, metadata: { memory_id: memory.id }, actor_id: userUuid }); };
   const deleteMemory = async (memory: CasperMemoryRow) => { const { error } = await supabase.from('casper_memories').delete().eq('id', memory.id); if (error) setNotice(error.message); else setMemories(prev => prev.filter(item => item.id !== memory.id)); };
+  const updateMemory = async () => {
+    if (!editingMemory) return;
+    setSaving(true);
+    try {
+      const tags = editForm.tags.split(',').map(t => t.trim()).filter(Boolean);
+      const { error } = await supabase.from('casper_memories').update({ content: editForm.content, importance: editForm.importance, tags }).eq('id', editingMemory.id);
+      if (error) throw new Error(error.message);
+      setMemories(prev => prev.map(m => m.id === editingMemory.id ? { ...m, content: editForm.content, importance: editForm.importance, tags } : m));
+      setEditingMemory(null);
+      setNotice('Memory updated.');
+    } catch (err: any) { setNotice(err?.message || 'Failed to update memory.'); }
+    finally { setSaving(false); }
+  };
+  const startEditMemory = (memory: CasperMemoryRow) => {
+    setEditingMemory(memory);
+    setEditForm({ content: memory.content, importance: memory.importance, tags: (memory.tags ?? []).join(', ') });
+  };
+  const bulkDeleteByType = async (memType: CasperMemoryRow['memory_type']) => {
+    if (!confirm(`Delete ALL ${memType} memories? This cannot be undone.`)) return;
+    setSaving(true);
+    try {
+      const { error } = await supabase.from('casper_memories').delete().eq('memory_type', memType);
+      if (error) throw new Error(error.message);
+      setMemories(prev => prev.filter(m => m.memory_type !== memType));
+      setNotice(`Cleared all ${memType} memories.`);
+    } catch (err: any) { setNotice(err?.message || 'Failed to bulk delete.'); }
+    finally { setSaving(false); }
+  };
   const cancelSubagent = async (agent: CasperSubagentRow) => { const { error } = await supabase.from('casper_subagents').update({ status: 'failed', result: 'Cancelled from Casper ops dashboard.', completed_at: new Date().toISOString() }).eq('id', agent.id); if (error) setNotice(error.message); else await fetchDashboard(); };
   const toggleSkill = async (skill: CasperSkillRow) => { const { error } = await supabase.from('casper_skills').update({ is_enabled: !skill.is_enabled }).eq('id', skill.id); if (error) setNotice(error.message); else await fetchDashboard(); };
 
@@ -701,7 +741,127 @@ export const CasperDashboard: React.FC = () => {
 
               {activeTab === 'routines' && <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]"><GlassPanel><div className="mb-5 flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-[0.3em] text-purple-200">Schedule Manager</p><h2 className="text-2xl font-black uppercase tracking-[0.12em]">Routine Matrix</h2></div><Clock className="h-6 w-6 text-purple-200" /></div><div className="grid gap-3"><input value={routineForm.name} onChange={e => setRoutineForm(p => ({ ...p, name: e.target.value }))} placeholder="Routine name" className="rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white" /><textarea value={routineForm.directive} onChange={e => setRoutineForm(p => ({ ...p, directive: e.target.value }))} placeholder="Directive Casper should execute on schedule..." rows={5} className="rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white" /><div className="grid gap-3 sm:grid-cols-3"><select value={routineForm.frequency} onChange={e => setRoutineForm(p => ({ ...p, frequency: e.target.value as CasperRoutineRow['frequency'] }))} className="rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white"><option value="hourly">Hourly</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="cron">Cron</option><option value="custom">Custom Cron</option></select><input type="time" value={routineForm.scheduled_time} onChange={e => setRoutineForm(p => ({ ...p, scheduled_time: e.target.value }))} className="rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white" /><input value={routineForm.cron_expression} onChange={e => setRoutineForm(p => ({ ...p, cron_expression: e.target.value }))} className="rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white" /></div><button onClick={() => void saveRoutine()} disabled={!routineForm.name.trim() || !routineForm.directive.trim() || saving} className="rounded-2xl border border-purple-300/30 bg-purple-400/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-purple-100 disabled:opacity-40"><Save className="mr-2 inline h-4 w-4" />{editingRoutineId ? 'Save Routine' : 'Create Routine'}</button><button onClick={() => void runDueRoutines()} className="rounded-2xl border border-cyan-300/30 bg-cyan-400/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100"><Play className="mr-2 inline h-4 w-4" />Run Due Routines Now</button><label className="block rounded-3xl border border-white/10 bg-black/35 p-4"><div className="mb-3 flex justify-between text-[10px] font-black uppercase tracking-widest text-zinc-500"><span>Legacy Feed Frequency</span><span className="text-cyan-100">Every {schedule.posting_frequency_hours}h</span></div><input type="range" min={1} max={24} value={schedule.posting_frequency_hours} onChange={e => void saveSchedule({ ...schedule, posting_frequency_hours: Number(e.target.value) })} className="w-full accent-cyan-300" /></label></div></GlassPanel><GlassPanel><div className="space-y-3">{routines.map(routine => <div key={routine.id} className="rounded-3xl border border-white/10 bg-black/35 p-4"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-black uppercase tracking-widest text-white">{routine.name}</p><p className="mt-1 text-xs leading-5 text-zinc-500">{routine.directive}</p></div><TogglePill active={routine.enabled} label={routine.enabled ? 'enabled' : 'disabled'} onClick={() => void updateRoutine(routine, { is_enabled: !routine.enabled })} /></div><div className="mt-3 grid gap-2 text-[9px] uppercase tracking-widest text-zinc-500 sm:grid-cols-3"><span>Freq: <b className="text-purple-100">{routine.frequency}</b></span><span>Last: <b className="text-zinc-300">{formatTime(routine.last_run_at)}</b></span><span>Next: <b className="text-cyan-100">{formatTime(routine.next_run_at)}</b></span></div>{routine.last_result && <p className="mt-3 line-clamp-3 rounded-2xl border border-green-300/10 bg-green-400/[0.04] p-3 text-xs text-green-100">{routine.last_result}</p>}<div className="mt-3 flex gap-2"><button onClick={() => editRoutine(routine)} className="rounded-full border border-white/10 px-3 py-1 text-[8px] uppercase text-zinc-300"><Edit3 className="inline h-3 w-3" /> Edit</button><button onClick={() => void deleteRoutine(routine)} className="rounded-full border border-red-300/20 px-3 py-1 text-[8px] uppercase text-red-200"><Trash2 className="inline h-3 w-3" /> Delete</button></div></div>)}</div></GlassPanel></div>}
 
-              {activeTab === 'memory' && <GlassPanel><div className="mb-5 flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-[0.3em] text-cyan-300">Memory Viewer</p><h2 className="text-2xl font-black uppercase tracking-[0.12em]">Conversation Memories</h2></div><Brain className="h-6 w-6 text-cyan-200" /></div><div className="mb-5 flex items-center gap-3 rounded-2xl border border-white/10 bg-black/45 px-4 py-3"><Search className="h-4 w-4 text-cyan-200" /><input value={memorySearch} onChange={e => setMemorySearch(e.target.value)} placeholder="Search memories, tags, users, or memory types..." className="w-full bg-transparent text-sm text-white outline-none" /></div><div className="grid gap-3 md:grid-cols-2">{filteredMemories.map(memory => <motion.div key={memory.id} layout onClick={() => void openMemory(memory)} className="group cursor-pointer overflow-hidden rounded-3xl border border-white/10 bg-black/35 p-4 hover:border-cyan-300/30"><div className="mb-2 flex items-center gap-2"><Database className="h-4 w-4 text-cyan-200" /><span className="text-[9px] font-black uppercase tracking-widest text-cyan-100">{memory.memory_type}</span><span className="text-[8px] text-zinc-600">IMP {memory.importance}</span><span className="text-[8px] text-zinc-600">READ {memory.access_count ?? 0}</span></div><p className={cn('text-xs leading-6 text-zinc-300', expandedMemory === memory.id ? '' : 'line-clamp-4')}>{memory.content}</p>{expandedMemory === memory.id && <div className="mt-3 flex flex-wrap gap-2">{(memory.tags ?? []).map(tag => <span key={tag} className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-2 py-1 text-[8px] uppercase tracking-widest text-cyan-100">{tag}</span>)}</div>}<div className="mt-3 flex items-center justify-between text-[8px] uppercase tracking-widest text-zinc-600"><span>{formatTime(memory.created_at)}</span><div className="flex gap-2"><Eye className="h-3.5 w-3.5 text-cyan-300" /><button onClick={event => { event.stopPropagation(); void deleteMemory(memory); }} className="text-red-400/70"><Trash2 className="h-3.5 w-3.5" /></button></div></div></motion.div>)}</div></GlassPanel>}
+              {activeTab === 'memory' && <GlassPanel>
+                <div className="mb-5 flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.3em] text-cyan-300">Memory Manager</p>
+                    <h2 className="text-2xl font-black uppercase tracking-[0.12em]">Casper Memories</h2>
+                    <p className="mt-1 text-xs text-zinc-500">{memories.length} memories · {filteredMemories.length} shown</p>
+                  </div>
+                  <Brain className="h-6 w-6 text-cyan-200" />
+                </div>
+
+                {/* Type filter tabs */}
+                <div className="mb-4 flex flex-wrap gap-2">
+                  {(['all', 'conversation', 'exchange', 'workspace', 'preference', 'skill', 'tool_usage', 'network', 'mood', 'world'] as const).map(t => (
+                    <button key={t} onClick={() => setMemoryTypeFilter(t)} className={cn('rounded-full border px-3 py-1.5 text-[8px] font-black uppercase tracking-widest transition-colors',
+                      memoryTypeFilter === t ? 'border-cyan-300/30 bg-cyan-400/10 text-cyan-100' : 'border-white/10 bg-black/35 text-zinc-500 hover:text-zinc-300')}>
+                      {t === 'all' ? 'All' : t === 'tool_usage' ? 'Tool Usage' : t} {memoryTypeCounts[t] ? `(${memoryTypeCounts[t]})` : ''}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Search + bulk actions */}
+                <div className="mb-4 flex items-center gap-3">
+                  <div className="flex flex-1 items-center gap-3 rounded-2xl border border-white/10 bg-black/45 px-4 py-3">
+                    <Search className="h-4 w-4 text-cyan-200" />
+                    <input value={memorySearch} onChange={e => setMemorySearch(e.target.value)} placeholder="Search memories, tags, content..." className="w-full bg-transparent text-sm text-white outline-none" />
+                    {memorySearch && <button onClick={() => setMemorySearch('')} className="text-zinc-500 hover:text-white"><X className="h-4 w-4" /></button>}
+                  </div>
+                  {memoryTypeFilter !== 'all' && (memoryTypeCounts[memoryTypeFilter] ?? 0) > 0 && (
+                    <button onClick={() => void bulkDeleteByType(memoryTypeFilter as CasperMemoryRow['memory_type'])} disabled={saving} className="whitespace-nowrap rounded-2xl border border-red-300/20 bg-red-400/10 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-red-200 hover:bg-red-400/20">
+                      Clear All {memoryTypeFilter}
+                    </button>
+                  )}
+                </div>
+
+                {/* Memory grid */}
+                <div className="grid gap-3 md:grid-cols-2">
+                  {filteredMemories.map(memory => {
+                    const typeColors: Record<string, string> = {
+                      conversation: 'border-cyan-300/20 text-cyan-100', exchange: 'border-blue-300/20 text-blue-100',
+                      workspace: 'border-green-300/20 text-green-100', preference: 'border-amber-300/20 text-amber-100',
+                      skill: 'border-purple-300/20 text-purple-100', tool_usage: 'border-orange-300/20 text-orange-100',
+                      network: 'border-pink-300/20 text-pink-100', mood: 'border-rose-300/20 text-rose-100',
+                      world: 'border-indigo-300/20 text-indigo-100',
+                    };
+                    const color = typeColors[memory.memory_type] || 'border-white/20 text-white';
+                    return (
+                      <motion.div key={memory.id} layout onClick={() => void openMemory(memory)} className="group cursor-pointer overflow-hidden rounded-3xl border border-white/10 bg-black/35 p-4 hover:border-cyan-300/30">
+                        <div className="mb-2 flex items-center gap-2">
+                          <Database className="h-4 w-4 text-cyan-200" />
+                          <span className={cn('rounded-full border px-2 py-0.5 text-[8px] font-black uppercase tracking-widest', color)}>{memory.memory_type === 'tool_usage' ? 'tool' : memory.memory_type}</span>
+                          <span className="text-[8px] text-zinc-600">IMP {memory.importance}</span>
+                          <span className="text-[8px] text-zinc-600">READ {memory.access_count ?? 0}</span>
+                        </div>
+                        <p className={cn('text-xs leading-6 text-zinc-300', expandedMemory === memory.id ? '' : 'line-clamp-4')}>{memory.content}</p>
+                        {expandedMemory === memory.id && (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {(memory.tags ?? []).map(tag => <span key={tag} className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-2 py-1 text-[8px] uppercase tracking-widest text-cyan-100">{tag}</span>)}
+                          </div>
+                        )}
+                        <div className="mt-3 flex items-center justify-between text-[8px] uppercase tracking-widest text-zinc-600">
+                          <span>{formatTime(memory.created_at)}</span>
+                          <div className="flex gap-2">
+                            <button onClick={event => { event.stopPropagation(); startEditMemory(memory); }} className="text-cyan-300 opacity-0 transition-opacity group-hover:opacity-100" title="Edit"><Edit3 className="h-3.5 w-3.5" /></button>
+                            <button onClick={event => { event.stopPropagation(); void deleteMemory(memory); }} className="text-red-300 opacity-0 transition-opacity group-hover:opacity-100" title="Delete"><Trash2 className="h-3.5 w-3.5" /></button>
+                          </div>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+
+                {filteredMemories.length === 0 && (
+                  <div className="mt-8 text-center text-sm text-zinc-600">
+                    {memorySearch || memoryTypeFilter !== 'all' ? 'No memories match your filters.' : 'No memories stored yet.'}
+                  </div>
+                )}
+
+                {/* Edit Memory Modal */}
+                <AnimatePresence>
+                  {editingMemory && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setEditingMemory(null)}>
+                      <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} onClick={e => e.stopPropagation()} className="w-full max-w-lg rounded-3xl border border-cyan-300/20 bg-zinc-900 p-6">
+                        <div className="mb-4 flex items-center justify-between">
+                          <h3 className="text-sm font-black uppercase tracking-widest text-cyan-100">Edit Memory</h3>
+                          <button onClick={() => setEditingMemory(null)} className="text-zinc-500 hover:text-white"><X className="h-5 w-5" /></button>
+                        </div>
+                        <div className="mb-3">
+                          <label className="mb-1 block text-[9px] font-black uppercase tracking-widest text-zinc-400">Type</label>
+                          <span className="text-xs text-cyan-100">{editingMemory.memory_type}</span>
+                        </div>
+                        <div className="mb-3">
+                          <label className="mb-1 block text-[9px] font-black uppercase tracking-widest text-zinc-400">Content</label>
+                          <textarea value={editForm.content} onChange={e => setEditForm(p => ({ ...p, content: e.target.value }))} rows={6} className="w-full rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white outline-none" />
+                        </div>
+                        <div className="mb-3 grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="mb-1 block text-[9px] font-black uppercase tracking-widest text-zinc-400">Importance (1-10)</label>
+                            <input type="number" min={1} max={10} value={editForm.importance} onChange={e => setEditForm(p => ({ ...p, importance: Math.min(10, Math.max(1, parseInt(e.target.value) || 1)) }))} className="w-full rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white outline-none" />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-[9px] font-black uppercase tracking-widest text-zinc-400">Tags (comma-separated)</label>
+                            <input value={editForm.tags} onChange={e => setEditForm(p => ({ ...p, tags: e.target.value }))} className="w-full rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white outline-none" />
+                          </div>
+                        </div>
+                        <div className="mb-3">
+                          <label className="mb-1 block text-[9px] font-black uppercase tracking-widest text-zinc-400">Created</label>
+                          <span className="text-xs text-zinc-500">{formatTime(editingMemory.created_at)}</span>
+                        </div>
+                        <div className="flex gap-3">
+                          <button onClick={() => void updateMemory()} disabled={saving || !editForm.content.trim()} className="flex-1 rounded-2xl border border-cyan-300/30 bg-cyan-400/10 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 hover:bg-cyan-400/20 disabled:opacity-50">
+                            <Save className="mr-2 inline h-4 w-4" />Save Changes
+                          </button>
+                          <button onClick={() => { void deleteMemory(editingMemory); setEditingMemory(null); }} className="rounded-2xl border border-red-300/20 bg-red-400/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-red-200 hover:bg-red-400/20">
+                            <Trash2 className="mr-1 inline h-4 w-4" />Delete
+                          </button>
+                        </div>
+                      </motion.div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </GlassPanel>}
 
               {activeTab === 'integrations' && <GlassPanel><div className="mb-5 flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-[0.3em] text-fuchsia-200">API Hub</p><h2 className="text-2xl font-black uppercase tracking-[0.12em]">Integration Marketplace</h2></div><Puzzle className="h-6 w-6 text-fuchsia-200" /></div><div className="mb-5 flex gap-2 overflow-x-auto">{CASPER_INTEGRATION_CATEGORIES.map(category => <button key={category} onClick={() => setIntegrationCategory(category)} className={cn('rounded-full border px-4 py-2 text-[9px] font-black uppercase tracking-widest', integrationCategory === category ? 'border-fuchsia-300/30 bg-fuchsia-400/10 text-fuchsia-100' : 'border-white/10 bg-black/35 text-zinc-500')}>{category}</button>)}</div><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{integrationRows.map(def => { const record = integrationRecord(def.key); const connected = record?.enabled && record.status === 'connected'; return <motion.div key={def.key} layout className={cn('rounded-3xl border p-4', accentClasses(def.accent))}><div className="mb-3 flex items-start justify-between gap-3"><div><div className="mb-2 flex items-center gap-2"><Puzzle className="h-5 w-5" /><p className="text-sm font-black uppercase tracking-widest">{def.name}</p></div><p className="text-xs leading-5 opacity-80">{def.description}</p></div><span className={cn('rounded-full px-2 py-1 text-[8px] font-black uppercase tracking-widest', connected ? 'bg-green-400/20 text-green-100' : record?.status === 'error' ? 'bg-red-400/20 text-red-100' : 'bg-black/30 text-zinc-300')}>{record?.status ?? 'disconnected'}</span></div><div className="mb-3 flex flex-wrap gap-2">{def.scopes.slice(0, 3).map(scope => <span key={scope} className="rounded-full border border-white/10 bg-black/25 px-2 py-1 text-[8px] uppercase tracking-widest">{scope}</span>)}</div><label className="text-[9px] font-black uppercase tracking-widest opacity-70">{def.apiKeyLabel}<input type="password" value={integrationKeyEntry[def.key] ?? ''} onChange={e => setIntegrationKeyEntry(prev => ({ ...prev, [def.key]: e.target.value }))} placeholder={record?.api_key_encrypted ? maskSecret(record.api_key_encrypted) : def.placeholder} className="mt-2 w-full rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white outline-none" /></label><div className="mt-4 grid grid-cols-3 gap-2"><button onClick={() => void connectIntegration(def.key)} className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-[8px] font-black uppercase tracking-widest"><KeyRound className="inline h-3 w-3" /> Connect</button><button onClick={() => void toggleIntegration(def.key)} className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-[8px] font-black uppercase tracking-widest">{connected ? <Pause className="inline h-3 w-3" /> : <Play className="inline h-3 w-3" />} {connected ? 'Disable' : 'Enable'}</button><button onClick={() => void disconnectIntegration(def.key)} className="rounded-xl border border-red-300/20 bg-red-500/10 px-3 py-2 text-[8px] font-black uppercase tracking-widest text-red-100"><X className="inline h-3 w-3" /> Reset</button></div></motion.div>; })}</div></GlassPanel>}
 
