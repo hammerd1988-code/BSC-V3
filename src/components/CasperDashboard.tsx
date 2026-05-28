@@ -71,7 +71,7 @@ interface CasperStateRow {
 interface CasperMemoryRow {
   id: string;
   user_id: string | null;
-  memory_type: 'conversation' | 'network' | 'mood' | 'world';
+  memory_type: 'conversation' | 'network' | 'mood' | 'world' | 'workspace' | 'preference' | 'skill' | 'tool_usage' | 'exchange';
   content: string;
   importance: number;
   tags: string[] | null;
