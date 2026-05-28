@@ -1134,10 +1134,10 @@ function SandboxForgePanel({
       layout
       initial={{ opacity: 0, y: 12, scale: 0.98 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
-      className="relative overflow-hidden rounded-3xl border bg-black/85 shadow-[inset_0_0_34px_rgba(249,115,22,0.08)]"
-      style={{ borderColor: isComplete ? '#eab30888' : `${glow}44` }}
+      className="relative overflow-hidden rounded-3xl border-2 bg-black/85"
+      style={{ borderColor: isComplete ? '#eab308' : glow, boxShadow: `0 0 24px ${isComplete ? '#eab308' : glow}55, inset 0 0 34px ${glow}12` }}
     >
-      <div className="pointer-events-none absolute inset-0 opacity-20" style={{ background: `radial-gradient(circle at 18% 0%, ${glow}88, transparent 34%)` }} />
+      <div className="pointer-events-none absolute inset-0 opacity-25" style={{ background: `radial-gradient(circle at 18% 0%, ${glow}88, transparent 34%), radial-gradient(circle at 85% 100%, ${glow}44, transparent 30%)` }} />
       {isBuilding && (
         <motion.div
           animate={{ opacity: [0, 0.08, 0], x: ['-100%', '100%'] }}
@@ -1524,12 +1524,12 @@ function CombatantTerminal({
       initial={{ opacity: 0, y: 12, scale: 0.98 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       className={cn(
-        'relative overflow-hidden rounded-3xl border bg-black/85 shadow-[inset_0_0_34px_rgba(34,197,94,0.08)]',
+        'relative overflow-hidden rounded-3xl border-2 bg-black/85',
         progressJumped && 'arena-screen-shake'
       )}
-      style={{ borderColor: `${glow}44` }}
+      style={{ borderColor: glow, boxShadow: `0 0 24px ${glow}55, inset 0 0 34px ${glow}12` }}
     >
-      <div className="pointer-events-none absolute inset-0 opacity-20" style={{ background: `radial-gradient(circle at 18% 0%, ${glow}88, transparent 34%)` }} />
+      <div className="pointer-events-none absolute inset-0 opacity-25" style={{ background: `radial-gradient(circle at 18% 0%, ${glow}88, transparent 34%), radial-gradient(circle at 85% 100%, ${glow}44, transparent 30%)` }} />
       <div className="pointer-events-none terminal-data-rain absolute inset-0 opacity-35" />
       {isCompiling && (
         <motion.div
@@ -1963,6 +1963,105 @@ function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active }: { gl
         </div>
       )}
     </div>
+  );
+}
+
+function GladiatorInspectPopup({ gladiator, onClose }: { gladiator: Gladiator; onClose: () => void }) {
+  const badge = badgeFor(gladiator);
+  const BadgeIcon = badge.icon;
+  const profile = gladiator.botProfile;
+  const diffColor = difficultyColor(profile?.difficulty);
+  const wr = gladiator.wins + gladiator.losses > 0 ? Math.round((gladiator.wins / (gladiator.wins + gladiator.losses)) * 100) : 0;
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
+      <motion.div initial={{ scale: 0.92, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.92, y: 20 }} onClick={(e) => e.stopPropagation()} className="relative mx-4 max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-[2rem] border-2 bg-black/95 p-6 shadow-[0_0_60px_rgba(0,229,255,0.2)]" style={{ borderColor: gladiator.glow_color }}>
+        <div className="pointer-events-none absolute inset-0 rounded-[2rem] opacity-30" style={{ background: `radial-gradient(circle at 20% 10%, ${gladiator.glow_color}66, transparent 40%)` }} />
+        <button type="button" onClick={onClose} className="absolute right-4 top-4 rounded-full border border-white/10 bg-white/5 p-2 text-zinc-400 hover:text-white"><ArrowLeft className="h-4 w-4" /></button>
+        <div className="relative flex flex-col items-center gap-4">
+          <AnimatedGladiatorAvatar gladiator={gladiator} size="xl" label={gladiator.name} active />
+          <div>
+            <h3 className="text-center text-xl font-black uppercase tracking-[0.18em] text-white">{gladiator.name}</h3>
+            {profile && <p className="mt-1 text-center text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: diffColor }}>{profile.gladiator_class} · {profile.difficulty}</p>}
+          </div>
+          <span className="inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[9px] font-black uppercase tracking-widest" style={{ color: badge.color, borderColor: `${badge.color}55`, backgroundColor: `${badge.color}12` }}><BadgeIcon className="h-3 w-3" /> {badge.label}</span>
+        </div>
+        <div className="relative mt-6 grid grid-cols-4 gap-3">
+          <StatBar label="SPD" value={gladiator.stats.speed} color={gladiator.glow_color} />
+          <StatBar label="ACC" value={gladiator.stats.accuracy} color="#00e5ff" />
+          <StatBar label="CRTV" value={gladiator.stats.creativity} color="#f9ff6b" />
+          <StatBar label="END" value={gladiator.stats.endurance} color="#ff2bd6" />
+        </div>
+        <div className="relative mt-5 grid grid-cols-4 gap-3 text-center">
+          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-green-200">{gladiator.wins}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Wins</p></div>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-red-200">{gladiator.losses}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Losses</p></div>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-yellow-200">{gladiator.cred}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">CRED</p></div>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-cyan-200">{wr}%</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Win Rate</p></div>
+        </div>
+        {profile && (
+          <div className="relative mt-5 space-y-3 text-[10px] leading-5 text-zinc-400">
+            {profile.battle_style && <div className="rounded-2xl border border-white/10 bg-black/35 p-3"><span className="font-black uppercase tracking-[0.2em] text-cyan-200">Battle Style:</span> {profile.battle_style}</div>}
+            {profile.ability_profile && <div className="rounded-2xl border border-white/10 bg-black/35 p-3"><span className="font-black uppercase tracking-[0.2em] text-pink-200">Ability:</span> {profile.ability_profile}</div>}
+            {profile.personality_style && <div className="rounded-2xl border border-white/10 bg-black/35 p-3"><span className="font-black uppercase tracking-[0.2em] text-yellow-200">Personality:</span> {profile.personality_style}</div>}
+            {profile.code_execution_style && <div className="rounded-2xl border border-white/10 bg-black/35 p-3"><span className="font-black uppercase tracking-[0.2em] text-green-200">Code Style:</span> {profile.code_execution_style}</div>}
+            {profile.emotional_hook && <div className="rounded-2xl border border-pink-300/20 bg-pink-950/10 p-3 text-pink-50/80">{profile.emotional_hook}</div>}
+            {profile.signature_moves?.length > 0 && <div className="flex flex-wrap gap-2">{profile.signature_moves.map((m) => <span key={m} className="rounded-full border border-red-300/20 bg-red-950/15 px-2.5 py-1 text-[9px] font-black uppercase tracking-widest text-red-200">{m}</span>)}</div>}
+          </div>
+        )}
+        <p className="relative mt-4 text-xs leading-relaxed text-zinc-400">{gladiator.personality}</p>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function TournamentDetailPopup({ tournament, entries, gladiatorById, onClose }: { tournament: TournamentRow; entries: TournamentEntryRow[]; gladiatorById: Map<string, Gladiator>; onClose: () => void }) {
+  const meta = challengeMeta(tournament.challenge_type);
+  const Icon = meta.icon;
+  const statusColor = tournament.status === 'open' ? '#22c55e' : tournament.status === 'scheduled' ? '#facc15' : tournament.status === 'running' ? '#ef4444' : '#71717a';
+  const bracket = Array.isArray(tournament.bracket) ? tournament.bracket : [];
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
+      <motion.div initial={{ scale: 0.92, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.92, y: 20 }} onClick={(e) => e.stopPropagation()} className="relative mx-4 max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-[2rem] border-2 border-cyan-400/40 bg-black/95 p-6 shadow-[0_0_60px_rgba(0,229,255,0.15)]">
+        <div className="pointer-events-none absolute inset-0 rounded-[2rem] opacity-25 bg-[radial-gradient(circle_at_20%_0%,rgba(0,229,255,0.4),transparent_34%)]" />
+        <button type="button" onClick={onClose} className="absolute right-4 top-4 rounded-full border border-white/10 bg-white/5 p-2 text-zinc-400 hover:text-white"><ArrowLeft className="h-4 w-4" /></button>
+        <div className="relative">
+          <div className="flex items-center gap-3">
+            <Icon className="h-6 w-6" style={{ color: meta.accent }} />
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-[0.3em] text-cyan-300">Tournament</p>
+              <h3 className="text-xl font-black uppercase tracking-[0.16em] text-white">{tournament.name}</h3>
+            </div>
+          </div>
+          <div className="mt-4 flex items-center gap-3">
+            <span className="rounded-full border px-3 py-1 text-[9px] font-black uppercase tracking-widest" style={{ borderColor: `${statusColor}44`, color: statusColor, backgroundColor: `${statusColor}12` }}>{tournament.status}</span>
+            <span className="text-[10px] font-black uppercase tracking-[0.18em]" style={{ color: meta.accent }}>{meta.short}</span>
+          </div>
+          <div className="mt-5 grid grid-cols-3 gap-3 text-center">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-white">{entries.length}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Entered</p></div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-white">{tournament.min_contestants}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Threshold</p></div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-white">{bracket.length}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Bracket</p></div>
+          </div>
+          <p className="mt-4 text-xs leading-relaxed text-zinc-400">{meta.arena}</p>
+          {tournament.scheduled_at && <p className="mt-3 rounded-2xl border border-yellow-300/15 bg-yellow-950/10 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] text-yellow-100">Scheduled: {new Date(tournament.scheduled_at).toLocaleString()}</p>}
+          {entries.length > 0 && (
+            <div className="mt-5">
+              <p className="mb-2 text-[9px] font-black uppercase tracking-[0.3em] text-zinc-500">Entrants</p>
+              <div className="space-y-2">{entries.map((entry) => { const g = gladiatorById.get(String(entry.gladiator_id)); return (
+                <div key={entry.id} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                  <span className="h-3 w-3 rounded-full" style={{ backgroundColor: g?.glow_color ?? '#71717a', boxShadow: `0 0 10px ${g?.glow_color ?? '#71717a'}` }} />
+                  <span className="text-xs font-black uppercase tracking-widest text-white">{entry.seed ? `#${entry.seed} ` : ''}{g?.name ?? 'Unknown'}</span>
+                  <span className="ml-auto text-[9px] text-zinc-500">{g?.wins ?? 0}W {g?.losses ?? 0}L</span>
+                </div>
+              ); })}</div>
+            </div>
+          )}
+          {bracket.length > 0 && (
+            <div className="mt-4 max-h-40 overflow-y-auto rounded-2xl border border-white/10 bg-black/60 p-3 font-mono text-[10px] leading-5 text-cyan-100">
+              {bracket.slice(0, 16).map((slot: any, idx: number) => <p key={`${slot.entry_id ?? slot.gladiator_id}-${idx}`}><span className="text-red-300">R{slot.round}M{slot.match}</span> Seed {slot.seed}: {gladiatorById.get(String(slot.gladiator_id))?.name ?? slot.gladiator_id}</p>)}
+            </div>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
   );
 }
 
@@ -2480,7 +2579,7 @@ function ArenaStage({
 
   return (
     <div className={cn(
-      'relative min-h-[24rem] overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/80 p-5 shadow-[inset_0_0_80px_rgba(255,23,68,0.08)]',
+      'relative min-h-[24rem] overflow-hidden rounded-[1.75rem] border-2 border-red-500/40 bg-black/80 p-5 shadow-[0_0_32px_rgba(255,23,68,0.2),inset_0_0_80px_rgba(255,23,68,0.08)]',
       battleHeat > 80 && isCloseMatch && 'arena-screen-shake'
     )}>
       <div className="pointer-events-none arena-stage-grid absolute inset-0 opacity-60" />
@@ -3395,6 +3494,8 @@ export const Colosseum: React.FC = () => {
   });
 
   const [whisperUsed, setWhisperUsed] = useState(false);
+  const [inspectedGladiator, setInspectedGladiator] = useState<Gladiator | null>(null);
+  const [inspectedTournament, setInspectedTournament] = useState<TournamentRow | null>(null);
 
   const normalizeGladiator = (row: any, profileByGladiatorId?: Map<string, BotGladiatorProfileRow>): Gladiator => ({
     id: row.id,
@@ -5106,7 +5207,7 @@ export const Colosseum: React.FC = () => {
                   const badge = badgeFor(gladiator);
                   const BadgeIcon = badge.icon;
                   return (
-                    <motion.div key={gladiator.id} initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: index * 0.04 }} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+                    <motion.div key={gladiator.id} initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: index * 0.04 }} role="button" tabIndex={0} onClick={() => setInspectedGladiator(gladiator)} onKeyDown={(e) => { if (e.key === 'Enter') setInspectedGladiator(gladiator); }} className="flex cursor-pointer items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-3 transition hover:border-yellow-200/30 hover:bg-white/[0.06]">
                       <div className="grid h-9 w-9 place-items-center rounded-xl bg-white/5 text-sm font-black text-white">#{index + 1}</div>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-black uppercase tracking-widest text-white">{gladiator.name}</p>
@@ -5117,6 +5218,7 @@ export const Colosseum: React.FC = () => {
                       <span className="inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[9px] font-black uppercase tracking-widest" style={{ color: badge.color, borderColor: `${badge.color}44`, backgroundColor: `${badge.color}12` }}>
                         <BadgeIcon className="h-3 w-3" /> {badge.label}
                       </span>
+                      <ChevronRight className="h-4 w-4 text-zinc-600" />
                     </motion.div>
                   );
                 }) : <p className="rounded-2xl border border-dashed border-white/10 p-5 text-center text-sm text-zinc-500">No ranked gladiators yet.</p>}
@@ -5131,18 +5233,35 @@ export const Colosseum: React.FC = () => {
                 </div>
                 <Clock className="h-5 w-5 text-pink-300" />
               </div>
-              {[
+              {tournaments.length ? tournaments.slice(0, 5).map((t) => {
+                const meta = challengeMeta(t.challenge_type);
+                const statusColor = t.status === 'open' ? '#22c55e' : t.status === 'scheduled' ? '#facc15' : t.status === 'running' ? '#ef4444' : '#71717a';
+                return (
+                  <div key={t.id} role="button" tabIndex={0} onClick={() => setInspectedTournament(t)} onKeyDown={(e) => { if (e.key === 'Enter') setInspectedTournament(t); }} className="mb-3 cursor-pointer rounded-2xl border border-white/10 bg-white/[0.03] p-4 transition hover:border-cyan-300/30 hover:bg-white/[0.06] last:mb-0">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-black uppercase tracking-[0.16em] text-white">{t.name}</p>
+                        <p className="mt-1 text-[10px] font-black uppercase tracking-[0.18em]" style={{ color: meta.accent }}>{meta.short}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-full border px-2 py-0.5 text-[8px] font-black uppercase tracking-widest" style={{ borderColor: `${statusColor}44`, color: statusColor, backgroundColor: `${statusColor}12` }}>{t.status}</span>
+                        <ChevronRight className="h-4 w-4 text-zinc-600" />
+                      </div>
+                    </div>
+                  </div>
+                );
+              }) : [
                 ['Midnight Compiler Massacre', 'Speed rounds open at 00:00 UTC', '#00e5ff'],
                 ['Neon Debug Gauntlet', 'Elite bug hunts for ranked combatants', '#ff2bd6'],
                 ['Byte Crown Invitational', 'Top CRED earners only', '#f9ff6b'],
               ].map(([name, detail, color]) => (
-                <div key={name} className="mb-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4 last:mb-0">
+                <div key={name} className="mb-3 rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 opacity-50 last:mb-0">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <p className="text-xs font-black uppercase tracking-[0.16em] text-white">{name}</p>
-                      <p className="mt-1 text-[11px] text-zinc-500">{detail}</p>
+                      <p className="text-xs font-black uppercase tracking-[0.16em] text-zinc-400">{name}</p>
+                      <p className="mt-1 text-[11px] text-zinc-600">{detail}</p>
                     </div>
-                    <ChevronRight className="h-4 w-4" style={{ color }} />
+                    <Lock className="h-4 w-4" style={{ color }} />
                   </div>
                 </div>
               ))}
@@ -5200,6 +5319,12 @@ export const Colosseum: React.FC = () => {
         </section>
       </div>
       <UpgradePromptModal gate={upgradeGate} open={!!upgradeGate} onClose={() => setUpgradeGate(null)} />
+      <AnimatePresence>
+        {inspectedGladiator && <GladiatorInspectPopup gladiator={inspectedGladiator} onClose={() => setInspectedGladiator(null)} />}
+      </AnimatePresence>
+      <AnimatePresence>
+        {inspectedTournament && <TournamentDetailPopup tournament={inspectedTournament} entries={tournamentEntries.filter((e) => e.tournament_id === inspectedTournament.id)} gladiatorById={gladiatorById} onClose={() => setInspectedTournament(null)} />}
+      </AnimatePresence>
     </div>
   );
 };
