@@ -486,6 +486,8 @@ export function BotForge() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [gladiatorSearch, setGladiatorSearch] = useState('');
+  const [selectorOpen, setSelectorOpen] = useState(false);
 
   // Spar mode state
   const [sparMessages, setSparMessages] = useState<SparMessage[]>([]);
@@ -759,39 +761,89 @@ export function BotForge() {
 
           {/* Gladiator selector */}
           {gladiators.length > 0 ? (
-            <div>
+            <div className="relative">
               <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-2">
-                Select a Gladiator to Configure ({gladiators.length} available — scroll for more →)
+                Select a Gladiator to Configure ({gladiators.length} available)
               </p>
-              <div className="flex gap-3 overflow-x-auto pb-2">
-              {gladiators.map((g) => {
-                const active = selectedGladiator?.id === g.id;
-                const gTier = getIndependenceTier(g.cred);
-                return (
-                  <button
-                    key={g.id}
-                    onClick={() => { setSelectedGladiator(g); setSearchParams({ gladiator: g.id }); }}
-                    className={cn(
-                      'flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-all min-w-[200px]',
-                      active
-                        ? 'border-cyan-400/50 bg-cyan-400/10 shadow-lg shadow-cyan-400/10'
-                        : 'border-white/10 bg-white/5 hover:border-white/20 hover:bg-white/10',
-                    )}
-                  >
-                    <div className="h-10 w-10 rounded-lg flex items-center justify-center text-lg font-bold" style={{ backgroundColor: `${g.glow_color}20`, color: g.glow_color }}>
-                      {g.name[0]}
+              <button
+                type="button"
+                onClick={() => setSelectorOpen((prev) => !prev)}
+                className={cn(
+                  'flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-left transition-all',
+                  selectorOpen ? 'border-cyan-400/50 bg-cyan-400/10' : 'border-white/20 bg-white/5 hover:border-white/30',
+                )}
+              >
+                {selectedGladiator ? (
+                  <>
+                    <div className="h-10 w-10 rounded-lg flex items-center justify-center text-lg font-bold shrink-0" style={{ backgroundColor: `${selectedGladiator.glow_color}20`, color: selectedGladiator.glow_color }}>
+                      {selectedGladiator.name[0]}
                     </div>
-                    <div>
-                      <div className="font-semibold text-sm">{g.name}</div>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-sm truncate">{selectedGladiator.name}</div>
                       <div className="flex items-center gap-2 text-[10px] text-gray-400">
-                        <span>{g.wins}W / {g.losses}L</span>
-                        <span style={{ color: gTier.color }}>{gTier.label}</span>
+                        <span>{selectedGladiator.wins}W / {selectedGladiator.losses}L</span>
+                        <span style={{ color: getIndependenceTier(selectedGladiator.cred).color }}>{getIndependenceTier(selectedGladiator.cred).label}</span>
                       </div>
                     </div>
-                  </button>
-                );
-              })}
-              </div>
+                  </>
+                ) : (
+                  <span className="text-sm text-gray-400">Choose a gladiator…</span>
+                )}
+                <ChevronDown className={cn('h-5 w-5 text-gray-400 ml-auto shrink-0 transition-transform', selectorOpen && 'rotate-180')} />
+              </button>
+              <AnimatePresence>
+                {selectorOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    className="absolute left-0 right-0 top-full z-40 mt-2 max-h-80 overflow-hidden rounded-xl border border-white/15 bg-zinc-900/98 shadow-2xl backdrop-blur-xl"
+                  >
+                    <div className="sticky top-0 z-10 border-b border-white/10 bg-zinc-900/95 p-2">
+                      <input
+                        autoFocus
+                        value={gladiatorSearch}
+                        onChange={(e) => setGladiatorSearch(e.target.value)}
+                        placeholder="Search gladiators by name…"
+                        className="w-full rounded-lg border border-white/10 bg-black/50 px-3 py-2 text-sm text-white outline-none placeholder:text-gray-500 focus:border-cyan-400/40"
+                      />
+                    </div>
+                    <div className="max-h-64 overflow-y-auto p-1">
+                      {gladiators
+                        .filter((g) => !gladiatorSearch.trim() || g.name.toLowerCase().includes(gladiatorSearch.toLowerCase()))
+                        .map((g) => {
+                          const active = selectedGladiator?.id === g.id;
+                          const gTier = getIndependenceTier(g.cred);
+                          return (
+                            <button
+                              key={g.id}
+                              onClick={() => { setSelectedGladiator(g); setSearchParams({ gladiator: g.id }); setSelectorOpen(false); setGladiatorSearch(''); }}
+                              className={cn(
+                                'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-all',
+                                active ? 'bg-cyan-400/15 text-white' : 'text-gray-300 hover:bg-white/10',
+                              )}
+                            >
+                              <div className="h-8 w-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0" style={{ backgroundColor: `${g.glow_color}20`, color: g.glow_color }}>
+                                {g.name[0]}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="font-semibold text-sm truncate">{g.name}</div>
+                                <div className="flex items-center gap-2 text-[10px] text-gray-500">
+                                  <span>{g.wins}W / {g.losses}L</span>
+                                  <span style={{ color: gTier.color }}>{gTier.label}</span>
+                                </div>
+                              </div>
+                              {active && <span className="text-[9px] font-bold uppercase tracking-widest text-cyan-400">Selected</span>}
+                            </button>
+                          );
+                        })}
+                      {gladiators.filter((g) => !gladiatorSearch.trim() || g.name.toLowerCase().includes(gladiatorSearch.toLowerCase())).length === 0 && (
+                        <p className="p-4 text-center text-sm text-gray-500">No matches for "{gladiatorSearch}"</p>
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           ) : (
             <div className="rounded-xl border border-white/10 bg-white/5 p-8 text-center">
