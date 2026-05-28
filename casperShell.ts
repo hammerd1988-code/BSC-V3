@@ -370,8 +370,9 @@ export async function runCasperShell(
   }
   // Guarantee the Node.js binary directory is in PATH so tools like
   // npm/npx are always discoverable in spawned processes.
+  env.PATH = env.PATH || '/usr/local/bin:/usr/bin:/bin';
   const nodeDir = path.dirname(process.execPath);
-  if (nodeDir && env.PATH && !env.PATH.split(':').includes(nodeDir)) {
+  if (nodeDir && !env.PATH.split(':').includes(nodeDir)) {
     env.PATH = `${nodeDir}:${env.PATH}`;
   }
   if (options.env) {
