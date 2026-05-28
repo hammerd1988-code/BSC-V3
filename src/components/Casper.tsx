@@ -28,6 +28,8 @@ import {
   maskSecret,
   type CasperIntegrationCategory,
 } from '../lib/casperIntegrations';
+import { useSubscription, type FeatureGateResult } from '../lib/subscription';
+import { UpgradePromptModal, UpgradeInlineCard } from './UpgradePrompt';
 
 interface Message {
   id: string;
@@ -370,6 +372,8 @@ const CasperWaveform: React.FC<{ isActive: boolean; instability: number }> = ({ 
 export const Casper: React.FC = () => {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
+  const { canAccess, recordUsage } = useSubscription();
+  const [upgradeGate, setUpgradeGate] = useState<FeatureGateResult | null>(null);
   const [aiSettings, setAiSettings] = useState<any>(currentUser?.ai_settings || {});
   const [showAiCore, setShowAiCore] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
@@ -1198,6 +1202,8 @@ export const Casper: React.FC = () => {
   }, []);
 
   const startCamera = useCallback(async (facing: 'environment' | 'user' = facingMode) => {
+    const visionGate = canAccess('casper_vision');
+    if (!visionGate.allowed) { setUpgradeGate(visionGate); return; }
     stopCamera();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -1217,7 +1223,7 @@ export const Casper: React.FC = () => {
         timestamp: new Date(),
       }]);
     }
-  }, [facingMode, stopCamera]);
+  }, [facingMode, stopCamera, canAccess]);
 
   const switchCamera = useCallback(() => {
     const next = facingMode === 'environment' ? 'user' : 'environment';
@@ -1225,6 +1231,8 @@ export const Casper: React.FC = () => {
   }, [facingMode, startCamera]);
 
   const enterVoiceMode = useCallback(async () => {
+    const voiceGate = canAccess('casper_voice');
+    if (!voiceGate.allowed) { setUpgradeGate(voiceGate); return; }
     await unlockPersistentAudio();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -1251,7 +1259,7 @@ export const Casper: React.FC = () => {
     void speakOnce(greeting, () => {
       if (voiceActiveRef.current) void startListeningSessionRef.current();
     });
-  }, [playBooLaugh, speakOnce, unlockPersistentAudio]);
+  }, [playBooLaugh, speakOnce, unlockPersistentAudio, canAccess]);
 
   useEffect(() => () => { exitVoiceMode(); stopCamera(); }, [exitVoiceMode, stopCamera]);
 
@@ -1259,10 +1267,14 @@ export const Casper: React.FC = () => {
     const text = input.trim();
     if (!text || isGenerating) return;
 
+    const chatGate = canAccess('casper_chat');
+    if (!chatGate.allowed) { setUpgradeGate(chatGate); return; }
+
     const userMsg: Message = { id: Date.now().toString(), role: 'user', content: text, timestamp: new Date() };
     setMessages(prev => [...prev, userMsg]);
     setInput('');
     setIsGenerating(true);
+    void recordUsage('casper_chat');
 
     try {
       // Build conversation history for context
@@ -1357,7 +1369,7 @@ export const Casper: React.FC = () => {
       setIsGenerating(false);
       if (ttsEnabled && voiceState !== 'recording') void speakOnce(fallback);
     }
-  }, [input, isGenerating, messages, aiSettings, integrationContext, currentUser?.id, ttsEnabled, voiceState, speakOnce, authFetch, visionActive, analyzeWithVision]);
+  }, [input, isGenerating, messages, aiSettings, integrationContext, currentUser?.id, ttsEnabled, voiceState, speakOnce, authFetch, visionActive, analyzeWithVision, canAccess, recordUsage]);
 
   const clearChat = () => {
     const greeting = CASPER_GREETINGS[Math.floor(Math.random() * CASPER_GREETINGS.length)];
@@ -1457,7 +1469,13 @@ export const Casper: React.FC = () => {
               {visionActive ? <Camera className="w-4 h-4" /> : <CameraOff className="w-4 h-4" />}
             </button>
             <button
-              onClick={() => setShowCoBrowse(!showCoBrowse)}
+              onClick={() => {
+                if (!showCoBrowse) {
+                  const browseGate = canAccess('ghost_browser');
+                  if (!browseGate.allowed) { setUpgradeGate(browseGate); return; }
+                }
+                setShowCoBrowse(!showCoBrowse);
+              }}
               className={cn(
                 "p-2.5 rounded-xl border transition-all",
                 showCoBrowse
@@ -2156,6 +2174,7 @@ export const Casper: React.FC = () => {
           </div>
         </div>
       </div>
+      <UpgradePromptModal gate={upgradeGate} open={!!upgradeGate} onClose={() => setUpgradeGate(null)} />
     </div>
   );
 };

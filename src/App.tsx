@@ -225,9 +225,7 @@ export default function App() {
             <Route
               path="/admin/casper"
               element={
-                <AdminRoute>
-                  <CasperDashboard />
-                </AdminRoute>
+                currentUser ? <CasperDashboard /> : <Navigate to="/" replace />
               }
             />
             <Route path="/profile/:username" element={<Profile />} />

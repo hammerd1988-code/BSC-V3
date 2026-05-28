@@ -70,6 +70,7 @@ export interface UsageMeter {
 
 interface SubscriptionContextValue {
   tier: SubscriptionTier;
+  isAdmin: boolean;
   subscription: SubscriptionRow | null;
   usage: FeatureUsageRow[];
   loading: boolean;
@@ -305,6 +306,7 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
   const [loading, setLoading] = useState(false);
 
   const tier = (subscription?.tier || currentUser?.subscription_tier || 'indie') as SubscriptionTier;
+  const isAdmin = currentUser?.role === 'admin';
 
   const refresh = useCallback(async () => {
     if (!currentUser?.id) {
@@ -351,6 +353,22 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     const config = FEATURE_CONFIG[feature];
     const used = getUsageForFeature(feature);
     const limit = config.limits[tier];
+
+    // Admins bypass all gates
+    if (isAdmin) {
+      return {
+        allowed: true,
+        feature,
+        requiredTier: config.requiredTier,
+        reason: undefined,
+        limit: null,
+        used,
+        remaining: null,
+        label: config.label,
+        upgradeMessage: config.upgradeMessage,
+      };
+    }
+
     const tierOk = TIER_RANK[tier] >= TIER_RANK[config.requiredTier];
 
     if (!tierOk) {
@@ -392,7 +410,7 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
       label: config.label,
       upgradeMessage: config.upgradeMessage,
     };
-  }, [getUsageForFeature, tier]);
+  }, [getUsageForFeature, tier, isAdmin]);
 
   const recordUsage = useCallback(async (feature: PremiumFeature, amount = 1) => {
     if (!currentUser?.id || amount <= 0) return;
@@ -484,6 +502,7 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
 
   const value = useMemo(() => ({
     tier,
+    isAdmin,
     subscription,
     usage,
     loading,
@@ -495,7 +514,7 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     usageMeters,
     openCheckout,
     openPortal,
-  }), [tier, subscription, usage, loading, canAccess, recordUsage, refresh, setLocalTier, usageMeters, openCheckout, openPortal]);
+  }), [tier, isAdmin, subscription, usage, loading, canAccess, recordUsage, refresh, setLocalTier, usageMeters, openCheckout, openPortal]);
 
   return <SubscriptionContext.Provider value={value}>{children}</SubscriptionContext.Provider>;
 }

@@ -12,6 +12,7 @@ import { playCommentSound, playMentionSound } from '../lib/sounds';
 import { NotificationEnableButton } from './NotificationEnableButton';
 import { useAskCasper } from './AskCasperWidget';
 import { ReportModal } from './ReportModal';
+import { useSubscription } from '../lib/subscription';
 
 interface AppNotification {
   id: string;
@@ -57,6 +58,7 @@ export const Navigation: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { currentUser } = useAuth();
+  const { canAccess } = useSubscription();
   const { openWidget: openAskCasper } = useAskCasper();
   const [unreadCount, setUnreadCount] = useState(0);
   const [showCreatePostModal, setShowCreatePostModal] = useState(false);
@@ -417,6 +419,9 @@ export const Navigation: React.FC = () => {
     { path: '/void', label: 'Void Feed', icon: CloudFog, active: isActive('/void'), color: '#FF00FF' },
     currentUser
       ? { path: '/terminal', label: 'Terminal', icon: Terminal, active: isActive('/terminal'), color: '#39FF14' }
+      : null,
+    currentUser && canAccess('ghostops_dashboard').allowed
+      ? { path: '/admin/casper', label: 'GhostOps', icon: BrainCircuit, active: isActive('/admin/casper'), color: '#4488FF' }
       : null,
     currentUser?.role === 'admin'
       ? { path: '/admin', label: 'Admin', icon: Shield, active: isActive('/admin'), color: '#FFD700' }
@@ -859,11 +864,11 @@ export const Navigation: React.FC = () => {
             {currentUser ? (
               <NavItem path="/terminal" icon={Terminal} active={isActive('/terminal')} color="#39FF14" />
             ) : null}
+            {currentUser && canAccess('ghostops_dashboard').allowed && (
+              <NavItem path="/admin/casper" icon={BrainCircuit} active={isActive('/admin/casper')} color="#4488FF" />
+            )}
             {currentUser?.role === 'admin' && (
-              <>
-                <NavItem path="/admin/casper" icon={BrainCircuit} active={isActive('/admin/casper')} color="#4488FF" />
-                <NavItem path="/admin" icon={Shield} active={isActive('/admin')} color="#FFD700" />
-              </>
+              <NavItem path="/admin" icon={Shield} active={isActive('/admin')} color="#FFD700" />
             )}
             <ProfileMoreButton />
           </div>
