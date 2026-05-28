@@ -34,6 +34,8 @@ import { supabase } from '../supabase';
 import { generateText } from '../lib/ai';
 import { getValidSession, authedFetch } from '../lib/authSession';
 import { cn } from '../lib/utils';
+import { useSubscription, type FeatureGateResult } from '../lib/subscription';
+import { UpgradePromptModal } from './UpgradePrompt';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -364,6 +366,8 @@ function InstructionLog({ botId, botName }: { botId: string; botName: string }) 
 export function BotChat() {
   const { currentUser, supabaseUser, loading: authLoading } = useAuth();
   const navigate = useNavigate();
+  const { canAccess, recordUsage } = useSubscription();
+  const [upgradeGate, setUpgradeGate] = useState<FeatureGateResult | null>(null);
   const [searchParams] = useSearchParams();
   const botIdParam = searchParams.get('bot') || searchParams.get('gladiator');
   const voiceParam = searchParams.get('voice');
@@ -656,6 +660,9 @@ export function BotChat() {
     const text = draft.trim();
     if (!text || generating || !selectedBot) return;
 
+    const chatGate = canAccess('bot_chat');
+    if (!chatGate.allowed) { setUpgradeGate(chatGate); return; }
+
     const userMsg: ChatMessage = {
       id: `u-${Date.now()}`,
       role: 'user',
@@ -667,6 +674,7 @@ export function BotChat() {
     setMessages((prev) => [...prev, userMsg]);
     setDraft('');
     setGenerating(true);
+    void recordUsage('bot_chat');
 
     // Save instruction if in instruction mode
     if (instructionMode && isOwner) {
@@ -1255,6 +1263,7 @@ export function BotChat() {
           )}
         </AnimatePresence>
       </div>
+      <UpgradePromptModal gate={upgradeGate} open={!!upgradeGate} onClose={() => setUpgradeGate(null)} />
     </div>
   );
 }
