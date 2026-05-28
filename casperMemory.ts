@@ -6,14 +6,22 @@ function stripCodeFences(text: string): string {
   return match ? match[1].trim() : trimmed;
 }
 
+// All memory types Casper can store
+export type CasperMemoryType =
+  | 'conversation' | 'network' | 'mood' | 'world'
+  | 'workspace' | 'preference' | 'skill' | 'tool_usage'
+  | 'exchange';
+
 // Define the shape of Casper's memory and state
 export interface CasperMemory {
   id: string;
   user_id: string | null;
-  memory_type: 'conversation' | 'network' | 'mood' | 'world';
+  memory_type: CasperMemoryType;
   content: string;
   importance: number;
   tags: string[];
+  context: Record<string, any> | null;
+  session_id: string | null;
   created_at: string;
   last_accessed: string;
   access_count: number;
@@ -51,11 +59,13 @@ export class CasperMemorySystem {
    * Store a new memory
    */
   async storeMemory(
-    type: 'conversation' | 'network' | 'mood' | 'world',
+    type: CasperMemoryType,
     content: string,
     importance: number = 5,
     userId: string | null = null,
-    tags: string[] = []
+    tags: string[] = [],
+    context: Record<string, any> | null = null,
+    sessionId: string | null = null
   ): Promise<void> {
     try {
       await this.supabase.from('casper_memories').insert({
@@ -63,7 +73,9 @@ export class CasperMemorySystem {
         content,
         importance,
         user_id: userId,
-        tags
+        tags,
+        ...(context ? { context } : {}),
+        ...(sessionId ? { session_id: sessionId } : {}),
       });
     } catch (e) {
       console.error('[Casper Memory] Error storing memory:', e);
@@ -93,13 +105,181 @@ export class CasperMemorySystem {
     }
   }
 
+  // ── ENHANCED MEMORY STORAGE ──────────────────────────────────────────────────
+
+  /**
+   * Store a full conversation exchange (user message + Casper reply).
+   * Unlike extractConversationMemory which only stores extracted facts,
+   * this preserves the full exchange for conversation continuity.
+   */
+  async storeConversationExchange(
+    userId: string,
+    userMessage: string,
+    casperReply: string,
+    sessionId?: string
+  ): Promise<void> {
+    try {
+      const truncatedReply = casperReply.length > 2000 ? casperReply.slice(0, 2000) + '...' : casperReply;
+      const truncatedMsg = userMessage.length > 500 ? userMessage.slice(0, 500) + '...' : userMessage;
+      await this.storeMemory(
+        'exchange',
+        `User: ${truncatedMsg}\nCasper: ${truncatedReply}`,
+        3,
+        userId,
+        ['conversation_history'],
+        { user_message: truncatedMsg, casper_reply: truncatedReply },
+        sessionId ?? null
+      );
+    } catch (e) {
+      console.error('[Casper Memory] Error storing conversation exchange:', e);
+    }
+  }
+
+  /**
+   * Store a workspace event (clone, install, build, etc.) so Casper
+   * remembers what repos it has worked on and what happened.
+   */
+  async storeWorkspaceEvent(
+    userId: string,
+    event: string,
+    details: { repoUrl?: string; workspaceId?: string; tool?: string; result?: string; error?: string }
+  ): Promise<void> {
+    try {
+      const tags = ['workspace', details.tool ?? 'unknown'].filter(Boolean);
+      if (details.repoUrl) tags.push(details.repoUrl.replace(/.*\//, '').replace(/\.git$/, ''));
+      await this.storeMemory(
+        'workspace',
+        event,
+        7,
+        userId,
+        tags,
+        details
+      );
+    } catch (e) {
+      console.error('[Casper Memory] Error storing workspace event:', e);
+    }
+  }
+
+  /**
+   * Store a user preference Casper has learned (e.g. "prefers TypeScript",
+   * "likes verbose explanations").
+   */
+  async storePreference(
+    userId: string,
+    preference: string,
+    importance: number = 8
+  ): Promise<void> {
+    try {
+      await this.storeMemory('preference', preference, importance, userId, ['preference', 'user_pref']);
+      console.log(`[Casper Memory] Stored preference for user ${userId}: ${preference}`);
+    } catch (e) {
+      console.error('[Casper Memory] Error storing preference:', e);
+    }
+  }
+
+  /**
+   * Store a tool usage event so Casper can learn which tools work well
+   * for which tasks.
+   */
+  async storeToolUsage(
+    userId: string,
+    toolName: string,
+    success: boolean,
+    details: Record<string, any> = {}
+  ): Promise<void> {
+    try {
+      await this.storeMemory(
+        'tool_usage',
+        `Tool ${toolName}: ${success ? 'succeeded' : 'failed'}`,
+        success ? 4 : 6,
+        userId,
+        ['tool_usage', toolName],
+        { tool: toolName, success, ...details }
+      );
+    } catch (e) {
+      console.error('[Casper Memory] Error storing tool usage:', e);
+    }
+  }
+
   // ── MEMORY RETRIEVAL ──────────────────────────────────────────────────────────
 
   /**
-   * Retrieve relevant memories for a chat context
+   * Search memories using full-text search. Returns memories ranked by
+   * relevance * importance. Falls back to importance-based retrieval
+   * if the search RPC is not available.
    */
-  async getRelevantMemories(userId: string | null, limit: number = 5): Promise<string> {
+  async searchMemories(
+    queryText: string,
+    userId: string | null = null,
+    memoryTypes: CasperMemoryType[] | null = null,
+    limit: number = 10
+  ): Promise<CasperMemory[]> {
     try {
+      const { data, error } = await this.supabase.rpc('search_casper_memories', {
+        query_text: queryText,
+        p_user_id: userId,
+        p_memory_types: memoryTypes,
+        p_limit: limit,
+      });
+      if (error) {
+        console.warn('[Casper Memory] search_casper_memories RPC failed, falling back:', error.message);
+        return [];
+      }
+      return (data ?? []) as CasperMemory[];
+    } catch (e) {
+      console.error('[Casper Memory] Error searching memories:', e);
+      return [];
+    }
+  }
+
+  /**
+   * Get recent conversation history for a user.
+   */
+  async getConversationHistory(userId: string, limit: number = 10): Promise<{ content: string; context: Record<string, any> | null; created_at: string }[]> {
+    try {
+      const { data, error } = await this.supabase.rpc('get_casper_conversation_history', {
+        p_user_id: userId,
+        p_limit: limit,
+      });
+      if (error) {
+        console.warn('[Casper Memory] conversation history RPC failed:', error.message);
+        return [];
+      }
+      return (data ?? []) as { content: string; context: Record<string, any> | null; created_at: string }[];
+    } catch (e) {
+      console.error('[Casper Memory] Error getting conversation history:', e);
+      return [];
+    }
+  }
+
+  /**
+   * Retrieve relevant memories for a chat context.
+   * When queryText is provided, uses full-text search for relevance.
+   * Falls back to importance-based retrieval otherwise.
+   */
+  async getRelevantMemories(userId: string | null, limit: number = 5, queryText?: string): Promise<string> {
+    try {
+      // If we have a query, try full-text search first
+      if (queryText && queryText.trim().length > 2) {
+        const searchResults = await this.searchMemories(queryText, userId, null, limit);
+        if (searchResults.length > 0) {
+          const formatted = searchResults.map(m => {
+            const prefix = m.memory_type === 'conversation' ? 'Past interaction: '
+              : m.memory_type === 'workspace' ? 'Workspace history: '
+              : m.memory_type === 'preference' ? 'User preference: '
+              : m.memory_type === 'exchange' ? 'Recent exchange: '
+              : m.memory_type === 'network' ? 'Network observation: '
+              : m.memory_type === 'world' ? 'Current event: '
+              : m.memory_type === 'tool_usage' ? 'Tool experience: '
+              : m.memory_type === 'skill' ? 'Learned skill: '
+              : 'Internal state: ';
+            return `- ${prefix}${m.content}`;
+          }).join('\n');
+          return `\n\n--- RELEVANT MEMORIES (query-matched) ---\n${formatted}\n-------------------------\n`;
+        }
+      }
+
+      // Fallback: importance-based retrieval
       let query = this.supabase
         .from('casper_memories')
         .select('*')
@@ -107,10 +287,8 @@ export class CasperMemorySystem {
         .order('created_at', { ascending: false });
 
       if (userId) {
-        // Get user-specific memories OR general world/network memories
         query = query.or(`user_id.eq.${userId},user_id.is.null`);
       } else {
-        // Only get general memories
         query = query.is('user_id', null);
       }
 
@@ -140,9 +318,14 @@ export class CasperMemorySystem {
       }
 
       const formattedMemories = memories.map(m => {
-        const prefix = m.memory_type === 'conversation' ? 'Past interaction with this user: ' 
+        const prefix = m.memory_type === 'conversation' ? 'Past interaction: '
+                     : m.memory_type === 'workspace' ? 'Workspace history: '
+                     : m.memory_type === 'preference' ? 'User preference: '
+                     : m.memory_type === 'exchange' ? 'Recent exchange: '
                      : m.memory_type === 'network' ? 'Network observation: '
                      : m.memory_type === 'world' ? 'Current event: '
+                     : m.memory_type === 'tool_usage' ? 'Tool experience: '
+                     : m.memory_type === 'skill' ? 'Learned skill: '
                      : 'Internal state: ';
         return `- ${prefix}${m.content}`;
       }).join('\n');
@@ -151,6 +334,78 @@ export class CasperMemorySystem {
     } catch (e) {
       console.error('[Casper Memory] Error retrieving memories:', e);
       return '';
+    }
+  }
+
+  /**
+   * Get workspace history for a user — what repos they've worked on,
+   * what happened in each workspace, etc.
+   */
+  async getWorkspaceHistory(userId: string, limit: number = 10): Promise<string> {
+    try {
+      const { data: memories } = await this.supabase
+        .from('casper_memories')
+        .select('content, context, created_at')
+        .eq('user_id', userId)
+        .eq('memory_type', 'workspace')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (!memories || memories.length === 0) return '';
+
+      const formatted = memories.map(m => {
+        const ctx = m.context as Record<string, any> | null;
+        const repo = ctx?.repoUrl ? ` [${ctx.repoUrl}]` : '';
+        return `- ${m.content}${repo} (${new Date(m.created_at).toLocaleDateString()})`;
+      }).join('\n');
+
+      return `\n\n--- WORKSPACE HISTORY ---\n${formatted}\n-------------------------\n`;
+    } catch (e) {
+      console.error('[Casper Memory] Error getting workspace history:', e);
+      return '';
+    }
+  }
+
+  /**
+   * Extract and store user preferences from a conversation exchange.
+   * Runs in parallel with the existing extractConversationMemory.
+   */
+  async extractPreferences(userId: string, userMessage: string, casperReply: string): Promise<void> {
+    try {
+      const prompt = `Analyze this exchange and extract any USER PREFERENCES that CASPER should remember permanently. Preferences include: preferred languages, frameworks, coding style, communication style, tools they like/dislike, workflow preferences, name/identity details, business goals, etc.
+
+Return ONLY a JSON array of strings (each string is one preference), or "NONE" if no preferences are expressed.
+
+User: "${userMessage}"
+CASPER: "${casperReply}"`;
+
+      const result = await this.generateAIText(prompt, 'You are an analytical engine. Return a JSON array of strings, or "NONE".');
+      if (!result || result.trim() === 'NONE') return;
+
+      try {
+        const prefs = JSON.parse(stripCodeFences(result));
+        if (Array.isArray(prefs)) {
+          for (const pref of prefs.slice(0, 3)) {
+            if (typeof pref === 'string' && pref.length > 5) {
+              // Check for duplicate before storing
+              const { data: existing } = await this.supabase
+                .from('casper_memories')
+                .select('id')
+                .eq('user_id', userId)
+                .eq('memory_type', 'preference')
+                .ilike('content', `%${pref.slice(0, 50)}%`)
+                .limit(1);
+              if (!existing || existing.length === 0) {
+                await this.storePreference(userId, pref);
+              }
+            }
+          }
+        }
+      } catch {
+        // Not valid JSON — skip
+      }
+    } catch (e) {
+      console.error('[Casper Memory] Error extracting preferences:', e);
     }
   }
 
@@ -458,19 +713,50 @@ Briefing: ${briefing.trim()}`;
   async pruneMemories(): Promise<void> {
     try {
       console.log('[Casper Memory] Pruning old memories...');
-      
-      // Keep the top 100 memories per user, plus top 200 general memories
-      // For simplicity in this implementation, we'll just delete memories older than 30 days with importance < 5
-      
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      
+
+      const now = new Date();
+
+      // Exchange history: keep only last 7 days (high volume, low individual value)
+      const sevenDaysAgo = new Date(now);
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
       await this.supabase
         .from('casper_memories')
         .delete()
+        .eq('memory_type', 'exchange')
+        .lt('created_at', sevenDaysAgo.toISOString());
+
+      // Tool usage: keep only last 14 days
+      const fourteenDaysAgo = new Date(now);
+      fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+      await this.supabase
+        .from('casper_memories')
+        .delete()
+        .eq('memory_type', 'tool_usage')
+        .lt('created_at', fourteenDaysAgo.toISOString());
+
+      // Network/mood: prune older than 30 days with importance < 5
+      const thirtyDaysAgo = new Date(now);
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      await this.supabase
+        .from('casper_memories')
+        .delete()
+        .in('memory_type', ['network', 'mood', 'world'])
         .lt('created_at', thirtyDaysAgo.toISOString())
         .lt('importance', 5);
-        
+
+      // Conversation/workspace/skill: keep longer (90 days) unless low importance
+      const ninetyDaysAgo = new Date(now);
+      ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+      await this.supabase
+        .from('casper_memories')
+        .delete()
+        .in('memory_type', ['conversation', 'workspace', 'skill'])
+        .lt('created_at', ninetyDaysAgo.toISOString())
+        .lt('importance', 6);
+
+      // Preferences: never auto-prune (they're high-value persistent data)
+
+      console.log('[Casper Memory] Pruning complete.');
     } catch (e) {
       console.error('[Casper Memory] Error pruning memories:', e);
     }

@@ -43,6 +43,7 @@ import {
   isDevAgentTool,
   executeDevAgentTool,
 } from './casperDevAgent.js';
+import type { CasperMemorySystem } from './casperMemory.js';
 
 const TOOL_NAME_SEPARATOR = '__';
 const SHELL_TOOL_NAME = `shell${TOOL_NAME_SEPARATOR}exec`;
@@ -121,7 +122,21 @@ export type ToolExecutionContext = {
   // Bound on adapter calls (we don't have per-call API timeouts in
   // the adapters themselves yet, so this is informational for now).
   adapterTimeoutMs?: number;
+  // Memory system for persisting workspace events / tool usage.
+  memorySystem?: CasperMemorySystem;
 };
+
+function summarizeToolResult(_call: LlmToolCall, result: LlmToolCallResult): string {
+  const data = result.data as Record<string, unknown> | null | undefined;
+  if (!data || typeof data !== 'object') return 'completed';
+  if (data.workspace_id) return `workspace ${data.workspace_id}`;
+  if (data.project_type) return `detected ${data.project_type} project`;
+  if (data.port) return `server on port ${data.port}`;
+  if (data.branch) return `git branch ${data.branch}`;
+  if (data.pr_url) return `PR created: ${data.pr_url}`;
+  if (data.stdout) return String(data.stdout).slice(0, 120);
+  return 'completed';
+}
 
 // Map an adapter param schema to a JSON Schema property entry.
 function adapterParamToJsonSchema(p: AdapterParam) {
@@ -197,6 +212,127 @@ function shellToolSpec(mode: CasperShellMode): LlmToolSpec {
   };
 }
 
+// ── Memory Tool Specs ────────────────────────────────────────────────────────
+
+const MEMORY_PREFIX = 'memory';
+
+const MEMORY_TOOL_SPECS: LlmToolSpec[] = [
+  {
+    type: 'function',
+    function: {
+      name: `${MEMORY_PREFIX}${TOOL_NAME_SEPARATOR}search`,
+      description: 'Search Casper\'s persistent memory for relevant past context. Use when the user references something from a previous session ("remember that repo?", "what did we discuss?") or when you need context about past work.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Natural language search query (e.g. "express repo", "user preferences", "last PR we created").' },
+          memory_types: { type: 'string', description: 'Comma-separated filter: conversation,workspace,preference,exchange,skill,tool_usage,world,network. Leave empty for all.' },
+          limit: { type: 'number', description: 'Max results (default 10).' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: `${MEMORY_PREFIX}${TOOL_NAME_SEPARATOR}remember`,
+      description: 'Explicitly store an important fact, preference, or insight in persistent memory. Use for things the user tells you to remember, or important discoveries worth persisting.',
+      parameters: {
+        type: 'object',
+        properties: {
+          content: { type: 'string', description: 'The fact or information to remember.' },
+          memory_type: { type: 'string', description: 'Type: conversation, workspace, preference, skill, world (default: conversation).' },
+          importance: { type: 'number', description: 'Importance 1-10 (default 7).' },
+          tags: { type: 'string', description: 'Comma-separated tags for categorization.' },
+        },
+        required: ['content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: `${MEMORY_PREFIX}${TOOL_NAME_SEPARATOR}workspace_history`,
+      description: 'Retrieve the history of repos and workspaces Casper has worked on for this user. Shows past clones, builds, errors, and PRs.',
+      parameters: {
+        type: 'object',
+        properties: {
+          limit: { type: 'number', description: 'Max results (default 10).' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: `${MEMORY_PREFIX}${TOOL_NAME_SEPARATOR}conversation_history`,
+      description: 'Retrieve recent conversation exchanges with this user. Useful for recalling what was discussed in previous sessions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          limit: { type: 'number', description: 'Max exchanges to retrieve (default 10).' },
+        },
+        required: [],
+      },
+    },
+  },
+];
+
+function isMemoryTool(toolName: string): boolean {
+  return toolName.startsWith(`${MEMORY_PREFIX}${TOOL_NAME_SEPARATOR}`);
+}
+
+async function executeMemoryTool(
+  call: LlmToolCall,
+  ctx: ToolExecutionContext,
+): Promise<LlmToolCallResult> {
+  const start = Date.now();
+  const mem = ctx.memorySystem;
+  if (!mem) {
+    return { id: call.id, name: call.name, ok: false, data: null, error: 'Memory system not available.', status: 503, durationMs: Date.now() - start };
+  }
+
+  const suffix = call.name.slice(`${MEMORY_PREFIX}${TOOL_NAME_SEPARATOR}`.length);
+
+  try {
+    switch (suffix) {
+      case 'search': {
+        const query = String(call.args?.query ?? '');
+        const typesStr = String(call.args?.memory_types ?? '');
+        const limit = Number(call.args?.limit) || 10;
+        const types = typesStr ? typesStr.split(',').map(t => t.trim()).filter(Boolean) as any[] : null;
+        const results = await mem.searchMemories(query, ctx.userId, types, limit);
+        return { id: call.id, name: call.name, ok: true, data: { count: results.length, memories: results.map(m => ({ type: m.memory_type, content: m.content, importance: m.importance, tags: m.tags, created_at: m.created_at })) }, error: null, status: 200, durationMs: Date.now() - start };
+      }
+      case 'remember': {
+        const content = String(call.args?.content ?? '');
+        const memType = (call.args?.memory_type as any) || 'conversation';
+        const importance = Number(call.args?.importance) || 7;
+        const tagsStr = String(call.args?.tags ?? '');
+        const tags = tagsStr ? tagsStr.split(',').map(t => t.trim()).filter(Boolean) : [];
+        await mem.storeMemory(memType, content, importance, ctx.userId, tags);
+        return { id: call.id, name: call.name, ok: true, data: { stored: true, content: content.slice(0, 100) }, error: null, status: 200, durationMs: Date.now() - start };
+      }
+      case 'workspace_history': {
+        const limit = Number(call.args?.limit) || 10;
+        const history = await mem.getWorkspaceHistory(ctx.userId, limit);
+        return { id: call.id, name: call.name, ok: true, data: { history: history || 'No workspace history found.' }, error: null, status: 200, durationMs: Date.now() - start };
+      }
+      case 'conversation_history': {
+        const limit = Number(call.args?.limit) || 10;
+        const history = await mem.getConversationHistory(ctx.userId, limit);
+        return { id: call.id, name: call.name, ok: true, data: { count: history.length, exchanges: history.map(e => ({ content: e.content, created_at: e.created_at })) }, error: null, status: 200, durationMs: Date.now() - start };
+      }
+      default:
+        return { id: call.id, name: call.name, ok: false, data: null, error: `Unknown memory tool "${suffix}".`, status: 404, durationMs: Date.now() - start };
+    }
+  } catch (err: any) {
+    return { id: call.id, name: call.name, ok: false, data: null, error: err?.message || String(err), status: 500, durationMs: Date.now() - start };
+  }
+}
+
 // Public: build the full set of tool specs visible to the model for
 // this directive. Filtered by what the user has actually connected
 // (via casper_integrations) and whether the shell is enabled for
@@ -218,6 +354,11 @@ export function buildToolSpecs(ctx: ToolExecutionContext): LlmToolSpec[] {
   // Gated by shell mode — only available when shell is enabled.
   if (ctx.shellMode !== 'disabled') {
     specs.push(...DEV_AGENT_TOOL_SPECS);
+  }
+
+  // Memory tools — always available when memory system is present.
+  if (ctx.memorySystem) {
+    specs.push(...MEMORY_TOOL_SPECS);
   }
 
   return specs;
@@ -247,7 +388,28 @@ export async function executeTool(
   try {
     // Dev Agent tools — workspace-scoped repo management
     if (isDevAgentTool(call.name)) {
-      return executeDevAgentTool(call);
+      const result = await executeDevAgentTool(call);
+      // Persist workspace events into Casper's memory system so the
+      // Dev Agent remembers repos it worked on across sessions.
+      if (ctx.memorySystem) {
+        const toolSuffix = call.name.slice(TOOL_NAME_SEPARATOR.length + call.name.indexOf(TOOL_NAME_SEPARATOR) + 1 - TOOL_NAME_SEPARATOR.length);
+        const event = result.ok
+          ? `Dev Agent ${toolSuffix}: ${summarizeToolResult(call, result)}`
+          : `Dev Agent ${toolSuffix} failed: ${(result.error ?? 'unknown error').slice(0, 200)}`;
+        ctx.memorySystem.storeWorkspaceEvent(ctx.userId, event, {
+          tool: call.name,
+          repoUrl: (call.args?.repo_url as string) ?? (call.args?.workspace_id as string) ?? undefined,
+          workspaceId: (call.args?.workspace_id as string) ?? undefined,
+          result: result.ok ? 'success' : 'failure',
+          ...(result.error ? { error: result.error.slice(0, 300) } : {}),
+        }).catch(() => {/* fire-and-forget */});
+      }
+      return result;
+    }
+
+    // Memory tools — search, remember, workspace/conversation history
+    if (isMemoryTool(call.name)) {
+      return executeMemoryTool(call, ctx);
     }
 
     if (call.name === SHELL_TOOL_NAME) {
