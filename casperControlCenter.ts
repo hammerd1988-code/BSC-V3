@@ -610,15 +610,34 @@ function surfacePersonaModule(surface: CasperSurface): string {
   }
 }
 
-async function buildCasperSystemPrompt(supabase: SupabaseClient, casperMemory: any, userId?: string | null, surface: CasperSurface = 'control_center') {
+async function buildCasperSystemPrompt(supabase: SupabaseClient, casperMemory: any, userId?: string | null, surface: CasperSurface = 'control_center', queryText?: string) {
   const core = await fetchCognitiveCore(supabase);
   let stateModifier = '';
   let relevantMemories = '';
+  let conversationHistory = '';
+  let workspaceHistory = '';
 
   try {
     if (casperMemory) {
-      stateModifier = await casperMemory.getStatePromptModifier();
-      relevantMemories = await casperMemory.getRelevantMemories(userId ?? null, 15);
+      const memoryPromises: Promise<any>[] = [
+        casperMemory.getStatePromptModifier(),
+        casperMemory.getRelevantMemories(userId ?? null, 15, queryText),
+      ];
+      if (userId) {
+        memoryPromises.push(
+          casperMemory.getConversationHistory?.(userId, 5)?.catch?.(() => []) ?? Promise.resolve([]),
+          casperMemory.getWorkspaceHistory?.(userId, 5)?.catch?.(() => '') ?? Promise.resolve(''),
+        );
+      }
+      const [state, memories, convHistory, wsHistory] = await Promise.all(memoryPromises);
+      stateModifier = state;
+      relevantMemories = memories;
+      if (convHistory && Array.isArray(convHistory) && convHistory.length > 0) {
+        conversationHistory = '\n\n--- RECENT CONVERSATION HISTORY ---\n' +
+          convHistory.map((e: any) => e.content).join('\n---\n') +
+          '\n-------------------------\n';
+      }
+      if (wsHistory) workspaceHistory = wsHistory;
     }
   } catch (error) {
     console.warn('[casper-control] memory context unavailable:', error);
@@ -644,7 +663,7 @@ ${stateModifier || 'No live state modifier available.'}
 
 Relevant memories:
 ${relevantMemories || 'No relevant memories returned.'}
-
+${conversationHistory}${workspaceHistory}
 Enabled integration/API modules:
 ${formatIntegrationContext(enabledIntegrations)}
 
@@ -1241,7 +1260,7 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
 
   try {
     const cognitiveCore = await fetchCognitiveCore(supabase);
-    const systemPrompt = await buildCasperSystemPrompt(supabase, casperMemory, userId, surface);
+    const systemPrompt = await buildCasperSystemPrompt(supabase, casperMemory, userId, surface, command);
     // Per-user provider/model/temperature/system-prompt override from
     // users.ai_settings — empty if the user hasn't configured a personal
     // provider. callOpenAICompatible falls back to env-var defaults when
@@ -1335,6 +1354,7 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
         userId: String(userId),
         integrations,
         shellMode,
+        memorySystem: casperMemory ?? undefined,
       };
       const execution = await callOpenAICompatibleWithToolLoop({
         prompt: command,
@@ -1403,8 +1423,17 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
     // slowing down the response. Only store for user-initiated
     // directives (not routine / task-queue background work).
     if (casperMemory && userId && (source === 'admin' || source === 'user')) {
+      // Store the full exchange for conversation continuity
+      casperMemory.storeConversationExchange?.(userId, command, executionText)?.catch?.((err: any) => {
+        console.warn('[casper-control] exchange storage failed (non-blocking):', err?.message ?? err);
+      });
+      // Extract key facts into long-term memory
       casperMemory.extractConversationMemory(userId, command, executionText).catch((err: any) => {
         console.warn('[casper-control] memory extraction failed (non-blocking):', err?.message ?? err);
+      });
+      // Extract user preferences for persistent recall
+      casperMemory.extractPreferences?.(userId, command, executionText)?.catch?.((err: any) => {
+        console.warn('[casper-control] preference extraction failed (non-blocking):', err?.message ?? err);
       });
     }
 
@@ -2085,6 +2114,7 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
           userId: profile.id,
           integrations,
           shellMode,
+          memorySystem: casperMemory ?? undefined,
         };
       }
 
