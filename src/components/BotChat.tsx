@@ -477,19 +477,19 @@ export function BotChat() {
     setListening(false);
   }, []);
 
-  // Text-to-speech with per-bot voice variety
+  // Text-to-speech — honours the user's voice selection from settings panel
   const speakText = useCallback((text: string) => {
     if (!ttsEnabled || !selectedBot) return;
     const botId = selectedBot.id;
 
-    // Mimo / server TTS — use per-bot voice from the pool
+    // Mimo / server TTS — use the voice the user picked in the dropdown
     if (voiceProvider !== 'browser') {
-      const mimoVoice = getMimoVoiceForBot(botId);
+      const providerVoice = voiceProvider.replace(/^mimo-/, '').replace(/^openai-/, '');
       setSpeaking(true);
       fetch('/api/tts/mimo', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: text.slice(0, 4096), voice: mimoVoice, speed: 1.0 }),
+        body: JSON.stringify({ text: text.slice(0, 4096), voice: providerVoice, speed: 1.0 }),
       })
         .then((r) => {
           if (!r.ok) throw new Error(`Mimo TTS ${r.status}`);
@@ -505,13 +505,11 @@ export function BotChat() {
         })
         .catch(() => {
           setSpeaking(false);
-          // Fallback to browser TTS with per-bot voice
-          const settings = getVoiceSettingsForBot(botId, availableVoices);
-          if (settings.voice) {
+          // Fallback to browser TTS using selected voice
+          const voice = selectedVoice ?? getVoiceSettingsForBot(botId, availableVoices).voice;
+          if (voice) {
             const utterance = new SpeechSynthesisUtterance(text);
-            utterance.voice = settings.voice;
-            utterance.pitch = settings.pitch;
-            utterance.rate = settings.rate;
+            utterance.voice = voice;
             utterance.onstart = () => setSpeaking(true);
             utterance.onend = () => setSpeaking(false);
             utterance.onerror = () => setSpeaking(false);
@@ -521,20 +519,18 @@ export function BotChat() {
       return;
     }
 
-    // Browser-native TTS with per-bot voice, pitch, and rate
-    const settings = getVoiceSettingsForBot(botId, availableVoices);
-    if (!settings.voice) return;
+    // Browser-native TTS — use the voice the user selected, fall back to per-bot hash
+    const voice = selectedVoice ?? getVoiceSettingsForBot(botId, availableVoices).voice;
+    if (!voice) return;
     speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.voice = settings.voice;
-    utterance.rate = settings.rate;
-    utterance.pitch = settings.pitch;
+    utterance.voice = voice;
     utterance.onstart = () => setSpeaking(true);
     utterance.onend = () => setSpeaking(false);
     utterance.onerror = () => setSpeaking(false);
     utteranceRef.current = utterance;
     speechSynthesis.speak(utterance);
-  }, [ttsEnabled, selectedBot, voiceProvider, availableVoices]);
+  }, [ttsEnabled, selectedBot, voiceProvider, availableVoices, selectedVoice]);
 
   const stopSpeaking = useCallback(() => {
     speechSynthesis.cancel();
@@ -1173,7 +1169,7 @@ export function BotChat() {
                         {/* Browser voice selector (only shown when browser provider is selected) */}
                         {voiceProvider === 'browser' && (
                           <div>
-                            <p className="text-[9px] font-bold uppercase tracking-widest text-gray-500 mb-1">Browser Voice (auto-assigned per bot)</p>
+                            <p className="text-[9px] font-bold uppercase tracking-widest text-gray-500 mb-1">Browser Voice</p>
                             <select
                               value={selectedVoice?.name ?? ''}
                               onChange={(e) => {

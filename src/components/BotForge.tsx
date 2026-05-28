@@ -506,7 +506,8 @@ export function BotForge() {
 
   const gladiatorParam = searchParams.get('gladiator');
 
-  // Load gladiators owned by this user, or all gladiators for the admin autonomy console
+  // Load gladiators owned by this user, or all gladiators for the admin autonomy console.
+  // Admin flow: ensure platform bots exist first, then query so the results include them.
   useEffect(() => {
     if (!currentUser?.id) {
       setGladiators([]);
@@ -518,21 +519,23 @@ export function BotForge() {
     (async () => {
       setLoading(true);
       try {
-        const ensurePromise = isAdmin ? ensurePlatformBotGladiatorsForForge() : Promise.resolve([]);
+        // For admin, ensure platform bots exist BEFORE querying so they show up
+        if (isAdmin) {
+          await ensurePlatformBotGladiatorsForForge().catch(() => {});
+        }
+        if (cancelled) return;
+
         let query = supabase
           .from('gladiators')
           .select('*')
           .order('created_at', { ascending: false });
         if (!isAdmin) query = query.eq('user_id', currentUser.id);
-        const [{ data, error }, ensuredGladiators] = await Promise.all([query, ensurePromise]);
+        const { data, error } = await query;
         if (cancelled) return;
-        const roster = isAdmin && ensuredGladiators.length > 0 && (error || !data?.length)
-          ? ensuredGladiators
-          : data ?? [];
+        const roster = data ?? [];
         if (error && roster.length === 0) {
           handleDbError(error, 'load gladiators');
         }
-        if (error && ensuredGladiators.length > 0) console.warn('[BotForge] Falling back to ensured platform gladiator roster after admin query failed', error);
         setGladiators(roster);
 
         // Auto-select from URL param or first
@@ -746,7 +749,11 @@ export function BotForge() {
 
           {/* Gladiator selector */}
           {gladiators.length > 0 ? (
-            <div className="flex gap-3 overflow-x-auto pb-2">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-2">
+                Select a Gladiator to Configure ({gladiators.length} available — scroll for more →)
+              </p>
+              <div className="flex gap-3 overflow-x-auto pb-2">
               {gladiators.map((g) => {
                 const active = selectedGladiator?.id === g.id;
                 const gTier = getIndependenceTier(g.cred);
@@ -774,6 +781,7 @@ export function BotForge() {
                   </button>
                 );
               })}
+              </div>
             </div>
           ) : (
             <div className="rounded-xl border border-white/10 bg-white/5 p-8 text-center">
