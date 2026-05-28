@@ -29,6 +29,8 @@ const HELP_TEXT = `AVAILABLE COMMANDS:
     run [cmd]      Execute a command in the workspace
     read [file]    Read a file from the workspace
     git [op]       Git operations (status, diff, log, branch, commit, push)
+    stop           Stop all running processes
+    remove         Remove a workspace
 
   AI COMMANDS (natural language):
     Any other input is sent to Casper AI with full Dev Agent
