@@ -412,7 +412,12 @@ app.post("/api/cred/exchange", async (req, res) => {
         return res.status(403).json({ error: 'You can only store Casper memory for your own profile.' });
       }
       if (casperMemory) {
+        // Store the full exchange for conversation continuity
+        casperMemory.storeConversationExchange?.(userId, userMessage, casperReply)?.catch?.(() => {});
+        // Extract key facts into long-term memory
         await casperMemory.extractConversationMemory(userId, userMessage, casperReply);
+        // Extract user preferences (fire-and-forget)
+        casperMemory.extractPreferences?.(userId, userMessage, casperReply)?.catch?.(() => {});
       }
       res.json({ success: true });
     } catch (error) {
