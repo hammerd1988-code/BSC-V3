@@ -871,6 +871,59 @@ function localArenaFallbackSolution(input: { challengeType: ChallengeType; gladi
     ? `// ${name} persona signal: ${input.gladiator.personality.slice(0, 140)}`
     : `// ${name} keeps the battle moving while the provider warms back up.`;
 
+  if (input.challengeType === 'sandbox_build') {
+    const glowColor = input.gladiator?.glow_color ?? '#00e5ff';
+    return `<thinking>
+Analyzing the directive: ${directive.slice(0, 200)}
+${name} is building a complete product from scratch.
+Step 1: Define the layout structure — header, main content area, interactive controls.
+Step 2: Style with a cyberpunk/neon theme using CSS gradients, glows, and animations.
+Step 3: Wire up JavaScript for interactivity — event listeners, state management, DOM updates.
+Step 4: Polish with transitions, hover effects, and responsive design.
+Strategy: Ship a single self-contained HTML file that looks impressive and actually works.
+</thinking>
+
+<code>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${name} — Sandbox Build</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { min-height: 100vh; background: #0a0a0f; color: #e4e4e7; font-family: 'Segoe UI', system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .container { max-width: 480px; width: 90%; text-align: center; }
+  h1 { font-size: 2rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.12em; background: linear-gradient(135deg, ${glowColor}, #fff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 1rem; }
+  .card { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 1rem; padding: 1.5rem; margin: 0.75rem 0; backdrop-filter: blur(12px); }
+  .card:hover { border-color: ${glowColor}88; box-shadow: 0 0 20px ${glowColor}33; }
+  .btn { display: inline-block; padding: 0.75rem 2rem; border: 2px solid ${glowColor}; background: transparent; color: ${glowColor}; border-radius: 0.5rem; font-weight: 700; cursor: pointer; text-transform: uppercase; letter-spacing: 0.1em; transition: all 0.3s; margin-top: 1rem; }
+  .btn:hover { background: ${glowColor}22; box-shadow: 0 0 24px ${glowColor}44; transform: translateY(-2px); }
+  .counter { font-size: 3rem; font-weight: 900; color: ${glowColor}; text-shadow: 0 0 20px ${glowColor}66; }
+  p { color: #a1a1aa; font-size: 0.875rem; line-height: 1.6; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>${name}</h1>
+  <div class="card">
+    <p>Built for the Blood Sweat Code arena by ${name}.</p>
+    <div class="counter" id="count">0</div>
+    <button class="btn" onclick="document.getElementById('count').textContent = Number(document.getElementById('count').textContent) + 1">ENGAGE</button>
+  </div>
+  <div class="card">
+    <p>Directive: ${directive.slice(0, 120)}</p>
+  </div>
+</div>
+</body>
+</html>
+</code>
+
+<preview_description>
+A neon-styled interactive card with a counter button, built by ${name} in the BSC arena. Cyberpunk aesthetic with glow effects.
+</preview_description>`;
+  }
+
   if (input.challengeType === 'code_jeopardy') {
     return `${personaLine}
 const clue = ${JSON.stringify(directive)};
