@@ -4036,12 +4036,29 @@ export const Colosseum: React.FC = () => {
     const initialDefenderScore = clampBattleScore(42 + aiMoveBonus(defenderMove, type) + botProfileScoreBonus(defender.botProfile, type) + (isSapphireGladiator(defender) ? sapphireSolutionBonus(sapphireMove, type) : 0));
     const combatLines = combatLinesFor(type, challenger, defender, codingChallenge);
 
+    const isSandbox = type === 'sandbox_build';
+    const totalTicks = isSandbox ? 40 : 10;
+    const tickInterval = isSandbox ? 1500 : 800;
+
     let tick = 0;
     const interval = window.setInterval(() => {
       tick += 1;
-      const challengerProgress = Math.min(100, Math.round((tick / 7) * 100 + (initialChallengerScore > initialDefenderScore ? tick * 1.4 : 0)));
-      const defenderProgress = Math.min(100, Math.round((tick / 7) * 100 + (initialDefenderScore > initialChallengerScore ? tick * 1.4 : 0)));
-      if (combatLines[tick - 1]) finalLogs.push(combatLines[tick - 1]);
+      const ratio = tick / totalTicks;
+      const leaderBonus = isSandbox ? ratio * 6 : tick * 1.4;
+      const challengerProgress = Math.min(99, Math.round(
+        isSandbox
+          ? (ratio < 0.2 ? ratio * 120 : ratio < 0.6 ? 24 + (ratio - 0.2) * 140 : 80 + (ratio - 0.6) * 50)
+            + (initialChallengerScore > initialDefenderScore ? leaderBonus : 0)
+          : ratio * 100 + (initialChallengerScore > initialDefenderScore ? leaderBonus : 0)
+      ));
+      const defenderProgress = Math.min(99, Math.round(
+        isSandbox
+          ? (ratio < 0.2 ? ratio * 120 : ratio < 0.6 ? 24 + (ratio - 0.2) * 140 : 80 + (ratio - 0.6) * 50)
+            + (initialDefenderScore > initialChallengerScore ? leaderBonus : 0)
+          : ratio * 100 + (initialDefenderScore > initialChallengerScore ? leaderBonus : 0)
+      ));
+      const lineIndex = Math.floor((tick - 1) * combatLines.length / totalTicks);
+      if (combatLines[lineIndex] && !finalLogs.includes(combatLines[lineIndex])) finalLogs.push(combatLines[lineIndex]);
 
       setSimulation((prev) => prev ? {
         ...prev,
@@ -4060,7 +4077,7 @@ export const Colosseum: React.FC = () => {
         updated_client_at: new Date().toISOString(),
       });
 
-      if (tick >= 7) {
+      if (tick >= totalTicks) {
         window.clearInterval(interval);
         void (async () => {
           let judge: BattleJudgeResult;
@@ -4138,7 +4155,7 @@ export const Colosseum: React.FC = () => {
           });
         })();
       }
-    }, 720);
+    }, tickInterval);
   };
 
   const letSapphireEnterWaitingBattle = async (match: MatchRow) => {
