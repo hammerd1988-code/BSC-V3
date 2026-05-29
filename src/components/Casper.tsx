@@ -1785,11 +1785,25 @@ export const Casper: React.FC = () => {
                     world: 'border-indigo-300/20 text-indigo-100',
                   };
                   const color = typeColors[memory.memory_type] || 'border-white/20 text-white';
-                  return <div key={memory.id} onClick={() => void openMemory(memory)} className="group cursor-pointer rounded-3xl border border-white/10 bg-black/35 p-4 hover:border-cyan-300/30">
-                    <div className="mb-2 flex items-center gap-2">
-                      <Database className="h-4 w-4 text-cyan-200" />
-                      <span className={cn('rounded-full border px-2 py-0.5 text-[8px] font-black uppercase tracking-widest', color)}>{memory.memory_type === 'tool_usage' ? 'tool' : memory.memory_type}</span>
-                      <span className="text-[8px] text-zinc-600">IMP {memory.importance}</span>
+	                  return (
+	                    <div
+	                      key={memory.id}
+	                      role="button"
+	                      tabIndex={0}
+	                      aria-label="Open memory"
+	                      onClick={() => void openMemory(memory)}
+	                      onKeyDown={(e) => {
+	                        if (e.key === 'Enter' || e.key === ' ') {
+	                          e.preventDefault();
+	                          void openMemory(memory);
+	                        }
+	                      }}
+	                      className="group cursor-pointer rounded-3xl border border-white/10 bg-black/35 p-4 hover:border-cyan-300/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/40"
+	                    >
+	                    <div className="mb-2 flex items-center gap-2">
+	                      <Database className="h-4 w-4 text-cyan-200" />
+	                      <span className={cn('rounded-full border px-2 py-0.5 text-[8px] font-black uppercase tracking-widest', color)}>{memory.memory_type === 'tool_usage' ? 'tool' : memory.memory_type}</span>
+	                      <span className="text-[8px] text-zinc-600">IMP {memory.importance}</span>
                     </div>
                     <p className={cn('text-xs leading-6 text-zinc-300', expandedMemory === memory.id ? '' : 'line-clamp-4')}>{memory.content}</p>
                     {expandedMemory === memory.id && (memory.tags ?? []).length > 0 && (
@@ -1802,10 +1816,11 @@ export const Casper: React.FC = () => {
                       <div className="flex gap-2">
                         <button onClick={e => { e.stopPropagation(); startEditMemory(memory); }} className="text-cyan-300 opacity-0 transition-opacity group-hover:opacity-100" title="Edit"><Edit3 className="h-3.5 w-3.5" /></button>
                         <button onClick={e => { e.stopPropagation(); void deleteMemory(memory); }} className="text-red-300 opacity-0 transition-opacity group-hover:opacity-100" title="Delete"><Trash2 className="h-3.5 w-3.5" /></button>
-                      </div>
-                    </div>
-                  </div>;
-                })}</div>
+	                      </div>
+	                    </div>
+	                  </div>
+	                  );
+	                })}</div>
                 {filteredMemories.length === 0 && <div className="mt-6 text-center text-sm text-zinc-600">{memorySearch || memoryTypeFilter !== 'all' ? 'No memories match.' : 'No memories stored yet.'}</div>}
 
                 {/* Edit Memory Modal */}
