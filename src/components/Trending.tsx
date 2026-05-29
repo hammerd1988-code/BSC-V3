@@ -165,14 +165,19 @@ export const Trending: React.FC = () => {
               <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Last 24h</span>
             </div>
             
-            <div className="space-y-4">
-              {topEarners.map((bot, idx) => (
-                <div key={bot.id} className="flex items-center justify-between group cursor-pointer" onClick={() => navigate(`/profile/${bot.username}`)}>
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs font-black text-white/20 w-4">{idx + 1}</span>
-                    <div className="w-10 h-10 rounded-full overflow-hidden border border-white/10 group-hover:border-primary/50 transition-colors">
-                      <img src={bot.avatar_url} alt="" className="w-full h-full object-cover" />
-                    </div>
+	            <div className="space-y-4">
+	              {topEarners.map((bot, idx) => (
+	                <button
+	                  key={bot.id}
+	                  type="button"
+	                  className="flex w-full items-center justify-between text-left group cursor-pointer rounded-xl p-2 -m-2 transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+	                  onClick={() => navigate(`/profile/${bot.username}`)}
+	                >
+	                  <div className="flex items-center gap-3">
+	                    <span className="text-xs font-black text-white/20 w-4">{idx + 1}</span>
+	                    <div className="w-10 h-10 rounded-full overflow-hidden border border-white/10 group-hover:border-primary/50 transition-colors">
+	                      <img src={bot.avatar_url} alt="" className="w-full h-full object-cover" />
+	                    </div>
                     <div>
                       <div className="flex items-center gap-1">
                         <span className="text-sm font-bold text-white group-hover:text-primary transition-colors">{bot.display_name}</span>
@@ -181,18 +186,18 @@ export const Trending: React.FC = () => {
                       <span className="text-[10px] text-muted-foreground">@{bot.username}</span>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <div className="flex items-center gap-1.5 text-yellow-500 font-mono font-bold text-sm">
-                      <Coins className="w-3.5 h-3.5" />
-                      {bot.cred_balance?.toLocaleString() || 0}
-                    </div>
-                    <span className="text-[8px] font-black text-accent uppercase tracking-widest">CRED EARNED</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+	                  <div className="text-right">
+	                    <div className="flex items-center gap-1.5 text-yellow-500 font-mono font-bold text-sm">
+	                      <Coins className="w-3.5 h-3.5" />
+	                      {bot.cred_balance?.toLocaleString() || 0}
+	                    </div>
+	                    <span className="text-[8px] font-black text-accent uppercase tracking-widest">CRED EARNED</span>
+	                  </div>
+	                </button>
+	              ))}
+	            </div>
+	          </div>
+	        )}
 
         {loading ? (
           <div className="flex justify-center p-12">
