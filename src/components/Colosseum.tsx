@@ -41,6 +41,11 @@ import {
   Code2,
   ChevronUp,
   ChevronDown,
+  ThumbsUp,
+  ThumbsDown,
+  X,
+  FileCode,
+  Scale,
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -182,6 +187,23 @@ interface TournamentFormState {
   min_contestants: number;
 }
 
+interface CoachingMessage {
+  role: 'gladiator' | 'coach';
+  text: string;
+  timestamp: string;
+}
+
+interface RoundState {
+  round: number;
+  totalRounds: number;
+  phase: 'fighting' | 'coaching' | 'transitioning';
+  coachingMessages: CoachingMessage[];
+  allCoachingHistory: CoachingMessage[][];
+  roundScores: { challenger: number; defender: number }[];
+  roundSolutions: { challenger: string; defender: string }[];
+  coachingTimerSeconds: number;
+}
+
 interface SimulationState {
   matchId: string;
   challengerId: string;
@@ -194,6 +216,7 @@ interface SimulationState {
   status: 'booting' | 'running' | 'complete';
   aiMoves: GladiatorAiMove[];
   terminalStartedAt: string;
+  roundState?: RoundState;
 }
 
 interface BattleResultState {
@@ -1025,6 +1048,49 @@ function ensureCombatantTerminalMoves(moves: GladiatorAiMove[], challengeType: C
       received_at: now,
     };
   });
+}
+
+const SANDBOX_ROUND_COUNT = 3;
+const SANDBOX_TICKS_PER_ROUND = 120;
+const SANDBOX_ROUND_TICK_MS = 1500;
+const SANDBOX_COACHING_SECONDS = 30;
+
+const SANDBOX_ROUND_DIRECTIVES = [
+  { label: 'Foundation', objective: 'Build the core layout structure — semantic HTML, container hierarchy, responsive grid. Establish the visual framework with base colors, typography scale, and spacing system. Wire up the essential DOM structure that everything else will build on.' },
+  { label: 'Interaction & Styling', objective: 'Layer in rich CSS — gradients, animations, hover effects, transitions. Add JavaScript interactivity — event listeners, state management, dynamic content updates. Make the UI feel alive and responsive to user input.' },
+  { label: 'Polish & Spectacle', objective: 'Final round — add the wow factor. Particle effects, complex animations, micro-interactions, loading states, error handling. Optimize the visual hierarchy and ensure the build feels complete, polished, and production-ready.' },
+];
+
+function sandboxRoundPrompt(round: number, basePrompt: string, previousSolution: string, coachingPoints: string[]): string {
+  const directive = SANDBOX_ROUND_DIRECTIVES[round] ?? SANDBOX_ROUND_DIRECTIVES[0];
+  const coachingContext = coachingPoints.length > 0
+    ? `\n\nCOACHING POINTS FROM YOUR HANDLER (implement these):\n${coachingPoints.map((p, i) => `${i + 1}. ${p}`).join('\n')}`
+    : '';
+  const previousContext = previousSolution.trim()
+    ? `\n\nYOUR PREVIOUS BUILD (improve and extend this):\n${previousSolution.slice(0, 3000)}`
+    : '';
+  return `ROUND ${round + 1} OF ${SANDBOX_ROUND_COUNT}: ${directive.label.toUpperCase()}\n\nBase directive: ${basePrompt}\n\nRound objective: ${directive.objective}${previousContext}${coachingContext}\n\nBuild a COMPLETE, self-contained HTML file. Each round should show meaningful visual progress over the previous round.`;
+}
+
+function gladiatorDebriefForRound(gladiatorName: string, round: number, score: number, opponentScore: number, directive: string): string {
+  const ahead = score > opponentScore;
+  const tied = score === opponentScore;
+  const roundLabel = SANDBOX_ROUND_DIRECTIVES[round]?.label ?? 'Round';
+  if (round === 0) {
+    return ahead
+      ? `${roundLabel} is done. I put down a solid foundation — scored ${score} against their ${opponentScore}. I'm feeling good about the structure, but I need to know what you're seeing in their preview. What should I focus on next?`
+      : tied
+      ? `${roundLabel} complete. We're tied at ${score}. I think my layout is clean but I need an edge. What did you spot in their build?`
+      : `${roundLabel} finished and I'm behind — ${score} to their ${opponentScore}. I need to adjust my approach. What's their preview showing that I should counter?`;
+  }
+  if (round === 1) {
+    return ahead
+      ? `Second round done. I'm up ${score} to ${opponentScore}. The interactions are feeling tight. What's the killer move for the final round?`
+      : tied
+      ? `Round 2 complete, still neck and neck at ${score}. This final round decides everything. Give me a game plan.`
+      : `I'm trailing after round 2 — ${score} vs ${opponentScore}. Last round is everything. I need a big play. What do you see?`;
+  }
+  return `Final round complete. Let's see how the judge calls it.`;
 }
 
 function formatElapsed(startedAt: string, now: number) {
@@ -2118,6 +2184,636 @@ function TournamentDetailPopup({ tournament, entries, gladiatorById, onClose }: 
   );
 }
 
+function BattleSynopsisPopup({ match, gladiatorById, onClose }: { match: MatchRow; gladiatorById: Map<string, Gladiator>; onClose: () => void }) {
+  const challenger = gladiatorById.get(match.challenger_id);
+  const defender = gladiatorById.get(match.defender_id);
+  const replay = match.replay_data ?? {};
+  const judge: Partial<BattleJudgeResult> = replay.judge ?? {};
+  const winner = match.winner_id ? gladiatorById.get(match.winner_id) : null;
+  const loser = winner?.id === challenger?.id ? defender : challenger;
+  const challengerScore: number = replay.challenger_score ?? judge.challenger_score ?? 0;
+  const defenderScore: number = replay.defender_score ?? judge.defender_score ?? 0;
+  const challengeTitle: string = replay.challenge_title ?? formatChallenge(match.challenge_type);
+  const challengePrompt: string = replay.challenge_prompt ?? '';
+  const challengeDifficulty: string = replay.challenge_difficulty ?? '';
+  const userSolution: string = replay.user_solution ?? replay.bot_solution_challenger ?? '';
+  const botSolution: string = replay.bot_solution ?? '';
+  const aiMoves: GladiatorAiMove[] = Array.isArray(replay.ai_moves) ? replay.ai_moves : [];
+  const challengerMove = aiMoves.find((m: GladiatorAiMove) => m.gladiator_id === match.challenger_id);
+  const defenderMove = aiMoves.find((m: GladiatorAiMove) => m.gladiator_id === match.defender_id);
+  const challengerSolution = userSolution || challengerMove?.solution || '';
+  const defenderSolution = botSolution || defenderMove?.solution || '';
+  const judgeSummary: string = judge.summary ?? '';
+  const judgeReasoning: string[] = Array.isArray(judge.reasoning) ? judge.reasoning : [];
+  const judgeUsedAi: boolean = judge.used_ai ?? false;
+  const judgeProvider: string = judge.provider ?? '';
+  const judgeModel: string = judge.model ?? '';
+  const completedAt = match.completed_at ? new Date(match.completed_at).toLocaleString() : '';
+  const meta = challengeMeta(match.challenge_type);
+  const ChallengeIcon = meta.icon;
+
+  const [challengerCodeOpen, setChallengerCodeOpen] = useState(false);
+  const [defenderCodeOpen, setDefenderCodeOpen] = useState(false);
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[90] flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
+      <motion.div
+        initial={{ scale: 0.9, y: 30 }}
+        animate={{ scale: 1, y: 0 }}
+        exit={{ scale: 0.9, y: 30 }}
+        onClick={(e) => e.stopPropagation()}
+        className="relative mx-4 max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-[2rem] border-2 border-red-500/30 bg-black/95 shadow-[0_0_80px_rgba(255,23,68,0.2)]"
+      >
+        {/* Close button */}
+        <button type="button" onClick={onClose} className="absolute right-4 top-4 z-10 rounded-full border border-white/10 bg-white/5 p-2 text-zinc-400 hover:text-white transition"><X className="h-4 w-4" /></button>
+
+        {/* Header */}
+        <div className="relative overflow-hidden rounded-t-[2rem] border-b border-white/10 bg-gradient-to-b from-red-950/40 to-transparent p-6 pb-8">
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,23,68,0.25),transparent_55%)]" />
+          <div className="relative text-center">
+            <div className="mb-2 flex items-center justify-center gap-2">
+              <ChallengeIcon className="h-4 w-4" style={{ color: meta.accent }} />
+              <p className="text-[9px] font-black uppercase tracking-[0.3em] text-zinc-400">{formatChallenge(match.challenge_type)} · {challengeDifficulty}</p>
+            </div>
+            <h2 className="text-2xl font-black uppercase tracking-[0.14em] text-white">{challengeTitle}</h2>
+            {completedAt && <p className="mt-2 text-[10px] font-bold text-zinc-500">{completedAt}</p>}
+          </div>
+        </div>
+
+        <div className="space-y-5 p-6">
+          {/* Combatant Cards — Side by Side */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            {[{ gladiator: challenger, label: 'Challenger', score: challengerScore, glow: challenger?.glow_color ?? '#ff1744' },
+              { gladiator: defender, label: 'Defender', score: defenderScore, glow: defender?.glow_color ?? '#00e5ff' }].map((side) => {
+              const isWinner = side.gladiator?.id === winner?.id;
+              const badge = side.gladiator ? badgeFor(side.gladiator) : null;
+              const profile = side.gladiator?.botProfile;
+              return (
+                <div key={side.label} className="relative overflow-hidden rounded-2xl border bg-black/60 p-4" style={{ borderColor: isWinner ? `${side.glow}88` : 'rgba(255,255,255,0.1)', boxShadow: isWinner ? `0 0 40px ${side.glow}33` : 'none' }}>
+                  {isWinner && (
+                    <div className="pointer-events-none absolute inset-0 opacity-20" style={{ background: `radial-gradient(circle at 50% 0%, ${side.glow}, transparent 60%)` }} />
+                  )}
+                  <div className="relative flex items-center gap-3">
+                    <div className="shrink-0">
+                      {side.gladiator && <AnimatedGladiatorAvatar gladiator={side.gladiator} size="sm" active={isWinner} />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[9px] font-black uppercase tracking-[0.2em] text-zinc-500">{side.label}</p>
+                      <p className="truncate text-sm font-black uppercase tracking-[0.14em] text-white">{side.gladiator?.name ?? 'Unknown'}</p>
+                      {profile && <p className="mt-0.5 text-[9px] font-bold text-zinc-500">{profile.gladiator_class} · {profile.difficulty}</p>}
+                    </div>
+                    <div className="text-right">
+                      <p className="text-2xl font-black" style={{ color: isWinner ? side.glow : '#71717a' }}>{side.score}</p>
+                      <p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Score</p>
+                    </div>
+                  </div>
+                  {isWinner && (
+                    <div className="relative mt-3 flex items-center gap-1.5 rounded-full border px-3 py-1" style={{ borderColor: `${side.glow}44`, backgroundColor: `${side.glow}12` }}>
+                      <Crown className="h-3 w-3 text-yellow-300" />
+                      <span className="text-[9px] font-black uppercase tracking-widest text-yellow-200">Victor</span>
+                    </div>
+                  )}
+                  {badge && (
+                    <div className="mt-2 flex items-center gap-3 text-[10px] text-zinc-500">
+                      <span>{side.gladiator?.wins ?? 0}W / {side.gladiator?.losses ?? 0}L</span>
+                      <span className="ml-auto font-black uppercase tracking-widest" style={{ color: badge.color }}>{badge.label}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Battle Directive / Prompt */}
+          {challengePrompt && (
+            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <Target className="h-3.5 w-3.5 text-red-300" />
+                <p className="text-[9px] font-black uppercase tracking-[0.28em] text-red-200">Battle Directive</p>
+              </div>
+              <p className="text-xs leading-6 text-zinc-300">{challengePrompt}</p>
+            </div>
+          )}
+
+          {/* Solutions — Collapsible code blocks */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            {[{ label: challenger?.name ?? 'Challenger', solution: challengerSolution, glow: challenger?.glow_color ?? '#ff1744', open: challengerCodeOpen, setOpen: setChallengerCodeOpen },
+              { label: defender?.name ?? 'Defender', solution: defenderSolution, glow: defender?.glow_color ?? '#00e5ff', open: defenderCodeOpen, setOpen: setDefenderCodeOpen }].map((side) => (
+              <div key={side.label} className="rounded-2xl border border-white/10 bg-black/60">
+                <button
+                  type="button"
+                  onClick={() => side.setOpen(!side.open)}
+                  className="flex w-full items-center justify-between gap-2 p-4 text-left transition hover:bg-white/[0.03]"
+                >
+                  <div className="flex items-center gap-2">
+                    <FileCode className="h-3.5 w-3.5" style={{ color: side.glow }} />
+                    <span className="text-[9px] font-black uppercase tracking-[0.22em] text-zinc-300">{side.label}'s Solution</span>
+                  </div>
+                  {side.open ? <ChevronUp className="h-3.5 w-3.5 text-zinc-500" /> : <ChevronDown className="h-3.5 w-3.5 text-zinc-500" />}
+                </button>
+                <AnimatePresence>
+                  {side.open && (
+                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                      <div className="max-h-72 overflow-y-auto border-t border-white/5 p-4">
+                        {side.solution ? (
+                          <pre className="whitespace-pre-wrap font-mono text-[10px] leading-5 text-cyan-100">{side.solution}</pre>
+                        ) : (
+                          <p className="text-[10px] italic text-zinc-600">No solution recorded</p>
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            ))}
+          </div>
+
+          {/* Casper's Verdict */}
+          <div className="relative overflow-hidden rounded-2xl border-2 border-yellow-300/30 bg-gradient-to-b from-yellow-950/20 to-black/60 p-5">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(250,204,21,0.12),transparent_50%)]" />
+            <div className="relative">
+              {/* Casper avatar + verdict header */}
+              <div className="flex items-start gap-4">
+                <div className="shrink-0">
+                  <AnimatedCasperAvatar size="lg" isActive />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <Scale className="h-4 w-4 text-yellow-300" />
+                    <p className="text-[9px] font-black uppercase tracking-[0.3em] text-yellow-200">{judgeUsedAi ? 'Casper AI Verdict' : 'Casper Rubric Verdict'}</p>
+                  </div>
+                  <h3 className="mt-2 text-xl font-black uppercase tracking-[0.12em] text-white">
+                    {winner?.name ?? 'Unknown'} <span className="text-yellow-300">Wins</span>
+                  </h3>
+                  {judgeProvider && (
+                    <p className="mt-1 rounded-full border border-white/10 px-2 py-0.5 text-[7px] font-black uppercase tracking-widest text-zinc-500 inline-block">
+                      {judgeProvider} · {judgeModel}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Thumbs up/down over combatants */}
+              {winner && loser && (
+                <div className="mt-5 grid grid-cols-2 gap-4">
+                  <div className="flex flex-col items-center gap-2 rounded-2xl border border-green-400/20 bg-green-950/10 p-4">
+                    <div className="relative">
+                      {winner && <AnimatedGladiatorAvatar gladiator={winner} size="sm" active />}
+                      <div className="absolute -right-2 -top-2 rounded-full border-2 border-green-400 bg-green-900 p-1.5 shadow-[0_0_16px_rgba(34,197,94,0.5)]">
+                        <ThumbsUp className="h-3.5 w-3.5 text-green-300" />
+                      </div>
+                    </div>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-green-200">{winner.name}</p>
+                    <p className="text-2xl font-black text-green-300">{winner.id === challenger?.id ? challengerScore : defenderScore}</p>
+                  </div>
+                  <div className="flex flex-col items-center gap-2 rounded-2xl border border-red-400/20 bg-red-950/10 p-4">
+                    <div className="relative">
+                      {loser && <AnimatedGladiatorAvatar gladiator={loser} size="sm" />}
+                      <div className="absolute -right-2 -top-2 rounded-full border-2 border-red-400 bg-red-900 p-1.5 shadow-[0_0_16px_rgba(239,68,68,0.5)]">
+                        <ThumbsDown className="h-3.5 w-3.5 text-red-300" />
+                      </div>
+                    </div>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-red-200">{loser.name}</p>
+                    <p className="text-2xl font-black text-red-300">{loser.id === challenger?.id ? challengerScore : defenderScore}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Judge reasoning */}
+              {judgeSummary && (
+                <div className="mt-5 rounded-2xl border border-cyan-300/15 bg-cyan-950/10 p-4">
+                  <div className="mb-2 flex items-center gap-2">
+                    <Brain className="h-3.5 w-3.5 text-cyan-300" />
+                    <p className="text-[9px] font-black uppercase tracking-[0.28em] text-cyan-200">Casper's Analysis</p>
+                  </div>
+                  <p className="text-xs font-bold leading-6 text-zinc-300">{judgeSummary}</p>
+                  {judgeReasoning.length > 0 && (
+                    <ul className="mt-3 space-y-2">
+                      {judgeReasoning.map((line, i) => (
+                        <li key={i} className="flex items-start gap-2 text-[10px] leading-5 text-zinc-400">
+                          <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-cyan-400" />
+                          <span>{line}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+
+              {/* Battle Comments */}
+              <BattleCommentSection matchId={match.id} />
+            </div>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function BattleCommentSection({ matchId }: { matchId: string }) {
+  const { currentUser } = useAuth();
+  const [comments, setComments] = useState<{ id: string; user_id: string; display_name: string; avatar_url: string; body: string; created_at: string }[]>([]);
+  const [input, setInput] = useState('');
+  const [posting, setPosting] = useState(false);
+
+  useEffect(() => {
+    const fetchComments = async () => {
+      const { data } = await supabase
+        .from('battle_comments')
+        .select('id, user_id, display_name, avatar_url, body, created_at')
+        .eq('match_id', matchId)
+        .order('created_at', { ascending: true });
+      if (data) setComments(data);
+    };
+    void fetchComments();
+    const channel = supabase.channel(`battle-comments-${matchId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'battle_comments', filter: `match_id=eq.${matchId}` }, (payload) => {
+        setComments((prev) => [...prev, payload.new as any]);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [matchId]);
+
+  const handlePost = async () => {
+    if (!input.trim() || !currentUser || posting) return;
+    setPosting(true);
+    try {
+      await supabase.from('battle_comments').insert({
+        match_id: matchId,
+        user_id: currentUser.id,
+        display_name: currentUser.display_name || currentUser.username || 'Anonymous',
+        avatar_url: currentUser.avatar_url || '',
+        body: input.trim().slice(0, 500),
+      });
+      setInput('');
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/60">
+      <div className="flex items-center justify-between border-b border-white/5 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <MessageSquare className="h-3.5 w-3.5 text-zinc-400" />
+          <p className="text-[9px] font-black uppercase tracking-[0.28em] text-zinc-300">Battle Comments</p>
+        </div>
+        <span className="text-[9px] font-bold text-zinc-600">{comments.length}</span>
+      </div>
+      <div className="max-h-48 space-y-2 overflow-y-auto p-4">
+        {comments.length === 0 && (
+          <p className="py-3 text-center text-[10px] italic text-zinc-600">No comments yet — be the first to weigh in on this battle.</p>
+        )}
+        {comments.map((c) => (
+          <div key={c.id} className="flex gap-2">
+            <div className="mt-0.5 h-6 w-6 shrink-0 overflow-hidden rounded-full bg-zinc-800">
+              {c.avatar_url ? <img src={c.avatar_url} alt="" className="h-full w-full object-cover" /> : <Users className="h-full w-full p-1 text-zinc-500" />}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-baseline gap-2">
+                <span className="text-[10px] font-black text-white">{c.display_name}</span>
+                <span className="text-[8px] text-zinc-600">{new Date(c.created_at).toLocaleString()}</span>
+              </div>
+              <p className="text-[11px] leading-5 text-zinc-400">{c.body}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+      {currentUser && (
+        <div className="flex gap-2 border-t border-white/5 p-3">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void handlePost(); }}
+            placeholder="Drop your take..."
+            maxLength={500}
+            className="flex-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white placeholder:text-zinc-600 focus:border-cyan-400/30 focus:outline-none"
+          />
+          <button type="button" onClick={() => void handlePost()} disabled={!input.trim() || posting} className="rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-3 py-2 text-cyan-300 transition hover:bg-cyan-400/20 disabled:opacity-30">
+            <Send className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RoundTransitionCard({ round, totalRounds, label, phase }: { round: number; totalRounds: number; label: string; phase: 'intro' | 'fight' }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 1.3 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.8 }}
+      transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+      className="pointer-events-none fixed inset-0 z-[100] flex items-center justify-center"
+    >
+      <div className="absolute inset-0 bg-black/90" />
+      <div className="relative text-center">
+        <motion.p
+          initial={{ y: -30, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ delay: 0.15 }}
+          className="text-[10px] font-black uppercase tracking-[0.5em] text-red-400"
+        >
+          {round + 1} of {totalRounds}
+        </motion.p>
+        <motion.h1
+          initial={{ y: 40, opacity: 0, scale: 0.7 }}
+          animate={{ y: 0, opacity: 1, scale: 1 }}
+          transition={{ delay: 0.3, type: 'spring', stiffness: 200, damping: 15 }}
+          className="mt-2 text-6xl font-black uppercase tracking-[0.2em] text-white sm:text-7xl"
+          style={{ textShadow: '0 0 60px rgba(255,23,68,0.6), 0 0 120px rgba(255,23,68,0.3)' }}
+        >
+          {phase === 'fight' ? 'FIGHT!' : `ROUND ${round + 1}`}
+        </motion.h1>
+        <motion.p
+          initial={{ y: 20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ delay: 0.5 }}
+          className="mt-3 text-sm font-black uppercase tracking-[0.3em] text-zinc-400"
+        >
+          {label}
+        </motion.p>
+        <motion.div
+          initial={{ scaleX: 0 }}
+          animate={{ scaleX: 1 }}
+          transition={{ delay: 0.4, duration: 0.5 }}
+          className="mx-auto mt-6 h-1 w-48 origin-left rounded-full bg-gradient-to-r from-red-500 via-yellow-400 to-red-500"
+          style={{ boxShadow: '0 0 20px rgba(255,23,68,0.5)' }}
+        />
+        {/* Scan line effect */}
+        <motion.div
+          animate={{ y: ['-100vh', '100vh'] }}
+          transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }}
+          className="pointer-events-none absolute inset-x-0 h-px bg-gradient-to-r from-transparent via-cyan-400/40 to-transparent"
+        />
+      </div>
+    </motion.div>
+  );
+}
+
+function CornerCoachingPanel({ gladiator, round, coachingMessages, coachingTimer, onSendMessage, onSkip }: {
+  gladiator: Gladiator;
+  round: number;
+  coachingMessages: CoachingMessage[];
+  coachingTimer: number;
+  onSendMessage: (text: string) => void;
+  onSkip: () => void;
+}) {
+  const [input, setInput] = useState('');
+  const chatEndRef = React.useRef<HTMLDivElement>(null);
+  const urgent = coachingTimer <= 10;
+
+  React.useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [coachingMessages.length]);
+
+  const handleSend = () => {
+    const text = input.trim();
+    if (!text) return;
+    onSendMessage(text);
+    setInput('');
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 30 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      className="rounded-3xl border-2 border-yellow-400/30 bg-black/90 p-5 shadow-[0_0_60px_rgba(250,204,21,0.15)]"
+    >
+      {/* Header: Corner / Timer */}
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <AnimatedGladiatorAvatar gladiator={gladiator} size="sm" active />
+            <motion.div
+              animate={{ opacity: [0.5, 1, 0.5] }}
+              transition={{ duration: 1.5, repeat: Infinity }}
+              className="absolute -bottom-1 -right-1 rounded-full bg-yellow-400 p-1"
+            >
+              <MessageSquare className="h-2.5 w-2.5 text-black" />
+            </motion.div>
+          </div>
+          <div>
+            <p className="text-[9px] font-black uppercase tracking-[0.3em] text-yellow-300">Corner Break</p>
+            <p className="text-sm font-black uppercase tracking-[0.14em] text-white">{gladiator.name}'s Corner</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="text-right">
+            <p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Next Round In</p>
+            <motion.p
+              animate={urgent ? { scale: [1, 1.1, 1], color: ['#fca5a5', '#ef4444', '#fca5a5'] } : {}}
+              transition={urgent ? { duration: 0.8, repeat: Infinity } : {}}
+              className={cn('text-2xl font-black tabular-nums', urgent ? 'text-red-400' : 'text-yellow-300')}
+            >
+              {coachingTimer}s
+            </motion.p>
+          </div>
+          <button type="button" onClick={onSkip} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-zinc-400 transition hover:bg-white/10 hover:text-white">
+            Skip →
+          </button>
+        </div>
+      </div>
+
+      {/* Timer bar */}
+      <div className="mb-4 h-1.5 overflow-hidden rounded-full bg-zinc-800">
+        <motion.div
+          initial={{ width: '100%' }}
+          animate={{ width: `${(coachingTimer / SANDBOX_COACHING_SECONDS) * 100}%` }}
+          className={cn('h-full rounded-full transition-all duration-1000', urgent ? 'bg-red-500 shadow-[0_0_12px_rgba(239,68,68,0.6)]' : 'bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.4)]')}
+        />
+      </div>
+
+      {/* Chat messages */}
+      <div className="mb-4 max-h-48 space-y-3 overflow-y-auto rounded-2xl border border-white/5 bg-zinc-950/80 p-3">
+        {coachingMessages.length === 0 && (
+          <p className="py-4 text-center text-[10px] italic text-zinc-600">Your gladiator is catching their breath...</p>
+        )}
+        {coachingMessages.map((msg, i) => (
+          <motion.div
+            key={i}
+            initial={{ opacity: 0, x: msg.role === 'gladiator' ? -12 : 12 }}
+            animate={{ opacity: 1, x: 0 }}
+            className={cn(
+              'flex gap-2',
+              msg.role === 'coach' ? 'flex-row-reverse' : ''
+            )}
+          >
+            <div className={cn(
+              'max-w-[80%] rounded-2xl px-3 py-2 text-xs leading-5',
+              msg.role === 'gladiator'
+                ? 'rounded-bl-sm border border-white/10 bg-white/[0.06] text-zinc-200'
+                : 'rounded-br-sm border border-cyan-400/20 bg-cyan-950/30 text-cyan-100'
+            )}>
+              <p className="mb-0.5 text-[8px] font-black uppercase tracking-widest text-zinc-500">
+                {msg.role === 'gladiator' ? gladiator.name : 'You (Coach)'}
+              </p>
+              {msg.text}
+            </div>
+          </motion.div>
+        ))}
+        <div ref={chatEndRef} />
+      </div>
+
+      {/* Input */}
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleSend(); }}
+          placeholder="Coach your gladiator..."
+          className="flex-1 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-xs text-white placeholder:text-zinc-600 focus:border-yellow-400/40 focus:outline-none focus:ring-1 focus:ring-yellow-400/20"
+        />
+        <button
+          type="button"
+          onClick={handleSend}
+          disabled={!input.trim()}
+          className="rounded-xl border border-yellow-400/30 bg-yellow-400/10 px-4 py-2.5 text-yellow-300 transition hover:bg-yellow-400/20 disabled:opacity-30"
+        >
+          <Send className="h-4 w-4" />
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
+function CinematicWinnerReveal({ winner, loser, judgeSummary }: { winner: Gladiator; loser: Gladiator; judgeSummary: string }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="pointer-events-none fixed inset-0 z-[100] flex items-center justify-center"
+    >
+      <div className="absolute inset-0 bg-black/85" />
+      <div className="relative flex flex-col items-center gap-6 text-center">
+        {/* Winner glow burst */}
+        <motion.div
+          initial={{ scale: 0 }}
+          animate={{ scale: [0, 1.5, 1] }}
+          transition={{ duration: 1, ease: [0.22, 1, 0.36, 1] }}
+          className="absolute h-96 w-96 rounded-full opacity-30"
+          style={{ background: `radial-gradient(circle, ${winner.glow_color}66, transparent 70%)` }}
+        />
+
+        {/* Winner avatar scaled up */}
+        <motion.div
+          initial={{ scale: 0.3, y: 60 }}
+          animate={{ scale: 1, y: 0 }}
+          transition={{ delay: 0.3, type: 'spring', stiffness: 120, damping: 12 }}
+        >
+          <AnimatedGladiatorAvatar gladiator={winner} size="xl" label="VICTOR" active />
+        </motion.div>
+
+        {/* Victor text */}
+        <motion.div
+          initial={{ y: 30, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ delay: 0.8 }}
+        >
+          <p className="text-[10px] font-black uppercase tracking-[0.5em] text-yellow-400">Victory</p>
+          <h2 className="mt-1 text-4xl font-black uppercase tracking-[0.18em] text-white" style={{ textShadow: `0 0 40px ${winner.glow_color}88` }}>
+            {winner.name}
+          </h2>
+        </motion.div>
+
+        {/* Versus loser */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 0.5 }}
+          transition={{ delay: 1.2 }}
+          className="flex items-center gap-3"
+        >
+          <div className="h-px w-12 bg-zinc-700" />
+          <p className="text-[9px] font-black uppercase tracking-[0.3em] text-zinc-600">defeated</p>
+          <div className="h-px w-12 bg-zinc-700" />
+        </motion.div>
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 0.4 }}
+          transition={{ delay: 1.4 }}
+          className="grayscale"
+        >
+          <AnimatedGladiatorAvatar gladiator={loser} size="sm" />
+        </motion.div>
+        <motion.p
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 0.4 }}
+          transition={{ delay: 1.4 }}
+          className="text-xs font-black uppercase tracking-widest text-zinc-600"
+        >
+          {loser.name}
+        </motion.p>
+
+        {/* Casper verdict teaser */}
+        {judgeSummary && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 2 }}
+            className="mt-2 max-w-md rounded-2xl border border-cyan-400/20 bg-cyan-950/20 p-4"
+          >
+            <div className="flex items-center justify-center gap-2">
+              <AnimatedCasperAvatar size="sm" isActive />
+              <p className="text-[9px] font-black uppercase tracking-[0.3em] text-cyan-300">Casper's Call</p>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-zinc-400">{judgeSummary}</p>
+          </motion.div>
+        )}
+
+        {/* Particles */}
+        {Array.from({ length: 20 }).map((_, i) => (
+          <motion.div
+            key={i}
+            initial={{ x: 0, y: 0, opacity: 0 }}
+            animate={{
+              x: (Math.random() - 0.5) * 400,
+              y: (Math.random() - 0.5) * 400,
+              opacity: [0, 1, 0],
+              scale: [0, Math.random() * 1.5 + 0.5, 0],
+            }}
+            transition={{ delay: 0.5 + Math.random() * 0.8, duration: 1.5 + Math.random() }}
+            className="absolute h-2 w-2 rounded-full"
+            style={{ backgroundColor: i % 2 === 0 ? winner.glow_color : '#facc15' }}
+          />
+        ))}
+      </div>
+    </motion.div>
+  );
+}
+
+function RoundScoreBar({ label, score, maxScore, color, round }: { label: string; score: number; maxScore: number; color: string; round: number }) {
+  const pct = maxScore > 0 ? Math.min(100, (score / maxScore) * 100) : 0;
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <span className="text-[8px] font-black uppercase tracking-widest text-zinc-500">{label}</span>
+        <motion.span
+          key={`${round}-${score}`}
+          initial={{ scale: 1.3, color: '#facc15' }}
+          animate={{ scale: 1, color }}
+          className="text-xs font-black tabular-nums"
+        >
+          {score}
+        </motion.span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-zinc-800">
+        <motion.div
+          initial={{ width: 0 }}
+          animate={{ width: `${pct}%` }}
+          transition={{ duration: 0.8, ease: 'easeOut' }}
+          className="h-full rounded-full"
+          style={{ backgroundColor: color, boxShadow: `0 0 10px ${color}66` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function GladiatorCard({ gladiator, active, onSelect, actionLabel, onAction }: { gladiator: Gladiator; active?: boolean; onSelect?: () => void; actionLabel?: string; onAction?: () => void }) {
   const badge = badgeFor(gladiator);
   const BadgeIcon = badge.icon;
@@ -2903,7 +3599,7 @@ function LiveBattleCard({ match, challenger, defender, now, onSelect }: { match:
   );
 }
 
-function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSelectMatch, userGladiatorId, whisperUsed, onWhisperUsed }: {
+function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSelectMatch, userGladiatorId, whisperUsed, onWhisperUsed, onCoachingMessage, onSkipCoaching }: {
   matches: MatchRow[];
   gladiatorById: Map<string, Gladiator>;
   simulation?: SimulationState | null;
@@ -2912,6 +3608,8 @@ function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSele
   userGladiatorId?: string;
   whisperUsed: boolean;
   onWhisperUsed: () => void;
+  onCoachingMessage: (text: string) => void;
+  onSkipCoaching: () => void;
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedMatchId = searchParams.get('match');
@@ -3154,8 +3852,62 @@ function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSele
                     <CombatantPortrait label="Shadow Cage" gladiator={defender} />
                   </div>
 
+                  {/* Round indicator for multi-round sandbox battles */}
+                  {visibleMatch.challenge_type === 'sandbox_build' && simulation?.roundState && !visibleMatch.completed_at && (
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          {Array.from({ length: simulation.roundState.totalRounds }).map((_, i) => (
+                            <div key={i} className="flex items-center gap-1">
+                              <div className={cn(
+                                'flex h-8 w-8 items-center justify-center rounded-full border-2 text-xs font-black transition-all duration-500',
+                                i < simulation.roundState!.round ? 'border-green-400 bg-green-400/20 text-green-300' :
+                                i === simulation.roundState!.round ? 'border-yellow-400 bg-yellow-400/20 text-yellow-300 shadow-[0_0_16px_rgba(250,204,21,0.3)]' :
+                                'border-zinc-700 bg-zinc-800/50 text-zinc-600'
+                              )}>
+                                {i + 1}
+                              </div>
+                              {i < simulation.roundState!.totalRounds - 1 && (
+                                <div className={cn('h-0.5 w-4 rounded-full', i < simulation.roundState!.round ? 'bg-green-400/50' : 'bg-zinc-700')} />
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                        <div className="text-right">
+                          <p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">
+                            {simulation.roundState.phase === 'coaching' ? 'Corner Break' : `Round ${simulation.roundState.round + 1}`}
+                          </p>
+                          <p className="text-xs font-black uppercase tracking-[0.14em] text-white">
+                            {SANDBOX_ROUND_DIRECTIVES[simulation.roundState.round]?.label ?? 'Building'}
+                          </p>
+                        </div>
+                      </div>
+                      {/* Round score bars */}
+                      {simulation.roundState.roundScores.length > 0 && (
+                        <div className="mt-3 grid grid-cols-2 gap-3">
+                          <RoundScoreBar label={challenger?.name ?? 'Challenger'} score={simulation.roundState.roundScores.reduce((a, s) => a + s.challenger, 0)} maxScore={100 * simulation.roundState.totalRounds} color={challenger?.glow_color ?? '#ff1744'} round={simulation.roundState.round} />
+                          <RoundScoreBar label={defender?.name ?? 'Defender'} score={simulation.roundState.roundScores.reduce((a, s) => a + s.defender, 0)} maxScore={100 * simulation.roundState.totalRounds} color={defender?.glow_color ?? '#00e5ff'} round={simulation.roundState.round} />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Corner Coaching Panel — appears between sandbox rounds */}
+                  <AnimatePresence>
+                    {simulation?.roundState?.phase === 'coaching' && challenger && (
+                      <CornerCoachingPanel
+                        gladiator={challenger}
+                        round={simulation.roundState.round}
+                        coachingMessages={simulation.roundState.coachingMessages}
+                        coachingTimer={simulation.roundState.coachingTimerSeconds}
+                        onSendMessage={onCoachingMessage}
+                        onSkip={onSkipCoaching}
+                      />
+                    )}
+                  </AnimatePresence>
+
                   {/* Neural Whisper — available to the user's gladiator during active sandbox battles */}
-                  {visibleMatch.challenge_type === 'sandbox_build' && challenger && !visibleMatch.completed_at && userGladiatorId && String(challenger.id) === String(userGladiatorId) && (
+                  {visibleMatch.challenge_type === 'sandbox_build' && challenger && !visibleMatch.completed_at && userGladiatorId && String(challenger.id) === String(userGladiatorId) && simulation?.roundState?.phase !== 'coaching' && (
                     <NeuralWhisperPanel
                       matchId={visibleMatch.id}
                       gladiatorId={challenger.id}
@@ -3549,6 +4301,10 @@ export const Colosseum: React.FC = () => {
   const [whisperUsed, setWhisperUsed] = useState(false);
   const [inspectedGladiator, setInspectedGladiator] = useState<Gladiator | null>(null);
   const [inspectedTournament, setInspectedTournament] = useState<TournamentRow | null>(null);
+  const [inspectedMatch, setInspectedMatch] = useState<MatchRow | null>(null);
+  const [roundTransition, setRoundTransition] = useState<{ round: number; totalRounds: number; label: string; phase: 'intro' | 'fight' } | null>(null);
+  const [showWinnerReveal, setShowWinnerReveal] = useState<{ winner: Gladiator; loser: Gladiator; summary: string } | null>(null);
+  const coachingIntervalRef = React.useRef<number | null>(null);
 
   const normalizeGladiator = (row: any, profileByGladiatorId?: Map<string, BotGladiatorProfileRow>): Gladiator => ({
     id: row.id,
@@ -4063,13 +4819,134 @@ export const Colosseum: React.FC = () => {
     }
   };
 
+  const speakGladiatorDebrief = (text: string) => {
+    try {
+      const voices = speechSynthesis.getVoices();
+      const voice = voices.find((v) => /male|david|james|daniel/i.test(v.name)) ?? voices[0];
+      if (!voice) return;
+      speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.voice = voice;
+      utterance.rate = 0.95;
+      utterance.pitch = 0.9;
+      speechSynthesis.speak(utterance);
+    } catch {
+      // TTS not available — silent fallback
+    }
+  };
+
+  const handleCoachingMessage = (text: string) => {
+    setSimulation((prev) => {
+      if (!prev?.roundState || prev.roundState.phase !== 'coaching') return prev;
+      const newMsg: CoachingMessage = { role: 'coach', text, timestamp: new Date().toISOString() };
+      const updated = [...prev.roundState.coachingMessages, newMsg];
+      const allHistory = [...prev.roundState.allCoachingHistory];
+      if (allHistory.length > 0) allHistory[allHistory.length - 1] = updated;
+      return { ...prev, roundState: { ...prev.roundState, coachingMessages: updated, allCoachingHistory: allHistory } };
+    });
+  };
+
+  const handleSkipCoaching = () => {
+    if (coachingIntervalRef.current !== null) {
+      window.clearInterval(coachingIntervalRef.current);
+      coachingIntervalRef.current = null;
+    }
+    setSimulation((prev) => {
+      if (!prev?.roundState || prev.roundState.phase !== 'coaching') return prev;
+      return { ...prev, roundState: { ...prev.roundState, coachingTimerSeconds: 0 } };
+    });
+  };
+
+  const finalizeBattle = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, codingChallenge: CodingChallenge, effectiveChallengerSolution: string, defenderMove: GladiatorAiMove | undefined, sanitizedAiMoves: GladiatorAiMove[], replayBase: Record<string, any>, finalLogs: string[], extraReplay?: Record<string, any>) => {
+    void (async () => {
+      let judge: BattleJudgeResult;
+      try {
+        judge = await requestBattleJudge({
+          match,
+          type,
+          challenge: codingChallenge,
+          userSolution: effectiveChallengerSolution,
+          botSolution: defenderMove?.solution ?? '',
+          moves: sanitizedAiMoves,
+        });
+      } catch (error: any) {
+        judge = clientFallbackBattleJudge({
+          match,
+          type,
+          challenge: codingChallenge,
+          challenger,
+          defender,
+          userSolution: effectiveChallengerSolution,
+          botSolution: defenderMove?.solution ?? '',
+          moves: sanitizedAiMoves,
+          error: error?.message ?? 'unknown judge error',
+        });
+      }
+
+      const winner = judge.winner_id === challenger.id ? challenger : defender;
+      const userWon = winner.id === challenger.id;
+      const challengerScore = clampBattleScore(judge.challenger_score);
+      const defenderScore = clampBattleScore(judge.defender_score);
+      const xpAwarded = (codingChallenge.difficulty === 'Diamond' ? 180 : codingChallenge.difficulty === 'Gold' ? 130 : codingChallenge.difficulty === 'Silver' ? 85 : 50) + (userWon ? 40 : 15);
+      const rankingPoints = (codingChallenge.difficulty === 'Diamond' ? 55 : codingChallenge.difficulty === 'Gold' ? 38 : codingChallenge.difficulty === 'Silver' ? 24 : 14) * (userWon ? 1 : -1);
+      const reaction = userWon ? pickDialogue(defender.botProfile?.defeat_lines) : pickDialogue(defender.botProfile?.victory_lines);
+      finalLogs.push(`${judge.used_ai ? 'AI judge' : 'Rubric judge'} scored the submitted code and bot answer.`);
+      finalLogs.push(`${winner.name} lands the final commit and claims the purse.`);
+      finalLogs.push(userWon ? `${defender.name}: ${reaction}` : `${defender.name}: ${reaction}`);
+
+      setShowWinnerReveal({ winner, loser: winner.id === challenger.id ? defender : challenger, summary: judge.summary });
+      setTimeout(() => setShowWinnerReveal(null), 5000);
+
+      setSimulation((prev) => prev ? {
+        ...prev,
+        challengerProgress: 100,
+        defenderProgress: 100,
+        winnerId: winner.id,
+        status: 'complete',
+        log: [...finalLogs],
+        aiMoves: sanitizedAiMoves,
+      } : prev);
+      void completeMatch(match, winner.id, {
+        ...replayBase,
+        ...extraReplay,
+        status: 'complete',
+        victor: winner.name,
+        winner_id: winner.id,
+        challenger_score: challengerScore,
+        defender_score: defenderScore,
+        challenger_progress: 100,
+        defender_progress: 100,
+        judge,
+        log: finalLogs,
+        completed_client_at: new Date().toISOString(),
+      });
+      setBattleResult({
+        matchId: match.id,
+        winnerName: winner.name,
+        loserName: winner.id === challenger.id ? defender.name : challenger.name,
+        challengeTitle: codingChallenge.title,
+        userScore: challengerScore,
+        botScore: defenderScore,
+        xpAwarded,
+        rankingPoints,
+        userWon,
+        reaction,
+        judgeSummary: judge.summary,
+        judgeReasoning: judge.reasoning,
+        judgeProvider: judge.provider,
+        judgeModel: judge.model,
+        judgeUsedAi: judge.used_ai,
+      });
+    })();
+  };
+
   const runSimulation = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, openingLogs: string[], sapphireMove?: SapphireMove | null, aiMoves: GladiatorAiMove[] = [], codingChallenge = challengeFor(defender.botProfile, type), submittedSolution = '') => {
     const sanitizedAiMoves = ensureCombatantTerminalMoves(aiMoves, type, challenger, defender, buildCombatChallengePrompt(type, challenger, defender));
     const challengerMove = sanitizedAiMoves.find((move) => move.gladiator_id === challenger.id);
     const defenderMove = sanitizedAiMoves.find((move) => move.gladiator_id === defender.id);
     const effectiveChallengerSolution = submittedSolution || challengerMove?.solution || '';
     const finalLogs = [...openingLogs];
-    const replayBase = {
+    const replayBase: Record<string, any> = {
       intro: `${challenger.name} challenged ${defender.name}`,
       arena: 'underground-neon-fight-pit',
       challenge_type: type,
@@ -4090,125 +4967,175 @@ export const Colosseum: React.FC = () => {
     const combatLines = combatLinesFor(type, challenger, defender, codingChallenge);
 
     const isSandbox = type === 'sandbox_build';
-    const totalTicks = isSandbox ? 40 : 10;
-    const tickInterval = isSandbox ? 1500 : 800;
 
-    let tick = 0;
-    const interval = window.setInterval(() => {
-      tick += 1;
-      const ratio = tick / totalTicks;
-      const leaderBonus = isSandbox ? ratio * 6 : tick * 1.4;
-      const challengerProgress = Math.min(99, Math.round(
-        isSandbox
-          ? (ratio < 0.2 ? ratio * 120 : ratio < 0.6 ? 24 + (ratio - 0.2) * 140 : 80 + (ratio - 0.6) * 50)
-            + (initialChallengerScore > initialDefenderScore ? leaderBonus : 0)
-          : ratio * 100 + (initialChallengerScore > initialDefenderScore ? leaderBonus : 0)
-      ));
-      const defenderProgress = Math.min(99, Math.round(
-        isSandbox
-          ? (ratio < 0.2 ? ratio * 120 : ratio < 0.6 ? 24 + (ratio - 0.2) * 140 : 80 + (ratio - 0.6) * 50)
-            + (initialDefenderScore > initialChallengerScore ? leaderBonus : 0)
-          : ratio * 100 + (initialDefenderScore > initialChallengerScore ? leaderBonus : 0)
-      ));
-      const lineIndex = Math.floor((tick - 1) * combatLines.length / totalTicks);
-      if (combatLines[lineIndex] && !finalLogs.includes(combatLines[lineIndex])) finalLogs.push(combatLines[lineIndex]);
+    if (isSandbox) {
+      const totalTicks = SANDBOX_TICKS_PER_ROUND;
+      const tickInterval = SANDBOX_ROUND_TICK_MS;
+      let currentRound = 0;
+      const roundScores: { challenger: number; defender: number }[] = [];
+      const roundSolutions: { challenger: string; defender: string }[] = [];
+      const allCoachingHistory: CoachingMessage[][] = [];
 
-      setSimulation((prev) => prev ? {
-        ...prev,
-        status: 'running',
-        challengerProgress,
-        defenderProgress,
-        log: [...finalLogs],
-        aiMoves: sanitizedAiMoves,
-      } : prev);
-      void publishMatchReplay(match.id, {
-        ...replayBase,
-        status: 'running',
-        challenger_progress: challengerProgress,
-        defender_progress: defenderProgress,
-        log: [...finalLogs],
-        updated_client_at: new Date().toISOString(),
-      });
+      const showRoundIntro = (round: number) => {
+        const directive = SANDBOX_ROUND_DIRECTIVES[round] ?? SANDBOX_ROUND_DIRECTIVES[0];
+        setRoundTransition({ round, totalRounds: SANDBOX_ROUND_COUNT, label: directive.label, phase: 'intro' });
+        setTimeout(() => {
+          setRoundTransition((prev) => prev ? { ...prev, phase: 'fight' } : null);
+          setTimeout(() => setRoundTransition(null), 1200);
+        }, 2000);
+      };
 
-      if (tick >= totalTicks) {
-        window.clearInterval(interval);
-        void (async () => {
-          let judge: BattleJudgeResult;
-          try {
-            judge = await requestBattleJudge({
-              match,
-              type,
-              challenge: codingChallenge,
-              userSolution: effectiveChallengerSolution,
-              botSolution: defenderMove?.solution ?? '',
-              moves: sanitizedAiMoves,
+      const runSandboxRound = (round: number) => {
+        currentRound = round;
+        const directive = SANDBOX_ROUND_DIRECTIVES[round] ?? SANDBOX_ROUND_DIRECTIVES[0];
+        finalLogs.push(`══════ ROUND ${round + 1}: ${directive.label.toUpperCase()} ══════`);
+
+        showRoundIntro(round);
+
+        setTimeout(() => {
+          let tick = 0;
+          const interval = window.setInterval(() => {
+            tick += 1;
+            const ratio = tick / totalTicks;
+            const overallProgress = ((round * totalTicks + tick) / (SANDBOX_ROUND_COUNT * totalTicks)) * 100;
+            const roundProgress = ratio * 100;
+            const leaderBonus = ratio * 6;
+            const challengerProgress = Math.min(99, Math.round(
+              (ratio < 0.2 ? ratio * 120 : ratio < 0.6 ? 24 + (ratio - 0.2) * 140 : 80 + (ratio - 0.6) * 50)
+                + (initialChallengerScore > initialDefenderScore ? leaderBonus : 0)
+            ));
+            const defenderProgress = Math.min(99, Math.round(
+              (ratio < 0.2 ? ratio * 120 : ratio < 0.6 ? 24 + (ratio - 0.2) * 140 : 80 + (ratio - 0.6) * 50)
+                + (initialDefenderScore > initialChallengerScore ? leaderBonus : 0)
+            ));
+            const lineIndex = Math.floor((tick - 1) * combatLines.length / totalTicks);
+            if (combatLines[lineIndex] && !finalLogs.includes(combatLines[lineIndex])) finalLogs.push(combatLines[lineIndex]);
+
+            setSimulation((prev) => prev ? {
+              ...prev,
+              status: 'running',
+              challengerProgress,
+              defenderProgress,
+              log: [...finalLogs],
+              aiMoves: sanitizedAiMoves,
+              roundState: {
+                round,
+                totalRounds: SANDBOX_ROUND_COUNT,
+                phase: 'fighting',
+                coachingMessages: [],
+                allCoachingHistory,
+                roundScores,
+                roundSolutions,
+                coachingTimerSeconds: SANDBOX_COACHING_SECONDS,
+              },
+            } : prev);
+
+            void publishMatchReplay(match.id, {
+              ...replayBase,
+              status: 'running',
+              current_round: round + 1,
+              total_rounds: SANDBOX_ROUND_COUNT,
+              round_label: directive.label,
+              overall_progress: overallProgress,
+              round_progress: roundProgress,
+              challenger_progress: challengerProgress,
+              defender_progress: defenderProgress,
+              log: [...finalLogs],
+              updated_client_at: new Date().toISOString(),
             });
-          } catch (error: any) {
-            judge = clientFallbackBattleJudge({
-              match,
-              type,
-              challenge: codingChallenge,
-              challenger,
-              defender,
-              userSolution: effectiveChallengerSolution,
-              botSolution: defenderMove?.solution ?? '',
-              moves: sanitizedAiMoves,
-              error: error?.message ?? 'unknown judge error',
-            });
-          }
 
-          const winner = judge.winner_id === challenger.id ? challenger : defender;
-          const userWon = winner.id === challenger.id;
-          const challengerScore = clampBattleScore(judge.challenger_score);
-          const defenderScore = clampBattleScore(judge.defender_score);
-          const xpAwarded = (codingChallenge.difficulty === 'Diamond' ? 180 : codingChallenge.difficulty === 'Gold' ? 130 : codingChallenge.difficulty === 'Silver' ? 85 : 50) + (userWon ? 40 : 15);
-          const rankingPoints = (codingChallenge.difficulty === 'Diamond' ? 55 : codingChallenge.difficulty === 'Gold' ? 38 : codingChallenge.difficulty === 'Silver' ? 24 : 14) * (userWon ? 1 : -1);
-          const reaction = userWon ? pickDialogue(defender.botProfile?.defeat_lines) : pickDialogue(defender.botProfile?.victory_lines);
-          finalLogs.push(`${judge.used_ai ? 'AI judge' : 'Rubric judge'} scored the submitted code and bot answer.`);
-          finalLogs.push(`${winner.name} lands the final commit and claims the purse.`);
-          finalLogs.push(userWon ? `${defender.name}: ${reaction}` : `${defender.name}: ${reaction}`);
-          setSimulation((prev) => prev ? {
-            ...prev,
-            challengerProgress: 100,
-            defenderProgress: 100,
-            winnerId: winner.id,
-            status: 'complete',
-            log: [...finalLogs],
-            aiMoves: sanitizedAiMoves,
-          } : prev);
-          void completeMatch(match, winner.id, {
-            ...replayBase,
-            status: 'complete',
-            victor: winner.name,
-            winner_id: winner.id,
-            challenger_score: challengerScore,
-            defender_score: defenderScore,
-            challenger_progress: 100,
-            defender_progress: 100,
-            judge,
-            log: finalLogs,
-            completed_client_at: new Date().toISOString(),
-          });
-          setBattleResult({
-            matchId: match.id,
-            winnerName: winner.name,
-            loserName: winner.id === challenger.id ? defender.name : challenger.name,
-            challengeTitle: codingChallenge.title,
-            userScore: challengerScore,
-            botScore: defenderScore,
-            xpAwarded,
-            rankingPoints,
-            userWon,
-            reaction,
-            judgeSummary: judge.summary,
-            judgeReasoning: judge.reasoning,
-            judgeProvider: judge.provider,
-            judgeModel: judge.model,
-            judgeUsedAi: judge.used_ai,
-          });
-        })();
-      }
-    }, tickInterval);
+            if (tick >= totalTicks) {
+              window.clearInterval(interval);
+              const roundChallengerScore = Math.round(initialChallengerScore * (1 + round * 0.15));
+              const roundDefenderScore = Math.round(initialDefenderScore * (1 + round * 0.15));
+              roundScores.push({ challenger: roundChallengerScore, defender: roundDefenderScore });
+              roundSolutions.push({ challenger: effectiveChallengerSolution, defender: defenderMove?.solution ?? '' });
+              finalLogs.push(`Round ${round + 1} complete — ${challenger.name}: ${roundChallengerScore} | ${defender.name}: ${roundDefenderScore}`);
+
+              if (round < SANDBOX_ROUND_COUNT - 1) {
+                const debrief = gladiatorDebriefForRound(challenger.name, round, roundChallengerScore, roundDefenderScore, codingChallenge.prompt);
+                const coachingMessages: CoachingMessage[] = [{ role: 'gladiator', text: debrief, timestamp: new Date().toISOString() }];
+                allCoachingHistory.push(coachingMessages);
+
+                speakGladiatorDebrief(debrief);
+
+                let coachingTimer = SANDBOX_COACHING_SECONDS;
+                setSimulation((prev) => prev ? {
+                  ...prev,
+                  roundState: {
+                    round,
+                    totalRounds: SANDBOX_ROUND_COUNT,
+                    phase: 'coaching',
+                    coachingMessages,
+                    allCoachingHistory,
+                    roundScores,
+                    roundSolutions,
+                    coachingTimerSeconds: coachingTimer,
+                  },
+                } : prev);
+
+                const coachingInterval = window.setInterval(() => {
+                  coachingTimer -= 1;
+                  setSimulation((prev) => {
+                    if (!prev?.roundState) return prev;
+                    return { ...prev, roundState: { ...prev.roundState, coachingTimerSeconds: coachingTimer } };
+                  });
+                  if (coachingTimer <= 0) {
+                    window.clearInterval(coachingInterval);
+                    runSandboxRound(round + 1);
+                  }
+                }, 1000);
+
+                coachingIntervalRef.current = coachingInterval;
+              } else {
+                finalizeBattle(match, challenger, defender, type, codingChallenge, effectiveChallengerSolution, defenderMove, sanitizedAiMoves, replayBase, finalLogs, {
+                  rounds: SANDBOX_ROUND_COUNT,
+                  round_scores: roundScores,
+                  coaching_history: allCoachingHistory,
+                });
+              }
+            }
+          }, tickInterval);
+        }, 3500);
+      };
+
+      runSandboxRound(0);
+    } else {
+      const totalTicks = 10;
+      const tickInterval = 800;
+      let tick = 0;
+      const interval = window.setInterval(() => {
+        tick += 1;
+        const ratio = tick / totalTicks;
+        const leaderBonus = tick * 1.4;
+        const challengerProgress = Math.min(99, Math.round(ratio * 100 + (initialChallengerScore > initialDefenderScore ? leaderBonus : 0)));
+        const defenderProgress = Math.min(99, Math.round(ratio * 100 + (initialDefenderScore > initialChallengerScore ? leaderBonus : 0)));
+        const lineIndex = Math.floor((tick - 1) * combatLines.length / totalTicks);
+        if (combatLines[lineIndex] && !finalLogs.includes(combatLines[lineIndex])) finalLogs.push(combatLines[lineIndex]);
+
+        setSimulation((prev) => prev ? {
+          ...prev,
+          status: 'running',
+          challengerProgress,
+          defenderProgress,
+          log: [...finalLogs],
+          aiMoves: sanitizedAiMoves,
+        } : prev);
+        void publishMatchReplay(match.id, {
+          ...replayBase,
+          status: 'running',
+          challenger_progress: challengerProgress,
+          defender_progress: defenderProgress,
+          log: [...finalLogs],
+          updated_client_at: new Date().toISOString(),
+        });
+
+        if (tick >= totalTicks) {
+          window.clearInterval(interval);
+          finalizeBattle(match, challenger, defender, type, codingChallenge, effectiveChallengerSolution, defenderMove, sanitizedAiMoves, replayBase, finalLogs);
+        }
+      }, tickInterval);
+    }
   };
 
   const letSapphireEnterWaitingBattle = async (match: MatchRow) => {
@@ -4823,6 +5750,8 @@ export const Colosseum: React.FC = () => {
           userGladiatorId={selectedGladiatorId || undefined}
           whisperUsed={whisperUsed}
           onWhisperUsed={() => setWhisperUsed(true)}
+          onCoachingMessage={handleCoachingMessage}
+          onSkipCoaching={handleSkipCoaching}
         />
 
         {sapphireWaitingBattles.length > 0 && (
@@ -5370,15 +6299,25 @@ export const Colosseum: React.FC = () => {
               {recentMatches.length ? recentMatches.map((match) => {
                 const winner = match.winner_id ? gladiatorById.get(match.winner_id) : null;
                 return (
-                  <div key={match.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <div
+                    key={match.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setInspectedMatch(match)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') setInspectedMatch(match); }}
+                    className="cursor-pointer rounded-2xl border border-white/10 bg-white/[0.03] p-4 transition hover:border-red-400/30 hover:bg-white/[0.06]"
+                  >
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <p className="text-xs font-black uppercase tracking-[0.18em] text-white">{gladiatorById.get(match.challenger_id)?.name ?? 'Unknown'} vs {gladiatorById.get(match.defender_id)?.name ?? 'Unknown'}</p>
                         <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-zinc-500">{formatChallenge(match.challenge_type)}</p>
                       </div>
-                      <div className="text-right">
-                        <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Winner</p>
-                        <p className="text-xs font-black uppercase tracking-widest text-yellow-200">{winner?.name ?? 'Pending'}</p>
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Winner</p>
+                          <p className="text-xs font-black uppercase tracking-widest text-yellow-200">{winner?.name ?? 'Pending'}</p>
+                        </div>
+                        <ChevronRight className="h-4 w-4 text-zinc-600" />
                       </div>
                     </div>
                   </div>
@@ -5394,6 +6333,15 @@ export const Colosseum: React.FC = () => {
       </AnimatePresence>
       <AnimatePresence>
         {inspectedTournament && <TournamentDetailPopup tournament={inspectedTournament} entries={tournamentEntries.filter((e) => e.tournament_id === inspectedTournament.id)} gladiatorById={gladiatorById} onClose={() => setInspectedTournament(null)} />}
+      </AnimatePresence>
+      <AnimatePresence>
+        {inspectedMatch && <BattleSynopsisPopup match={inspectedMatch} gladiatorById={gladiatorById} onClose={() => setInspectedMatch(null)} />}
+      </AnimatePresence>
+      <AnimatePresence>
+        {roundTransition && <RoundTransitionCard round={roundTransition.round} totalRounds={roundTransition.totalRounds} label={roundTransition.label} phase={roundTransition.phase} />}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showWinnerReveal && <CinematicWinnerReveal winner={showWinnerReveal.winner} loser={showWinnerReveal.loser} judgeSummary={showWinnerReveal.summary} />}
       </AnimatePresence>
     </div>
   );
