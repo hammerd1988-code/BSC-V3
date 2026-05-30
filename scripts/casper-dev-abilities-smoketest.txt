@@ -1,0 +1,8 @@
+Casper dev abilities smoke notes (automated)
+
+- npm install --ignore-scripts (postinstall Playwright download was terminated after hanging)
+- npm run lint (tsc --noEmit): PASS
+- npm run build (vite build): PASS
+
+This file exists to create a minimal, non-runtime-impacting change that can be committed/pushed
+to validate the automated commit/PR tooling in this environment.
