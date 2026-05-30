@@ -29,7 +29,7 @@ CREATE POLICY battle_comments_insert ON public.battle_comments
       SELECT 1 FROM public.users u
       WHERE u.auth_uid = (SELECT auth.uid())
         AND u.id = battle_comments.user_id
-        AND u.display_name = battle_comments.display_name
+        AND coalesce(nullif(u.display_name, ''), u.username) = battle_comments.display_name
         AND coalesce(u.avatar_url, '') = battle_comments.avatar_url
     )
   );
