@@ -2,9 +2,9 @@
 -- Users can discuss, analyze, and trash-talk about past battles
 
 CREATE TABLE IF NOT EXISTS public.battle_comments (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
   match_id text NOT NULL REFERENCES public.matches(id) ON DELETE CASCADE,
-  user_id text NOT NULL,
+  user_id text NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
   display_name text NOT NULL DEFAULT 'Anonymous',
   avatar_url text NOT NULL DEFAULT '',
   body text NOT NULL CHECK (char_length(body) <= 500),
@@ -29,6 +29,8 @@ CREATE POLICY battle_comments_insert ON public.battle_comments
       SELECT 1 FROM public.users u
       WHERE u.auth_uid = (SELECT auth.uid())
         AND u.id = battle_comments.user_id
+        AND u.display_name = battle_comments.display_name
+        AND coalesce(u.avatar_url, '') = battle_comments.avatar_url
     )
   );
 
