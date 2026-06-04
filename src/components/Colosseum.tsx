@@ -831,10 +831,11 @@ function challengeMeta(type: ChallengeType) {
   return CHALLENGES.find((challenge) => challenge.id === type) ?? CHALLENGES[0];
 }
 
-function challengeFor(profile: BotGladiatorProfileRow | null | undefined, type: ChallengeType): CodingChallenge {
+let _sandboxPromptCounter = 0;
+function challengeFor(profile: BotGladiatorProfileRow | null | undefined, type: ChallengeType, stableSeed?: string): CodingChallenge {
   const base = CHALLENGE_LIBRARY[profile?.difficulty ?? 'Bronze'][type];
   if (type === 'sandbox_build') {
-    const seed = `${Date.now()}-${profile?.persona_username ?? 'anon'}`;
+    const seed = stableSeed ?? `${++_sandboxPromptCounter}-${profile?.persona_username ?? 'anon'}`;
     const diverse = pickRandomSandboxPrompt(seed);
     return { ...base, title: diverse.title, prompt: diverse.prompt, expected: diverse.expected };
   }
@@ -3225,10 +3226,12 @@ function CasperBattleIntro({ challenger, defender, challengeTitle, onComplete }:
   challengeTitle: string;
   onComplete: () => void;
 }) {
+  const onCompleteRef = React.useRef(onComplete);
+  onCompleteRef.current = onComplete;
   React.useEffect(() => {
-    const timer = setTimeout(onComplete, 5500);
+    const timer = setTimeout(() => onCompleteRef.current(), 5500);
     return () => clearTimeout(timer);
-  }, [onComplete]);
+  }, []);
 
   React.useEffect(() => {
     playDialUpSound();
@@ -5291,7 +5294,8 @@ export const Colosseum: React.FC = () => {
   }, [activeMatches, gladiators]);
   const selectedGladiator = selectedGladiatorId ? gladiatorById.get(selectedGladiatorId) : null;
   const selectedOpponent = selectedOpponentId ? gladiatorById.get(selectedOpponentId) : null;
-  const selectedCodingChallenge = useMemo(() => challengeFor(selectedOpponent?.botProfile, challengeType), [selectedOpponent?.botProfile, challengeType]);
+  const challengeSeed = useMemo(() => `${selectedOpponent?.id ?? 'none'}-${challengeType}-${Date.now()}`, [selectedOpponent?.id, challengeType]);
+  const selectedCodingChallenge = useMemo(() => challengeFor(selectedOpponent?.botProfile, challengeType, challengeSeed), [selectedOpponent?.botProfile, challengeType, challengeSeed]);
   const selectedChallengeMeta = challengeMeta(challengeType);
   const battleInProgress = simulation?.status === 'booting' || simulation?.status === 'running';
 
@@ -5517,7 +5521,7 @@ export const Colosseum: React.FC = () => {
     if (!challengeGate.allowed) { setUpgradeGate(challengeGate); return; }
     void recordUsage('colosseum_challenge');
     const activeChallengeType = challengeTypeOverride;
-    const codingChallenge = challengeFor(defender.botProfile, activeChallengeType);
+    const codingChallenge = challengeFor(defender.botProfile, activeChallengeType, challengeSeed);
     const submittedSolution = (solutionOverride ?? userSolution).trim();
     const challengerHasModel = Boolean(selectedGladiator?.model || selectedGladiator?.botProfile);
     if (defender.botProfile && !submittedSolution && !challengerHasModel) {
