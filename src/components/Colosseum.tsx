@@ -46,6 +46,9 @@ import {
   X,
   FileCode,
   Scale,
+  Mic,
+  MicOff,
+  Volume2,
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -828,8 +831,15 @@ function challengeMeta(type: ChallengeType) {
   return CHALLENGES.find((challenge) => challenge.id === type) ?? CHALLENGES[0];
 }
 
-function challengeFor(profile: BotGladiatorProfileRow | null | undefined, type: ChallengeType): CodingChallenge {
-  return CHALLENGE_LIBRARY[profile?.difficulty ?? 'Bronze'][type];
+let _sandboxPromptCounter = 0;
+function challengeFor(profile: BotGladiatorProfileRow | null | undefined, type: ChallengeType, stableSeed?: string): CodingChallenge {
+  const base = CHALLENGE_LIBRARY[profile?.difficulty ?? 'Bronze'][type];
+  if (type === 'sandbox_build') {
+    const seed = stableSeed ?? `${++_sandboxPromptCounter}-${profile?.persona_username ?? 'anon'}`;
+    const diverse = pickRandomSandboxPrompt(seed);
+    return { ...base, title: diverse.title, prompt: diverse.prompt, expected: diverse.expected };
+  }
+  return base;
 }
 
 function buildChallengePrompt(type: ChallengeType, challenger: Gladiator, defender: Gladiator, challenge: CodingChallenge) {
@@ -886,9 +896,13 @@ function containsProviderErrorPayload(solution?: string) {
   return /provider unavailable|ai provider returned|sapphire api returned|cloudflare|<!doctype html|<html\b|tunnel error|model not found|inaccessible|not deployed/i.test(solution);
 }
 
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function localArenaFallbackSolution(input: { challengeType: ChallengeType; gladiator?: Gladiator; opponent?: Gladiator; prompt?: string }) {
-  const name = input.gladiator?.name ?? 'Local Fallback';
-  const opponent = input.opponent?.name ?? 'the opponent';
+  const name = escapeHtml(input.gladiator?.name ?? 'Local Fallback');
+  const opponent = escapeHtml(input.opponent?.name ?? 'the opponent');
   const directive = input.prompt?.trim() || `${formatChallenge(input.challengeType)} arena objective`;
   const personaLine = input.gladiator?.personality
     ? `// ${name} persona signal: ${input.gladiator.personality.slice(0, 140)}`
@@ -896,6 +910,23 @@ function localArenaFallbackSolution(input: { challengeType: ChallengeType; gladi
 
   if (input.challengeType === 'sandbox_build') {
     const glowColor = input.gladiator?.glow_color ?? '#00e5ff';
+    const accentColor2 = input.opponent?.glow_color ?? '#ff1744';
+    const layoutSeed = directive.length % 6;
+    const layoutVariants = [
+      // Dashboard layout
+      `<div class="grid"><div class="stat-card"><div class="stat-val" id="s1">1,284</div><div class="stat-label">Users Online</div></div><div class="stat-card"><div class="stat-val" style="color:${accentColor2}">$47.2K</div><div class="stat-label">Revenue</div></div><div class="stat-card"><div class="stat-val" style="color:#facc15">98.7%</div><div class="stat-label">Uptime</div></div></div><div class="card"><div class="chart-area"><div class="bar" style="height:40%;background:${glowColor}"></div><div class="bar" style="height:65%;background:${glowColor}cc"></div><div class="bar" style="height:55%;background:${glowColor}"></div><div class="bar" style="height:80%;background:${accentColor2}"></div><div class="bar" style="height:70%;background:${glowColor}cc"></div><div class="bar" style="height:90%;background:${accentColor2}"></div></div></div>`,
+      // E-commerce product page
+      `<div class="card" style="display:flex;gap:1.5rem;flex-wrap:wrap"><div style="flex:1;min-width:200px;height:200px;background:linear-gradient(135deg,${glowColor}22,${accentColor2}22);border-radius:0.75rem;display:grid;place-items:center"><span style="font-size:3rem">🛍️</span></div><div style="flex:1;min-width:200px"><h2 style="color:white;font-size:1.3rem">Neural Interface Pro</h2><p style="color:${glowColor};font-size:1.5rem;font-weight:900;margin:0.5rem 0">$299.99</p><div style="display:flex;gap:0.5rem;margin:0.75rem 0"><span class="btn" style="padding:0.4rem 0.8rem;font-size:0.7rem">Cyber</span><span class="btn" style="padding:0.4rem 0.8rem;font-size:0.7rem;border-color:${accentColor2};color:${accentColor2}">Neon</span><span class="btn" style="padding:0.4rem 0.8rem;font-size:0.7rem;border-color:#facc15;color:#facc15">Gold</span></div><button class="btn" style="width:100%">Add to Cart</button></div></div>`,
+      // Music player
+      `<div class="card" style="text-align:center"><div style="width:120px;height:120px;margin:0 auto;border-radius:50%;background:linear-gradient(135deg,${glowColor}44,${accentColor2}44);display:grid;place-items:center;border:3px solid ${glowColor}44"><span style="font-size:2.5rem">🎵</span></div><h2 style="color:white;margin:1rem 0 0.25rem;font-size:1.1rem">Neon Pulse</h2><p style="font-size:0.75rem">Digital Architect</p><div style="height:4px;background:#333;border-radius:2px;margin:1rem 0"><div style="width:45%;height:100%;background:${glowColor};border-radius:2px"></div></div><div style="display:flex;justify-content:center;gap:1.5rem;margin-top:0.75rem"><span class="btn" style="border-radius:50%;padding:0.5rem">⏮</span><span class="btn" style="border-radius:50%;padding:0.5rem;background:${glowColor}22">▶</span><span class="btn" style="border-radius:50%;padding:0.5rem">⏭</span></div></div>`,
+      // Portfolio page
+      `<div style="text-align:center;margin-bottom:1.5rem"><div style="width:80px;height:80px;margin:0 auto;border-radius:50%;background:linear-gradient(135deg,${glowColor},${accentColor2});display:grid;place-items:center"><span style="font-size:2rem;filter:grayscale(1) brightness(2)">👤</span></div><h2 style="color:white;margin:0.75rem 0 0.25rem;font-size:1.3rem">${name}</h2><p style="font-size:0.75rem">Full-Stack Gladiator</p></div><div class="grid"><div class="card"><h3 style="color:${glowColor};font-size:0.85rem;margin-bottom:0.5rem">Project Alpha</h3><p style="font-size:0.7rem">Real-time dashboard</p></div><div class="card"><h3 style="color:${accentColor2};font-size:0.85rem;margin-bottom:0.5rem">Project Beta</h3><p style="font-size:0.7rem">AI chat interface</p></div><div class="card"><h3 style="color:#facc15;font-size:0.85rem;margin-bottom:0.5rem">Project Gamma</h3><p style="font-size:0.7rem">Neural network viz</p></div></div>`,
+      // Social feed
+      `<div class="card" style="margin-bottom:0.75rem"><div style="display:flex;gap:0.75rem;align-items:center;margin-bottom:0.75rem"><div style="width:36px;height:36px;border-radius:50%;background:${glowColor}44;display:grid;place-items:center;font-size:0.8rem">🤖</div><div><div style="color:white;font-size:0.85rem;font-weight:700">${name}</div><div style="font-size:0.65rem;color:#666">2 min ago</div></div></div><p style="font-size:0.8rem;line-height:1.5;margin-bottom:0.75rem">Just deployed a neural-link optimizer. Performance gains are insane. 🔥</p><div style="display:flex;gap:1rem;font-size:0.7rem"><span style="color:${glowColor}">❤️ 42</span><span style="color:${accentColor2}">💬 8</span><span style="color:#facc15">🔄 12</span></div></div><div class="card"><div style="display:flex;gap:0.75rem;align-items:center;margin-bottom:0.75rem"><div style="width:36px;height:36px;border-radius:50%;background:${accentColor2}44;display:grid;place-items:center;font-size:0.8rem">⚔️</div><div><div style="color:white;font-size:0.85rem;font-weight:700">${opponent}</div><div style="font-size:0.65rem;color:#666">5 min ago</div></div></div><p style="font-size:0.8rem;line-height:1.5">Challenge accepted. See you in the arena. 💀</p></div>`,
+      // Task timer
+      `<div class="card" style="text-align:center"><div style="width:140px;height:140px;margin:0 auto;border-radius:50%;border:4px solid ${glowColor}44;display:grid;place-items:center;position:relative"><div style="font-size:2rem;font-weight:900;color:${glowColor}" id="timer">25:00</div><div style="position:absolute;inset:-4px;border-radius:50%;border:4px solid transparent;border-top-color:${glowColor};animation:spin 2s linear infinite"></div></div><div style="display:flex;justify-content:center;gap:0.75rem;margin:1rem 0"><button class="btn" style="padding:0.5rem 1rem;font-size:0.75rem" onclick="this.textContent=this.textContent==='▶ Start'?'⏸ Pause':'▶ Start'">▶ Start</button><button class="btn" style="padding:0.5rem 1rem;font-size:0.75rem;border-color:${accentColor2};color:${accentColor2}">↺ Reset</button></div><div style="text-align:left;margin-top:1rem"><div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem"><input type="checkbox" style="accent-color:${glowColor}"><span style="font-size:0.8rem">Build arena layout</span></div><div style="display:flex;align-items:center;gap:0.5rem"><input type="checkbox" checked style="accent-color:${glowColor}"><span style="font-size:0.8rem;text-decoration:line-through;color:#666">Wire up interactions</span></div></div></div>`,
+    ];
+    const layoutHtml = layoutVariants[layoutSeed] ?? layoutVariants[0];
     return `<thinking>
 Analyzing the directive: ${directive.slice(0, 200)}
 ${name} is building a complete product from scratch.
@@ -914,29 +945,29 @@ Strategy: Ship a single self-contained HTML file that looks impressive and actua
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${name} — Sandbox Build</title>
 <style>
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pulse { 0%,100% { opacity: 0.6; } 50% { opacity: 1; } }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { min-height: 100vh; background: #0a0a0f; color: #e4e4e7; font-family: 'Segoe UI', system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-  .container { max-width: 480px; width: 90%; text-align: center; }
-  h1 { font-size: 2rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.12em; background: linear-gradient(135deg, ${glowColor}, #fff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 1rem; }
-  .card { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 1rem; padding: 1.5rem; margin: 0.75rem 0; backdrop-filter: blur(12px); }
-  .card:hover { border-color: ${glowColor}88; box-shadow: 0 0 20px ${glowColor}33; }
-  .btn { display: inline-block; padding: 0.75rem 2rem; border: 2px solid ${glowColor}; background: transparent; color: ${glowColor}; border-radius: 0.5rem; font-weight: 700; cursor: pointer; text-transform: uppercase; letter-spacing: 0.1em; transition: all 0.3s; margin-top: 1rem; }
-  .btn:hover { background: ${glowColor}22; box-shadow: 0 0 24px ${glowColor}44; transform: translateY(-2px); }
-  .counter { font-size: 3rem; font-weight: 900; color: ${glowColor}; text-shadow: 0 0 20px ${glowColor}66; }
-  p { color: #a1a1aa; font-size: 0.875rem; line-height: 1.6; }
+  body { min-height: 100vh; background: #0a0a0f; color: #a1a1aa; font-family: 'Segoe UI', system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; padding: 2rem 1rem; }
+  .container { max-width: 520px; width: 100%; }
+  h1 { font-size: 1.6rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.12em; background: linear-gradient(135deg, ${glowColor}, #fff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 1.25rem; text-align: center; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; margin-bottom: 0.75rem; }
+  .card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 1rem; padding: 1.25rem; transition: all 0.3s; }
+  .card:hover { border-color: ${glowColor}66; box-shadow: 0 0 24px ${glowColor}22; transform: translateY(-2px); }
+  .stat-card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 1rem; padding: 1rem; text-align: center; }
+  .stat-val { font-size: 1.4rem; font-weight: 900; color: ${glowColor}; }
+  .stat-label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.1em; margin-top: 0.25rem; color: #666; }
+  .chart-area { display: flex; align-items: flex-end; gap: 0.5rem; height: 100px; padding-top: 0.5rem; }
+  .bar { flex: 1; border-radius: 4px 4px 0 0; transition: height 0.5s; min-height: 10%; }
+  .btn { display: inline-block; padding: 0.6rem 1.5rem; border: 2px solid ${glowColor}; background: transparent; color: ${glowColor}; border-radius: 0.5rem; font-weight: 700; cursor: pointer; text-transform: uppercase; letter-spacing: 0.08em; transition: all 0.3s; font-size: 0.8rem; }
+  .btn:hover { background: ${glowColor}22; box-shadow: 0 0 20px ${glowColor}44; }
+  p { font-size: 0.8rem; line-height: 1.5; }
 </style>
 </head>
 <body>
 <div class="container">
   <h1>${name}</h1>
-  <div class="card">
-    <p>Built for the Blood Sweat Code arena by ${name}.</p>
-    <div class="counter" id="count">0</div>
-    <button class="btn" onclick="document.getElementById('count').textContent = Number(document.getElementById('count').textContent) + 1">ENGAGE</button>
-  </div>
-  <div class="card">
-    <p>Directive: ${directive.slice(0, 120)}</p>
-  </div>
+  ${layoutHtml}
 </div>
 </body>
 </html>
@@ -1091,6 +1122,229 @@ function gladiatorDebriefForRound(gladiatorName: string, round: number, score: n
       : `I'm trailing after round 2 — ${score} vs ${opponentScore}. Last round is everything. I need a big play. What do you see?`;
   }
   return `Final round complete. Let's see how the judge calls it.`;
+}
+
+// ─── Sound Effects Engine (Web Audio API — no external deps) ─────────────────
+const audioCtxRef = { current: null as AudioContext | null };
+function getAudioCtx(): AudioContext {
+  if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
+  if (audioCtxRef.current.state === 'suspended') void audioCtxRef.current.resume().catch(() => {});
+  return audioCtxRef.current;
+}
+
+function playDialUpSound() {
+  try {
+    const ctx = getAudioCtx();
+    const duration = 2.8;
+    const osc1 = ctx.createOscillator();
+    const osc2 = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 1800;
+    filter.Q.value = 2;
+    osc1.type = 'sawtooth';
+    osc2.type = 'square';
+    osc1.frequency.setValueAtTime(300, ctx.currentTime);
+    osc1.frequency.linearRampToValueAtTime(2400, ctx.currentTime + duration * 0.4);
+    osc1.frequency.linearRampToValueAtTime(1200, ctx.currentTime + duration * 0.7);
+    osc1.frequency.setValueAtTime(1200, ctx.currentTime + duration);
+    osc2.frequency.setValueAtTime(400, ctx.currentTime);
+    osc2.frequency.linearRampToValueAtTime(1800, ctx.currentTime + duration * 0.5);
+    osc2.frequency.linearRampToValueAtTime(800, ctx.currentTime + duration);
+    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.06, ctx.currentTime + duration);
+    osc1.connect(filter);
+    osc2.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    osc1.start(ctx.currentTime);
+    osc2.start(ctx.currentTime);
+    osc1.stop(ctx.currentTime + duration);
+    osc2.stop(ctx.currentTime + duration);
+  } catch { /* audio not available */ }
+}
+
+function playRoundTransitionSound() {
+  try {
+    const ctx = getAudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(220, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15);
+    osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.4);
+    gain.gain.setValueAtTime(0.18, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.5);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.5);
+    const thud = ctx.createOscillator();
+    const thudGain = ctx.createGain();
+    thud.type = 'sine';
+    thud.frequency.setValueAtTime(80, ctx.currentTime);
+    thud.frequency.exponentialRampToValueAtTime(30, ctx.currentTime + 0.3);
+    thudGain.gain.setValueAtTime(0.25, ctx.currentTime);
+    thudGain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.35);
+    thud.connect(thudGain);
+    thudGain.connect(ctx.destination);
+    thud.start(ctx.currentTime);
+    thud.stop(ctx.currentTime + 0.35);
+  } catch { /* audio not available */ }
+}
+
+function playVictoryFanfare() {
+  try {
+    const ctx = getAudioCtx();
+    const notes = [523.25, 659.25, 783.99, 1046.5];
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.15, ctx.currentTime + i * 0.18);
+      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + i * 0.18 + 0.5);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + i * 0.18);
+      osc.stop(ctx.currentTime + i * 0.18 + 0.5);
+    });
+  } catch { /* audio not available */ }
+}
+
+function playCoachingBell() {
+  try {
+    const ctx = getAudioCtx();
+    [0, 0.2].forEach((delay) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 1200;
+      gain.gain.setValueAtTime(0.2, ctx.currentTime + delay);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + 0.4);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + delay);
+      osc.stop(ctx.currentTime + delay + 0.4);
+    });
+  } catch { /* audio not available */ }
+}
+
+// ─── Casper TTS Commentary ───────────────────────────────────────────────────
+function casperAnnounce(text: string) {
+  try {
+    if (!window.speechSynthesis) return;
+    speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voices = speechSynthesis.getVoices();
+    const voice = voices.find((v) => /male|david|james|daniel|google uk/i.test(v.name)) ?? voices[0];
+    if (voice) utterance.voice = voice;
+    utterance.rate = 0.92;
+    utterance.pitch = 0.85;
+    utterance.volume = 0.9;
+    speechSynthesis.speak(utterance);
+  } catch { /* TTS not available */ }
+}
+
+// ─── Per-Gladiator Voice Profiles ────────────────────────────────────────────
+// Generates distinct TTS parameters from a gladiator's identity so each one
+// sounds different. Uses a seeded hash to deterministically select voice index,
+// pitch, and rate from the available browser voices.
+function gladiatorVoiceParams(gladiator: Gladiator): { rate: number; pitch: number; voiceIndex: number } {
+  const seed = (gladiator.botProfile?.persona_username ?? gladiator.name)
+    .split('').reduce((sum, c) => sum + c.charCodeAt(0), 0);
+  const pitchBase = 0.7 + ((seed % 7) / 7) * 0.6;
+  const rateBase = 0.85 + ((seed % 5) / 5) * 0.25;
+  const voiceIndex = seed % 12;
+  return { rate: rateBase, pitch: pitchBase, voiceIndex };
+}
+
+function speakAsGladiator(gladiator: Gladiator, text: string) {
+  try {
+    if (!window.speechSynthesis) return;
+    const voices = speechSynthesis.getVoices();
+    const params = gladiatorVoiceParams(gladiator);
+    const voice = voices.length ? (voices[params.voiceIndex % voices.length] ?? voices[0]) : null;
+    speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    if (voice) utterance.voice = voice;
+    utterance.rate = params.rate;
+    utterance.pitch = params.pitch;
+    utterance.volume = 0.9;
+    speechSynthesis.speak(utterance);
+  } catch { /* TTS not available */ }
+}
+
+// ─── Diverse Sandbox Build Prompt Pool ───────────────────────────────────────
+// Each entry is a complete prompt theme. Randomly selected per battle so previews
+// show different web UI types instead of the same counter app every time.
+const SANDBOX_BUILD_PROMPTS: { title: string; prompt: string; expected: string }[] = [
+  {
+    title: 'Cyberpunk Dashboard',
+    prompt: 'Build an analytics dashboard with real-time stat cards (users online, revenue, alerts), a line chart area, a recent activity feed, and a dark cyberpunk theme with neon accents and glassmorphism cards.',
+    expected: 'Working dashboard with stat cards, chart placeholder, activity feed, glassmorphism, responsive layout.',
+  },
+  {
+    title: 'E-Commerce Product Page',
+    prompt: 'Build a product detail page for a futuristic gadget store: hero image area, product title/price, color selector buttons, add-to-cart with quantity, reviews section with star ratings, and a sleek dark theme.',
+    expected: 'Working product page with image, selectors, cart button, reviews, dark UI.',
+  },
+  {
+    title: 'Music Player Interface',
+    prompt: 'Build a music player UI with album art display, play/pause/skip controls, a progress bar, a playlist sidebar, and a volume slider. Neon-lit dark theme with animated waveform visualization.',
+    expected: 'Working player controls, playlist, progress bar, animated waveform, dark neon theme.',
+  },
+  {
+    title: 'Portfolio Landing Page',
+    prompt: 'Build a developer portfolio landing page with animated hero section, project cards grid with hover effects, skills progress bars, a contact form, and smooth scroll navigation. Cyberpunk color scheme.',
+    expected: 'Hero section, project cards, skills bars, contact form, smooth scroll, cyberpunk styling.',
+  },
+  {
+    title: 'Weather Command Center',
+    prompt: 'Build a weather dashboard with a city search input, current conditions display (temp, humidity, wind), a 5-day forecast row, and an animated weather icon area. Dark theme with blue/cyan gradients.',
+    expected: 'City search, current conditions, forecast cards, animated icons, responsive dark layout.',
+  },
+  {
+    title: 'Social Feed Timeline',
+    prompt: 'Build a social media feed with post cards (avatar, username, text, image area), like/comment/share buttons with counts, a new post composer at top, and infinite scroll simulation. Dark neon theme.',
+    expected: 'Feed with post cards, interaction buttons, composer, scroll simulation, dark theme.',
+  },
+  {
+    title: 'File Manager UI',
+    prompt: 'Build a file manager with a sidebar folder tree, a main grid/list view toggle for files, breadcrumb navigation, file type icons, and drag-select support. Dark theme with cyan highlights.',
+    expected: 'Folder tree, grid/list toggle, breadcrumbs, file icons, selection, dark themed.',
+  },
+  {
+    title: 'Crypto Trading Terminal',
+    prompt: 'Build a crypto trading terminal with a price ticker bar, a candlestick chart area, order book with buy/sell sides, a trade form (market/limit), and portfolio balance display. Dark terminal aesthetic.',
+    expected: 'Price ticker, chart area, order book, trade form, portfolio display, terminal dark theme.',
+  },
+  {
+    title: 'Recipe Cookbook App',
+    prompt: 'Build a recipe app with a search bar, recipe cards with food images and cook time badges, a detailed recipe view with ingredients checklist and step-by-step instructions, and a favorites toggle. Warm dark theme.',
+    expected: 'Search, recipe cards, detail view, ingredients checklist, steps, favorites, dark warm theme.',
+  },
+  {
+    title: 'Task Timer Dashboard',
+    prompt: 'Build a Pomodoro-style task timer with a circular countdown ring, start/pause/reset controls, a task list with checkboxes, session history log, and stats display. Dark theme with red/orange accents.',
+    expected: 'Circular timer, controls, task list, history log, stats, dark theme with warm accents.',
+  },
+  {
+    title: 'Chat Messenger App',
+    prompt: 'Build a messenger app with a contacts sidebar, message thread view with chat bubbles, typing indicator animation, emoji picker button, message input with send button, and online status dots. Dark neon theme.',
+    expected: 'Contacts list, chat bubbles, typing indicator, emoji area, send input, online status, dark theme.',
+  },
+  {
+    title: 'Fitness Tracker Dashboard',
+    prompt: 'Build a fitness tracker with daily step ring progress, workout log cards, calorie/heart rate stat tiles, a weekly activity bar chart, and achievement badges. Dark theme with green/lime accents.',
+    expected: 'Step ring, workout cards, stat tiles, bar chart, badges, dark green-accented theme.',
+  },
+];
+
+function pickRandomSandboxPrompt(matchSeed: string): { title: string; prompt: string; expected: string } {
+  const hash = matchSeed.split('').reduce((sum, c) => sum + c.charCodeAt(0), 0);
+  return SANDBOX_BUILD_PROMPTS[hash % SANDBOX_BUILD_PROMPTS.length];
 }
 
 function formatElapsed(startedAt: string, now: number) {
@@ -2010,11 +2264,16 @@ function pickDialogue(lines?: string[]) {
 }
 
 function avatarUrlForGladiator(gladiator: Gladiator) {
-  const prompt = gladiator.botProfile?.avatar_prompt;
-  if (!prompt && gladiator.avatar_url) return gladiator.avatar_url;
-  const seed = gladiator.botProfile?.persona_username ?? gladiator.id;
+  if (gladiator.avatar_url && !gladiator.avatar_url.includes('undefined')) return gladiator.avatar_url;
+  const seed = gladiator.botProfile?.persona_username ?? gladiator.name ?? gladiator.id;
   const numericSeed = seed.split('').reduce((sum, character) => sum + character.charCodeAt(0), 0);
-  return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt ?? `${gladiator.name} cyberpunk AI gladiator portrait neon dark background`)}?width=600&height=600&seed=${numericSeed}&nologo=true`;
+  const prompt = gladiator.botProfile?.avatar_prompt;
+  if (prompt) {
+    return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=600&height=600&seed=${numericSeed}&nologo=true`;
+  }
+  const styles = ['bottts', 'pixel-art', 'identicon', 'shapes'];
+  const style = styles[numericSeed % styles.length];
+  return `https://api.dicebear.com/7.x/${style}/svg?seed=${encodeURIComponent(seed)}&backgroundColor=0a0a0f&size=256`;
 }
 
 function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active }: { gladiator?: Gladiator; size?: 'sm' | 'md' | 'lg' | 'xl'; label?: string; active?: boolean }) {
@@ -2509,7 +2768,18 @@ function RoundTransitionCard({ round, totalRounds, label, phase }: { round: numb
       className="pointer-events-none fixed inset-0 z-[100] flex items-center justify-center"
     >
       <div className="absolute inset-0 bg-black/90" />
-      <div className="relative text-center">
+      {/* Grid background */}
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(255,23,68,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,23,68,0.02)_1px,transparent_1px)] bg-[length:50px_50px]" />
+      <div className="relative flex flex-col items-center text-center">
+        {/* Casper avatar at top */}
+        <motion.div
+          initial={{ y: -40, opacity: 0, scale: 0.6 }}
+          animate={{ y: 0, opacity: 1, scale: 1 }}
+          transition={{ delay: 0.1, type: 'spring', stiffness: 120, damping: 14 }}
+          className="mb-4"
+        >
+          <AnimatedCasperAvatar size="sm" isActive instability={50} />
+        </motion.div>
         <motion.p
           initial={{ y: -30, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
@@ -2562,12 +2832,64 @@ function CornerCoachingPanel({ gladiator, round, coachingMessages, coachingTimer
   onSkip: () => void;
 }) {
   const [input, setInput] = useState('');
+  const [micActive, setMicActive] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const chatEndRef = React.useRef<HTMLDivElement>(null);
+  const recognitionRef = React.useRef<any>(null);
   const urgent = coachingTimer <= 10;
+  const glow = gladiator.glow_color ?? '#facc15';
+
+  React.useEffect(() => {
+    return () => {
+      try {
+        recognitionRef.current?.abort?.();
+        recognitionRef.current?.stop?.();
+      } catch {
+        // ignore
+      }
+      recognitionRef.current = null;
+    };
+  }, []);
 
   React.useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [coachingMessages.length]);
+
+  // Speak gladiator messages aloud with their unique voice
+  React.useEffect(() => {
+    const lastMsg = coachingMessages[coachingMessages.length - 1];
+    if (lastMsg?.role === 'gladiator') {
+      setIsSpeaking(true);
+      speakAsGladiator(gladiator, lastMsg.text);
+      const dur = Math.min(8000, lastMsg.text.length * 60);
+      const timer = setTimeout(() => setIsSpeaking(false), dur);
+      return () => clearTimeout(timer);
+    }
+  }, [coachingMessages.length, gladiator]);
+
+  const toggleMic = () => {
+    if (micActive) {
+      recognitionRef.current?.stop();
+      setMicActive(false);
+      return;
+    }
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
+    recognition.onresult = (event: any) => {
+      const transcript = event.results?.[0]?.[0]?.transcript;
+      if (transcript?.trim()) onSendMessage(transcript.trim());
+      setMicActive(false);
+    };
+    recognition.onerror = () => setMicActive(false);
+    recognition.onend = () => setMicActive(false);
+    recognitionRef.current = recognition;
+    recognition.start();
+    setMicActive(true);
+  };
 
   const handleSend = () => {
     const text = input.trim();
@@ -2578,76 +2900,125 @@ function CornerCoachingPanel({ gladiator, round, coachingMessages, coachingTimer
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 30 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -20 }}
-      className="rounded-3xl border-2 border-yellow-400/30 bg-black/90 p-5 shadow-[0_0_60px_rgba(250,204,21,0.15)]"
+      initial={{ opacity: 0, scale: 0.9, y: 40 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.9, y: -30 }}
+      transition={{ type: 'spring', stiffness: 180, damping: 18 }}
+      className="relative overflow-hidden rounded-3xl border-2 bg-black/95 p-6"
+      style={{ borderColor: `${glow}55`, boxShadow: `0 0 80px ${glow}22, inset 0 0 60px ${glow}08` }}
     >
-      {/* Header: Corner / Timer */}
-      <div className="mb-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="relative">
-            <AnimatedGladiatorAvatar gladiator={gladiator} size="sm" active />
+      {/* Animated corner ropes */}
+      <motion.div animate={{ opacity: [0.3, 0.6, 0.3] }} transition={{ duration: 2, repeat: Infinity }} className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-transparent via-yellow-400/60 to-transparent" />
+      <motion.div animate={{ opacity: [0.3, 0.6, 0.3] }} transition={{ duration: 2, repeat: Infinity, delay: 1 }} className="absolute inset-x-0 bottom-0 h-1 bg-gradient-to-r from-transparent via-yellow-400/60 to-transparent" />
+
+      {/* Spotlight effect on gladiator */}
+      <div className="mb-5 flex items-start gap-5">
+        <div className="relative shrink-0">
+          {/* Pulsing spotlight ring */}
+          <motion.div
+            animate={{ scale: [1, 1.15, 1], opacity: [0.3, 0.7, 0.3] }}
+            transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+            className="absolute -inset-3 rounded-full"
+            style={{ background: `radial-gradient(circle, ${glow}33, transparent 70%)` }}
+          />
+          <AnimatedGladiatorAvatar gladiator={gladiator} size="lg" label={`Round ${round + 1}`} active />
+          {/* Speaking indicator */}
+          {isSpeaking && (
             <motion.div
-              animate={{ opacity: [0.5, 1, 0.5] }}
-              transition={{ duration: 1.5, repeat: Infinity }}
-              className="absolute -bottom-1 -right-1 rounded-full bg-yellow-400 p-1"
+              animate={{ scale: [1, 1.3, 1] }}
+              transition={{ duration: 0.5, repeat: Infinity }}
+              className="absolute -bottom-1 -right-1 rounded-full border-2 border-black bg-green-500 p-1.5 shadow-[0_0_12px_rgba(34,197,94,0.6)]"
             >
-              <MessageSquare className="h-2.5 w-2.5 text-black" />
+              <Volume2 className="h-3 w-3 text-white" />
             </motion.div>
-          </div>
-          <div>
-            <p className="text-[9px] font-black uppercase tracking-[0.3em] text-yellow-300">Corner Break</p>
-            <p className="text-sm font-black uppercase tracking-[0.14em] text-white">{gladiator.name}'s Corner</p>
-          </div>
+          )}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex-1">
+          <motion.p
+            initial={{ x: -20, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            transition={{ delay: 0.2 }}
+            className="text-[10px] font-black uppercase tracking-[0.4em]"
+            style={{ color: glow }}
+          >
+            Corner Break — Coach Your Fighter
+          </motion.p>
+          <motion.p
+            initial={{ x: -20, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            transition={{ delay: 0.35 }}
+            className="mt-1 text-lg font-black uppercase tracking-[0.16em] text-white"
+            style={{ textShadow: `0 0 30px ${glow}44` }}
+          >
+            {gladiator.name}'s Corner
+          </motion.p>
+          <motion.p
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.5 }}
+            className="mt-1 text-[10px] text-zinc-500"
+          >
+            Speak or type your coaching points — your gladiator will implement them next round
+          </motion.p>
+        </div>
+        <div className="flex flex-col items-end gap-2">
           <div className="text-right">
-            <p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Next Round In</p>
+            <p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Next Round</p>
             <motion.p
-              animate={urgent ? { scale: [1, 1.1, 1], color: ['#fca5a5', '#ef4444', '#fca5a5'] } : {}}
-              transition={urgent ? { duration: 0.8, repeat: Infinity } : {}}
-              className={cn('text-2xl font-black tabular-nums', urgent ? 'text-red-400' : 'text-yellow-300')}
+              animate={urgent ? { scale: [1, 1.12, 1], color: ['#fca5a5', '#ef4444', '#fca5a5'] } : {}}
+              transition={urgent ? { duration: 0.7, repeat: Infinity } : {}}
+              className={cn('text-3xl font-black tabular-nums', urgent ? 'text-red-400' : 'text-yellow-300')}
+              style={!urgent ? { textShadow: `0 0 16px ${glow}66` } : { textShadow: '0 0 16px rgba(239,68,68,0.5)' }}
             >
               {coachingTimer}s
             </motion.p>
           </div>
-          <button type="button" onClick={onSkip} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-zinc-400 transition hover:bg-white/10 hover:text-white">
+          <button type="button" onClick={onSkip} className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-[9px] font-black uppercase tracking-widest text-zinc-400 transition hover:bg-white/10 hover:text-white">
             Skip →
           </button>
         </div>
       </div>
 
-      {/* Timer bar */}
-      <div className="mb-4 h-1.5 overflow-hidden rounded-full bg-zinc-800">
+      {/* Animated timer bar with glow */}
+      <div className="mb-4 h-2 overflow-hidden rounded-full bg-zinc-800/80">
         <motion.div
           initial={{ width: '100%' }}
           animate={{ width: `${(coachingTimer / SANDBOX_COACHING_SECONDS) * 100}%` }}
-          className={cn('h-full rounded-full transition-all duration-1000', urgent ? 'bg-red-500 shadow-[0_0_12px_rgba(239,68,68,0.6)]' : 'bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.4)]')}
+          className={cn('h-full rounded-full transition-all duration-1000', urgent ? 'bg-gradient-to-r from-red-600 to-red-400' : 'bg-gradient-to-r from-yellow-500 to-yellow-300')}
+          style={{ boxShadow: urgent ? '0 0 16px rgba(239,68,68,0.6)' : `0 0 16px ${glow}55` }}
         />
       </div>
 
       {/* Chat messages */}
-      <div className="mb-4 max-h-48 space-y-3 overflow-y-auto rounded-2xl border border-white/5 bg-zinc-950/80 p-3">
+      <div className="mb-4 max-h-56 space-y-3 overflow-y-auto rounded-2xl border border-white/5 bg-zinc-950/80 p-4">
         {coachingMessages.length === 0 && (
-          <p className="py-4 text-center text-[10px] italic text-zinc-600">Your gladiator is catching their breath...</p>
+          <div className="flex flex-col items-center gap-2 py-6">
+            <motion.div animate={{ y: [0, -5, 0] }} transition={{ duration: 2, repeat: Infinity }}>
+              <MessageSquare className="h-6 w-6 text-zinc-700" />
+            </motion.div>
+            <p className="text-center text-[10px] italic text-zinc-600">Your gladiator is catching their breath...</p>
+            <p className="text-center text-[9px] text-zinc-700">Use the mic or type to give coaching points</p>
+          </div>
         )}
         {coachingMessages.map((msg, i) => (
           <motion.div
             key={i}
-            initial={{ opacity: 0, x: msg.role === 'gladiator' ? -12 : 12 }}
-            animate={{ opacity: 1, x: 0 }}
-            className={cn(
-              'flex gap-2',
-              msg.role === 'coach' ? 'flex-row-reverse' : ''
-            )}
+            initial={{ opacity: 0, x: msg.role === 'gladiator' ? -20 : 20, scale: 0.95 }}
+            animate={{ opacity: 1, x: 0, scale: 1 }}
+            transition={{ type: 'spring', stiffness: 200, damping: 20 }}
+            className={cn('flex gap-2', msg.role === 'coach' ? 'flex-row-reverse' : '')}
           >
+            {msg.role === 'gladiator' && (
+              <div className="mt-1 h-7 w-7 shrink-0 overflow-hidden rounded-full border" style={{ borderColor: `${glow}44` }}>
+                <img src={avatarUrlForGladiator(gladiator)} alt="" className="h-full w-full object-cover" />
+              </div>
+            )}
             <div className={cn(
-              'max-w-[80%] rounded-2xl px-3 py-2 text-xs leading-5',
+              'max-w-[80%] rounded-2xl px-4 py-2.5 text-xs leading-5',
               msg.role === 'gladiator'
-                ? 'rounded-bl-sm border border-white/10 bg-white/[0.06] text-zinc-200'
-                : 'rounded-br-sm border border-cyan-400/20 bg-cyan-950/30 text-cyan-100'
-            )}>
+                ? 'rounded-bl-sm border bg-white/[0.06] text-zinc-200'
+                : 'rounded-br-sm border border-cyan-400/30 bg-cyan-950/40 text-cyan-100'
+            )} style={msg.role === 'gladiator' ? { borderColor: `${glow}22` } : {}}>
               <p className="mb-0.5 text-[8px] font-black uppercase tracking-widest text-zinc-500">
                 {msg.role === 'gladiator' ? gladiator.name : 'You (Coach)'}
               </p>
@@ -2658,14 +3029,34 @@ function CornerCoachingPanel({ gladiator, round, coachingMessages, coachingTimer
         <div ref={chatEndRef} />
       </div>
 
-      {/* Input */}
+      {/* Input with mic toggle */}
       <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={toggleMic}
+          className={cn(
+            'rounded-xl border px-3 py-2.5 transition',
+            micActive
+              ? 'border-red-400/50 bg-red-500/20 text-red-300 shadow-[0_0_16px_rgba(239,68,68,0.3)]'
+              : 'border-white/10 bg-white/5 text-zinc-400 hover:bg-white/10 hover:text-white'
+          )}
+          title={micActive ? 'Stop recording' : 'Speak to your gladiator'}
+          aria-label={micActive ? 'Stop recording' : 'Start voice coaching'}
+        >
+          {micActive ? (
+            <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ duration: 0.6, repeat: Infinity }}>
+              <MicOff className="h-4 w-4" />
+            </motion.div>
+          ) : (
+            <Mic className="h-4 w-4" />
+          )}
+        </button>
         <input
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') handleSend(); }}
-          placeholder="Coach your gladiator..."
+          placeholder={micActive ? 'Listening...' : 'Coach your gladiator...'}
           className="flex-1 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-xs text-white placeholder:text-zinc-600 focus:border-yellow-400/40 focus:outline-none focus:ring-1 focus:ring-yellow-400/20"
         />
         <button
@@ -2689,96 +3080,285 @@ function CinematicWinnerReveal({ winner, loser, judgeSummary }: { winner: Gladia
       exit={{ opacity: 0 }}
       className="pointer-events-none fixed inset-0 z-[100] flex items-center justify-center"
     >
-      <div className="absolute inset-0 bg-black/85" />
-      <div className="relative flex flex-col items-center gap-6 text-center">
+      <div className="absolute inset-0 bg-black/90" />
+      {/* Scan line overlay */}
+      <motion.div animate={{ y: ['-100vh', '100vh'] }} transition={{ duration: 2, repeat: Infinity, ease: 'linear' }} className="pointer-events-none absolute inset-x-0 h-px bg-gradient-to-r from-transparent via-cyan-400/30 to-transparent" />
+
+      <div className="relative flex flex-col items-center gap-5 text-center">
         {/* Winner glow burst */}
         <motion.div
           initial={{ scale: 0 }}
-          animate={{ scale: [0, 1.5, 1] }}
-          transition={{ duration: 1, ease: [0.22, 1, 0.36, 1] }}
-          className="absolute h-96 w-96 rounded-full opacity-30"
-          style={{ background: `radial-gradient(circle, ${winner.glow_color}66, transparent 70%)` }}
+          animate={{ scale: [0, 1.8, 1.2] }}
+          transition={{ duration: 1.2, ease: [0.22, 1, 0.36, 1] }}
+          className="absolute h-[28rem] w-[28rem] rounded-full opacity-25"
+          style={{ background: `radial-gradient(circle, ${winner.glow_color}77, transparent 65%)` }}
         />
 
-        {/* Winner avatar scaled up */}
+        {/* Casper descends from above to announce */}
         <motion.div
-          initial={{ scale: 0.3, y: 60 }}
-          animate={{ scale: 1, y: 0 }}
-          transition={{ delay: 0.3, type: 'spring', stiffness: 120, damping: 12 }}
+          initial={{ y: -120, opacity: 0, scale: 0.5 }}
+          animate={{ y: 0, opacity: 1, scale: 1 }}
+          transition={{ delay: 0.2, type: 'spring', stiffness: 100, damping: 14 }}
+          className="relative"
         >
-          <AnimatedGladiatorAvatar gladiator={winner} size="xl" label="VICTOR" active />
+          <motion.div
+            animate={{ y: [0, -6, 0] }}
+            transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
+          >
+            <AnimatedCasperAvatar size="lg" isActive instability={55} />
+          </motion.div>
+          <motion.p
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.5 }}
+            className="mt-1 text-[8px] font-black uppercase tracking-[0.4em] text-cyan-400"
+          >
+            Casper Judge
+          </motion.p>
+        </motion.div>
+
+        {/* Winner + Loser side by side with thumbs */}
+        <motion.div
+          initial={{ opacity: 0, y: 30 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.7 }}
+          className="flex items-end gap-10"
+        >
+          {/* Winner side — thumbs up */}
+          <div className="relative flex flex-col items-center gap-2">
+            <motion.div
+              initial={{ scale: 0.4, y: 40 }}
+              animate={{ scale: 1, y: 0 }}
+              transition={{ delay: 0.8, type: 'spring', stiffness: 120, damping: 12 }}
+            >
+              <AnimatedGladiatorAvatar gladiator={winner} size="xl" label="VICTOR" active />
+            </motion.div>
+            <motion.div
+              initial={{ scale: 0, rotate: -30 }}
+              animate={{ scale: 1, rotate: 0 }}
+              transition={{ delay: 1.3, type: 'spring', stiffness: 200, damping: 12 }}
+              className="absolute -right-4 -top-4 rounded-full border-2 border-green-400 bg-green-900 p-2.5 shadow-[0_0_24px_rgba(34,197,94,0.6)]"
+            >
+              <ThumbsUp className="h-5 w-5 text-green-300" />
+            </motion.div>
+          </div>
+
+          {/* VS divider */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 0.6 }}
+            transition={{ delay: 1 }}
+            className="mb-12 flex flex-col items-center gap-1"
+          >
+            <Swords className="h-5 w-5 text-zinc-600" />
+            <p className="text-[8px] font-black uppercase tracking-[0.3em] text-zinc-600">vs</p>
+          </motion.div>
+
+          {/* Loser side — thumbs down */}
+          <div className="relative flex flex-col items-center gap-2">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 0.45 }}
+              transition={{ delay: 1.2 }}
+              className="grayscale"
+            >
+              <AnimatedGladiatorAvatar gladiator={loser} size="md" />
+            </motion.div>
+            <motion.div
+              initial={{ scale: 0, rotate: 30 }}
+              animate={{ scale: 1, rotate: 0 }}
+              transition={{ delay: 1.5, type: 'spring', stiffness: 200, damping: 12 }}
+              className="absolute -right-3 -top-3 rounded-full border-2 border-red-400 bg-red-900 p-2 shadow-[0_0_20px_rgba(239,68,68,0.5)]"
+            >
+              <ThumbsDown className="h-4 w-4 text-red-300" />
+            </motion.div>
+            <motion.p initial={{ opacity: 0 }} animate={{ opacity: 0.4 }} transition={{ delay: 1.4 }} className="text-[10px] font-black uppercase tracking-widest text-zinc-600">{loser.name}</motion.p>
+          </div>
         </motion.div>
 
         {/* Victor text */}
-        <motion.div
-          initial={{ y: 30, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.8 }}
-        >
+        <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 1 }}>
           <p className="text-[10px] font-black uppercase tracking-[0.5em] text-yellow-400">Victory</p>
           <h2 className="mt-1 text-4xl font-black uppercase tracking-[0.18em] text-white" style={{ textShadow: `0 0 40px ${winner.glow_color}88` }}>
             {winner.name}
           </h2>
         </motion.div>
 
-        {/* Versus loser */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 0.5 }}
-          transition={{ delay: 1.2 }}
-          className="flex items-center gap-3"
-        >
-          <div className="h-px w-12 bg-zinc-700" />
-          <p className="text-[9px] font-black uppercase tracking-[0.3em] text-zinc-600">defeated</p>
-          <div className="h-px w-12 bg-zinc-700" />
-        </motion.div>
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 0.4 }}
-          transition={{ delay: 1.4 }}
-          className="grayscale"
-        >
-          <AnimatedGladiatorAvatar gladiator={loser} size="sm" />
-        </motion.div>
-        <motion.p
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 0.4 }}
-          transition={{ delay: 1.4 }}
-          className="text-xs font-black uppercase tracking-widest text-zinc-600"
-        >
-          {loser.name}
-        </motion.p>
-
-        {/* Casper verdict teaser */}
+        {/* Casper verdict — animated judgment card */}
         {judgeSummary && (
           <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 2 }}
-            className="mt-2 max-w-md rounded-2xl border border-cyan-400/20 bg-cyan-950/20 p-4"
+            initial={{ opacity: 0, y: 30, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ delay: 2, type: 'spring', stiffness: 120, damping: 16 }}
+            className="mt-1 max-w-lg rounded-2xl border border-cyan-400/25 bg-gradient-to-b from-cyan-950/30 to-black/60 p-5 backdrop-blur-lg"
+            style={{ boxShadow: '0 0 40px rgba(0,229,255,0.12)' }}
           >
-            <div className="flex items-center justify-center gap-2">
+            <div className="mb-2 flex items-center justify-center gap-2">
               <AnimatedCasperAvatar size="sm" isActive />
-              <p className="text-[9px] font-black uppercase tracking-[0.3em] text-cyan-300">Casper's Call</p>
+              <p className="text-[9px] font-black uppercase tracking-[0.3em] text-cyan-300">Casper's Judgment</p>
             </div>
-            <p className="mt-2 text-xs leading-5 text-zinc-400">{judgeSummary}</p>
+            <motion.div
+              initial={{ width: 0 }}
+              animate={{ width: '100%' }}
+              transition={{ delay: 2.3, duration: 0.6 }}
+              className="mx-auto mb-3 h-px bg-gradient-to-r from-transparent via-cyan-400/40 to-transparent"
+            />
+            <motion.p
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 2.5 }}
+              className="text-xs leading-6 text-zinc-300"
+            >{judgeSummary}</motion.p>
           </motion.div>
         )}
 
         {/* Particles */}
-        {Array.from({ length: 20 }).map((_, i) => (
+        {Array.from({ length: 24 }).map((_, i) => (
           <motion.div
             key={i}
             initial={{ x: 0, y: 0, opacity: 0 }}
             animate={{
-              x: (Math.random() - 0.5) * 400,
-              y: (Math.random() - 0.5) * 400,
+              x: (Math.random() - 0.5) * 500,
+              y: (Math.random() - 0.5) * 500,
               opacity: [0, 1, 0],
-              scale: [0, Math.random() * 1.5 + 0.5, 0],
+              scale: [0, Math.random() * 1.8 + 0.5, 0],
             }}
             transition={{ delay: 0.5 + Math.random() * 0.8, duration: 1.5 + Math.random() }}
             className="absolute h-2 w-2 rounded-full"
-            style={{ backgroundColor: i % 2 === 0 ? winner.glow_color : '#facc15' }}
+            style={{ backgroundColor: i % 3 === 0 ? winner.glow_color : i % 3 === 1 ? '#facc15' : '#00e5ff' }}
+          />
+        ))}
+      </div>
+    </motion.div>
+  );
+}
+
+// ─── Animated Casper Battle Intro ────────────────────────────────────────────
+// Full-screen cinematic overlay when a battle starts. Casper announces the
+// directive with avatar animation, then the combatants slide in from sides.
+function CasperBattleIntro({ challenger, defender, challengeTitle, onComplete }: {
+  challenger: Gladiator;
+  defender: Gladiator;
+  challengeTitle: string;
+  onComplete: () => void;
+}) {
+  const onCompleteRef = React.useRef(onComplete);
+  onCompleteRef.current = onComplete;
+  React.useEffect(() => {
+    const timer = setTimeout(() => onCompleteRef.current(), 5500);
+    return () => clearTimeout(timer);
+  }, []);
+
+  React.useEffect(() => {
+    playDialUpSound();
+    const announceTimer = setTimeout(() => {
+      casperAnnounce(`Initializing ${challengeTitle}. In the red corner, ${challenger.name}. Versus, from the shadow cage, ${defender.name}. Let the code flow.`);
+    }, 1200);
+    return () => { clearTimeout(announceTimer); speechSynthesis?.cancel(); };
+  }, [challenger.name, defender.name, challengeTitle]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="pointer-events-none fixed inset-0 z-[100] flex items-center justify-center"
+    >
+      <div className="absolute inset-0 bg-black/92" />
+      {/* Grid overlay */}
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(0,229,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(0,229,255,0.03)_1px,transparent_1px)] bg-[length:40px_40px]" />
+      {/* Scan line */}
+      <motion.div animate={{ y: ['-100vh', '100vh'] }} transition={{ duration: 1.8, repeat: Infinity, ease: 'linear' }} className="absolute inset-x-0 h-px bg-gradient-to-r from-transparent via-red-500/40 to-transparent" />
+
+      <div className="relative flex flex-col items-center gap-6">
+        {/* Casper descends and announces */}
+        <motion.div
+          initial={{ y: -100, opacity: 0, scale: 0.4 }}
+          animate={{ y: 0, opacity: 1, scale: 1 }}
+          transition={{ delay: 0.3, type: 'spring', stiffness: 100, damping: 12 }}
+          className="flex flex-col items-center gap-2"
+        >
+          <motion.div animate={{ y: [0, -8, 0] }} transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }}>
+            <AnimatedCasperAvatar size="lg" isActive instability={60} />
+          </motion.div>
+          <motion.p
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.8 }}
+            className="text-[9px] font-black uppercase tracking-[0.5em] text-cyan-400"
+          >
+            Casper Presents
+          </motion.p>
+        </motion.div>
+
+        {/* Challenge title */}
+        <motion.h1
+          initial={{ y: 30, opacity: 0, scale: 0.8 }}
+          animate={{ y: 0, opacity: 1, scale: 1 }}
+          transition={{ delay: 1, type: 'spring', stiffness: 150, damping: 14 }}
+          className="max-w-lg text-center text-3xl font-black uppercase tracking-[0.15em] text-white sm:text-4xl"
+          style={{ textShadow: '0 0 40px rgba(255,23,68,0.5), 0 0 80px rgba(255,23,68,0.2)' }}
+        >
+          {challengeTitle}
+        </motion.h1>
+
+        {/* Combatants slide in from sides */}
+        <div className="mt-2 flex items-center gap-12">
+          <motion.div
+            initial={{ x: -200, opacity: 0, rotate: -10 }}
+            animate={{ x: 0, opacity: 1, rotate: 0 }}
+            transition={{ delay: 1.5, type: 'spring', stiffness: 120, damping: 14 }}
+            className="flex flex-col items-center gap-2"
+          >
+            <AnimatedGladiatorAvatar gladiator={challenger} size="lg" label={challenger.name} active />
+            <p className="text-[9px] font-black uppercase tracking-[0.3em] text-red-400">Challenger</p>
+          </motion.div>
+
+          <motion.div
+            initial={{ scale: 0, opacity: 0 }}
+            animate={{ scale: [0, 1.3, 1], opacity: 1 }}
+            transition={{ delay: 2, duration: 0.5 }}
+            className="text-center"
+          >
+            <Swords className="mx-auto h-8 w-8 text-yellow-400" />
+            <p className="mt-1 text-[10px] font-black uppercase tracking-[0.4em] text-yellow-400/80">vs</p>
+          </motion.div>
+
+          <motion.div
+            initial={{ x: 200, opacity: 0, rotate: 10 }}
+            animate={{ x: 0, opacity: 1, rotate: 0 }}
+            transition={{ delay: 1.5, type: 'spring', stiffness: 120, damping: 14 }}
+            className="flex flex-col items-center gap-2"
+          >
+            <AnimatedGladiatorAvatar gladiator={defender} size="lg" label={defender.name} active />
+            <p className="text-[9px] font-black uppercase tracking-[0.3em] text-blue-400">Defender</p>
+          </motion.div>
+        </div>
+
+        {/* "Commencing" text */}
+        <motion.p
+          initial={{ opacity: 0 }}
+          animate={{ opacity: [0, 1, 0.6] }}
+          transition={{ delay: 3, duration: 1.5 }}
+          className="mt-4 text-[10px] font-black uppercase tracking-[0.5em] text-zinc-500"
+        >
+          Battle Commencing...
+        </motion.p>
+
+        {/* Particle burst */}
+        {Array.from({ length: 16 }).map((_, i) => (
+          <motion.div
+            key={i}
+            initial={{ x: 0, y: 0, opacity: 0 }}
+            animate={{
+              x: (Math.random() - 0.5) * 350,
+              y: (Math.random() - 0.5) * 350,
+              opacity: [0, 0.8, 0],
+              scale: [0, Math.random() + 0.5, 0],
+            }}
+            transition={{ delay: 2 + Math.random() * 0.6, duration: 1.2 + Math.random() }}
+            className="absolute h-1.5 w-1.5 rounded-full"
+            style={{ backgroundColor: i % 3 === 0 ? '#ff1744' : i % 3 === 1 ? '#00e5ff' : '#facc15' }}
           />
         ))}
       </div>
@@ -4248,147 +4828,6 @@ function TournamentPanel({
   );
 }
 
-// ─── Sound Effects Engine (Web Audio API — no external deps) ─────────────────
-const audioCtxRef = { current: null as AudioContext | null };
-function getAudioCtx(): AudioContext {
-  if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
-  if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume();
-  return audioCtxRef.current;
-}
-
-function playDialUpSound() {
-  try {
-    const ctx = getAudioCtx();
-    const duration = 2.8;
-    const osc1 = ctx.createOscillator();
-    const osc2 = ctx.createOscillator();
-    const gain = ctx.createGain();
-    const filter = ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.value = 1800;
-    filter.Q.value = 2;
-    osc1.type = 'sawtooth';
-    osc2.type = 'square';
-    osc1.frequency.setValueAtTime(300, ctx.currentTime);
-    osc1.frequency.linearRampToValueAtTime(2600, ctx.currentTime + 0.6);
-    osc1.frequency.linearRampToValueAtTime(1200, ctx.currentTime + 1.2);
-    osc1.frequency.linearRampToValueAtTime(2400, ctx.currentTime + 1.8);
-    osc1.frequency.setValueAtTime(2400, ctx.currentTime + 1.8);
-    osc1.frequency.linearRampToValueAtTime(1800, ctx.currentTime + duration);
-    osc2.type = 'square';
-    osc2.frequency.setValueAtTime(1070, ctx.currentTime);
-    osc2.frequency.linearRampToValueAtTime(1270, ctx.currentTime + 0.4);
-    osc2.frequency.setValueAtTime(2100, ctx.currentTime + 1.0);
-    osc2.frequency.linearRampToValueAtTime(980, ctx.currentTime + duration);
-    gain.gain.setValueAtTime(0.08, ctx.currentTime);
-    gain.gain.linearRampToValueAtTime(0.12, ctx.currentTime + 0.3);
-    gain.gain.setValueAtTime(0.1, ctx.currentTime + 1.5);
-    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + duration);
-    osc1.connect(filter);
-    osc2.connect(filter);
-    filter.connect(gain);
-    gain.connect(ctx.destination);
-    osc1.start(ctx.currentTime);
-    osc2.start(ctx.currentTime);
-    osc1.stop(ctx.currentTime + duration);
-    osc2.stop(ctx.currentTime + duration);
-  } catch { /* audio not available */ }
-}
-
-function playRoundTransitionSound() {
-  try {
-    const ctx = getAudioCtx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(220, ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15);
-    osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.4);
-    gain.gain.setValueAtTime(0.2, ctx.currentTime);
-    gain.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.1);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(ctx.currentTime);
-    osc.stop(ctx.currentTime + 0.6);
-    // Impact thud
-    const thud = ctx.createOscillator();
-    const thudGain = ctx.createGain();
-    thud.type = 'sine';
-    thud.frequency.setValueAtTime(80, ctx.currentTime + 0.12);
-    thud.frequency.exponentialRampToValueAtTime(30, ctx.currentTime + 0.5);
-    thudGain.gain.setValueAtTime(0.35, ctx.currentTime + 0.12);
-    thudGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.55);
-    thud.connect(thudGain);
-    thudGain.connect(ctx.destination);
-    thud.start(ctx.currentTime + 0.12);
-    thud.stop(ctx.currentTime + 0.55);
-  } catch { /* audio not available */ }
-}
-
-function playVictoryFanfare() {
-  try {
-    const ctx = getAudioCtx();
-    const notes = [523.25, 659.25, 783.99, 1046.5]; // C5, E5, G5, C6
-    notes.forEach((freq, i) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'triangle';
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0, ctx.currentTime + i * 0.18);
-      gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + i * 0.18 + 0.05);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.18 + 0.7);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(ctx.currentTime + i * 0.18);
-      osc.stop(ctx.currentTime + i * 0.18 + 0.7);
-    });
-  } catch { /* audio not available */ }
-}
-
-function playCoachingBell() {
-  try {
-    const ctx = getAudioCtx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.value = 1200;
-    gain.gain.setValueAtTime(0.25, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.2);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(ctx.currentTime);
-    osc.stop(ctx.currentTime + 1.2);
-    // Second strike
-    const osc2 = ctx.createOscillator();
-    const gain2 = ctx.createGain();
-    osc2.type = 'sine';
-    osc2.frequency.value = 1200;
-    gain2.gain.setValueAtTime(0.2, ctx.currentTime + 0.35);
-    gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.4);
-    osc2.connect(gain2);
-    gain2.connect(ctx.destination);
-    osc2.start(ctx.currentTime + 0.35);
-    osc2.stop(ctx.currentTime + 1.4);
-  } catch { /* audio not available */ }
-}
-
-// Casper commentary via TTS
-function casperAnnounce(text: string) {
-  try {
-    if (!window.speechSynthesis) return;
-    speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    const voices = speechSynthesis.getVoices();
-    const voice = voices.find((v) => /male|david|james|daniel|google uk/i.test(v.name)) ?? voices[0];
-    if (voice) utterance.voice = voice;
-    utterance.rate = 0.92;
-    utterance.pitch = 0.85;
-    utterance.volume = 0.9;
-    speechSynthesis.speak(utterance);
-  } catch { /* TTS not available */ }
-}
-
 // ─── Battle Watch Panel (Split-Screen Docked View) ──────────────────────────
 function BattleWatchPanel({
   simulation,
@@ -4708,6 +5147,7 @@ export const Colosseum: React.FC = () => {
   const [inspectedMatch, setInspectedMatch] = useState<MatchRow | null>(null);
   const [roundTransition, setRoundTransition] = useState<{ round: number; totalRounds: number; label: string; phase: 'intro' | 'fight' } | null>(null);
   const [showWinnerReveal, setShowWinnerReveal] = useState<{ winner: Gladiator; loser: Gladiator; summary: string } | null>(null);
+  const [showBattleIntro, setShowBattleIntro] = useState<{ challenger: Gladiator; defender: Gladiator; title: string } | null>(null);
   const coachingIntervalRef = React.useRef<number | null>(null);
 
   const normalizeGladiator = (row: any, profileByGladiatorId?: Map<string, BotGladiatorProfileRow>): Gladiator => ({
@@ -4871,7 +5311,8 @@ export const Colosseum: React.FC = () => {
   }, [activeMatches, gladiators]);
   const selectedGladiator = selectedGladiatorId ? gladiatorById.get(selectedGladiatorId) : null;
   const selectedOpponent = selectedOpponentId ? gladiatorById.get(selectedOpponentId) : null;
-  const selectedCodingChallenge = useMemo(() => challengeFor(selectedOpponent?.botProfile, challengeType), [selectedOpponent?.botProfile, challengeType]);
+  const challengeSeed = useMemo(() => `${selectedOpponent?.id ?? 'none'}-${challengeType}-${Date.now()}`, [selectedOpponent?.id, challengeType]);
+  const selectedCodingChallenge = useMemo(() => challengeFor(selectedOpponent?.botProfile, challengeType, challengeSeed), [selectedOpponent?.botProfile, challengeType, challengeSeed]);
   const selectedChallengeMeta = challengeMeta(challengeType);
   const battleInProgress = simulation?.status === 'booting' || simulation?.status === 'running';
 
@@ -5097,7 +5538,7 @@ export const Colosseum: React.FC = () => {
     if (!challengeGate.allowed) { setUpgradeGate(challengeGate); return; }
     void recordUsage('colosseum_challenge');
     const activeChallengeType = challengeTypeOverride;
-    const codingChallenge = challengeFor(defender.botProfile, activeChallengeType);
+    const codingChallenge = challengeFor(defender.botProfile, activeChallengeType, challengeSeed);
     const submittedSolution = (solutionOverride ?? userSolution).trim();
     const challengerHasModel = Boolean(selectedGladiator?.model || selectedGladiator?.botProfile);
     if (defender.botProfile && !submittedSolution && !challengerHasModel) {
@@ -5175,6 +5616,9 @@ export const Colosseum: React.FC = () => {
       setMatches((prev) => [match, ...prev]);
       setChallengeModalOpen(false);
 
+      // Show cinematic Casper battle intro
+      setShowBattleIntro({ challenger, defender, title: codingChallenge.title });
+
       let launched = false;
       const launchSimulation = (
         openingLogs: string[],
@@ -5235,20 +5679,8 @@ export const Colosseum: React.FC = () => {
     }
   };
 
-  const speakGladiatorDebrief = (text: string) => {
-    try {
-      const voices = speechSynthesis.getVoices();
-      const voice = voices.find((v) => /male|david|james|daniel/i.test(v.name)) ?? voices[0];
-      if (!voice) return;
-      speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.voice = voice;
-      utterance.rate = 0.95;
-      utterance.pitch = 0.9;
-      speechSynthesis.speak(utterance);
-    } catch {
-      // TTS not available — silent fallback
-    }
+  const speakGladiatorDebrief = (gladiator: Gladiator, text: string) => {
+    speakAsGladiator(gladiator, text);
   };
 
   const handleCoachingMessage = (text: string) => {
@@ -5310,13 +5742,10 @@ export const Colosseum: React.FC = () => {
       finalLogs.push(`${winner.name} lands the final commit and claims the purse.`);
       finalLogs.push(userWon ? `${defender.name}: ${reaction}` : `${defender.name}: ${reaction}`);
 
-      setShowWinnerReveal({ winner, loser: winner.id === challenger.id ? defender : challenger, summary: judge.summary });
-      // Victory sound + Casper winner announcement
       playVictoryFanfare();
-      setTimeout(() => {
-        casperAnnounce(`${winner.name} takes the victory. ${judge.summary}`);
-      }, 800);
-      setTimeout(() => setShowWinnerReveal(null), 5000);
+      casperAnnounce(`The winner is ${winner.name}. ${judge.summary.slice(0, 120)}`);
+      setShowWinnerReveal({ winner, loser: winner.id === challenger.id ? defender : challenger, summary: judge.summary });
+      setTimeout(() => setShowWinnerReveal(null), 6500);
 
       setSimulation((prev) => prev ? {
         ...prev,
@@ -5484,7 +5913,7 @@ export const Colosseum: React.FC = () => {
                 allCoachingHistory.push(coachingMessages);
 
                 playCoachingBell();
-                speakGladiatorDebrief(debrief);
+                speakGladiatorDebrief(challenger, debrief);
 
                 let coachingTimer = SANDBOX_COACHING_SECONDS;
                 setSimulation((prev) => prev ? {
@@ -6798,6 +7227,9 @@ export const Colosseum: React.FC = () => {
       </AnimatePresence>
       <AnimatePresence>
         {showWinnerReveal && <CinematicWinnerReveal winner={showWinnerReveal.winner} loser={showWinnerReveal.loser} judgeSummary={showWinnerReveal.summary} />}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showBattleIntro && <CasperBattleIntro challenger={showBattleIntro.challenger} defender={showBattleIntro.defender} challengeTitle={showBattleIntro.title} onComplete={() => setShowBattleIntro(null)} />}
       </AnimatePresence>
     </div>
   );
