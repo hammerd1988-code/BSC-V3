@@ -2840,6 +2840,18 @@ function CornerCoachingPanel({ gladiator, round, coachingMessages, coachingTimer
   const glow = gladiator.glow_color ?? '#facc15';
 
   React.useEffect(() => {
+    return () => {
+      try {
+        recognitionRef.current?.abort?.();
+        recognitionRef.current?.stop?.();
+      } catch {
+        // ignore
+      }
+      recognitionRef.current = null;
+    };
+  }, []);
+
+  React.useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [coachingMessages.length]);
 
