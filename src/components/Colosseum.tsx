@@ -3041,6 +3041,7 @@ function CornerCoachingPanel({ gladiator, round, coachingMessages, coachingTimer
               : 'border-white/10 bg-white/5 text-zinc-400 hover:bg-white/10 hover:text-white'
           )}
           title={micActive ? 'Stop recording' : 'Speak to your gladiator'}
+          aria-label={micActive ? 'Stop recording' : 'Start voice coaching'}
         >
           {micActive ? (
             <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ duration: 0.6, repeat: Infinity }}>
