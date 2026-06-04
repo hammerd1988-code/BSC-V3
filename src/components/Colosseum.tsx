@@ -5400,7 +5400,10 @@ export const Colosseum: React.FC = () => {
       const showRoundIntro = (round: number) => {
         const directive = SANDBOX_ROUND_DIRECTIVES[round] ?? SANDBOX_ROUND_DIRECTIVES[0];
         playRoundTransitionSound();
-        casperAnnounce(`Round ${round + 1}. ${directive.label}. Fight!`);
+        // Skip TTS for round 0 — the battle intro announcement (fired at 1200ms delay) covers it
+        if (round > 0) {
+          casperAnnounce(`Round ${round + 1}. ${directive.label}. Fight!`);
+        }
         setRoundTransition({ round, totalRounds: SANDBOX_ROUND_COUNT, label: directive.label, phase: 'intro' });
         setTimeout(() => {
           setRoundTransition((prev) => prev ? { ...prev, phase: 'fight' } : null);
