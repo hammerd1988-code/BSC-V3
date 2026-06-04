@@ -1128,7 +1128,7 @@ function gladiatorDebriefForRound(gladiatorName: string, round: number, score: n
 const audioCtxRef = { current: null as AudioContext | null };
 function getAudioCtx(): AudioContext {
   if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
-  if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume();
+  if (audioCtxRef.current.state === 'suspended') void audioCtxRef.current.resume().catch(() => {});
   return audioCtxRef.current;
 }
 
