@@ -1264,12 +1264,11 @@ function speakAsGladiator(gladiator: Gladiator, text: string) {
   try {
     if (!window.speechSynthesis) return;
     const voices = speechSynthesis.getVoices();
-    if (!voices.length) return;
     const params = gladiatorVoiceParams(gladiator);
-    const voice = voices[params.voiceIndex % voices.length] ?? voices[0];
+    const voice = voices.length ? (voices[params.voiceIndex % voices.length] ?? voices[0]) : null;
     speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.voice = voice;
+    if (voice) utterance.voice = voice;
     utterance.rate = params.rate;
     utterance.pitch = params.pitch;
     utterance.volume = 0.9;
