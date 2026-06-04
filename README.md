@@ -37,6 +37,24 @@ View the original AI Studio app: https://ai.studio/apps/8b4535cd-ac06-4134-b563-
    - `npm run dev` for frontend-only development
 7. Optional auth safety smoke-test: `npm run verify:auth`
 
+## Testing
+
+This repo uses **Vitest** + **React Testing Library** for fast unit/UI tests.
+
+- Run in watch mode: `npm test`
+- Run once (CI-style): `npm run test:run`
+- Run with coverage: `npm run test:coverage` (also writes `coverage/` HTML report)
+
+Current coverage starts with high-risk primitives:
+- `src/supabase.ts` — `toDb()` / `fromDb()` mapping and timestamp formatting helpers
+- `src/lib/authSession.ts` — session refresh + 401 retry behavior (`getValidSession()`, `authedFetch()`)
+
+Testing plan (incremental):
+- Unit tests for pure helpers in `src/lib/` (crypto, formatting, notifications, mappings)
+- Component tests for critical UX flows (feed interactions, create post, profile edit, transmissions)
+- Integration tests around Supabase query wrappers using mocked `supabase-js` clients
+- End-to-end tests (Playwright) for auth/login + posting + basic navigation flows
+
 ## Frontend-Backend Connection Setup
 
 For reliable landing page, login, and account creation workflows, keep origins aligned:
