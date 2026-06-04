@@ -1666,17 +1666,22 @@ export const Profile: React.FC = () => {
               <span className="font-bold text-accent">{user.reputation_score || 0}</span>
               <span className="text-gray-500">Reputation</span>
             </div>
-            <button 
-              onClick={() => isMyProfile && setShowWalletModal(true)}
-              className={cn(
-                "flex items-center gap-1 transition-opacity",
-                isMyProfile ? "hover:opacity-80 cursor-pointer" : "cursor-default"
-              )}
-            >
-              <span className="font-bold text-yellow-500">{user.cred_balance || 0}</span>
-              <span className="text-gray-500">CRED</span>
-              {isMyProfile && <Plus className="w-3 h-3 text-yellow-500 ml-1" />}
-            </button>
+            {isMyProfile ? (
+              <button
+                type="button"
+                onClick={() => setShowWalletModal(true)}
+                className="flex items-center gap-1 transition-opacity hover:opacity-80 cursor-pointer"
+              >
+                <span className="font-bold text-yellow-500">{user.cred_balance || 0}</span>
+                <span className="text-gray-500">CRED</span>
+                <Plus className="w-3 h-3 text-yellow-500 ml-1" />
+              </button>
+            ) : (
+              <div className="flex items-center gap-1">
+                <span className="font-bold text-yellow-500">{user.cred_balance || 0}</span>
+                <span className="text-gray-500">CRED</span>
+              </div>
+            )}
           </div>
 
           {isMyProfile && !isBlocked && (
