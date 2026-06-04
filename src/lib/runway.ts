@@ -37,7 +37,7 @@ export interface RunwayTaskResponse {
   status: RunwayStatus;
   output?: string[];
   assetUrl?: string | null;
-  provider?: 'runway' | 'zimage';
+  provider?: 'runway' | 'zimage' | 'comfyui';
   type?: RunwayAssetType;
   ratio?: RunwayAspectRatio;
   duration?: number;
@@ -98,4 +98,48 @@ export async function uploadStudioAsset(input: StudioAssetUploadRequest): Promis
   });
 
   return parseResponse(response) as unknown as Promise<StudioAssetUploadResponse>;
+}
+
+// ---------------------------------------------------------------------------
+// ComfyUI avatar generation
+// ---------------------------------------------------------------------------
+
+export interface ComfyUIAvatarRequest {
+  gladiatorName: string;
+  personality?: string;
+  avatarPrompt?: string;
+  seed?: number;
+}
+
+export interface ComfyUIAvatarResponse {
+  avatarUrl: string;
+  storagePath?: string;
+  promptId?: string;
+  provider: 'comfyui';
+}
+
+export async function generateComfyUIAvatar(input: ComfyUIAvatarRequest): Promise<ComfyUIAvatarResponse> {
+  const response = await authedFetch(`${apiBaseUrl()}/api/comfyui/generate-avatar`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new RunwayRequestError(
+      payload?.error || 'ComfyUI avatar generation failed.',
+      response.status,
+      payload,
+    );
+  }
+  return payload as ComfyUIAvatarResponse;
+}
+
+export async function checkComfyUIHealth(): Promise<{ configured: boolean; healthy: boolean }> {
+  try {
+    const response = await fetch(`${apiBaseUrl()}/api/comfyui/health`);
+    return await response.json();
+  } catch {
+    return { configured: false, healthy: false };
+  }
 }
