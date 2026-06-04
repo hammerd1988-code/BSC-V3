@@ -896,9 +896,13 @@ function containsProviderErrorPayload(solution?: string) {
   return /provider unavailable|ai provider returned|sapphire api returned|cloudflare|<!doctype html|<html\b|tunnel error|model not found|inaccessible|not deployed/i.test(solution);
 }
 
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function localArenaFallbackSolution(input: { challengeType: ChallengeType; gladiator?: Gladiator; opponent?: Gladiator; prompt?: string }) {
-  const name = input.gladiator?.name ?? 'Local Fallback';
-  const opponent = input.opponent?.name ?? 'the opponent';
+  const name = escapeHtml(input.gladiator?.name ?? 'Local Fallback');
+  const opponent = escapeHtml(input.opponent?.name ?? 'the opponent');
   const directive = input.prompt?.trim() || `${formatChallenge(input.challengeType)} arena objective`;
   const personaLine = input.gladiator?.personality
     ? `// ${name} persona signal: ${input.gladiator.personality.slice(0, 140)}`
@@ -3235,9 +3239,10 @@ function CasperBattleIntro({ challenger, defender, challengeTitle, onComplete }:
 
   React.useEffect(() => {
     playDialUpSound();
-    setTimeout(() => {
+    const announceTimer = setTimeout(() => {
       casperAnnounce(`Initializing ${challengeTitle}. In the red corner, ${challenger.name}. Versus, from the shadow cage, ${defender.name}. Let the code flow.`);
     }, 1200);
+    return () => { clearTimeout(announceTimer); speechSynthesis?.cancel(); };
   }, [challenger.name, defender.name, challengeTitle]);
 
   return (
