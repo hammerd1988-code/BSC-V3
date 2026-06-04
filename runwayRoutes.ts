@@ -653,7 +653,7 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
         });
       }
 
-      const provider: ImageGenerationProvider = type === 'image' ? normalizeImageProvider() : 'runway';
+      let provider: ImageGenerationProvider = type === 'image' ? normalizeImageProvider() : 'runway';
       const runwayPath = type === 'video'
         ? '/image_to_video'
         : '/text_to_image';
@@ -682,6 +682,7 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
         // Fall back to Z-Image if ComfyUI is unreachable
         if (!runway.ok && (runway.status === 504 || runway.status === 500) && /not configured|unreachable|COMFYUI_API_URL/i.test(String(runway.payload?.error ?? ''))) {
           console.warn('[Runway] ComfyUI unavailable, falling back to Z-Image.');
+          provider = 'zimage';
           runway = await callZImage(promptText, ratio);
         }
       } else if (provider === 'zimage') {
@@ -720,7 +721,7 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
         feature,
         usage: { used, limit: access.limit, tier: access.tier, adminBypass: access.adminBypass },
         duration: type === 'video' ? duration : undefined,
-        model: provider === 'zimage' ? 'z-image-turbo' : payload.model,
+        model: provider === 'comfyui' ? 'comfyui-local' : provider === 'zimage' ? 'z-image-turbo' : payload.model,
         userId: access.userId,
         raw: runway.payload,
       });
@@ -828,13 +829,15 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
     }
   });
 
-  // ComfyUI health check endpoint
-  app.get('/api/comfyui/health', async (_req: Request, res: Response) => {
+  // ComfyUI health check endpoint (authenticated, no URL leak)
+  app.get('/api/comfyui/health', async (req: Request, res: Response) => {
+    const authUser = await requireSupabaseUser(req, res, supabase);
+    if (!authUser) return;
     const configured = isComfyUIConfigured();
     if (!configured) {
       return res.json({ configured: false, healthy: false, message: 'COMFYUI_API_URL not set.' });
     }
     const healthy = await comfyuiHealthCheck();
-    return res.json({ configured: true, healthy, url: process.env.COMFYUI_API_URL });
+    return res.json({ configured: true, healthy });
   });
 }
