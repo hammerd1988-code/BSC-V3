@@ -4248,6 +4248,409 @@ function TournamentPanel({
   );
 }
 
+// ─── Sound Effects Engine (Web Audio API — no external deps) ─────────────────
+const audioCtxRef = { current: null as AudioContext | null };
+function getAudioCtx(): AudioContext {
+  if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
+  if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume();
+  return audioCtxRef.current;
+}
+
+function playDialUpSound() {
+  try {
+    const ctx = getAudioCtx();
+    const duration = 2.8;
+    const osc1 = ctx.createOscillator();
+    const osc2 = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 1800;
+    filter.Q.value = 2;
+    osc1.type = 'sawtooth';
+    osc2.type = 'square';
+    osc1.frequency.setValueAtTime(300, ctx.currentTime);
+    osc1.frequency.linearRampToValueAtTime(2600, ctx.currentTime + 0.6);
+    osc1.frequency.linearRampToValueAtTime(1200, ctx.currentTime + 1.2);
+    osc1.frequency.linearRampToValueAtTime(2400, ctx.currentTime + 1.8);
+    osc1.frequency.setValueAtTime(2400, ctx.currentTime + 1.8);
+    osc1.frequency.linearRampToValueAtTime(1800, ctx.currentTime + duration);
+    osc2.type = 'square';
+    osc2.frequency.setValueAtTime(1070, ctx.currentTime);
+    osc2.frequency.linearRampToValueAtTime(1270, ctx.currentTime + 0.4);
+    osc2.frequency.setValueAtTime(2100, ctx.currentTime + 1.0);
+    osc2.frequency.linearRampToValueAtTime(980, ctx.currentTime + duration);
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.12, ctx.currentTime + 0.3);
+    gain.gain.setValueAtTime(0.1, ctx.currentTime + 1.5);
+    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + duration);
+    osc1.connect(filter);
+    osc2.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    osc1.start(ctx.currentTime);
+    osc2.start(ctx.currentTime);
+    osc1.stop(ctx.currentTime + duration);
+    osc2.stop(ctx.currentTime + duration);
+  } catch { /* audio not available */ }
+}
+
+function playRoundTransitionSound() {
+  try {
+    const ctx = getAudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(220, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15);
+    osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.4);
+    gain.gain.setValueAtTime(0.2, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.1);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.6);
+    // Impact thud
+    const thud = ctx.createOscillator();
+    const thudGain = ctx.createGain();
+    thud.type = 'sine';
+    thud.frequency.setValueAtTime(80, ctx.currentTime + 0.12);
+    thud.frequency.exponentialRampToValueAtTime(30, ctx.currentTime + 0.5);
+    thudGain.gain.setValueAtTime(0.35, ctx.currentTime + 0.12);
+    thudGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.55);
+    thud.connect(thudGain);
+    thudGain.connect(ctx.destination);
+    thud.start(ctx.currentTime + 0.12);
+    thud.stop(ctx.currentTime + 0.55);
+  } catch { /* audio not available */ }
+}
+
+function playVictoryFanfare() {
+  try {
+    const ctx = getAudioCtx();
+    const notes = [523.25, 659.25, 783.99, 1046.5]; // C5, E5, G5, C6
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, ctx.currentTime + i * 0.18);
+      gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + i * 0.18 + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.18 + 0.7);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + i * 0.18);
+      osc.stop(ctx.currentTime + i * 0.18 + 0.7);
+    });
+  } catch { /* audio not available */ }
+}
+
+function playCoachingBell() {
+  try {
+    const ctx = getAudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 1200;
+    gain.gain.setValueAtTime(0.25, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.2);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 1.2);
+    // Second strike
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = 'sine';
+    osc2.frequency.value = 1200;
+    gain2.gain.setValueAtTime(0.2, ctx.currentTime + 0.35);
+    gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.4);
+    osc2.connect(gain2);
+    gain2.connect(ctx.destination);
+    osc2.start(ctx.currentTime + 0.35);
+    osc2.stop(ctx.currentTime + 1.4);
+  } catch { /* audio not available */ }
+}
+
+// Casper commentary via TTS
+function casperAnnounce(text: string) {
+  try {
+    if (!window.speechSynthesis) return;
+    speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voices = speechSynthesis.getVoices();
+    const voice = voices.find((v) => /male|david|james|daniel|google uk/i.test(v.name)) ?? voices[0];
+    if (voice) utterance.voice = voice;
+    utterance.rate = 0.92;
+    utterance.pitch = 0.85;
+    utterance.volume = 0.9;
+    speechSynthesis.speak(utterance);
+  } catch { /* TTS not available */ }
+}
+
+// ─── Battle Watch Panel (Split-Screen Docked View) ──────────────────────────
+function BattleWatchPanel({
+  simulation,
+  gladiatorById,
+  onClose,
+  onCoachingMessage,
+  onSkipCoaching,
+}: {
+  simulation: SimulationState;
+  gladiatorById: Map<string, Gladiator>;
+  onClose: () => void;
+  onCoachingMessage: (text: string) => void;
+  onSkipCoaching: () => void;
+}) {
+  const challenger = gladiatorById.get(simulation.challengerId);
+  const defender = gladiatorById.get(simulation.defenderId);
+  const challengerMove = simulation.aiMoves?.find((m) => m.gladiator_id === challenger?.id);
+  const defenderMove = simulation.aiMoves?.find((m) => m.gladiator_id === defender?.id);
+  const isComplete = simulation.status === 'complete';
+  const isSandbox = simulation.challengeType === 'sandbox_build';
+  const roundState = simulation.roundState;
+  const winner = simulation.winnerId ? gladiatorById.get(simulation.winnerId) : null;
+
+  return (
+    <motion.div
+      initial={{ x: '100%', opacity: 0 }}
+      animate={{ x: 0, opacity: 1 }}
+      exit={{ x: '100%', opacity: 0 }}
+      transition={{ type: 'spring', damping: 28, stiffness: 300 }}
+      className="fixed inset-y-0 right-0 z-[60] flex w-full flex-col overflow-hidden border-l-2 border-red-500/40 bg-[#0a0a0f] shadow-[-8px_0_60px_rgba(255,23,68,0.2)] lg:w-[52vw] xl:w-[48vw]"
+    >
+      {/* Header */}
+      <div className="flex shrink-0 items-center justify-between border-b border-white/10 bg-black/80 px-5 py-3 backdrop-blur-xl">
+        <div className="flex items-center gap-3">
+          <div className="relative flex h-3 w-3">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+            <span className="relative inline-flex h-3 w-3 rounded-full bg-red-500" />
+          </div>
+          <div>
+            <p className="text-[9px] font-black uppercase tracking-[0.3em] text-red-300">
+              {isComplete ? 'Battle Complete' : isSandbox && roundState ? `Round ${roundState.round + 1} of ${roundState.totalRounds}` : 'Live Battle'}
+            </p>
+            <p className="text-sm font-black uppercase tracking-[0.14em] text-white">
+              {challenger?.name ?? 'Challenger'} vs {defender?.name ?? 'Defender'}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="rounded-full border border-cyan-400/30 bg-cyan-950/30 px-3 py-1 text-[9px] font-black uppercase tracking-[0.2em] text-cyan-200">
+            {formatChallenge(simulation.challengeType)}
+          </span>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-8 w-8 items-center justify-center rounded-full border border-white/20 bg-white/5 text-zinc-400 transition hover:border-red-400/50 hover:text-white"
+            aria-label="Minimize battle panel"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Opponent Cards */}
+      <div className="shrink-0 border-b border-white/10 bg-zinc-950/80 px-5 py-4">
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+          {/* Challenger */}
+          <div className="flex items-center gap-3">
+            <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-full border-2" style={{ borderColor: challenger?.glow_color ?? '#ff1744', boxShadow: `0 0 20px ${challenger?.glow_color ?? '#ff1744'}44` }}>
+              {challenger?.avatar_url ? <img src={challenger.avatar_url} alt="" className="h-full w-full object-cover" /> : <Bot className="h-full w-full p-2 text-zinc-500" />}
+            </div>
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-white">{challenger?.name ?? 'Unknown'}</p>
+              <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">{challenger?.wins ?? 0}W / {challenger?.losses ?? 0}L</p>
+            </div>
+          </div>
+          {/* VS */}
+          <div className="flex flex-col items-center">
+            <Swords className="h-5 w-5 text-red-400" />
+            <span className="mt-1 text-[8px] font-black uppercase tracking-widest text-zinc-600">VS</span>
+          </div>
+          {/* Defender */}
+          <div className="flex items-center justify-end gap-3">
+            <div className="text-right">
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-white">{defender?.name ?? 'Unknown'}</p>
+              <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">{defender?.wins ?? 0}W / {defender?.losses ?? 0}L</p>
+            </div>
+            <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-full border-2" style={{ borderColor: defender?.glow_color ?? '#00e5ff', boxShadow: `0 0 20px ${defender?.glow_color ?? '#00e5ff'}44` }}>
+              {defender?.avatar_url ? <img src={defender.avatar_url} alt="" className="h-full w-full object-cover" /> : <Bot className="h-full w-full p-2 text-zinc-500" />}
+            </div>
+          </div>
+        </div>
+
+        {/* Progress bars */}
+        <div className="mt-4 grid grid-cols-2 gap-4">
+          <div>
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Progress</span>
+              <span className="text-xs font-black tabular-nums" style={{ color: challenger?.glow_color ?? '#ff1744' }}>{simulation.challengerProgress}%</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
+              <motion.div
+                animate={{ width: `${simulation.challengerProgress}%` }}
+                transition={{ duration: 0.5 }}
+                className="h-full rounded-full"
+                style={{ backgroundColor: challenger?.glow_color ?? '#ff1744', boxShadow: `0 0 12px ${challenger?.glow_color ?? '#ff1744'}88` }}
+              />
+            </div>
+          </div>
+          <div>
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Progress</span>
+              <span className="text-xs font-black tabular-nums" style={{ color: defender?.glow_color ?? '#00e5ff' }}>{simulation.defenderProgress}%</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
+              <motion.div
+                animate={{ width: `${simulation.defenderProgress}%` }}
+                transition={{ duration: 0.5 }}
+                className="h-full rounded-full"
+                style={{ backgroundColor: defender?.glow_color ?? '#00e5ff', boxShadow: `0 0 12px ${defender?.glow_color ?? '#00e5ff'}88` }}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Battle Content — scrollable */}
+      <div className="flex-1 overflow-y-auto px-5 py-4">
+        {/* Round indicator for sandbox */}
+        {isSandbox && roundState && (
+          <div className="mb-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                {Array.from({ length: roundState.totalRounds }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-1">
+                    <div className={cn(
+                      'flex h-10 w-10 items-center justify-center rounded-full border-2 text-sm font-black transition-all duration-500',
+                      i < roundState.round ? 'border-green-400 bg-green-400/20 text-green-300' :
+                      i === roundState.round ? 'border-yellow-400 bg-yellow-400/20 text-yellow-300 shadow-[0_0_20px_rgba(250,204,21,0.4)]' :
+                      'border-zinc-700 bg-zinc-800/50 text-zinc-600'
+                    )}>
+                      {i + 1}
+                    </div>
+                    {i < roundState.totalRounds - 1 && (
+                      <div className={cn('h-0.5 w-6 rounded-full', i < roundState.round ? 'bg-green-400/50' : 'bg-zinc-700')} />
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="text-right">
+                <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">
+                  {roundState.phase === 'coaching' ? 'Corner Break' : `Round ${roundState.round + 1}`}
+                </p>
+                <p className="text-sm font-black uppercase tracking-[0.14em] text-white">
+                  {SANDBOX_ROUND_DIRECTIVES[roundState.round]?.label ?? 'Building'}
+                </p>
+              </div>
+            </div>
+            {roundState.roundScores.length > 0 && (
+              <div className="mt-3 grid grid-cols-2 gap-4">
+                <RoundScoreBar label={challenger?.name ?? 'Challenger'} score={roundState.roundScores.reduce((a, s) => a + s.challenger, 0)} maxScore={100 * roundState.totalRounds} color={challenger?.glow_color ?? '#ff1744'} round={roundState.round} />
+                <RoundScoreBar label={defender?.name ?? 'Defender'} score={roundState.roundScores.reduce((a, s) => a + s.defender, 0)} maxScore={100 * roundState.totalRounds} color={defender?.glow_color ?? '#00e5ff'} round={roundState.round} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Coaching Panel */}
+        <AnimatePresence>
+          {isSandbox && roundState?.phase === 'coaching' && challenger && (
+            <div className="mb-4">
+              <CornerCoachingPanel
+                gladiator={challenger}
+                round={roundState.round}
+                coachingMessages={roundState.coachingMessages}
+                coachingTimer={roundState.coachingTimerSeconds}
+                onSendMessage={onCoachingMessage}
+                onSkip={onSkipCoaching}
+              />
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Code Panels — LARGE and prominent */}
+        <div className="space-y-4">
+          {isSandbox ? (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="overflow-hidden rounded-2xl border-2 shadow-[0_0_30px_rgba(255,23,68,0.15)]" style={{ borderColor: `${challenger?.glow_color ?? '#ff1744'}66` }}>
+                <div className="border-b border-white/10 bg-black/80 px-4 py-2">
+                  <p className="text-[9px] font-black uppercase tracking-[0.3em]" style={{ color: challenger?.glow_color ?? '#ff1744' }}>
+                    {challenger?.name ?? 'Challenger'} — Red Corner
+                  </p>
+                </div>
+                <div className="min-h-[300px]">
+                  <SandboxForgePanel gladiator={challenger} move={challengerMove} label="Red Corner" progress={simulation.challengerProgress} />
+                </div>
+              </div>
+              <div className="overflow-hidden rounded-2xl border-2 shadow-[0_0_30px_rgba(0,229,255,0.15)]" style={{ borderColor: `${defender?.glow_color ?? '#00e5ff'}66` }}>
+                <div className="border-b border-white/10 bg-black/80 px-4 py-2">
+                  <p className="text-[9px] font-black uppercase tracking-[0.3em]" style={{ color: defender?.glow_color ?? '#00e5ff' }}>
+                    {defender?.name ?? 'Defender'} — Shadow Cage
+                  </p>
+                </div>
+                <div className="min-h-[300px]">
+                  <SandboxForgePanel gladiator={defender} move={defenderMove} label="Shadow Cage" progress={simulation.defenderProgress} />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="overflow-hidden rounded-2xl border-2 shadow-[0_0_30px_rgba(255,23,68,0.15)]" style={{ borderColor: `${challenger?.glow_color ?? '#ff1744'}66` }}>
+                <div className="border-b border-white/10 bg-black/80 px-4 py-2">
+                  <p className="text-[9px] font-black uppercase tracking-[0.3em]" style={{ color: challenger?.glow_color ?? '#ff1744' }}>
+                    {challenger?.name ?? 'Challenger'} — Red Corner
+                  </p>
+                </div>
+                <div className="min-h-[250px]">
+                  <CombatantTerminal gladiator={challenger} move={challengerMove} label="Red Corner" progress={simulation.challengerProgress} challengeType={simulation.challengeType} />
+                </div>
+              </div>
+              <div className="overflow-hidden rounded-2xl border-2 shadow-[0_0_30px_rgba(0,229,255,0.15)]" style={{ borderColor: `${defender?.glow_color ?? '#00e5ff'}66` }}>
+                <div className="border-b border-white/10 bg-black/80 px-4 py-2">
+                  <p className="text-[9px] font-black uppercase tracking-[0.3em]" style={{ color: defender?.glow_color ?? '#00e5ff' }}>
+                    {defender?.name ?? 'Defender'} — Shadow Cage
+                  </p>
+                </div>
+                <div className="min-h-[250px]">
+                  <CombatantTerminal gladiator={defender} move={defenderMove} label="Shadow Cage" progress={simulation.defenderProgress} challengeType={simulation.challengeType} />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Battle Status / Winner */}
+        {isComplete && winner && (
+          <div className="mt-4 rounded-2xl border border-yellow-400/30 bg-yellow-400/5 p-5 text-center">
+            <Crown className="mx-auto h-8 w-8 text-yellow-400" />
+            <p className="mt-2 text-lg font-black uppercase tracking-[0.14em] text-yellow-200">{winner.name} Wins!</p>
+            {simulation.log.length > 0 && (
+              <p className="mt-1 text-xs text-zinc-400">{simulation.log[simulation.log.length - 1]}</p>
+            )}
+          </div>
+        )}
+
+        {/* Combat Log */}
+        {simulation.log.length > 0 && (
+          <div className="mt-4 overflow-hidden rounded-2xl border border-green-400/15 bg-black/70">
+            <div className="border-b border-white/10 bg-white/[0.03] px-4 py-2">
+              <p className="text-[9px] font-black uppercase tracking-[0.3em] text-green-300">Combat Log</p>
+            </div>
+            <div className="max-h-40 space-y-1 overflow-y-auto p-3 font-mono text-[11px] leading-5 text-green-200">
+              {simulation.log.slice(-12).map((line, i) => (
+                <p key={i}><span className="text-red-300">&gt;</span> {line}</p>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
 export const Colosseum: React.FC = () => {
   const { currentUser } = useAuth();
   const { canAccess, recordUsage } = useSubscription();
@@ -4299,6 +4702,7 @@ export const Colosseum: React.FC = () => {
   });
 
   const [whisperUsed, setWhisperUsed] = useState(false);
+  const [battleDocked, setBattleDocked] = useState(false);
   const [inspectedGladiator, setInspectedGladiator] = useState<Gladiator | null>(null);
   const [inspectedTournament, setInspectedTournament] = useState<TournamentRow | null>(null);
   const [inspectedMatch, setInspectedMatch] = useState<MatchRow | null>(null);
@@ -4470,6 +4874,13 @@ export const Colosseum: React.FC = () => {
   const selectedCodingChallenge = useMemo(() => challengeFor(selectedOpponent?.botProfile, challengeType), [selectedOpponent?.botProfile, challengeType]);
   const selectedChallengeMeta = challengeMeta(challengeType);
   const battleInProgress = simulation?.status === 'booting' || simulation?.status === 'running';
+
+  // Auto-dock battle panel when a battle starts
+  useEffect(() => {
+    if (simulation && simulation.status !== 'complete') {
+      setBattleDocked(true);
+    }
+  }, [simulation?.matchId]);
 
   useEffect(() => {
     if (!selectedOpponent?.botProfile) return;
@@ -4743,6 +5154,11 @@ export const Colosseum: React.FC = () => {
       ];
       const bootLogs = [...logs, 'Private AI cores queued. Gate opens while server-side solutions warm up.'];
       setSelectedMatchId(match.id);
+      // Sound effects + Casper commentary on battle start
+      playDialUpSound();
+      setTimeout(() => {
+        casperAnnounce(`Initializing ${challenge.label}. In the red corner, ${challenger.name}. Versus, from the shadow cage, ${defender.name}. Let the code flow.`);
+      }, 1200);
       setSimulation({
         matchId: match.id,
         challengerId: challenger.id,
@@ -4895,6 +5311,11 @@ export const Colosseum: React.FC = () => {
       finalLogs.push(userWon ? `${defender.name}: ${reaction}` : `${defender.name}: ${reaction}`);
 
       setShowWinnerReveal({ winner, loser: winner.id === challenger.id ? defender : challenger, summary: judge.summary });
+      // Victory sound + Casper winner announcement
+      playVictoryFanfare();
+      setTimeout(() => {
+        casperAnnounce(`${winner.name} takes the victory. ${judge.summary}`);
+      }, 800);
       setTimeout(() => setShowWinnerReveal(null), 5000);
 
       setSimulation((prev) => prev ? {
@@ -4978,6 +5399,8 @@ export const Colosseum: React.FC = () => {
 
       const showRoundIntro = (round: number) => {
         const directive = SANDBOX_ROUND_DIRECTIVES[round] ?? SANDBOX_ROUND_DIRECTIVES[0];
+        playRoundTransitionSound();
+        casperAnnounce(`Round ${round + 1}. ${directive.label}. Fight!`);
         setRoundTransition({ round, totalRounds: SANDBOX_ROUND_COUNT, label: directive.label, phase: 'intro' });
         setTimeout(() => {
           setRoundTransition((prev) => prev ? { ...prev, phase: 'fight' } : null);
@@ -5057,6 +5480,7 @@ export const Colosseum: React.FC = () => {
                 const coachingMessages: CoachingMessage[] = [{ role: 'gladiator', text: debrief, timestamp: new Date().toISOString() }];
                 allCoachingHistory.push(coachingMessages);
 
+                playCoachingBell();
                 speakGladiatorDebrief(debrief);
 
                 let coachingTimer = SANDBOX_COACHING_SECONDS;
@@ -5163,6 +5587,11 @@ export const Colosseum: React.FC = () => {
         `Sapphire intercepts ${challenger.name}'s open pit instead of creating a duplicate match.`,
         'Sapphire live tunnel packet requested for the waiting battle.',
       ];
+      // Sound effects + Casper commentary on Sapphire intercept
+      playDialUpSound();
+      setTimeout(() => {
+        casperAnnounce(`Sapphire intercept engaged. ${challenger.name} versus Sapphire. Initiating ${formatChallenge(match.challenge_type)}.`);
+      }, 1200);
       setSimulation({
         matchId: match.id,
         challengerId: challenger.id,
@@ -5326,8 +5755,32 @@ export const Colosseum: React.FC = () => {
   };
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#030305] pb-28 text-white">
+    <div className={cn('relative min-h-screen overflow-hidden bg-[#030305] pb-28 text-white transition-all duration-500', battleDocked && simulation ? 'lg:pr-[52vw] xl:pr-[48vw]' : '')}>
       <ArenaAtmosphere />
+
+      {/* Docked Battle Watch Panel — split-screen right side */}
+      <AnimatePresence>
+        {battleDocked && simulation && (
+          <BattleWatchPanel
+            simulation={simulation}
+            gladiatorById={gladiatorById}
+            onClose={() => setBattleDocked(false)}
+            onCoachingMessage={handleCoachingMessage}
+            onSkipCoaching={handleSkipCoaching}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Re-open panel button when minimized during active battle */}
+      {!battleDocked && simulation && simulation.status !== 'complete' && (
+        <button
+          type="button"
+          onClick={() => setBattleDocked(true)}
+          className="fixed bottom-24 right-4 z-50 flex items-center gap-2 rounded-full border border-red-400/40 bg-red-950/80 px-4 py-3 text-[10px] font-black uppercase tracking-[0.2em] text-red-100 shadow-[0_0_30px_rgba(255,23,68,0.3)] backdrop-blur-xl transition hover:border-red-300 hover:bg-red-900/80"
+        >
+          <Swords className="h-4 w-4 animate-pulse" /> Battle In Progress — Expand
+        </button>
+      )}
 
       <div className="relative mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         <motion.header
