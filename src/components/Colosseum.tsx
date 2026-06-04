@@ -4136,14 +4136,21 @@ function LiveBattleCard({ match, challenger, defender, now, onSelect }: { match:
         </div>
 
         <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-          <div className="min-w-0">
-            <motion.div
-              animate={{ boxShadow: [`0 0 18px ${challengerGlow}`, `0 0 28px ${challengerGlow}`, `0 0 18px ${challengerGlow}`] }}
-              transition={{ duration: 2, repeat: Infinity }}
-              className="mb-2 h-1.5 rounded-full"
-              style={{ backgroundColor: challengerGlow }}
-            />
-            <p className="truncate text-sm font-black uppercase tracking-[0.18em] text-white">{challenger?.name ?? 'Unknown'}</p>
+          <div className="flex items-center gap-2 min-w-0">
+            {challenger && (
+              <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full border border-white/20" style={{ boxShadow: `0 0 14px ${challengerGlow}55` }}>
+                <img src={avatarUrlForGladiator(challenger)} alt="" className="h-full w-full object-cover" />
+              </div>
+            )}
+            <div className="min-w-0">
+              <motion.div
+                animate={{ boxShadow: [`0 0 18px ${challengerGlow}`, `0 0 28px ${challengerGlow}`, `0 0 18px ${challengerGlow}`] }}
+                transition={{ duration: 2, repeat: Infinity }}
+                className="mb-1 h-1 rounded-full"
+                style={{ backgroundColor: challengerGlow }}
+              />
+              <p className="truncate text-xs font-black uppercase tracking-[0.18em] text-white">{challenger?.name ?? 'Unknown'}</p>
+            </div>
           </div>
           <motion.div
             animate={{ rotate: [0, 10, -10, 0], scale: [1, 1.1, 1] }}
@@ -4151,14 +4158,21 @@ function LiveBattleCard({ match, challenger, defender, now, onSelect }: { match:
           >
             <Swords className="h-7 w-7 text-red-200 drop-shadow-[0_0_14px_rgba(255,23,68,0.85)]" />
           </motion.div>
-          <div className="min-w-0 text-right">
-            <motion.div
-              animate={{ boxShadow: [`0 0 18px ${defenderGlow}`, `0 0 28px ${defenderGlow}`, `0 0 18px ${defenderGlow}`] }}
-              transition={{ duration: 2, repeat: Infinity, delay: 0.5 }}
-              className="mb-2 h-1.5 rounded-full"
-              style={{ backgroundColor: defenderGlow }}
-            />
-            <p className="truncate text-sm font-black uppercase tracking-[0.18em] text-white">{defender?.name ?? 'Unknown'}</p>
+          <div className="flex items-center justify-end gap-2 min-w-0">
+            <div className="min-w-0 text-right">
+              <motion.div
+                animate={{ boxShadow: [`0 0 18px ${defenderGlow}`, `0 0 28px ${defenderGlow}`, `0 0 18px ${defenderGlow}`] }}
+                transition={{ duration: 2, repeat: Infinity, delay: 0.5 }}
+                className="mb-1 h-1 rounded-full"
+                style={{ backgroundColor: defenderGlow }}
+              />
+              <p className="truncate text-xs font-black uppercase tracking-[0.18em] text-white">{defender?.name ?? 'Unknown'}</p>
+            </div>
+            {defender && (
+              <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full border border-white/20" style={{ boxShadow: `0 0 14px ${defenderGlow}55` }}>
+                <img src={avatarUrlForGladiator(defender)} alt="" className="h-full w-full object-cover" />
+              </div>
+            )}
           </div>
         </div>
 
@@ -4896,7 +4910,7 @@ function BattleWatchPanel({
           {/* Challenger */}
           <div className="flex items-center gap-3">
             <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-full border-2" style={{ borderColor: challenger?.glow_color ?? '#ff1744', boxShadow: `0 0 20px ${challenger?.glow_color ?? '#ff1744'}44` }}>
-              {challenger?.avatar_url ? <img src={challenger.avatar_url} alt="" className="h-full w-full object-cover" /> : <Bot className="h-full w-full p-2 text-zinc-500" />}
+              {challenger ? <img src={avatarUrlForGladiator(challenger)} alt="" className="h-full w-full object-cover" /> : <Bot className="h-full w-full p-2 text-zinc-500" />}
             </div>
             <div>
               <p className="text-xs font-black uppercase tracking-[0.14em] text-white">{challenger?.name ?? 'Unknown'}</p>
@@ -4915,7 +4929,7 @@ function BattleWatchPanel({
               <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">{defender?.wins ?? 0}W / {defender?.losses ?? 0}L</p>
             </div>
             <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-full border-2" style={{ borderColor: defender?.glow_color ?? '#00e5ff', boxShadow: `0 0 20px ${defender?.glow_color ?? '#00e5ff'}44` }}>
-              {defender?.avatar_url ? <img src={defender.avatar_url} alt="" className="h-full w-full object-cover" /> : <Bot className="h-full w-full p-2 text-zinc-500" />}
+              {defender ? <img src={avatarUrlForGladiator(defender)} alt="" className="h-full w-full object-cover" /> : <Bot className="h-full w-full p-2 text-zinc-500" />}
             </div>
           </div>
         </div>
@@ -5105,6 +5119,7 @@ export const Colosseum: React.FC = () => {
   const [selectedOpponentId, setSelectedOpponentId] = useState<string>('');
   const [botRosterSearch, setBotRosterSearch] = useState('');
   const [botRosterDifficulty, setBotRosterDifficulty] = useState<'all' | BotDifficulty>('all');
+  const opponentRosterRef = React.useRef<HTMLElement>(null);
   const [challengeType, setChallengeType] = useState<ChallengeType>('speed_round');
   const [simulation, setSimulation] = useState<SimulationState | null>(null);
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(searchParams.get('match'));
@@ -6672,7 +6687,7 @@ export const Colosseum: React.FC = () => {
           </section>
         )}
 
-        <section className="mt-6 overflow-hidden rounded-[2rem] border border-cyan-300/20 bg-black/65 p-5 shadow-[0_0_54px_rgba(0,229,255,0.12)] backdrop-blur-xl">
+        <section ref={opponentRosterRef} className="mt-6 overflow-hidden rounded-[2rem] border border-cyan-300/20 bg-black/65 p-5 shadow-[0_0_54px_rgba(0,229,255,0.12)] backdrop-blur-xl">
           <div className="mb-5 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
             <div>
               <p className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-200">Platform Gladiator Bot Roster</p>
@@ -6810,7 +6825,16 @@ export const Colosseum: React.FC = () => {
               <div className="space-y-3">
                 {myGladiators.map((gladiator) => (
                   <React.Fragment key={gladiator.id}>
-                    <GladiatorCard gladiator={gladiator} active={selectedGladiatorId === gladiator.id} onSelect={() => setSelectedGladiatorId(gladiator.id)} />
+                    <GladiatorCard
+                      gladiator={gladiator}
+                      active={selectedGladiatorId === gladiator.id}
+                      onSelect={() => setSelectedGladiatorId(gladiator.id)}
+                      actionLabel="Enter the Pit"
+                      onAction={() => {
+                        setSelectedGladiatorId(gladiator.id);
+                        opponentRosterRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }}
+                    />
                   </React.Fragment>
                 ))}
               </div>
@@ -7093,6 +7117,9 @@ export const Colosseum: React.FC = () => {
                   return (
                     <motion.div key={gladiator.id} initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: index * 0.04 }} role="button" tabIndex={0} onClick={() => setInspectedGladiator(gladiator)} onKeyDown={(e) => { if (e.key === 'Enter') setInspectedGladiator(gladiator); }} className="flex cursor-pointer items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-3 transition hover:border-yellow-200/30 hover:bg-white/[0.06]">
                       <div className="grid h-9 w-9 place-items-center rounded-xl bg-white/5 text-sm font-black text-white">#{index + 1}</div>
+                      <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded-full border border-white/15" style={{ boxShadow: `0 0 12px ${gladiator.glow_color}44` }}>
+                        <img src={avatarUrlForGladiator(gladiator)} alt="" className="h-full w-full object-cover" />
+                      </div>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-black uppercase tracking-widest text-white">{gladiator.name}</p>
                         <div className="mt-1 flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-zinc-500">
@@ -7193,9 +7220,17 @@ export const Colosseum: React.FC = () => {
                     className="cursor-pointer rounded-2xl border border-white/10 bg-white/[0.03] p-4 transition hover:border-red-400/30 hover:bg-white/[0.06]"
                   >
                     <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-black uppercase tracking-[0.18em] text-white">{gladiatorById.get(match.challenger_id)?.name ?? 'Unknown'} vs {gladiatorById.get(match.defender_id)?.name ?? 'Unknown'}</p>
-                        <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-zinc-500">{formatChallenge(match.challenge_type)}</p>
+                      <div className="flex items-center gap-3">
+                        {(() => { const ch = gladiatorById.get(match.challenger_id); const de = gladiatorById.get(match.defender_id); return (
+                          <div className="flex -space-x-2 shrink-0">
+                            {ch && <div className="relative h-8 w-8 overflow-hidden rounded-full border border-white/20" style={{ boxShadow: `0 0 8px ${ch.glow_color}44` }}><img src={avatarUrlForGladiator(ch)} alt="" className="h-full w-full object-cover" /></div>}
+                            {de && <div className="relative h-8 w-8 overflow-hidden rounded-full border border-white/20" style={{ boxShadow: `0 0 8px ${de.glow_color}44` }}><img src={avatarUrlForGladiator(de)} alt="" className="h-full w-full object-cover" /></div>}
+                          </div>
+                        ); })()}
+                        <div>
+                          <p className="text-xs font-black uppercase tracking-[0.18em] text-white">{gladiatorById.get(match.challenger_id)?.name ?? 'Unknown'} vs {gladiatorById.get(match.defender_id)?.name ?? 'Unknown'}</p>
+                          <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-zinc-500">{formatChallenge(match.challenge_type)}</p>
+                        </div>
                       </div>
                       <div className="flex items-center gap-3">
                         <div className="text-right">
