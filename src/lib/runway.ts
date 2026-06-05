@@ -143,3 +143,81 @@ export async function checkComfyUIHealth(): Promise<{ configured: boolean; healt
     return { configured: false, healthy: false };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Sapphire image generation (ComfyUI tool)
+// ---------------------------------------------------------------------------
+
+export interface SapphireImageRequest {
+  prompt: string;
+  negativePrompt?: string;
+  ratio?: RunwayAspectRatio;
+  steps?: number;
+  cfg?: number;
+  seed?: number;
+  /** Set to 'raw' to skip Sapphire's cyberpunk style enhancement */
+  style?: 'sapphire' | 'raw';
+}
+
+export interface SapphireImageResponse {
+  success: boolean;
+  imageUrl?: string;
+  imageDataUrl?: string;
+  storagePath?: string | null;
+  promptId?: string;
+  prompt?: string;
+  provider: 'comfyui';
+  source: 'sapphire';
+  error?: string;
+}
+
+export async function sapphireGenerateImage(input: SapphireImageRequest): Promise<SapphireImageResponse> {
+  const response = await fetch(`${apiBaseUrl()}/api/sapphire/generate-image`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new RunwayRequestError(
+      payload?.error || 'Sapphire image generation failed.',
+      response.status,
+      payload,
+    );
+  }
+  return payload as SapphireImageResponse;
+}
+
+export interface SapphireAvatarRequest {
+  gladiatorName?: string;
+  personality?: string;
+  avatarPrompt?: string;
+  seed?: number;
+}
+
+export interface SapphireAvatarResponse {
+  success: boolean;
+  avatarUrl?: string;
+  promptId?: string;
+  provider: 'comfyui';
+  source: 'sapphire';
+}
+
+export async function sapphireGenerateAvatar(input: SapphireAvatarRequest = {}): Promise<SapphireAvatarResponse> {
+  const response = await fetch(`${apiBaseUrl()}/api/sapphire/generate-avatar`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new RunwayRequestError(
+      payload?.error || 'Sapphire avatar generation failed.',
+      response.status,
+      payload,
+    );
+  }
+  return payload as SapphireAvatarResponse;
+}
