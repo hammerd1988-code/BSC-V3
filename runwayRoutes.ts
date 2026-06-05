@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { deflateSync } from 'node:zlib';
+import { generateImage as comfyGenerateImage, isComfyUIConfigured, comfyuiHealthCheck } from './comfyuiProvider.js';
 
 type RunwayGenerationType = 'image' | 'video';
 type RunwayVideoDuration = 4 | 5 | 10;
@@ -28,7 +29,7 @@ type StudioAssetUploadRequest = {
 };
 
 type RunwayTaskStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN';
-type ImageGenerationProvider = 'runway' | 'zimage';
+type ImageGenerationProvider = 'runway' | 'zimage' | 'comfyui';
 
 type FeatureAccess = {
   userId: string;
@@ -102,8 +103,11 @@ function normalizeImageRatio(value: RunwayAspectRatio): '1920:1080' | '1080:1920
 
 function normalizeImageProvider(): ImageGenerationProvider {
   const configured = String(process.env.CASPER_IMAGE_PROVIDER || process.env.IMAGE_GENERATION_PROVIDER || '').toLowerCase();
+  if (configured === 'comfyui' || configured === 'comfy') return 'comfyui';
   if (configured === 'runway') return 'runway';
   if (configured === 'zimage' || configured === 'z-image' || configured === 'local') return 'zimage';
+  // Auto-detect: prefer ComfyUI if configured, then zimage
+  if (isComfyUIConfigured()) return 'comfyui';
   return 'zimage';
 }
 
@@ -523,7 +527,39 @@ function extractOutputUrl(payload: any): string | null {
 }
 
 function providerLabel(provider: ImageGenerationProvider) {
+  if (provider === 'comfyui') return 'ComfyUI';
   return provider === 'zimage' ? 'Z-Image' : 'Runway';
+}
+
+async function callComfyUI(promptText: string, ratio: RunwayAspectRatio) {
+  try {
+    const result = await comfyGenerateImage({
+      prompt: promptText,
+      ratio: ratio as any,
+      steps: 20,
+      cfg: 7,
+    });
+
+    if (!result.ok) {
+      return { ok: false, status: result.status, payload: { error: result.error || 'ComfyUI generation failed.' } };
+    }
+
+    const outputUrl = result.imageDataUrl || result.imageUrl || '';
+    return {
+      ok: true,
+      status: 200,
+      payload: {
+        id: result.promptId ?? `comfyui-${Date.now()}`,
+        status: 'SUCCEEDED',
+        output: [outputUrl],
+        assetUrl: outputUrl,
+        generationTime: null,
+        raw: { provider: 'comfyui', ...(typeof result.raw === 'object' && result.raw !== null ? result.raw as Record<string, unknown> : {}) },
+      },
+    };
+  } catch (error: any) {
+    return { ok: false, status: 500, payload: { error: error?.message || 'ComfyUI generation failed.' } };
+  }
 }
 
 function buildProviderFailureMessage(provider: ImageGenerationProvider, payload: any, fallback: string, adminBypass = false) {
@@ -538,6 +574,9 @@ function buildProviderFailureMessage(provider: ImageGenerationProvider, payload:
   }
   if (/api key|unauthorized|forbidden|authentication/i.test(raw) && provider === 'runway') {
     return `Runway API key is missing or invalid. Set RUNWAY_API_KEY in your server environment to enable video generation.`;
+  }
+  if (provider === 'comfyui' && /not configured|unreachable|COMFYUI_API_URL/i.test(raw)) {
+    return `ComfyUI server is not reachable. Make sure your ComfyUI instance is running and COMFYUI_API_URL is correctly set.`;
   }
   return raw;
 }
@@ -614,7 +653,7 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
         });
       }
 
-      const provider: ImageGenerationProvider = type === 'image' ? normalizeImageProvider() : 'runway';
+      let provider: ImageGenerationProvider = type === 'image' ? normalizeImageProvider() : 'runway';
       const runwayPath = type === 'video'
         ? '/image_to_video'
         : '/text_to_image';
@@ -637,12 +676,23 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
             ...(promptImage ? { promptImage } : {}),
           };
 
-      const runway = provider === 'zimage'
-        ? await callZImage(promptText, ratio)
-        : await callRunway(runwayPath, {
+      let runway;
+      if (provider === 'comfyui') {
+        runway = await callComfyUI(promptText, ratio);
+        // Fall back to Z-Image if ComfyUI is unreachable
+        if (!runway.ok && (runway.status === 504 || runway.status === 500) && /not configured|unreachable|COMFYUI_API_URL/i.test(String(runway.payload?.error ?? ''))) {
+          console.warn('[Runway] ComfyUI unavailable, falling back to Z-Image.');
+          provider = 'zimage';
+          runway = await callZImage(promptText, ratio);
+        }
+      } else if (provider === 'zimage') {
+        runway = await callZImage(promptText, ratio);
+      } else {
+        runway = await callRunway(runwayPath, {
             method: 'POST',
             body: JSON.stringify(payload),
           });
+      }
 
       if (!runway.ok) {
         return res.status(runway.status).json({
@@ -671,7 +721,7 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
         feature,
         usage: { used, limit: access.limit, tier: access.tier, adminBypass: access.adminBypass },
         duration: type === 'video' ? duration : undefined,
-        model: provider === 'zimage' ? 'z-image-turbo' : payload.model,
+        model: provider === 'comfyui' ? 'comfyui-local' : provider === 'zimage' ? 'z-image-turbo' : payload.model,
         userId: access.userId,
         raw: runway.payload,
       });
@@ -712,5 +762,82 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
       console.error('[Runway] task polling failed:', error);
       return res.status(error?.name === 'AbortError' ? 504 : 500).json({ error: error?.message || 'Failed to check Runway task status.' });
     }
+  });
+
+  // ComfyUI gladiator avatar generation endpoint
+  app.post('/api/comfyui/generate-avatar', async (req: Request, res: Response) => {
+    try {
+      const authUser = await requireSupabaseUser(req, res, supabase);
+      if (!authUser) return;
+
+      if (!isComfyUIConfigured()) {
+        return res.status(503).json({ error: 'ComfyUI is not configured. Set COMFYUI_API_URL on the backend.' });
+      }
+
+      const { generateGladiatorAvatar } = await import('./comfyuiProvider.js');
+      const { gladiatorName, personality, avatarPrompt, seed } = req.body ?? {};
+
+      if (!gladiatorName || typeof gladiatorName !== 'string') {
+        return res.status(400).json({ error: 'gladiatorName is required.' });
+      }
+
+      const result = await generateGladiatorAvatar({
+        gladiatorName: gladiatorName.trim(),
+        personality: typeof personality === 'string' ? personality.trim() : undefined,
+        avatarPrompt: typeof avatarPrompt === 'string' ? avatarPrompt.trim() : undefined,
+        seed: typeof seed === 'number' ? seed : undefined,
+      });
+
+      if (!result.ok) {
+        return res.status(result.status).json({ error: result.error, raw: result.raw });
+      }
+
+      // Upload the generated avatar to Supabase Storage
+      const dataUrl = result.imageDataUrl;
+      if (dataUrl) {
+        const commaIndex = dataUrl.indexOf(',');
+        const base64Data = dataUrl.slice(commaIndex + 1);
+        const buffer = Buffer.from(base64Data, 'base64');
+        const profile = await resolveProfile(supabase, authUser);
+        const userId = String(profile.id ?? authUser.id);
+        const path = `gladiator-avatars/${userId}/${Date.now()}-${gladiatorName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')}.png`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('media')
+          .upload(path, buffer, { contentType: 'image/png', upsert: true });
+
+        if (!uploadError) {
+          const { data } = supabase.storage.from('media').getPublicUrl(path);
+          return res.json({
+            avatarUrl: data.publicUrl,
+            storagePath: path,
+            promptId: result.promptId,
+            provider: 'comfyui',
+          });
+        }
+        console.error('[ComfyUI] Avatar upload to storage failed:', uploadError);
+      }
+
+      return res.json({
+        avatarUrl: result.imageDataUrl || result.imageUrl,
+        promptId: result.promptId,
+        provider: 'comfyui',
+      });
+    } catch (error: any) {
+      console.error('[ComfyUI] avatar generation failed:', error);
+      return res.status(500).json({ error: error?.message || 'Avatar generation failed.' });
+    }
+  });
+
+  // ComfyUI health check endpoint (authenticated, no URL leak)
+  app.get('/api/comfyui/health', async (req: Request, res: Response) => {
+    const authUser = await requireSupabaseUser(req, res, supabase);
+    if (!authUser) return;
+    const configured = isComfyUIConfigured();
+    if (!configured) {
+      return res.json({ configured: false, healthy: false, message: 'COMFYUI_API_URL not set.' });
+    }
+    const healthy = await comfyuiHealthCheck();
+    return res.json({ configured: true, healthy });
   });
 }
