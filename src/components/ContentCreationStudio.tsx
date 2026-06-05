@@ -197,7 +197,7 @@ export function ContentCreationStudio() {
         aspectRatio: safeRunwayRatio(ratio),
         ratio: safeRunwayRatio(ratio),
       });
-      const providerName = initial.provider === 'zimage' ? 'Z-Image' : 'Runway';
+      const providerName = initial.provider === 'comfyui' ? 'ComfyUI' : initial.provider === 'zimage' ? 'Z-Image' : 'Runway';
       setProviderLabel(providerName);
       setProgress(`${providerName} render in progress...`);
       const result = await pollRunwayTask(initial, setProgress);
