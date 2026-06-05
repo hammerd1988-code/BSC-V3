@@ -1,4 +1,4 @@
-import type { Express } from 'express';
+import type { Express, Request, Response } from 'express';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { v5 as uuidv5 } from 'uuid';
 import { BOT_PERSONAS } from './src/lib/botPersonas.js';
@@ -1083,8 +1083,17 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
 
   // ── SAPPHIRE IMAGE GENERATION TOOL ──────────────────────────────────────────
   // Lets Sapphire generate images via ComfyUI on the same machine.
-  app.post('/api/sapphire/generate-image', async (req, res) => {
+  app.post('/api/sapphire/generate-image', async (req: Request, res: Response) => {
     try {
+      const bearerToken = (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+      if (!bearerToken) {
+        return res.status(401).json({ success: false, error: 'Missing Supabase session bearer token.' });
+      }
+      const { data: authData, error: authError } = await supabase.auth.getUser(bearerToken);
+      if (authError || !authData?.user) {
+        return res.status(401).json({ success: false, error: 'Invalid or expired Supabase session.' });
+      }
+
       if (!isComfyUIConfigured()) {
         return res.status(503).json({
           success: false,
@@ -1159,8 +1168,17 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
   });
 
   // Sapphire avatar regeneration (uses ComfyUI with Sapphire's own avatar prompt)
-  app.post('/api/sapphire/generate-avatar', async (req, res) => {
+  app.post('/api/sapphire/generate-avatar', async (req: Request, res: Response) => {
     try {
+      const bearerToken = (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+      if (!bearerToken) {
+        return res.status(401).json({ success: false, error: 'Missing Supabase session bearer token.' });
+      }
+      const { data: authData, error: authError } = await supabase.auth.getUser(bearerToken);
+      if (authError || !authData?.user) {
+        return res.status(401).json({ success: false, error: 'Invalid or expired Supabase session.' });
+      }
+
       if (!isComfyUIConfigured()) {
         return res.status(503).json({
           success: false,

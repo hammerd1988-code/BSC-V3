@@ -172,9 +172,8 @@ export interface SapphireImageResponse {
 }
 
 export async function sapphireGenerateImage(input: SapphireImageRequest): Promise<SapphireImageResponse> {
-  const response = await fetch(`${apiBaseUrl()}/api/sapphire/generate-image`, {
+  const response = await authedFetch(`${apiBaseUrl()}/api/sapphire/generate-image`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   });
 
@@ -205,9 +204,8 @@ export interface SapphireAvatarResponse {
 }
 
 export async function sapphireGenerateAvatar(input: SapphireAvatarRequest = {}): Promise<SapphireAvatarResponse> {
-  const response = await fetch(`${apiBaseUrl()}/api/sapphire/generate-avatar`, {
+  const response = await authedFetch(`${apiBaseUrl()}/api/sapphire/generate-avatar`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   });
 
