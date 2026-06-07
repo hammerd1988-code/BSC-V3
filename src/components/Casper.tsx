@@ -33,10 +33,13 @@ import { UpgradePromptModal, UpgradeInlineCard } from './UpgradePrompt';
 
 interface Message {
   id: string;
-  role: 'user' | 'casper';
+  role: 'user' | 'casper' | 'system';
   content: string;
   timestamp: Date;
   imageUrls?: string[];
+  /** When set, this message represents a live mission activity entry. */
+  missionTitle?: string;
+  actionType?: string;
 }
 
 interface UserCasperMemory {
@@ -54,9 +57,22 @@ interface UserCasperTask {
   title: string;
   description: string | null;
   priority: 'low' | 'medium' | 'high' | 'urgent';
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'awaiting_client';
   progress?: number | null;
   result: string | null;
+  task_type?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+interface ActivityLogEntry {
+  id: string;
+  action_type: string;
+  description: string;
+  metadata: Record<string, any>;
+  task_id: string | null;
+  actor_id: string | null;
   created_at: string;
 }
 
@@ -512,6 +528,141 @@ export const Casper: React.FC = () => {
   }, [authFetch, currentUser?.id]);
 
   useEffect(() => { void fetchControlCenter(); }, [fetchControlCenter]);
+
+  // ---- Real-time mission activity feed ----
+  // Subscribe to casper_tasks status changes and casper_activity_log inserts
+  // so the user can see what Casper is doing mid-mission in real time,
+  // right in the chat — like watching a terminal / command prompt.
+  const seenActivityIdsRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (!currentUser?.id) return;
+
+    const channel = supabase
+      .channel(`casper-live-feed-${currentUser.id}`)
+      // Watch task status changes (running / completed / failed)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'casper_tasks',
+        filter: `created_by=eq.${currentUser.id}`,
+      }, (payload) => {
+        const row = payload.new as Record<string, any>;
+        const old = payload.old as Record<string, any>;
+        if (!row) return;
+
+        // Update local tasks list reactively
+        setTasks(prev => prev.map(t => t.id === row.id ? { ...t, ...row } as UserCasperTask : t));
+
+        const title = row.title || 'Untitled mission';
+        const status = row.status as string;
+        const oldStatus = old?.status as string | undefined;
+
+        // Only emit system messages on actual status transitions
+        if (status === oldStatus) return;
+
+        if (status === 'running' && oldStatus !== 'running') {
+          setMessages(prev => [...prev, {
+            id: `sys-mission-start-${row.id}-${Date.now()}`,
+            role: 'system',
+            content: `▶ MISSION STARTED — ${title}`,
+            timestamp: new Date(),
+            missionTitle: title,
+            actionType: 'mission_start',
+          }]);
+        } else if (status === 'completed') {
+          const resultPreview = row.result
+            ? (row.result.length > 300 ? row.result.slice(0, 300) + '…' : row.result)
+            : 'Done.';
+          setMessages(prev => [...prev, {
+            id: `sys-mission-done-${row.id}-${Date.now()}`,
+            role: 'system',
+            content: `✓ MISSION COMPLETE — ${title}\n${resultPreview}`,
+            timestamp: new Date(),
+            missionTitle: title,
+            actionType: 'mission_complete',
+          }]);
+        } else if (status === 'failed') {
+          const errorPreview = row.result
+            ? (row.result.length > 200 ? row.result.slice(0, 200) + '…' : row.result)
+            : 'Unknown error.';
+          setMessages(prev => [...prev, {
+            id: `sys-mission-fail-${row.id}-${Date.now()}`,
+            role: 'system',
+            content: `✗ MISSION FAILED — ${title}\n${errorPreview}`,
+            timestamp: new Date(),
+            missionTitle: title,
+            actionType: 'mission_failed',
+          }]);
+        }
+      })
+      // Watch new task insertions (e.g. queued from another device)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'casper_tasks',
+        filter: `created_by=eq.${currentUser.id}`,
+      }, (payload) => {
+        const row = payload.new as Record<string, any>;
+        if (row) {
+          setTasks(prev => [row as UserCasperTask, ...prev]);
+        }
+      })
+      // Watch live activity log entries for this user's tasks
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'casper_activity_log',
+      }, (payload) => {
+        const entry = payload.new as ActivityLogEntry;
+        if (!entry?.id) return;
+        // Deduplicate — Supabase Realtime can fire twice
+        if (seenActivityIdsRef.current.has(entry.id)) return;
+        seenActivityIdsRef.current.add(entry.id);
+        // Keep set from growing unbounded
+        if (seenActivityIdsRef.current.size > 500) {
+          const arr = Array.from(seenActivityIdsRef.current);
+          seenActivityIdsRef.current = new Set(arr.slice(-250));
+        }
+
+        // Only show activities that are linked to one of the user's tasks
+        // or that reference the user's actor_id
+        if (entry.actor_id !== currentUser.id && !entry.task_id) return;
+
+        // Check if this activity's task belongs to the current user
+        if (entry.task_id) {
+          setTasks(currentTasks => {
+            const ownsTask = currentTasks.some(t => t.id === entry.task_id);
+            if (ownsTask) {
+              const desc = entry.description || entry.action_type;
+              setMessages(prev => [...prev, {
+                id: `sys-activity-${entry.id}`,
+                role: 'system',
+                content: `› ${desc}`,
+                timestamp: new Date(entry.created_at),
+                actionType: entry.action_type,
+              }]);
+            }
+            return currentTasks;
+          });
+        } else if (entry.actor_id === currentUser.id) {
+          const desc = entry.description || entry.action_type;
+          setMessages(prev => [...prev, {
+            id: `sys-activity-${entry.id}`,
+            role: 'system',
+            content: `› ${desc}`,
+            timestamp: new Date(entry.created_at),
+            actionType: entry.action_type,
+          }]);
+        }
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [currentUser?.id]);
+
+  // Derive running missions for the live status indicator
+  const runningMissions = tasks.filter(t => t.status === 'running');
 
   const saveAiCore = async () => {
     if (!currentUser) return;
@@ -1025,7 +1176,7 @@ export const Casper: React.FC = () => {
 
     try {
       const history = [...messages, userMsg]
-        .filter(message => message.id !== 'greeting')
+        .filter(message => message.id !== 'greeting' && message.role !== 'system')
         .slice(-20)
         .map(message => `${message.role === 'user' ? 'User' : 'Casper'}: ${message.content}`)
         .join('\n');
@@ -1279,7 +1430,7 @@ export const Casper: React.FC = () => {
     try {
       // Build conversation history for context
       const history = messages
-        .filter(message => message.id !== 'greeting')
+        .filter(message => message.id !== 'greeting' && message.role !== 'system')
         .slice(-20)
         .map(message => `${message.role === 'user' ? 'User' : 'Casper'}: ${message.content}`)
         .join('\n');
@@ -2038,11 +2189,60 @@ export const Casper: React.FC = () => {
         )}
       </AnimatePresence>
 
+      {/* Live Mission Status Bar */}
+      {runningMissions.length > 0 && (
+        <div className="relative z-20 border-b border-cyan-500/20 bg-cyan-950/30 backdrop-blur-md">
+          <div className="max-w-3xl mx-auto flex items-center gap-3 px-4 py-2">
+            <div className="h-2 w-2 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(34,211,238,0.6)]" />
+            <Activity className="w-3.5 h-3.5 text-cyan-300 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="truncate font-mono text-[10px] font-bold uppercase tracking-widest text-cyan-200">
+                {runningMissions.length === 1
+                  ? `Executing: ${runningMissions[0].title}`
+                  : `${runningMissions.length} missions running`}
+              </p>
+            </div>
+            {runningMissions[0].progress != null && runningMissions[0].progress > 0 && (
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <div className="h-1 w-16 rounded-full bg-white/10 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-cyan-400 transition-all duration-500"
+                    style={{ width: `${Math.min(100, runningMissions[0].progress)}%` }}
+                  />
+                </div>
+                <span className="font-mono text-[9px] text-cyan-300/70">{runningMissions[0].progress}%</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-6 relative z-10 scrollbar-hide">
         <div className="max-w-3xl mx-auto w-full pt-4">
           <AnimatePresence initial={false}>
             {messages.map((msg) => (
+              msg.role === 'system' ? (
+                <motion.div
+                  key={msg.id}
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="mb-2"
+                >
+                  <div className={cn(
+                    "w-full rounded-lg border px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap",
+                    msg.actionType === 'mission_start'
+                      ? "border-cyan-500/30 bg-cyan-950/40 text-cyan-300"
+                      : msg.actionType === 'mission_complete'
+                        ? "border-green-500/30 bg-green-950/30 text-green-300"
+                        : msg.actionType === 'mission_failed'
+                          ? "border-red-500/30 bg-red-950/30 text-red-300"
+                          : "border-white/5 bg-white/[0.02] text-zinc-500"
+                  )}>
+                    {msg.content}
+                  </div>
+                </motion.div>
+              ) : (
               <motion.div
                 key={msg.id}
                 initial={{ opacity: 0, y: 10 }}
@@ -2079,6 +2279,7 @@ export const Casper: React.FC = () => {
                   )}
                 </div>
               </motion.div>
+              )
             ))}
           </AnimatePresence>
           {isGenerating && (
@@ -2173,9 +2374,9 @@ export const Casper: React.FC = () => {
           <div className="flex items-center justify-between mt-3 px-2">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
-                <div className={cn("w-1.5 h-1.5 rounded-full shadow-[0_0_8px]", visionActive ? "bg-emerald-400 shadow-emerald-400/80" : "bg-cyan-500 shadow-cyan-500/80")} />
+                <div className={cn("w-1.5 h-1.5 rounded-full shadow-[0_0_8px]", runningMissions.length > 0 ? "bg-yellow-400 shadow-yellow-400/80 animate-pulse" : visionActive ? "bg-emerald-400 shadow-emerald-400/80" : "bg-cyan-500 shadow-cyan-500/80")} />
                 <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">
-                  {visionActive ? 'Vision Link Active' : 'Neural Link Active'}
+                  {runningMissions.length > 0 ? `Mission Active · ${runningMissions.length} running` : visionActive ? 'Vision Link Active' : 'Neural Link Active'}
                 </span>
               </div>
               {aiSettings?.model && aiSettings.model !== 'platform_default' && (
