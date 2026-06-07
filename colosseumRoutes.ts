@@ -1,9 +1,10 @@
-import type { Express } from 'express';
+import type { Express, Request, Response } from 'express';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { v5 as uuidv5 } from 'uuid';
 import { BOT_PERSONAS } from './src/lib/botPersonas.js';
 import { BOT_GLADIATOR_PROFILES, SAPPHIRE_GLADIATOR_PROFILE, botStatsToPercent } from './src/lib/botGladiatorProfiles.js';
 import { generateServerText, isServerAiConfigured } from './serverAi.js';
+import { generateImage as comfyGenerateImage, generateGladiatorAvatar as comfyGenerateAvatar, isComfyUIConfigured } from './comfyuiProvider.js';
 
 const BOT_UUID_NAMESPACE = '00000000-0000-4000-8000-000000000b5c';
 const SAPPHIRE_GLADIATOR_ID = '00000000-0000-4000-8000-00000000fa11';
@@ -1077,6 +1078,164 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
     } catch (error: any) {
       console.error('[colosseum:neural-whisper]', error);
       return res.status(502).json({ success: false, error: error.message || 'Neural Whisper failed' });
+    }
+  });
+
+  // ── SAPPHIRE IMAGE GENERATION TOOL ──────────────────────────────────────────
+  // Lets Sapphire generate images via ComfyUI on the same machine.
+  app.post('/api/sapphire/generate-image', async (req: Request, res: Response) => {
+    try {
+      const bearerToken = (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+      if (!bearerToken) {
+        return res.status(401).json({ success: false, error: 'Missing Supabase session bearer token.' });
+      }
+      const { data: authData, error: authError } = await supabase.auth.getUser(bearerToken);
+      if (authError || !authData?.user) {
+        return res.status(401).json({ success: false, error: 'Invalid or expired Supabase session.' });
+      }
+
+      if (!isComfyUIConfigured()) {
+        return res.status(503).json({
+          success: false,
+          error: 'ComfyUI is not configured. Set COMFYUI_API_URL to enable Sapphire image generation.',
+        });
+      }
+
+      const { prompt, negativePrompt, ratio, steps, cfg, seed, style } = req.body ?? {};
+      if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+        return res.status(400).json({ success: false, error: 'A prompt is required.' });
+      }
+
+      // Sapphire enhances the prompt with her persona style
+      const sapphireStyle = style === 'raw' ? '' : ', cyberpunk aesthetic, sapphire blue neon accents, high detail digital art, cinematic lighting';
+      const enhancedPrompt = `${prompt.trim()}${sapphireStyle}`;
+
+      const result = await comfyGenerateImage({
+        prompt: enhancedPrompt,
+        negativePrompt: negativePrompt || 'blurry, low quality, distorted, watermark, text, logo',
+        ratio: ratio || '1:1',
+        steps: typeof steps === 'number' ? steps : 20,
+        cfg: typeof cfg === 'number' ? cfg : 7,
+        seed: typeof seed === 'number' ? seed : undefined,
+      });
+
+      if (!result.ok) {
+        return res.status(result.status).json({
+          success: false,
+          error: result.error || 'Sapphire image generation failed.',
+          details: result.raw,
+        });
+      }
+
+      // Upload to Supabase storage for persistence
+      let storagePath: string | null = null;
+      let publicUrl: string | null = null;
+      if (result.imageDataUrl) {
+        try {
+          const base64Match = result.imageDataUrl.match(/^data:image\/\w+;base64,(.+)$/);
+          if (base64Match) {
+            const buffer = Buffer.from(base64Match[1], 'base64');
+            const ext = result.imageDataUrl.includes('png') ? 'png' : 'jpg';
+            const path = `sapphire-gen/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+            const { error: uploadError } = await supabase.storage
+              .from('media')
+              .upload(path, buffer, { contentType: `image/${ext}`, upsert: true });
+            if (!uploadError) {
+              storagePath = path;
+              const { data } = supabase.storage.from('media').getPublicUrl(path);
+              publicUrl = data.publicUrl;
+            }
+          }
+        } catch (e) {
+          console.warn('[sapphire:generate-image] Storage upload failed, returning data URL instead:', e);
+        }
+      }
+
+      return res.json({
+        success: true,
+        imageUrl: publicUrl || result.imageUrl || result.imageDataUrl,
+        imageDataUrl: result.imageDataUrl,
+        storagePath,
+        promptId: result.promptId,
+        prompt: enhancedPrompt,
+        provider: 'comfyui',
+        source: 'sapphire',
+      });
+    } catch (error: any) {
+      console.error('[sapphire:generate-image]', error);
+      return res.status(500).json({ success: false, error: error?.message || 'Sapphire image generation failed.' });
+    }
+  });
+
+  // Sapphire avatar regeneration (uses ComfyUI with Sapphire's own avatar prompt)
+  app.post('/api/sapphire/generate-avatar', async (req: Request, res: Response) => {
+    try {
+      const bearerToken = (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+      if (!bearerToken) {
+        return res.status(401).json({ success: false, error: 'Missing Supabase session bearer token.' });
+      }
+      const { data: authData, error: authError } = await supabase.auth.getUser(bearerToken);
+      if (authError || !authData?.user) {
+        return res.status(401).json({ success: false, error: 'Invalid or expired Supabase session.' });
+      }
+
+      if (!isComfyUIConfigured()) {
+        return res.status(503).json({
+          success: false,
+          error: 'ComfyUI is not configured. Set COMFYUI_API_URL to enable avatar generation.',
+        });
+      }
+
+      const { gladiatorName, personality, avatarPrompt, seed } = req.body ?? {};
+      const name = gladiatorName || 'Sapphire';
+      const prompt = avatarPrompt || SAPPHIRE_GLADIATOR_PROFILE.avatar_prompt || '';
+
+      const result = await comfyGenerateAvatar({
+        gladiatorName: name,
+        personality: personality || SAPPHIRE_GLADIATOR_PROFILE.personality_style,
+        avatarPrompt: prompt,
+        seed: typeof seed === 'number' ? seed : undefined,
+      });
+
+      if (!result.ok) {
+        return res.status(result.status).json({
+          success: false,
+          error: result.error || 'Sapphire avatar generation failed.',
+        });
+      }
+
+      // Upload avatar to storage
+      let publicUrl: string | null = null;
+      if (result.imageDataUrl) {
+        try {
+          const base64Match = result.imageDataUrl.match(/^data:image\/\w+;base64,(.+)$/);
+          if (base64Match) {
+            const buffer = Buffer.from(base64Match[1], 'base64');
+            const ext = result.imageDataUrl.includes('png') ? 'png' : 'jpg';
+            const path = `sapphire-avatars/${name.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Date.now()}.${ext}`;
+            const { error: uploadError } = await supabase.storage
+              .from('media')
+              .upload(path, buffer, { contentType: `image/${ext}`, upsert: true });
+            if (!uploadError) {
+              const { data } = supabase.storage.from('media').getPublicUrl(path);
+              publicUrl = data.publicUrl;
+            }
+          }
+        } catch (e) {
+          console.warn('[sapphire:generate-avatar] Storage upload failed:', e);
+        }
+      }
+
+      return res.json({
+        success: true,
+        avatarUrl: publicUrl || result.imageUrl || result.imageDataUrl,
+        promptId: result.promptId,
+        provider: 'comfyui',
+        source: 'sapphire',
+      });
+    } catch (error: any) {
+      console.error('[sapphire:generate-avatar]', error);
+      return res.status(500).json({ success: false, error: error?.message || 'Sapphire avatar generation failed.' });
     }
   });
 }
