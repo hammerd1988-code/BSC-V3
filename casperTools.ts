@@ -50,16 +50,16 @@ const SHELL_TOOL_NAME = `shell${TOOL_NAME_SEPARATOR}exec`;
 
 // Hard upper bound on tool-calling loop rounds per directive. The model
 // can request multiple tools per round (parallel tool_calls); this is
-// the round count, not the per-call count. 5 rounds is enough for
-// realistic plans (e.g. ls → cat → grep → call adapter → summarize)
-// without letting a confused or adversarial response burn unbounded
-// tokens.
-export const MAX_TOOL_CALL_ROUNDS = 5;
+// the round count, not the per-call count. 10 rounds covers realistic
+// dev-agent plans (clone → detect → install → build → branch → edit →
+// commit → push → PR → summarize) without letting a confused or
+// adversarial response burn unbounded tokens.
+export const MAX_TOOL_CALL_ROUNDS = 10;
 
 // Hard upper bound on TOTAL tool calls in one directive across all
 // rounds. Even if the model parallelizes, we cap the absolute number
 // of executions to keep cost + side-effects in check.
-export const MAX_TOOL_CALLS_PER_DIRECTIVE = 15;
+export const MAX_TOOL_CALLS_PER_DIRECTIVE = 25;
 
 // OpenAI-style tool spec (Chat Completions API).
 // Reference: https://platform.openai.com/docs/api-reference/chat/create#chat-create-tools
@@ -388,7 +388,11 @@ export async function executeTool(
   try {
     // Dev Agent tools — workspace-scoped repo management
     if (isDevAgentTool(call.name)) {
-      const result = await executeDevAgentTool(call);
+      // Thread the user's connected GitHub integration token through so
+      // clone/push/PR work against private repos even when the server
+      // has no GITHUB_TOKEN env var configured.
+      const githubToken = ctx.integrations.get('github')?.apiKey || undefined;
+      const result = await executeDevAgentTool(call, { githubToken });
       // Persist workspace events into Casper's memory system so the
       // Dev Agent remembers repos it worked on across sessions.
       if (ctx.memorySystem) {
@@ -438,7 +442,13 @@ export async function executeTool(
           stderr: result.stderr,
           truncated: result.truncated,
         },
-        error: result.ok ? null : result.reason || result.stderr.slice(0, 500) || 'Shell command failed.',
+        error: result.ok
+          ? null
+          : result.reason
+            || result.stderr.slice(0, 500)
+            || (result.stdout
+              ? `Shell command failed (exit ${result.exitCode ?? 'unknown'}). stdout: ${result.stdout.slice(0, 300)}`
+              : `Shell command failed (exit ${result.exitCode ?? 'unknown'}) with no output.`),
         status: null,
         durationMs: result.durationMs,
       };
