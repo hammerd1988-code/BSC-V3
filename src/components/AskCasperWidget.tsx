@@ -325,11 +325,19 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
     setVoiceStatus(null);
     const userTurn: ChatTurn = { role: 'user', text, ts: Date.now() };
     const pendingCasperTurn: ChatTurn = { role: 'casper', text: 'Thinking…', ts: Date.now() + 1, pending: true };
+    // Rolling conversation window: send the prior exchanges (excluding
+    // the message being sent, pending placeholders, and error turns) so
+    // Casper keeps context between messages instead of waking up fresh
+    // on every request.
+    const conversationHistory = turns
+      .filter((turn) => !turn.pending && !turn.error && turn.text.trim())
+      .map((turn) => ({ role: turn.role, text: turn.text }));
     setTurns((prev) => [...prev, userTurn, pendingCasperTurn]);
     setBusy(true);
     try {
       const result = await sendCasperCommand({
         command: text,
+        conversationHistory,
         // The page-context map decides whether Casper answers as the
         // concise 'guide' or as the full Studio dual-discipline expert
         // ('studio'). e.g. opening this widget from /casper/studio

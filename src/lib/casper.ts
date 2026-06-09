@@ -293,12 +293,24 @@ async function reportClientExecution(
 // endpoint and POST the answer back. The caller gets the same
 // CasperCommandResponse shape regardless — local execution is fully
 // transparent.
+export interface CasperConversationTurn {
+  role: 'user' | 'casper';
+  text: string;
+}
+
+// Rolling-window cap for conversation history sent with each command.
+// Keeps request payloads bounded while giving Casper enough context to
+// hold a coherent multi-message conversation.
+export const CASPER_HISTORY_WINDOW = 10;
+const CASPER_HISTORY_TURN_MAX_CHARS = 4000;
+
 export async function sendCasperCommand(input: {
   command: string;
   surface?: CasperSurface;
   source?: 'admin' | 'user';
   pageContext?: { path?: string; feature?: string; description?: string };
   metadata?: Record<string, unknown>;
+  conversationHistory?: CasperConversationTurn[];
 }): Promise<CasperCommandResponse> {
   const headers = await authHeaders();
   let command = input.command.trim();
@@ -320,6 +332,13 @@ export async function sendCasperCommand(input: {
       surface: input.surface ?? 'control_center',
       source: input.source,
       metadata: input.metadata ?? {},
+      conversationHistory: (input.conversationHistory ?? [])
+        .filter((turn) => turn && typeof turn.text === 'string' && turn.text.trim())
+        .slice(-CASPER_HISTORY_WINDOW)
+        .map((turn) => ({
+          role: turn.role === 'user' ? 'user' : 'casper',
+          text: turn.text.slice(0, CASPER_HISTORY_TURN_MAX_CHARS),
+        })),
     }),
   });
   const initial = await parseResponse<CasperCommandResponse | DeferredCasperCommandResponse>(response);

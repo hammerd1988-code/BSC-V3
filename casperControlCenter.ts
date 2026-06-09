@@ -62,6 +62,44 @@ function normalizeSurface(value: unknown): CasperSurface {
   return (CASPER_SURFACES as readonly string[]).includes(lower) ? (lower as CasperSurface) : 'control_center';
 }
 
+// One prior exchange turn forwarded by a chat-style client (the Ask
+// Casper widget, the Control Center console, etc.). 'casper' maps to
+// the OpenAI 'assistant' role when we replay the history to the model.
+export type CasperHistoryTurn = {
+  role: 'user' | 'casper';
+  text: string;
+};
+
+// Bounds for client-supplied conversation history. The window keeps
+// directives token-bounded even if a client sends an unbounded log.
+const HISTORY_MAX_TURNS = 10;
+const HISTORY_TURN_MAX_CHARS = 4000;
+
+// Sanitize an untrusted `conversationHistory` payload from the request
+// body into a bounded, well-typed rolling window. Anything malformed is
+// dropped silently — history is best-effort context, never a hard error.
+function normalizeConversationHistory(value: unknown): CasperHistoryTurn[] {
+  if (!Array.isArray(value)) return [];
+  const turns: CasperHistoryTurn[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const role = (item as any).role === 'user' ? 'user' : (item as any).role === 'casper' || (item as any).role === 'assistant' ? 'casper' : null;
+    const text = typeof (item as any).text === 'string' ? (item as any).text.trim() : '';
+    if (!role || !text) continue;
+    turns.push({ role, text: text.slice(0, HISTORY_TURN_MAX_CHARS) });
+  }
+  return turns.slice(-HISTORY_MAX_TURNS);
+}
+
+// Render history as a plain transcript for code paths that take a single
+// prompt string (single-shot completions, the local-LLM client handoff,
+// Gemini fallback).
+function formatHistoryTranscript(history: CasperHistoryTurn[]): string {
+  if (history.length === 0) return '';
+  const lines = history.map((turn) => `${turn.role === 'user' ? 'User' : 'Casper'}: ${turn.text}`);
+  return `[Conversation so far — use this to stay consistent with what was already said]\n${lines.join('\n\n')}\n[End of conversation history]\n\n`;
+}
+
 type CasperCommandInput = {
   command: string;
   source?: 'admin' | 'user' | 'routine' | 'task';
@@ -95,6 +133,11 @@ type CasperCommandInput = {
   // initial rollout — the blast radius from those callers is harder
   // to reason about). Falsy by default in those code paths.
   enableTools?: boolean;
+  // Rolling window of prior exchanges from a chat-style client so
+  // Casper can hold context between messages instead of treating each
+  // command as an isolated request. Bounded server-side (last 10 turns,
+  // 4k chars each) regardless of what the client sends.
+  conversationHistory?: CasperHistoryTurn[];
 };
 
 // Per-user Casper LLM settings stored in `users.ai_settings` (JSONB).
@@ -861,6 +904,9 @@ async function callOpenAICompatibleWithToolLoop(input: {
   toolCtx: ToolExecutionContext;
   maxToolRounds?: number;
   maxToolCalls?: number;
+  // Prior conversation turns replayed as real chat messages so the
+  // model sees the dialogue the same way the user does.
+  history?: CasperHistoryTurn[];
 }): Promise<{
   provider: string;
   model: string;
@@ -882,11 +928,12 @@ async function callOpenAICompatibleWithToolLoop(input: {
     ? `${input.systemPrompt}\n\n---\n\n[User custom instructions]\n${userSettings.systemPromptOverride}`
     : input.systemPrompt;
 
+  const history = input.history ?? [];
   const toolSpecs = buildToolSpecs(input.toolCtx);
   // No tools exposed at all → single-shot path is identical, take it.
   if (toolSpecs.length === 0) {
     const single = await callOpenAICompatible({
-      prompt: input.prompt,
+      prompt: formatHistoryTranscript(history) + input.prompt,
       systemPrompt: input.systemPrompt,
       cognitiveCore: input.cognitiveCore,
       userSettings: input.userSettings,
@@ -908,6 +955,11 @@ async function callOpenAICompatibleWithToolLoop(input: {
 
   const messages: ServerAIMessage[] = [
     { role: 'system', content: systemPrompt + toolPrimer },
+    ...history.map((turn): ServerAIMessage =>
+      turn.role === 'user'
+        ? { role: 'user', content: turn.text }
+        : { role: 'assistant', content: turn.text },
+    ),
     { role: 'user', content: input.prompt },
   ];
 
@@ -1257,6 +1309,7 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
   });
 
   const surface = normalizeSurface(input.surface);
+  const conversationHistory = input.conversationHistory ?? [];
 
   try {
     const cognitiveCore = await fetchCognitiveCore(supabase);
@@ -1283,7 +1336,9 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
     // the task. This is the path that lets users run directives free
     // on their own hardware.
     if (input.allowClientDefer && isLocalEndpoint(userSettings.endpoint)) {
-      const clientPayload = buildClientExecutionPayload(taskId, command, systemPrompt, cognitiveCore, userSettings);
+      // The local-LLM handoff is a single prompt string, so the rolling
+      // history rides along as a transcript prefix.
+      const clientPayload = buildClientExecutionPayload(taskId, formatHistoryTranscript(conversationHistory) + command, systemPrompt, cognitiveCore, userSettings);
       await supabase
         .from('casper_tasks')
         .update({
@@ -1362,6 +1417,7 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
         cognitiveCore,
         userSettings,
         toolCtx,
+        history: conversationHistory,
       });
       executionText = execution.text;
       executionProvider = execution.provider;
@@ -1370,7 +1426,7 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
       toolRounds = execution.rounds;
       toolTruncatedReason = execution.truncatedReason;
     } else {
-      const execution = await callOpenAICompatible({ prompt: command, systemPrompt, cognitiveCore, userSettings });
+      const execution = await callOpenAICompatible({ prompt: formatHistoryTranscript(conversationHistory) + command, systemPrompt, cognitiveCore, userSettings });
       executionText = execution.text;
       executionProvider = execution.provider;
       executionModel = execution.model;
@@ -1763,9 +1819,10 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
     try {
       const profile = await requireAuth(req, res, supabase);
       if (!profile) return;
-      const { command, source, surface, taskId, routineId, metadata } = req.body ?? {};
+      const { command, source, surface, taskId, routineId, metadata, conversationHistory } = req.body ?? {};
       const execution = await executeCasperCommand(supabase, casperMemory, {
         command: String(command || ''),
+        conversationHistory: normalizeConversationHistory(conversationHistory),
         source: source === 'user' ? 'user' : profile.role === 'admin' ? 'admin' : 'user',
         surface: normalizeSurface(surface),
         userId: profile.id,
