@@ -1428,13 +1428,11 @@ export const Casper: React.FC = () => {
     void recordUsage('casper_chat');
 
     try {
-      // Build conversation history for context
-      const history = messages
-        .filter(message => message.id !== 'greeting' && message.role !== 'system')
-        .slice(-20)
-        .map(message => `${message.role === 'user' ? 'User' : 'Casper'}: ${message.content}`)
-        .join('\n');
-      const prompt = history ? `${history}\nUser: ${text}\nCasper:` : text;
+      // Build structured conversation history for server-side injection.
+      const settledMessages = messages
+        .filter(message => message.id !== 'greeting' && message.role !== 'system');
+      const conversationHistory = settledMessages
+        .map(message => ({ role: message.role === 'user' ? 'user' as const : 'casper' as const, text: message.content }));
 
       let casperText: string;
       let imageUrls: string[] = [];
@@ -1443,6 +1441,13 @@ export const Casper: React.FC = () => {
         // Vision mode: capture camera frame and analyze with multimodal AI.
         // This path uses the direct vision endpoint and does not go through
         // tool-calling (keeps the response fast and focused on the image).
+        // analyzeWithVision takes a single prompt string, so we inline
+        // the history transcript here.
+        const historyText = settledMessages
+          .slice(-20)
+          .map(message => `${message.role === 'user' ? 'User' : 'Casper'}: ${message.content}`)
+          .join('\n');
+        const prompt = historyText ? `${historyText}\nUser: ${text}\nCasper:` : text;
         let memoryContext = '';
         if (currentUser?.id) {
           try {
@@ -1461,7 +1466,8 @@ export const Casper: React.FC = () => {
         // tool-calling (browser, shell, integrations).
         try {
           const cmdRes = await sendCasperCommand({
-            command: prompt,
+            command: text,
+            conversationHistory,
             surface: 'control_center',
             source: 'user',
             pageContext: { path: '/casper', feature: 'neural_chat' },
@@ -1470,6 +1476,11 @@ export const Casper: React.FC = () => {
           imageUrls = extractScreenshotUrls(cmdRes.toolCalls);
         } catch (cmdErr) {
           console.warn('[Casper] command path failed, falling back to generateText:', cmdErr);
+          const fallbackHistory = settledMessages
+            .slice(-20)
+            .map(m => `${m.role === 'user' ? 'User' : 'Casper'}: ${m.content}`)
+            .join('\n');
+          const fallbackPrompt = fallbackHistory ? `${fallbackHistory}\nUser: ${text}\nCasper:` : text;
           let memoryContext = '';
           if (currentUser?.id) {
             try {
@@ -1482,7 +1493,7 @@ export const Casper: React.FC = () => {
           const systemPromptParts = [CASPER_SYSTEM_PROMPT];
           if (memoryContext) systemPromptParts.push(memoryContext);
           if (integrationContext) systemPromptParts.push(`Enabled Casper integrations for this user:\n${integrationContext}`);
-          casperText = await generateText(prompt, aiSettings, {
+          casperText = await generateText(fallbackPrompt, aiSettings, {
             systemPrompt: systemPromptParts.join('\n\n'),
             temperature: 0.8,
             maxTokens: 4096,
