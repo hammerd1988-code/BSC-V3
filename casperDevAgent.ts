@@ -242,7 +242,8 @@ async function cloneRepo(args: Record<string, any>, opts?: DevAgentToolOptions):
         ? ' GitHub rejected the token — check that the connected GitHub integration token is valid and has repo access.'
         : ' No GitHub credential available — connect the GitHub integration (Settings → Integrations) or set the GITHUB_TOKEN env var on the server.'
       : '';
-    return { ok: false, data: { stdout: result.stdout, stderr: scrubbed.slice(0, 1000) }, error: `Clone failed: ${scrubbed.slice(0, 300)}${hint}` };
+    const scrubbedStdout = token ? result.stdout.split(token).join('***') : result.stdout;
+    return { ok: false, data: { stdout: scrubbedStdout, stderr: scrubbed.slice(0, 1000) }, error: `Clone failed: ${scrubbed.slice(0, 300)}${hint}` };
   }
 
   // Strip the credential from the stored origin remote so the token never
