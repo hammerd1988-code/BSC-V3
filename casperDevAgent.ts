@@ -24,6 +24,26 @@ const SERVER_START_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_BYTES = 128 * 1024;
 const GITHUB_TOKEN = () => process.env.GITHUB_TOKEN || process.env.GH_TOKEN || '';
 
+// Per-call options threaded from the tool executor. `githubToken` is the
+// calling user's connected GitHub integration credential — it takes
+// precedence over the server-wide GITHUB_TOKEN/GH_TOKEN env vars so
+// clone/push/PR work per-user without any server env configuration.
+export type DevAgentToolOptions = {
+  githubToken?: string;
+};
+
+function resolveGithubToken(opts?: DevAgentToolOptions): string {
+  return (opts?.githubToken || '').trim() || GITHUB_TOKEN();
+}
+
+// Git identity used for commits made by the dev agent inside fresh
+// clones (which have no user.name/user.email configured).
+const GIT_IDENTITY_FLAGS = "-c user.name='Casper Dev Agent' -c user.email='casper@bloodsweatcode.org'";
+
+// Never let git prompt for credentials — fail fast with a real error
+// instead of 'could not read Username … No such device or address'.
+const GIT_ENV = { GIT_TERMINAL_PROMPT: '0' };
+
 const TOOL_PREFIX = 'devagent';
 const SEP = '__';
 
@@ -190,7 +210,7 @@ function getDevCommand(projectType: ProjectType): string | null {
 
 // ── Tool Implementations ─────────────────────────────────────────────────────
 
-async function cloneRepo(args: Record<string, any>): Promise<{ ok: boolean; data: any; error?: string }> {
+async function cloneRepo(args: Record<string, any>, opts?: DevAgentToolOptions): Promise<{ ok: boolean; data: any; error?: string }> {
   const repoUrl = String(args.repo_url || '').trim();
   if (!repoUrl) return { ok: false, data: null, error: 'repo_url is required.' };
 
@@ -203,17 +223,32 @@ async function cloneRepo(args: Record<string, any>): Promise<{ ok: boolean; data
   const dir = path.join(WORKSPACES_DIR, id);
 
   let cloneUrl = repoUrl;
-  const token = GITHUB_TOKEN();
+  const token = resolveGithubToken(opts);
   if (token && cloneUrl.startsWith('https://github.com/')) {
-    cloneUrl = cloneUrl.replace('https://github.com/', `https://${token}@github.com/`);
+    cloneUrl = cloneUrl.replace('https://github.com/', `https://x-access-token:${token}@github.com/`);
   }
 
   const branch = typeof args.branch === 'string' ? args.branch.trim() : '';
   const branchFlag = branch ? `--branch '${shellQuote(branch)}'` : '';
 
-  const result = await execInWorkspace(WORKSPACES_DIR, `git clone --depth 1 ${branchFlag} '${cloneUrl}' '${id}'`);
+  const result = await execInWorkspace(WORKSPACES_DIR, `git clone --depth 1 ${branchFlag} '${cloneUrl}' '${id}'`, { env: GIT_ENV });
   if (!result.ok) {
-    return { ok: false, data: { stdout: result.stdout, stderr: result.stderr }, error: `Clone failed: ${result.stderr.slice(0, 300)}` };
+    // Token never appears in our error surface — git itself may echo the
+    // URL, so scrub it from stderr before returning it to the model/user.
+    const scrubbed = token ? result.stderr.split(token).join('***') : result.stderr;
+    const authFailure = /could not read Username|Authentication failed|Invalid username or token|403|terminal prompts disabled/i.test(scrubbed);
+    const hint = authFailure
+      ? token
+        ? ' GitHub rejected the token — check that the connected GitHub integration token is valid and has repo access.'
+        : ' No GitHub credential available — connect the GitHub integration (Settings → Integrations) or set the GITHUB_TOKEN env var on the server.'
+      : '';
+    return { ok: false, data: { stdout: result.stdout, stderr: scrubbed.slice(0, 1000) }, error: `Clone failed: ${scrubbed.slice(0, 300)}${hint}` };
+  }
+
+  // Strip the credential from the stored origin remote so the token never
+  // persists in .git/config on disk. Pushes re-inject it per-command.
+  if (token && cloneUrl !== repoUrl) {
+    await execInWorkspace(path.join(WORKSPACES_DIR, id), `git remote set-url origin '${shellQuote(repoUrl)}'`, { env: GIT_ENV });
   }
 
   const projectType = detectProjectType(dir);
@@ -483,7 +518,7 @@ async function writeFile(args: Record<string, any>): Promise<{ ok: boolean; data
   return { ok: true, data: { file_path: filePath, bytes_written: Buffer.byteLength(content, 'utf8') } };
 }
 
-async function gitOps(args: Record<string, any>): Promise<{ ok: boolean; data: any; error?: string }> {
+async function gitOps(args: Record<string, any>, opts?: DevAgentToolOptions): Promise<{ ok: boolean; data: any; error?: string }> {
   const ws = workspaces.get(String(args.workspace_id || ''));
   if (!ws) return { ok: false, data: null, error: 'Workspace not found.' };
 
@@ -521,11 +556,17 @@ async function gitOps(args: Record<string, any>): Promise<{ ok: boolean; data: a
     case 'commit': {
       const message = String(args.message || '').trim();
       if (!message) return { ok: false, data: null, error: 'message is required for commit operation.' };
-      command = `git commit -m '${message.replace(/'/g, "'\\''")}'`;
+      command = `git ${GIT_IDENTITY_FLAGS} commit -m '${message.replace(/'/g, "'\\''")}'`;
       break;
     }
     case 'push': {
-      const remote = String(args.remote || 'origin').trim();
+      let remote = String(args.remote || 'origin').trim();
+      // The stored origin remote is credential-free (see cloneRepo), so
+      // inject the GitHub token into the push target per-command instead.
+      const pushToken = resolveGithubToken(opts);
+      if (remote === 'origin' && pushToken && ws.repoUrl.startsWith('https://github.com/')) {
+        remote = ws.repoUrl.replace('https://github.com/', `https://x-access-token:${pushToken}@github.com/`);
+      }
       const branch = String(args.branch || '').trim();
       command = branch ? `git push '${shellQuote(remote)}' '${shellQuote(branch)}'` : `git push '${shellQuote(remote)}' HEAD`;
       break;
@@ -534,26 +575,28 @@ async function gitOps(args: Record<string, any>): Promise<{ ok: boolean; data: a
       return { ok: false, data: null, error: `Unknown operation "${operation}". Supported: status, diff, log, branch, checkout, add, commit, push.` };
   }
 
-  const result = await execInWorkspace(ws.dir, command);
+  const result = await execInWorkspace(ws.dir, command, { env: GIT_ENV });
+  const token = resolveGithubToken(opts);
+  const scrub = (s: string) => (token ? s.split(token).join('***') : s);
   return {
     ok: result.ok,
     data: {
       workspace_id: ws.id,
       operation,
-      command,
+      command: scrub(command),
       exit_code: result.exitCode,
-      output: (result.stdout || result.stderr).slice(0, 4000),
+      output: scrub(result.stdout || result.stderr).slice(0, 4000),
     },
-    error: result.ok ? undefined : `Git ${operation} failed: ${result.stderr.slice(0, 300)}`,
+    error: result.ok ? undefined : `Git ${operation} failed: ${scrub(result.stderr).slice(0, 300)}`,
   };
 }
 
-async function createPR(args: Record<string, any>): Promise<{ ok: boolean; data: any; error?: string }> {
+async function createPR(args: Record<string, any>, opts?: DevAgentToolOptions): Promise<{ ok: boolean; data: any; error?: string }> {
   const ws = workspaces.get(String(args.workspace_id || ''));
   if (!ws) return { ok: false, data: null, error: 'Workspace not found.' };
 
-  const token = GITHUB_TOKEN();
-  if (!token) return { ok: false, data: null, error: 'GITHUB_TOKEN not configured. Set GITHUB_TOKEN env var to create PRs.' };
+  const token = resolveGithubToken(opts);
+  if (!token) return { ok: false, data: null, error: 'No GitHub credential available. Connect the GitHub integration (Settings → Integrations) or set the GITHUB_TOKEN env var on the server.' };
 
   const title = String(args.title || '').trim();
   const body = String(args.body || '').trim();
@@ -566,7 +609,10 @@ async function createPR(args: Record<string, any>): Promise<{ ok: boolean; data:
   const remoteResult = await execInWorkspace(ws.dir, 'git remote get-url origin');
   const remoteUrl = remoteResult.stdout.trim();
   const match = remoteUrl.match(/github\.com[/:](.+?\/.+?)(?:\.git)?$/);
-  if (!match) return { ok: false, data: null, error: `Could not parse GitHub owner/repo from remote: ${remoteUrl}` };
+  if (!match) {
+    const scrubbedUrl = token ? remoteUrl.split(token).join('***') : remoteUrl;
+    return { ok: false, data: null, error: `Could not parse GitHub owner/repo from remote: ${scrubbedUrl}` };
+  }
   const ownerRepo = match[1];
 
   try {
@@ -862,7 +908,7 @@ export const DEV_AGENT_TOOL_SPECS: LlmToolSpec[] = [
     type: 'function',
     function: {
       name: `${TOOL_PREFIX}${SEP}create_pr`,
-      description: '[Dev Agent] Create a GitHub Pull Request from a workspace. Requires GITHUB_TOKEN env var.',
+      description: '[Dev Agent] Create a GitHub Pull Request from a workspace. Uses the connected GitHub integration credential (or the server GITHUB_TOKEN env var as fallback).',
       parameters: {
         type: 'object',
         properties: {
@@ -902,7 +948,7 @@ export const DEV_AGENT_TOOL_SPECS: LlmToolSpec[] = [
 
 // ── Tool Execution Router ────────────────────────────────────────────────────
 
-const TOOL_HANDLERS: Record<string, (args: Record<string, any>) => Promise<{ ok: boolean; data: any; error?: string }>> = {
+const TOOL_HANDLERS: Record<string, (args: Record<string, any>, opts?: DevAgentToolOptions) => Promise<{ ok: boolean; data: any; error?: string }>> = {
   clone_repo: cloneRepo,
   detect_project: detectAndReport,
   install_deps: installDeps,
@@ -923,7 +969,7 @@ export function isDevAgentTool(toolName: string): boolean {
   return toolName.startsWith(`${TOOL_PREFIX}${SEP}`);
 }
 
-export async function executeDevAgentTool(call: LlmToolCall): Promise<LlmToolCallResult> {
+export async function executeDevAgentTool(call: LlmToolCall, opts?: DevAgentToolOptions): Promise<LlmToolCallResult> {
   const start = Date.now();
   const toolSuffix = call.name.slice(`${TOOL_PREFIX}${SEP}`.length);
   const handler = TOOL_HANDLERS[toolSuffix];
@@ -941,7 +987,7 @@ export async function executeDevAgentTool(call: LlmToolCall): Promise<LlmToolCal
   }
 
   try {
-    const result = await handler(call.args ?? {});
+    const result = await handler(call.args ?? {}, opts);
     return {
       id: call.id,
       name: call.name,
