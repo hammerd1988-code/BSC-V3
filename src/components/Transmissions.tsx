@@ -759,21 +759,17 @@ export const Transmissions: React.FC = () => {
 
       if (isCasper) {
         // ── CASPER: route through full command pipeline with tools, memory, integrations ──
-        const history = recentTransmits
+        const conversationHistory = recentTransmits
           .slice(-20)
-          .map(t => {
-            const role = t.sender_id === currentUserId ? 'User' : 'Casper';
-            return `${role}: ${t.content}`;
-          })
-          .join('\n');
-
-        const commandText = history
-          ? `[DM conversation history]\n${history}\n\nLatest message from user: ${userMessage}`
-          : userMessage;
+          .map(t => ({
+            role: (t.sender_id === currentUserId ? 'user' : 'casper') as 'user' | 'casper',
+            text: t.content,
+          }));
 
         try {
           const casperResult = await sendCasperCommand({
-            command: commandText,
+            command: userMessage,
+            conversationHistory,
             surface: 'transmissions',
             source: currentUser?.role === 'admin' ? 'admin' : 'user',
             metadata: {
@@ -784,7 +780,10 @@ export const Transmissions: React.FC = () => {
           response = casperResult.response || "The void is silent. Try again?";
         } catch (casperErr: any) {
           console.warn('[Bot DM] Casper command failed, falling back to AI:', casperErr);
-          const fallbackPrompt = history ? `${history}\nUser: ${userMessage}\nCasper:` : userMessage;
+          const fallbackHistory = conversationHistory
+            .map(t => `${t.role === 'user' ? 'User' : 'Casper'}: ${t.text}`)
+            .join('\n');
+          const fallbackPrompt = fallbackHistory ? `${fallbackHistory}\nUser: ${userMessage}\nCasper:` : userMessage;
           try {
             response = await generateText(fallbackPrompt, undefined, {
               systemPrompt: 'You are Casper, the ghost-in-the-machine AI assistant of Blood Sweat Code. You are witty, helpful, and speak with a cyberpunk edge. Respond conversationally in DM context.',
