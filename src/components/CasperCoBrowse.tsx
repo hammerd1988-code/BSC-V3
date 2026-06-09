@@ -406,8 +406,13 @@ export const CasperCoBrowse: React.FC<CoBrowseProps> = ({
       if (text) messageParts.push(`User says: ${text}`);
       else if (img) messageParts.push('User shared an image. Respond based on the image analysis above.');
 
+      const conversationHistory = chatTurns
+        .filter(t => !t.pending && !t.error && t.text.trim())
+        .map(t => ({ role: t.role, text: t.text }));
+
       const result = await sendCasperCommand({
         command: messageParts.join('\n\n'),
+        conversationHistory,
         surface: 'guide',
         pageContext: { path: '/casper', feature: 'Ghost Browser Co-Browse', description: 'real-time co-browsing with Casper' },
         metadata: { client: 'cobrowse-chat', hasImage: !!img },
@@ -424,7 +429,7 @@ export const CasperCoBrowse: React.FC<CoBrowseProps> = ({
     } finally {
       setChatBusy(false);
     }
-  }, [chatDraft, chatBusy, currentFrame, ttsEnabled, unlockAudio, speakText, pendingImage]);
+  }, [chatDraft, chatBusy, chatTurns, currentFrame, ttsEnabled, unlockAudio, speakText, pendingImage]);
 
   const onChatKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendChat(); }
