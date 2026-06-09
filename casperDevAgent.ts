@@ -245,6 +245,12 @@ async function cloneRepo(args: Record<string, any>, opts?: DevAgentToolOptions):
     return { ok: false, data: { stdout: result.stdout, stderr: scrubbed.slice(0, 1000) }, error: `Clone failed: ${scrubbed.slice(0, 300)}${hint}` };
   }
 
+  // Strip the credential from the stored origin remote so the token never
+  // persists in .git/config on disk. Pushes re-inject it per-command.
+  if (token && cloneUrl !== repoUrl) {
+    await execInWorkspace(path.join(WORKSPACES_DIR, id), `git remote set-url origin '${shellQuote(repoUrl)}'`, { env: GIT_ENV });
+  }
+
   const projectType = detectProjectType(dir);
 
   const workspace: Workspace = {
@@ -554,7 +560,13 @@ async function gitOps(args: Record<string, any>, opts?: DevAgentToolOptions): Pr
       break;
     }
     case 'push': {
-      const remote = String(args.remote || 'origin').trim();
+      let remote = String(args.remote || 'origin').trim();
+      // The stored origin remote is credential-free (see cloneRepo), so
+      // inject the GitHub token into the push target per-command instead.
+      const pushToken = resolveGithubToken(opts);
+      if (remote === 'origin' && pushToken && ws.repoUrl.startsWith('https://github.com/')) {
+        remote = ws.repoUrl.replace('https://github.com/', `https://x-access-token:${pushToken}@github.com/`);
+      }
       const branch = String(args.branch || '').trim();
       command = branch ? `git push '${shellQuote(remote)}' '${shellQuote(branch)}'` : `git push '${shellQuote(remote)}' HEAD`;
       break;
@@ -571,7 +583,7 @@ async function gitOps(args: Record<string, any>, opts?: DevAgentToolOptions): Pr
     data: {
       workspace_id: ws.id,
       operation,
-      command,
+      command: scrub(command),
       exit_code: result.exitCode,
       output: scrub(result.stdout || result.stderr).slice(0, 4000),
     },
@@ -597,7 +609,10 @@ async function createPR(args: Record<string, any>, opts?: DevAgentToolOptions): 
   const remoteResult = await execInWorkspace(ws.dir, 'git remote get-url origin');
   const remoteUrl = remoteResult.stdout.trim();
   const match = remoteUrl.match(/github\.com[/:](.+?\/.+?)(?:\.git)?$/);
-  if (!match) return { ok: false, data: null, error: `Could not parse GitHub owner/repo from remote: ${remoteUrl}` };
+  if (!match) {
+    const scrubbedUrl = token ? remoteUrl.split(token).join('***') : remoteUrl;
+    return { ok: false, data: null, error: `Could not parse GitHub owner/repo from remote: ${scrubbedUrl}` };
+  }
   const ownerRepo = match[1];
 
   try {
