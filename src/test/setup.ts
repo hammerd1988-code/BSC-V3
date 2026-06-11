@@ -12,3 +12,6 @@ Object.defineProperty(window, 'scrollTo', {
   writable: true,
 });
 
+// Mock scrollIntoView which is not available in jsdom
+Element.prototype.scrollIntoView = vi.fn();
+
