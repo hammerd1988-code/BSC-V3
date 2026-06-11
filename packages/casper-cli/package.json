@@ -1,0 +1,45 @@
+{
+  "name": "@bsc/casper-cli",
+  "version": "0.1.0",
+  "description": "Casper AI agent CLI — local shell access, daemon mode, and remote orchestration for Blood Sweat Code",
+  "type": "module",
+  "bin": {
+    "casper": "./dist/bin/casper.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/bin/casper.js",
+    "lint": "tsc --noEmit"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "conf": "^13.0.1",
+    "ink": "^5.1.0",
+    "ink-text-input": "^6.0.0",
+    "open": "^10.1.0",
+    "openai": "^4.73.0",
+    "ora": "^8.1.1",
+    "react": "^18.3.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hammerd1988-code/BSC-V3.git",
+    "directory": "packages/casper-cli"
+  }
+}
