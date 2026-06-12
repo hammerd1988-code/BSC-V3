@@ -29,7 +29,7 @@ export interface CasperConfig {
 }
 
 const defaults: CasperConfig = {
-  relayUrl: 'wss://api.bloodsweatcode.org/ws/cli',
+  relayUrl: 'https://bloodsweatcode.org',
   machineId: `${os.hostname()}-${Math.random().toString(36).slice(2, 6)}`,
   machineName: os.hostname(),
   model: 'gpt-4.1-mini',
@@ -51,6 +51,10 @@ export function getConfig<K extends keyof CasperConfig>(key: K): CasperConfig[K]
 
 export function setConfig<K extends keyof CasperConfig>(key: K, value: CasperConfig[K]): void {
   config.set(key, value);
+}
+
+export function deleteConfig(key: keyof CasperConfig): void {
+  config.delete(key);
 }
 
 export function getAllConfig(): CasperConfig {
