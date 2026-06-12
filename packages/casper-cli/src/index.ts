@@ -4,6 +4,7 @@ import { startRepl } from './cli.js';
 import { startDaemon, stopDaemon, daemonStatus } from './daemon.js';
 import { runOnce } from './exec.js';
 import { getConfig, setConfig } from './config.js';
+import { loginFlow, logout, authStatus } from './auth.js';
 import chalk from 'chalk';
 
 const VERSION = '0.1.0';
@@ -66,6 +67,31 @@ daemon
   .description('Show daemon status')
   .action(async () => {
     await daemonStatus();
+  });
+
+// Auth (device-code flow against the Railway relay)
+const auth = program.command('auth').description('Link this machine to your BSC account');
+
+auth
+  .command('login')
+  .description('Link this machine via device code (approve at /casper/remote)')
+  .option('--relay <url>', 'Relay URL override')
+  .action(async (opts) => {
+    await loginFlow({ relayUrl: opts.relay });
+  });
+
+auth
+  .command('logout')
+  .description('Clear the stored relay token')
+  .action(() => {
+    logout();
+  });
+
+auth
+  .command('status')
+  .description('Show auth/link status')
+  .action(() => {
+    authStatus();
   });
 
 // Config management
