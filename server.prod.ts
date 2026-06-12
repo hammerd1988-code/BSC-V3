@@ -22,6 +22,7 @@ import { registerPushRoutes } from './pushNotifications.js';
 import { registerLiveKitRoutes } from './livekitRoutes.js';
 import { registerRunwayRoutes } from './runwayRoutes.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
+import { registerCasperRelay } from './casperRelay.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -93,6 +94,7 @@ async function startServer() {
   registerLiveKitRoutes(app, supabase);
   registerRunwayRoutes(app, supabase);
   registerCasperControlRoutes(app, supabase, casperMemory);
+  registerCasperRelay(io, app, supabase);
 
   // Webhook Authentication Middleware
   const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
