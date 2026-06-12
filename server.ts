@@ -16,6 +16,7 @@ import { registerColosseumRoutes } from './colosseumRoutes.js';
 import { initBotMayhemAutonomy, registerBotMayhemRoutes } from './botMayhemAutonomy.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
 import { registerStripeRoutes } from './stripeRoutes.js';
+import { registerCasperRelay } from './casperRelay.js';
 
 const supabase = createServerSupabaseClient();
 
@@ -81,6 +82,7 @@ async function startServer() {
   registerColosseumRoutes(app, supabase);
   registerBotMayhemRoutes(app);
   registerStripeRoutes(app, supabase);
+  registerCasperRelay(io, app, supabase);
 
   // Webhook Authentication Middleware
   const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
