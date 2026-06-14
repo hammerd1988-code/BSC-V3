@@ -18,7 +18,7 @@ import type { Express, Request, Response } from 'express';
 import type { Server as SocketServer, Socket } from 'socket.io';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { requireCasperAuth } from './casperControlCenter.js';
+import { requireCasperAuth, resolveCasperAuthFromToken } from './casperControlCenter.js';
 import type {
   CliToRelayMessage,
   RelayToCliMessage,
@@ -222,15 +222,30 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
   // ── Web client stream subscription (main namespace) ─────────────────────────
 
   io.on('connection', (socket) => {
-    socket.on('relay:subscribe', (data: { userId?: string }) => {
-      if (data?.userId && typeof data.userId === 'string') {
-        socket.join(userRoom(data.userId));
+    // Subscribing to a user's relay room exposes that user's live machine
+    // operations (tool output, shell results, approval prompts). The main
+    // namespace has no auth middleware, so the subscriber MUST present a valid
+    // Supabase token; the room is then derived from the verified profile id so
+    // a socket can only ever listen to its own operator's stream.
+    socket.on('relay:subscribe', async (data: { token?: string }) => {
+      if (!data || typeof data.token !== 'string') {
+        socket.emit('relay:subscribe_error', { error: 'A Supabase access token is required.' });
+        return;
       }
+      const auth = await resolveCasperAuthFromToken(data.token, supabase);
+      if (!auth.ok || !auth.profile) {
+        socket.emit('relay:subscribe_error', { error: auth.message ?? 'Not authorized to subscribe.' });
+        return;
+      }
+      // The room is derived from the verified token — never from a client
+      // supplied id — so a socket can only ever join its own operator's room.
+      socket.data.relayUserId = auth.profile.id;
+      socket.join(userRoom(auth.profile.id));
+      socket.emit('relay:subscribed', { userId: auth.profile.id });
     });
-    socket.on('relay:unsubscribe', (data: { userId?: string }) => {
-      if (data?.userId && typeof data.userId === 'string') {
-        socket.leave(userRoom(data.userId));
-      }
+    socket.on('relay:unsubscribe', () => {
+      const userId = socket.data.relayUserId;
+      if (typeof userId === 'string') socket.leave(userRoom(userId));
     });
   });
 
