@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, Monitor, Power, RefreshCw, Send, ShieldAlert, ShieldCheck, Terminal, Link2, XCircle } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { socket } from '../lib/socket';
+import { getValidSession } from '../lib/authSession';
 import {
   listRelayMachines,
   sendRelayDirective,
@@ -89,8 +90,27 @@ export const CasperRemoteOps: React.FC = () => {
   // Live relay stream over the main Socket.IO connection.
   useEffect(() => {
     if (!currentUser) return;
+    let cancelled = false;
     socket.connect();
-    socket.emit('relay:subscribe', { userId: currentUser.id });
+
+    // Join the relay room with a verified Supabase token (the server only
+    // admits sockets whose token resolves to this user). Re-run on every
+    // (re)connect so room membership survives socket reconnects.
+    const subscribe = async () => {
+      try {
+        const session = await getValidSession();
+        if (cancelled) return;
+        socket.emit('relay:subscribe', { token: session.access_token });
+      } catch {
+        appendEntry('error', 'Could not authenticate the live relay stream — sign in again.');
+      }
+    };
+    void subscribe();
+    socket.on('connect', subscribe);
+
+    const onSubscribeError = (data: { error?: string }) => {
+      appendEntry('error', `Relay stream rejected: ${data?.error ?? 'unauthorized'}`);
+    };
 
     const onOnline = (data: { machineId: string }) => {
       appendEntry('system', `Machine online: ${data.machineId}`);
@@ -124,6 +144,7 @@ export const CasperRemoteOps: React.FC = () => {
       setApprovals((prev) => prev.filter((a) => a.directiveId !== data.directiveId));
     };
 
+    socket.on('relay:subscribe_error', onSubscribeError);
     socket.on('relay:machine_online', onOnline);
     socket.on('relay:machine_offline', onOffline);
     socket.on('relay:tool_start', onToolStart);
@@ -133,7 +154,10 @@ export const CasperRemoteOps: React.FC = () => {
     socket.on('relay:directive_complete', onComplete);
 
     return () => {
-      socket.emit('relay:unsubscribe', { userId: currentUser.id });
+      cancelled = true;
+      socket.emit('relay:unsubscribe');
+      socket.off('connect', subscribe);
+      socket.off('relay:subscribe_error', onSubscribeError);
       socket.off('relay:machine_online', onOnline);
       socket.off('relay:machine_offline', onOffline);
       socket.off('relay:tool_start', onToolStart);
