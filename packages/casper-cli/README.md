@@ -63,6 +63,13 @@ casper daemon stop
 - All tool executions are logged to `~/.config/casper-cli/history.jsonl`
 - Destructive commands (rm -rf, force push, etc.) require confirmation
 - Configurable approval levels: `auto`, `confirm-local`, `confirm-remote`
+  - **`auto`** — never prompt; runs everything (use only on trusted machines).
+  - **`confirm-local`** — prompt at the local terminal in `casper chat`. In
+    `casper daemon` mode there is no attached terminal, so any non-`auto` level
+    (including `confirm-local`) escalates the prompt to a **remote approval**
+    card in the web Remote Ops console instead. Approvals time out (deny) if
+    left unanswered.
+  - **`confirm-remote`** — always route approvals to the web/mobile operator.
 
 ## Architecture
 
