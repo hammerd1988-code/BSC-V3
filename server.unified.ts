@@ -229,10 +229,11 @@ app.post("/api/cred/exchange", async (req, res) => {
     }
 });
 
-  // ── Text-to-Speech (OpenAI Ash) ──
+  // ── Text-to-Speech (OpenAI) ──
+  const OPENAI_TTS_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'] as const;
   app.post("/api/tts", async (req, res) => {
     try {
-      const { text, speed } = req.body;
+      const { text, voice, speed } = req.body;
 
       if (!text || typeof text !== 'string') {
         return res.status(400).json({ error: 'text is required' });
@@ -241,11 +242,12 @@ app.post("/api/cred/exchange", async (req, res) => {
       const apiKey = process.env.OPENAI_TTS_KEY || process.env.OPENAI_API_KEY;
       if (!apiKey) {
         console.warn('[tts] OPENAI_TTS_KEY/OPENAI_API_KEY is not configured');
-        return res.status(503).json({ error: 'OpenAI Ash TTS unavailable' });
+        return res.status(503).json({ error: 'OpenAI TTS unavailable' });
       }
 
       const input = text.slice(0, 4096);
       const speechSpeed = typeof speed === 'number' ? Math.max(0.25, Math.min(4.0, speed)) : 1.05;
+      const selectedVoice = typeof voice === 'string' && OPENAI_TTS_VOICES.includes(voice as any) ? voice : 'ash';
 
       const response = await fetch('https://api.openai.com/v1/audio/speech', {
         method: 'POST',
@@ -255,7 +257,7 @@ app.post("/api/cred/exchange", async (req, res) => {
         },
         body: JSON.stringify({
           model: 'tts-1',
-          voice: 'ash',
+          voice: selectedVoice,
           input,
           speed: speechSpeed,
           response_format: 'mp3',
@@ -265,7 +267,7 @@ app.post("/api/cred/exchange", async (req, res) => {
       if (!response.ok) {
         const errText = await response.text();
         console.warn(`[tts] OpenAI returned ${response.status}: ${errText.slice(0, 300)}`);
-        return res.status(503).json({ error: 'OpenAI Ash TTS unavailable' });
+        return res.status(503).json({ error: 'OpenAI TTS unavailable' });
       }
 
       const audioBuffer = Buffer.from(await response.arrayBuffer());
