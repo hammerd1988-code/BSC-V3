@@ -5,25 +5,30 @@ import {
   ArrowLeft,
   Bot,
   Brain,
+  CheckSquare,
   ChevronDown,
   Clock,
   Command,
   Copy,
   Check,
+  FolderPlus,
   Loader2,
   MessageSquare,
   Mic,
   MicOff,
   Phone,
   PhoneOff,
+  Play,
   ScrollText,
   Send,
   Settings,
   Shield,
   Sparkles,
+  Square,
   Swords,
   Trash2,
   User,
+  Users,
   Volume2,
   VolumeX,
   X,
@@ -102,10 +107,26 @@ interface ConversationMeta {
   lastActive: number;
 }
 
+interface Squad {
+  id: string;
+  name: string;
+  botIds: string[];
+  createdAt: number;
+}
+
+interface BatchResponse {
+  botId: string;
+  botName: string;
+  glowColor: string;
+  response: string;
+  status: 'pending' | 'generating' | 'done' | 'error';
+}
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const CHAT_STORAGE_KEY = 'bsc_bot_conversations';
 const INSTRUCTION_STORAGE_KEY = 'bsc_bot_instructions';
+const SQUAD_STORAGE_KEY = 'bsc_bot_squads';
 const MAX_HISTORY = 30;
 
 const FIGHTING_STYLES: Record<string, string> = {
@@ -208,6 +229,25 @@ function saveInstruction(botId: string, msg: ChatMessage, userId?: string) {
   }
 }
 
+// ── Squad helpers ────────────────────────────────────────────────────────────
+
+function loadSquads(): Squad[] {
+  try {
+    const raw = localStorage.getItem(SQUAD_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSquads(squads: Squad[]) {
+  try {
+    localStorage.setItem(SQUAD_STORAGE_KEY, JSON.stringify(squads));
+  } catch {
+    // storage full
+  }
+}
+
 function buildSystemPrompt(gladiator: GladiatorRow, config: ForgeConfig | null, profile: BotProfile | null): string {
   const lines: string[] = [
     `You are ${gladiator.name}, a gladiator in the BloodSweatCode Colosseum.`,
@@ -247,13 +287,33 @@ function BotDirectory({
   selectedId,
   onSelect,
   loading,
+  multiSelect,
+  selectedIds,
+  onToggleSelect,
+  onSelectAll,
+  onClearSelection,
+  squads,
+  onLoadSquad,
+  onSaveSquad,
+  onDeleteSquad,
 }: {
   bots: GladiatorRow[];
   selectedId: string | null;
   onSelect: (bot: GladiatorRow) => void;
   loading: boolean;
+  multiSelect: boolean;
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
+  onSelectAll: () => void;
+  onClearSelection: () => void;
+  squads: Squad[];
+  onLoadSquad: (squad: Squad) => void;
+  onSaveSquad: (name: string) => void;
+  onDeleteSquad: (id: string) => void;
 }) {
   const [search, setSearch] = useState('');
+  const [showSquadPanel, setShowSquadPanel] = useState(false);
+  const [newSquadName, setNewSquadName] = useState('');
   const filtered = useMemo(
     () => bots.filter((b) => b.name.toLowerCase().includes(search.toLowerCase())),
     [bots, search],
@@ -261,7 +321,7 @@ function BotDirectory({
 
   return (
     <div className="flex h-full flex-col border-r border-white/10 bg-black/40">
-      <div className="border-b border-white/10 p-3">
+      <div className="border-b border-white/10 p-3 space-y-2">
         <div className="relative">
           <input
             type="text"
@@ -276,6 +336,106 @@ function BotDirectory({
             </button>
           )}
         </div>
+
+        {/* Multi-select controls */}
+        {multiSelect && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={onSelectAll}
+                className="flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[9px] font-bold text-gray-400 hover:bg-white/10 transition"
+              >
+                All ({bots.length})
+              </button>
+              <button
+                onClick={onClearSelection}
+                className="flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[9px] font-bold text-gray-400 hover:bg-white/10 transition"
+              >
+                Clear
+              </button>
+              <button
+                onClick={() => setShowSquadPanel(!showSquadPanel)}
+                className={cn(
+                  'rounded-lg border px-2 py-1 text-[9px] font-bold transition',
+                  showSquadPanel ? 'border-amber-500/50 bg-amber-500/20 text-amber-300' : 'border-white/10 bg-white/5 text-gray-400 hover:bg-white/10',
+                )}
+                title="Manage squads"
+              >
+                <Users className="h-3 w-3" />
+              </button>
+            </div>
+            <p className="text-[9px] text-cyan-400 font-bold">{selectedIds.size} selected</p>
+
+            {/* Squad panel */}
+            <AnimatePresence>
+              {showSquadPanel && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="overflow-hidden"
+                >
+                  <div className="rounded-xl border border-white/10 bg-white/5 p-2 space-y-2">
+                    <p className="text-[8px] font-black uppercase tracking-[0.3em] text-gray-500">Squads</p>
+                    {/* Save current selection */}
+                    {selectedIds.size > 0 && (
+                      <div className="flex gap-1">
+                        <input
+                          type="text"
+                          value={newSquadName}
+                          onChange={(e) => setNewSquadName(e.target.value)}
+                          placeholder="Squad name..."
+                          className="flex-1 rounded-lg border border-white/10 bg-black/40 px-2 py-1 text-[10px] text-white placeholder-gray-500 outline-none"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && newSquadName.trim()) {
+                              onSaveSquad(newSquadName.trim());
+                              setNewSquadName('');
+                            }
+                          }}
+                        />
+                        <button
+                          onClick={() => {
+                            if (newSquadName.trim()) {
+                              onSaveSquad(newSquadName.trim());
+                              setNewSquadName('');
+                            }
+                          }}
+                          disabled={!newSquadName.trim()}
+                          className="rounded-lg bg-cyan-500/20 px-2 py-1 text-[9px] font-bold text-cyan-300 hover:bg-cyan-500/30 transition disabled:opacity-30"
+                        >
+                          <FolderPlus className="h-3 w-3" />
+                        </button>
+                      </div>
+                    )}
+                    {/* Saved squads */}
+                    {squads.length === 0 ? (
+                      <p className="text-[9px] text-gray-600">No squads saved yet</p>
+                    ) : (
+                      squads.map((sq) => (
+                        <div key={sq.id} className="flex items-center gap-1.5 rounded-lg border border-white/5 bg-black/20 px-2 py-1.5">
+                          <button
+                            onClick={() => onLoadSquad(sq)}
+                            className="flex-1 text-left text-[10px] font-bold text-white hover:text-cyan-300 transition truncate"
+                            title={`${sq.botIds.length} bots`}
+                          >
+                            {sq.name}
+                            <span className="ml-1 text-gray-500">({sq.botIds.length})</span>
+                          </button>
+                          <button
+                            onClick={() => onDeleteSquad(sq.id)}
+                            className="shrink-0 rounded p-0.5 text-gray-500 hover:text-red-400 transition"
+                          >
+                            <X className="h-2.5 w-2.5" />
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto">
         {loading ? (
@@ -288,16 +448,27 @@ function BotDirectory({
           </div>
         ) : (
           filtered.map((bot) => {
-            const isActive = bot.id === selectedId;
+            const isActive = !multiSelect && bot.id === selectedId;
+            const isChecked = multiSelect && selectedIds.has(bot.id);
             return (
               <button
                 key={bot.id}
-                onClick={() => onSelect(bot)}
+                onClick={() => multiSelect ? onToggleSelect(bot.id) : onSelect(bot)}
                 className={cn(
                   'flex w-full items-center gap-3 border-b border-white/5 px-3 py-3 text-left transition-colors',
-                  isActive ? 'bg-cyan-500/10 border-l-2 border-l-cyan-400' : 'hover:bg-white/5',
+                  isActive ? 'bg-cyan-500/10 border-l-2 border-l-cyan-400' : '',
+                  isChecked ? 'bg-amber-500/10 border-l-2 border-l-amber-400' : '',
+                  !isActive && !isChecked ? 'hover:bg-white/5' : '',
                 )}
               >
+                {multiSelect && (
+                  <div className="shrink-0">
+                    {isChecked
+                      ? <CheckSquare className="h-4 w-4 text-amber-400" />
+                      : <Square className="h-4 w-4 text-gray-600" />
+                    }
+                  </div>
+                )}
                 <div
                   className="h-9 w-9 shrink-0 overflow-hidden rounded-xl border border-white/10"
                   style={{ boxShadow: `0 0 12px ${bot.glow_color}44` }}
@@ -310,7 +481,7 @@ function BotDirectory({
                   />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className={cn('truncate text-xs font-bold', isActive ? 'text-cyan-300' : 'text-white')}>
+                  <p className={cn('truncate text-xs font-bold', isActive ? 'text-cyan-300' : isChecked ? 'text-amber-300' : 'text-white')}>
                     {bot.name}
                   </p>
                   <p className="truncate text-[10px] text-gray-500">
@@ -389,6 +560,14 @@ export function BotChat() {
   // Battle memory
   const [battleMemory, setBattleMemory] = useState<string>('');
 
+  // Multi-select & squad state
+  const [multiSelect, setMultiSelect] = useState(false);
+  const [selectedBotIds, setSelectedBotIds] = useState<Set<string>>(new Set());
+  const [squads, setSquads] = useState<Squad[]>(loadSquads);
+  const [batchDirective, setBatchDirective] = useState('');
+  const [batchResponses, setBatchResponses] = useState<BatchResponse[]>([]);
+  const [batchRunning, setBatchRunning] = useState(false);
+
   // Voice chat state
   const [voiceMode, setVoiceMode] = useState(false);
   const [listening, setListening] = useState(false);
@@ -400,11 +579,12 @@ export function BotChat() {
   const recognitionRef = useRef<any>(null);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
-  // Mimo / server TTS voices
-  type ServerVoice = { id: string; label: string; provider: string; description: string };
+  // Server TTS voices (Mimo, OpenAI)
+  type ServerVoice = { id: string; label: string; provider: string; description: string; tag?: string };
   const [serverVoices, setServerVoices] = useState<ServerVoice[]>([]);
-  const [voiceProvider, setVoiceProvider] = useState<string>('browser'); // 'browser' | 'mimo-alloy' | 'mimo-echo' etc.
+  const [voiceProvider, setVoiceProvider] = useState<string>('browser'); // 'browser' | 'mimo-alloy' | 'openai-ash' etc.
   const mimoAudioRef = useRef<HTMLAudioElement | null>(null);
+  const casperVoiceAppliedRef = useRef<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -434,12 +614,33 @@ export function BotChat() {
       .then((r) => (r.ok ? r.json() : { voices: [] }))
       .then((data: { voices: ServerVoice[] }) => {
         setServerVoices(data.voices ?? []);
-        // Auto-select first Mimo voice if available
+        // Auto-select Casper's voice if chatting with Casper, else first OpenAI voice
+        const casperVoice = (data.voices ?? []).find((v) => v.tag === 'casper');
+        const openaiVoice = (data.voices ?? []).find((v) => v.provider === 'openai');
         const mimoVoice = (data.voices ?? []).find((v) => v.provider === 'mimo');
-        if (mimoVoice) setVoiceProvider(mimoVoice.id);
+        if (casperVoice && selectedBot?.name?.toLowerCase() === 'casper') {
+          setVoiceProvider(casperVoice.id);
+        } else if (openaiVoice) {
+          setVoiceProvider(openaiVoice.id);
+        } else if (mimoVoice) {
+          setVoiceProvider(mimoVoice.id);
+        }
       })
       .catch(() => {});
   }, []);
+
+  // Auto-switch to Casper's voice when selecting the Casper bot
+  useEffect(() => {
+    if (!selectedBot) return;
+    const isCasper = selectedBot.name?.toLowerCase() === 'casper';
+    const casperVoice = serverVoices.find((v) => v.tag === 'casper');
+    if (isCasper && casperVoice && casperVoiceAppliedRef.current !== selectedBot.id) {
+      setVoiceProvider(casperVoice.id);
+      casperVoiceAppliedRef.current = selectedBot.id;
+    } else if (!isCasper && casperVoiceAppliedRef.current) {
+      casperVoiceAppliedRef.current = null;
+    }
+  }, [selectedBot, serverVoices]);
 
   // Speech-to-text
   const startListening = useCallback(() => {
@@ -482,14 +683,18 @@ export function BotChat() {
     if (!ttsEnabled || !selectedBot) return;
     const botId = selectedBot.id;
 
-    // Mimo / server TTS — use the voice the user picked in the dropdown
+    // Server TTS — route OpenAI voices through /api/tts, Mimo through /api/tts/mimo
     if (voiceProvider !== 'browser') {
+      const isOpenAI = voiceProvider.startsWith('openai-');
       const providerVoice = voiceProvider.replace(/^mimo-/, '').replace(/^openai-/, '');
+      const isCasperVoice = serverVoices.find((v) => v.id === voiceProvider)?.tag === 'casper';
+      const ttsUrl = isOpenAI ? '/api/tts' : '/api/tts/mimo';
+      const ttsSpeed = isCasperVoice ? 1.05 : 1.0;
       setSpeaking(true);
-      fetch('/api/tts/mimo', {
+      fetch(ttsUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: text.slice(0, 4096), voice: providerVoice, speed: 1.0 }),
+        body: JSON.stringify({ text: text.slice(0, 4096), voice: providerVoice, speed: ttsSpeed }),
       })
         .then((r) => {
           if (!r.ok) throw new Error(`Mimo TTS ${r.status}`);
@@ -783,6 +988,110 @@ export function BotChat() {
     }
   };
 
+  // ── Squad & batch directive callbacks ────────────────────────────────────
+
+  const toggleBotSelect = useCallback((id: string) => {
+    setSelectedBotIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const selectAllBots = useCallback(() => {
+    setSelectedBotIds(new Set(bots.map((b) => b.id)));
+  }, [bots]);
+
+  const clearBotSelection = useCallback(() => {
+    setSelectedBotIds(new Set());
+  }, []);
+
+  const handleSaveSquad = useCallback((name: string) => {
+    const newSquad: Squad = { id: `sq-${Date.now()}`, name, botIds: [...selectedBotIds], createdAt: Date.now() };
+    const updated = [...squads, newSquad];
+    setSquads(updated);
+    saveSquads(updated);
+  }, [selectedBotIds, squads]);
+
+  const handleLoadSquad = useCallback((squad: Squad) => {
+    setSelectedBotIds(new Set(squad.botIds));
+  }, []);
+
+  const handleDeleteSquad = useCallback((id: string) => {
+    const updated = squads.filter((s) => s.id !== id);
+    setSquads(updated);
+    saveSquads(updated);
+  }, [squads]);
+
+  const sendBatchDirective = useCallback(async () => {
+    const text = batchDirective.trim();
+    if (!text || batchRunning || selectedBotIds.size === 0) return;
+
+    const chatGate = canAccess('bot_chat');
+    if (!chatGate.allowed) { setUpgradeGate(chatGate); return; }
+
+    setBatchRunning(true);
+    const selectedBots = bots.filter((b) => selectedBotIds.has(b.id));
+
+    // Initialize response slots
+    const initial: BatchResponse[] = selectedBots.map((b) => ({
+      botId: b.id,
+      botName: b.name,
+      glowColor: b.glow_color,
+      response: '',
+      status: 'pending',
+    }));
+    setBatchResponses(initial);
+
+    // Fire all requests concurrently
+    const promises = selectedBots.map(async (bot, idx) => {
+      setBatchResponses((prev) => prev.map((r, i) => i === idx ? { ...r, status: 'generating' } : r));
+      void recordUsage('bot_chat');
+
+      try {
+        const sysPrompt = buildSystemPrompt(bot, null, null);
+        let botResponse = '';
+
+        // Server-side AI first
+        try {
+          const session = await getValidSession();
+          const res = await fetch('/api/casper/command', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({
+              command: `[Bot Chat — respond as "${bot.name}"]\n\nSystem context:\n${sysPrompt}\n\nUser says: "${text}"`,
+              surface: 'guide',
+              metadata: { client: 'bot-chat-batch', gladiatorId: bot.id },
+            }),
+          });
+          const data = await res.json();
+          if (data.response) botResponse = data.response;
+        } catch {
+          // fallback
+        }
+
+        if (!botResponse) {
+          botResponse = await generateText(`User: ${text}\n${bot.name}:`, currentUser?.ai_settings, {
+            systemPrompt: sysPrompt,
+            temperature: 0.85,
+            maxTokens: 512,
+          });
+        }
+
+        if (!botResponse) botResponse = `*${bot.name} stares silently*`;
+        setBatchResponses((prev) => prev.map((r, i) => i === idx ? { ...r, response: botResponse, status: 'done' } : r));
+      } catch {
+        setBatchResponses((prev) => prev.map((r, i) => i === idx ? { ...r, response: 'Connection lost.', status: 'error' } : r));
+      }
+    });
+
+    await Promise.all(promises);
+    setBatchRunning(false);
+  }, [batchDirective, batchRunning, selectedBotIds, bots, currentUser, canAccess, recordUsage]);
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#030308]">
@@ -803,51 +1112,74 @@ export function BotChat() {
           <MessageSquare className="h-5 w-5 text-cyan-400" />
           <div>
             <h1 className="text-sm font-black uppercase tracking-widest bg-gradient-to-r from-cyan-400 via-purple-400 to-red-400 bg-clip-text text-transparent">
-              Bot Chat
+              {multiSelect ? 'Squad Command' : 'Bot Chat'}
             </h1>
-            <p className="text-[10px] text-gray-500">Direct message any gladiator</p>
+            <p className="text-[10px] text-gray-500">
+              {multiSelect ? `${selectedBotIds.size} bots selected — batch directive mode` : 'Direct message any gladiator'}
+            </p>
           </div>
         </div>
 
-        {selectedBot && (
-          <div className="flex items-center gap-2">
-            {isOwner && (
-              <button
-                onClick={() => setInstructionMode(!instructionMode)}
-                className={cn(
-                  'flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest transition-all',
-                  instructionMode
-                    ? 'border-amber-500/50 bg-amber-500/20 text-amber-300'
-                    : 'border-white/10 bg-white/5 text-gray-400 hover:bg-white/10',
-                )}
-                title="Toggle instruction mode — commands are saved and logged"
-              >
-                <Command className="h-3 w-3" />
-                {instructionMode ? 'CMD Mode' : 'Chat'}
-              </button>
+        <div className="flex items-center gap-2">
+          {/* Squad mode toggle — always visible */}
+          <button
+            onClick={() => {
+              setMultiSelect(!multiSelect);
+              if (!multiSelect) setBatchResponses([]);
+            }}
+            className={cn(
+              'flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest transition-all',
+              multiSelect
+                ? 'border-amber-500/50 bg-amber-500/20 text-amber-300'
+                : 'border-white/10 bg-white/5 text-gray-400 hover:bg-white/10',
             )}
-            {isOwner && (
-              <button
-                onClick={() => setShowInstructions(!showInstructions)}
-                className={cn(
-                  'rounded-lg border p-2 transition-all',
-                  showInstructions
-                    ? 'border-amber-500/50 bg-amber-500/20 text-amber-300'
-                    : 'border-white/10 bg-white/5 text-gray-400 hover:bg-white/10',
-                )}
-                title="View instruction log"
-              >
-                <ScrollText className="h-4 w-4" />
-              </button>
-            )}
-            <button
-              onClick={() => setShowDirectory(!showDirectory)}
-              className="rounded-lg border border-white/10 bg-white/5 p-2 text-gray-400 hover:bg-white/10 transition md:hidden"
-            >
-              <Bot className="h-4 w-4" />
-            </button>
-          </div>
-        )}
+            title={multiSelect ? 'Exit squad mode' : 'Select multiple bots to send batch directives'}
+          >
+            <Users className="h-3 w-3" />
+            {multiSelect ? 'Squad' : 'Squad'}
+          </button>
+
+          {/* Single-bot controls (hidden in multi-select) */}
+          {!multiSelect && selectedBot && (
+            <>
+              {isOwner && (
+                <button
+                  onClick={() => setInstructionMode(!instructionMode)}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest transition-all',
+                    instructionMode
+                      ? 'border-amber-500/50 bg-amber-500/20 text-amber-300'
+                      : 'border-white/10 bg-white/5 text-gray-400 hover:bg-white/10',
+                  )}
+                  title="Toggle instruction mode — commands are saved and logged"
+                >
+                  <Command className="h-3 w-3" />
+                  {instructionMode ? 'CMD Mode' : 'Chat'}
+                </button>
+              )}
+              {isOwner && (
+                <button
+                  onClick={() => setShowInstructions(!showInstructions)}
+                  className={cn(
+                    'rounded-lg border p-2 transition-all',
+                    showInstructions
+                      ? 'border-amber-500/50 bg-amber-500/20 text-amber-300'
+                      : 'border-white/10 bg-white/5 text-gray-400 hover:bg-white/10',
+                  )}
+                  title="View instruction log"
+                >
+                  <ScrollText className="h-4 w-4" />
+                </button>
+              )}
+            </>
+          )}
+          <button
+            onClick={() => setShowDirectory(!showDirectory)}
+            className="rounded-lg border border-white/10 bg-white/5 p-2 text-gray-400 hover:bg-white/10 transition md:hidden"
+          >
+            <Bot className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       {/* Main content area */}
@@ -867,6 +1199,15 @@ export function BotChat() {
                 selectedId={selectedBot?.id ?? null}
                 onSelect={(bot) => selectBot(bot)}
                 loading={loading}
+                multiSelect={multiSelect}
+                selectedIds={selectedBotIds}
+                onToggleSelect={toggleBotSelect}
+                onSelectAll={selectAllBots}
+                onClearSelection={clearBotSelection}
+                squads={squads}
+                onLoadSquad={handleLoadSquad}
+                onSaveSquad={handleSaveSquad}
+                onDeleteSquad={handleDeleteSquad}
               />
             </motion.div>
           )}
@@ -874,7 +1215,142 @@ export function BotChat() {
 
         {/* Chat area */}
         <div className="flex flex-1 flex-col min-w-0">
-          {selectedBot ? (
+          {/* ── Batch Directive Mode (Squad) ────────────────────────── */}
+          {multiSelect ? (
+            <div className="flex flex-1 flex-col">
+              {/* Batch directive header */}
+              <div className="flex items-center gap-3 border-b border-amber-500/20 bg-amber-500/5 px-4 py-3">
+                <Users className="h-5 w-5 text-amber-400" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-amber-300">
+                    Squad Directive — {selectedBotIds.size} bots
+                  </p>
+                  <p className="text-[9px] text-gray-500 truncate">
+                    {selectedBotIds.size === 0
+                      ? 'Select bots from the sidebar to begin'
+                      : bots.filter((b) => selectedBotIds.has(b.id)).map((b) => b.name).join(', ')}
+                  </p>
+                </div>
+                {batchResponses.length > 0 && (
+                  <button
+                    onClick={() => setBatchResponses([])}
+                    className="rounded-lg border border-white/10 bg-white/5 p-1.5 text-gray-500 hover:text-red-400 transition"
+                    title="Clear results"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Results grid */}
+              <div className="flex-1 overflow-y-auto p-4">
+                {batchResponses.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-full gap-4 text-gray-500">
+                    <Users className="h-16 w-16 opacity-30" />
+                    <h2 className="text-lg font-black uppercase tracking-widest">Squad Command Center</h2>
+                    <p className="text-xs max-w-md text-center text-gray-600">
+                      Select bots from the sidebar, save them as squads, and send batch directives.
+                      Every selected bot will execute the command in parallel and report back.
+                    </p>
+                    {squads.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {squads.map((sq) => (
+                          <button
+                            key={sq.id}
+                            onClick={() => handleLoadSquad(sq)}
+                            className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] font-bold text-gray-300 hover:bg-white/10 transition"
+                          >
+                            <Users className="h-3 w-3 text-amber-400" />
+                            {sq.name}
+                            <span className="text-gray-500">({sq.botIds.length})</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="grid gap-3 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
+                    {batchResponses.map((resp) => (
+                      <motion.div
+                        key={resp.botId}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className={cn(
+                          'rounded-2xl border p-4 transition-all',
+                          resp.status === 'done' ? 'border-white/10 bg-white/[0.03]'
+                            : resp.status === 'generating' ? 'border-cyan-500/30 bg-cyan-500/5'
+                            : resp.status === 'error' ? 'border-red-500/30 bg-red-500/5'
+                            : 'border-white/5 bg-white/[0.02]',
+                        )}
+                      >
+                        <div className="flex items-center gap-2 mb-2">
+                          <div
+                            className="h-7 w-7 shrink-0 overflow-hidden rounded-lg border border-white/10"
+                            style={{ boxShadow: `0 0 8px ${resp.glowColor}44` }}
+                          >
+                            <img
+                              src={avatarUrlForBot(bots.find((b) => b.id === resp.botId) ?? { id: resp.botId, name: resp.botName, avatar_url: null } as GladiatorRow)}
+                              alt={resp.botName}
+                              className="h-full w-full object-cover"
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-black text-white truncate">{resp.botName}</p>
+                          </div>
+                          {resp.status === 'generating' && <Loader2 className="h-3.5 w-3.5 animate-spin text-cyan-400" />}
+                          {resp.status === 'done' && <Check className="h-3.5 w-3.5 text-emerald-400" />}
+                          {resp.status === 'error' && <X className="h-3.5 w-3.5 text-red-400" />}
+                          {resp.status === 'pending' && <Clock className="h-3.5 w-3.5 text-gray-500" />}
+                        </div>
+                        <p className={cn(
+                          'text-xs leading-5 whitespace-pre-wrap',
+                          resp.status === 'done' ? 'text-white/80' : resp.status === 'error' ? 'text-red-300' : 'text-gray-600',
+                        )}>
+                          {resp.response || (resp.status === 'generating' ? 'Generating...' : resp.status === 'pending' ? 'Waiting...' : '')}
+                        </p>
+                      </motion.div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Batch input */}
+              <div className="border-t border-white/10 bg-black/40 p-4">
+                <div className="flex items-end gap-3">
+                  <div className="flex-1 relative">
+                    <textarea
+                      value={batchDirective}
+                      onChange={(e) => setBatchDirective(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          sendBatchDirective();
+                        }
+                      }}
+                      placeholder={selectedBotIds.size === 0 ? 'Select bots first...' : `Directive for ${selectedBotIds.size} bots...`}
+                      disabled={selectedBotIds.size === 0 || batchRunning}
+                      className="w-full resize-none rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white placeholder-gray-500 outline-none focus:border-amber-500/50 disabled:opacity-30"
+                      rows={2}
+                    />
+                  </div>
+                  <button
+                    onClick={sendBatchDirective}
+                    disabled={!batchDirective.trim() || selectedBotIds.size === 0 || batchRunning}
+                    className="rounded-xl bg-amber-500 p-3 transition-all hover:bg-amber-600 text-black disabled:opacity-30"
+                  >
+                    {batchRunning ? (
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    ) : (
+                      <Play className="h-5 w-5" />
+                    )}
+                  </button>
+                </div>
+                <p className="mt-1.5 text-[9px] text-gray-600">
+                  Enter to send &middot; All selected bots execute in parallel
+                </p>
+              </div>
+            </div>
+          ) : selectedBot ? (
             <>
               {/* Bot info bar */}
               <div className="flex items-center gap-3 border-b border-white/5 bg-black/30 px-4 py-2">
@@ -1147,6 +1623,14 @@ export function BotChat() {
                       className="overflow-hidden"
                     >
                       <div className="mt-3 rounded-xl border border-white/10 bg-white/5 p-3 space-y-3">
+                        {/* Casper voice auto-lock indicator */}
+                        {selectedBot?.name?.toLowerCase() === 'casper' && serverVoices.some((v) => v.tag === 'casper') && (
+                          <div className="flex items-center gap-2 rounded-lg bg-cyan-500/10 border border-cyan-500/20 px-3 py-1.5">
+                            <Zap className="h-3 w-3 text-cyan-400" />
+                            <span className="text-[9px] font-bold text-cyan-300 uppercase tracking-widest">Casper&apos;s Voice — OpenAI Ash @ 1.05x</span>
+                          </div>
+                        )}
+
                         {/* Voice Provider Selector */}
                         <div>
                           <p className="text-[9px] font-bold uppercase tracking-widest text-gray-500 mb-1">Voice Engine</p>
@@ -1155,14 +1639,30 @@ export function BotChat() {
                             onChange={(e) => setVoiceProvider(e.target.value)}
                             className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-white outline-none"
                           >
-                            {serverVoices.map((v) => (
-                              <option key={v.id} value={v.id}>
-                                {v.label}
-                              </option>
-                            ))}
-                            {serverVoices.length === 0 && (
-                              <option value="browser">Browser Native</option>
+                            {serverVoices.filter((v) => v.provider === 'openai').length > 0 && (
+                              <optgroup label="OpenAI TTS">
+                                {serverVoices.filter((v) => v.provider === 'openai').map((v) => (
+                                  <option key={v.id} value={v.id}>
+                                    {v.tag === 'casper' ? `★ ${v.label} (Casper)` : v.label}
+                                  </option>
+                                ))}
+                              </optgroup>
                             )}
+                            {serverVoices.filter((v) => v.provider === 'mimo').length > 0 && (
+                              <optgroup label="Mimo v2.5">
+                                {serverVoices.filter((v) => v.provider === 'mimo').map((v) => (
+                                  <option key={v.id} value={v.id}>{v.label}</option>
+                                ))}
+                              </optgroup>
+                            )}
+                            <optgroup label="Other">
+                              {serverVoices.filter((v) => v.provider === 'browser').map((v) => (
+                                <option key={v.id} value={v.id}>{v.label}</option>
+                              ))}
+                              {serverVoices.length === 0 && (
+                                <option value="browser">Browser Native</option>
+                              )}
+                            </optgroup>
                           </select>
                         </div>
 
@@ -1184,6 +1684,18 @@ export function BotChat() {
                                 </option>
                               ))}
                             </select>
+                          </div>
+                        )}
+
+                        {/* OpenAI badge */}
+                        {voiceProvider.startsWith('openai-') && (
+                          <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5">
+                            <Sparkles className="h-3 w-3 text-emerald-400" />
+                            <span className="text-[9px] font-bold text-emerald-300 uppercase tracking-widest">
+                              {serverVoices.find((v) => v.id === voiceProvider)?.tag === 'casper'
+                                ? 'OpenAI TTS-1 — Casper\'s Signature Voice'
+                                : 'OpenAI TTS-1 — Premium AI Voice'}
+                            </span>
                           </div>
                         )}
 
