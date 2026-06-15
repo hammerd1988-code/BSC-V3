@@ -35,6 +35,7 @@ const SubscriptionSettings = lazy(() => import('./components/SubscriptionSetting
 const BotForge = lazy(() => import('./components/BotForge').then((m) => ({ default: m.BotForge })));
 const BotMayhemConsole = lazy(() => import('./components/BotMayhemConsole').then((m) => ({ default: m.BotMayhemConsole })));
 const BotChat = lazy(() => import('./components/BotChat').then((m) => ({ default: m.BotChat })));
+const CasperRemoteOps = lazy(() => import('./components/CasperRemoteOps').then((m) => ({ default: m.CasperRemoteOps })));
 
 function AdminRoute({ children }: { children: React.ReactNode }) {
   const { currentUser } = useAuth();
@@ -231,6 +232,7 @@ export default function App() {
             <Route path="/profile/:username" element={<Profile />} />
             <Route path="/casper" element={<Casper />} />
             <Route path="/casper/studio" element={<ContentCreationStudio />} />
+            <Route path="/casper/remote" element={currentUser ? <CasperRemoteOps /> : <Navigate to="/" replace />} />
             <Route path="/bots" element={<BotMarketplace />} />
             <Route path="/bots/mayhem" element={<BotMayhemConsole />} />
             <Route path="/colosseum" element={<Colosseum />} />

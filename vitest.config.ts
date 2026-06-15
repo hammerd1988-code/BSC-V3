@@ -1,9 +1,15 @@
 import { defineConfig, mergeConfig } from 'vitest/config';
-import viteConfig from './vite.config';
+import viteConfigExport from './vite.config';
 
-export default mergeConfig(
-  viteConfig,
-  defineConfig({
+// vite.config.ts exports a callback (`defineConfig(({mode}) => ...)`).
+// Resolve it to a plain object before merging.
+export default defineConfig(async () => {
+  const viteConfig =
+    typeof viteConfigExport === 'function'
+      ? await viteConfigExport({ mode: 'test', command: 'serve', isSsrBuild: false, isPreview: false })
+      : viteConfigExport;
+
+  return mergeConfig(viteConfig, {
     test: {
       environment: 'jsdom',
       globals: true,
@@ -19,5 +25,5 @@ export default mergeConfig(
         exclude: ['src/test/**', '**/*.d.ts', '**/*.test.*', '**/*.spec.*'],
       },
     },
-  })
-);
+  });
+});
