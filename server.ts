@@ -55,6 +55,11 @@ async function startServer() {
     },
   });
 
+  // Trust the first proxy hop (Railway, Render, etc.) so that req.ip reflects
+  // the real client IP rather than the load-balancer's address. This is required
+  // for per-client rate limiting in casperRelay to work correctly.
+  app.set('trust proxy', 1);
+
   // Express runs on 3001 in dev (Vite runs separately on 5173).
   // In production, PORT env var is set by the host.
   const PORT = Number(process.env.PORT) || 3001;
