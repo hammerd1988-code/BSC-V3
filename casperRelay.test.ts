@@ -406,9 +406,9 @@ describe('directive approval and abort', () => {
     expect(msg.id).toBe(directiveId);
     expect(msg.command).toBe('echo hello');
 
-    daemon.emit('relay:message', { type: 'tool:start', directiveId, tool: 'local__shell', args: { command: 'echo hello' } });
-    const toolStart = await waitForEvent<{ tool: string }>(webClient, 'relay:tool_start');
-    expect(toolStart.tool).toBe('local__shell');
+    daemon.emit('relay:message', { type: 'tool:start', directiveId, toolName: 'local__shell', args: { command: 'echo hello' } });
+    const toolStart = await waitForEvent<{ toolName: string }>(webClient, 'relay:tool_start');
+    expect(toolStart.toolName).toBe('local__shell');
 
     daemon.emit('relay:message', { type: 'directive:complete', directiveId, status: 'completed', response: 'hello' });
     const complete = await waitForEvent<{ status: string }>(webClient, 'relay:directive_complete');

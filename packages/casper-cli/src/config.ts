@@ -1,4 +1,5 @@
 import Conf from 'conf';
+import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
@@ -47,9 +48,14 @@ const config = new Conf<CasperConfig>({
 
 // Persist the generated machineId on first run so subsequent process invocations
 // (e.g. `casper daemon start` after `casper auth login`) use the same value.
-// Without this, Math.random() produces a different suffix each time the module
-// loads, causing silent relay registration failures due to machineId mismatch.
-if (!config.has('machineId')) {
+// Note: Conf.has() returns true for keys present in `defaults` even when never
+// written to disk, so we check the on-disk config file directly.
+let needsMachineIdPersist = true;
+try {
+  const raw = JSON.parse(fs.readFileSync(config.path, 'utf-8'));
+  needsMachineIdPersist = !('machineId' in raw);
+} catch { /* config file doesn't exist yet — first run */ }
+if (needsMachineIdPersist) {
   config.set('machineId', defaults.machineId);
 }
 
