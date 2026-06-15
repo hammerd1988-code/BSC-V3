@@ -510,6 +510,9 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
     if (!directive || directive.userId !== profile.id) {
       return res.status(404).json({ success: false, error: 'Directive not found.' });
     }
+    if (directive.status !== 'awaiting_approval') {
+      return res.status(409).json({ success: false, error: 'Directive is no longer awaiting approval.' });
+    }
     const conn = machines.get(directive.machineId);
     if (!conn) {
       return res.status(409).json({ success: false, error: 'Machine is no longer online.' });
