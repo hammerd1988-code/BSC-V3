@@ -74,7 +74,7 @@ export async function startDaemon(opts: { relayUrl?: string }): Promise<void> {
 
   socket.on('connect', () => {
     console.log(chalk.green('   ✓ Connected to relay — registering machine…'));
-    send({ type: 'cli:register', token, machine });
+    send({ type: 'cli:register', token: '', machine });
     if (heartbeat) clearInterval(heartbeat);
     heartbeat = setInterval(() => {
       send({
