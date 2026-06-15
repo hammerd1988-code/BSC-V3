@@ -29,7 +29,7 @@ export interface CasperConfig {
 }
 
 const defaults: CasperConfig = {
-  relayUrl: 'wss://api.bloodsweatcode.org/ws/cli',
+  relayUrl: 'https://bloodsweatcode.org',
   machineId: `${os.hostname()}-${Math.random().toString(36).slice(2, 6)}`,
   machineName: os.hostname(),
   model: 'gpt-4.1-mini',
@@ -45,12 +45,24 @@ const config = new Conf<CasperConfig>({
   configFileMode: 0o600, // Owner-only read/write
 });
 
+// Persist the generated machineId on first run so subsequent process invocations
+// (e.g. `casper daemon start` after `casper auth login`) use the same value.
+// Without this, Math.random() produces a different suffix each time the module
+// loads, causing silent relay registration failures due to machineId mismatch.
+if (!config.has('machineId')) {
+  config.set('machineId', defaults.machineId);
+}
+
 export function getConfig<K extends keyof CasperConfig>(key: K): CasperConfig[K] {
   return config.get(key);
 }
 
 export function setConfig<K extends keyof CasperConfig>(key: K, value: CasperConfig[K]): void {
   config.set(key, value);
+}
+
+export function deleteConfig(key: keyof CasperConfig): void {
+  config.delete(key);
 }
 
 export function getAllConfig(): CasperConfig {

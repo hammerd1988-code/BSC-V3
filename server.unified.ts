@@ -34,6 +34,7 @@ import { registerColosseumRoutes } from './colosseumRoutes.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
 import { registerCoBrowseSocket } from './casperCoBrowse.js';
 import { registerStripeRoutes } from './stripeRoutes.js';
+import { registerCasperRelay } from './casperRelay.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -888,6 +889,9 @@ app.post("/api/cred/exchange", async (req, res) => {
 
   // Co-browse: register Casper shared browser control events
   registerCoBrowseSocket(io, supabase);
+
+  // Casper CLI relay: /relay namespace for daemons + REST control plane
+  registerCasperRelay(io, app, supabase);
 
   io.on('connection', (socket) => {
     console.log(`[socket] Connected: ${socket.id} (total: ${io.engine.clientsCount})`);

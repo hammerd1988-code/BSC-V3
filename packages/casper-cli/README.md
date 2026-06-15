@@ -63,6 +63,13 @@ casper daemon stop
 - All tool executions are logged to `~/.config/casper-cli/history.jsonl`
 - Destructive commands (rm -rf, force push, etc.) require confirmation
 - Configurable approval levels: `auto`, `confirm-local`, `confirm-remote`
+  - **`auto`** — never prompt; runs everything (use only on trusted machines).
+  - **`confirm-local`** — prompt at the local terminal in `casper chat`. In
+    `casper daemon` mode there is no attached terminal, so any non-`auto` level
+    (including `confirm-local`) escalates the prompt to a **remote approval**
+    card in the web Remote Ops console instead. Approvals time out (deny) if
+    left unanswered.
+  - **`confirm-remote`** — always route approvals to the web/mobile operator.
 
 ## Architecture
 
@@ -70,6 +77,50 @@ casper daemon stop
 casper chat → REPL → LLM (tool-calling loop) → local tool executors → your machine
 casper daemon → WebSocket → Railway relay → accepts remote directives from mobile/web
 ```
+
+## In-Memory State & Restart Semantics
+
+The Railway relay keeps several data structures **in memory** (not persisted to
+the database). Understanding what survives a restart is important for operators:
+
+| Data | Storage | Survives relay restart? |
+|------|---------|------------------------|
+| Device registrations (`casper_cli_devices`) | Supabase (PostgreSQL) | **Yes** |
+| Relay tokens (hashed) | Supabase | **Yes** |
+| Pending device-code auth flows | In-memory map | **No** — CLI must re-run `casper auth login` |
+| Connected-machine registry | In-memory map | **No** — daemons auto-reconnect via socket.io |
+| Active directives (status, ownership) | In-memory map (1 h retention) | **No** — in-flight directives are lost |
+| Approval requests | In-memory (tied to directive) | **No** — pending approvals are lost |
+
+### What happens on relay restart
+
+1. All Socket.IO connections drop. Daemons see a `disconnect` event and
+   socket.io-client's reconnection loop re-establishes the connection
+   automatically (unless `reconnection: false`).
+2. After reconnecting, the daemon re-sends `cli:register`, restoring its entry
+   in the machine map. The web UI sees `relay:machine_offline` then
+   `relay:machine_online` in quick succession.
+3. Any directive that was mid-execution is orphaned: the relay no longer tracks
+   it, but the daemon's local tool loop finishes independently. The web console
+   shows no further streaming for that directive.
+4. Pending device-code flows are lost. The CLI polls and receives
+   `status: "expired"`, prompting the user to retry.
+
+### What happens on daemon disconnect
+
+1. The relay removes the machine from its in-memory map and emits
+   `relay:machine_offline` to the operator's web room.
+2. The `casper_cli_devices` row in Supabase is **not** deleted — it retains
+   `last_seen_at` as a historical record. The machine simply shows as offline.
+3. Any directive targeting that machine remains in the in-memory directive map
+   but can no longer be forwarded. Approval and abort requests return
+   409 ("Machine is no longer online").
+
+**Note:** There is currently no server-side approval timeout. If a destructive
+command is awaiting approval and the operator does not respond, the directive
+stays in `awaiting_approval` status until the 1-hour in-memory retention prune
+removes it (or the daemon disconnects). The daemon's local tool loop blocks on
+the approval indefinitely.
 
 ## License
 

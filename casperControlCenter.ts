@@ -291,7 +291,18 @@ export type CasperAuthResolution = {
 };
 
 export async function resolveCasperAuth(req: Request, supabase: SupabaseClient): Promise<CasperAuthResolution> {
-  const token = bearerToken(req);
+  return resolveCasperAuthFromToken(bearerToken(req), supabase);
+}
+
+/**
+ * Like {@link resolveCasperAuth} but takes a raw Supabase access token instead
+ * of an Express request. Used by non-HTTP entrypoints (e.g. the Socket.IO
+ * relay) that need to verify a session and resolve the operator profile.
+ */
+export async function resolveCasperAuthFromToken(
+  token: string | null | undefined,
+  supabase: SupabaseClient,
+): Promise<CasperAuthResolution> {
   if (!token) {
     return { ok: false, reason: 'no_token', message: 'No bearer token sent. Please sign in again.' };
   }
