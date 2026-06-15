@@ -47,6 +47,9 @@ function parseAllowedOrigins(): string[] {
 async function startServer() {
   const app = express();
   const isProd = process.env.NODE_ENV === 'production';
+  // Railway terminates TLS at its proxy layer; trust X-Forwarded-* headers
+  // so req.ip resolves to the real client IP (needed for rate limiting).
+  app.set('trust proxy', true);
   const allowedOrigins = parseAllowedOrigins();
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
