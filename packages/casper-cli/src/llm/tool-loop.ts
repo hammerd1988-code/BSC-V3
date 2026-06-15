@@ -26,6 +26,8 @@ export interface ToolLoopOptions {
   onToken?: (text: string) => void;
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
   onToolResult?: (name: string, result: unknown) => void;
+  /** Override for destructive-command confirmation (e.g. remote approval in daemon mode). */
+  confirm?: (command: string) => Promise<boolean>;
 }
 
 /**
@@ -78,7 +80,9 @@ export async function runToolLoop(
 
         // Security check for destructive commands
         if (toolName === 'local__shell' && typeof args.command === 'string' && isDestructive(args.command)) {
-          const approved = await confirmAction(`Casper wants to run: ${chalk.red(args.command)}`);
+          const approved = opts.confirm
+            ? await opts.confirm(args.command)
+            : await confirmAction(`Casper wants to run: ${chalk.red(args.command)}`);
           if (!approved) {
             allMessages.push({
               role: 'tool',
