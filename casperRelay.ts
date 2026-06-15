@@ -64,6 +64,9 @@ interface PendingDeviceAuth {
 
 const DEVICE_AUTH_TTL_MS = 10 * 60 * 1000;
 const DIRECTIVE_RETENTION_MS = 60 * 60 * 1000;
+const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000; // Match daemon-side timeout
+const DEVICE_INIT_RATE_LIMIT = 10; // Max requests per IP per minute
+const DEVICE_INIT_RATE_WINDOW_MS = 60_000;
 
 function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -197,6 +200,21 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
           if (!directive || directive.machineId !== machineId) return;
           directive.status = 'awaiting_approval';
           emitToUser(directive.userId, 'relay:approval_request', { ...message });
+          // Server-side approval timeout: if unanswered after APPROVAL_TIMEOUT_MS,
+          // mark the directive as failed and notify the web client so stale
+          // approval cards are cleaned up (the daemon will have already timed out).
+          setTimeout(() => {
+            const d = directives.get(message.directiveId);
+            if (d && d.status === 'awaiting_approval') {
+              d.status = 'failed';
+              emitToUser(d.userId, 'relay:directive_complete', {
+                directiveId: d.id,
+                machineId: d.machineId,
+                status: 'failed',
+                response: 'Approval timed out (no response within 5 minutes).',
+              });
+            }
+          }, APPROVAL_TIMEOUT_MS).unref?.();
           break;
         }
         case 'directive:complete': {
@@ -251,8 +269,21 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
 
   // ── Device-code auth flow ───────────────────────────────────────────────────
 
+  // Simple in-memory rate limiter for the public device-init endpoint.
+  const deviceInitHits = new Map<string, number[]>(); // IP -> timestamps
+
   // Step 1 — CLI starts the flow. Public endpoint (no credentials yet).
   app.post('/api/casper/relay/device/init', (req: Request, res: Response) => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    const hits = deviceInitHits.get(ip) ?? [];
+    const recent = hits.filter((t) => now - t < DEVICE_INIT_RATE_WINDOW_MS);
+    if (recent.length >= DEVICE_INIT_RATE_LIMIT) {
+      return res.status(429).json({ success: false, error: 'Too many requests. Try again in a minute.' });
+    }
+    recent.push(now);
+    deviceInitHits.set(ip, recent);
+
     pruneExpired();
     const { machineId, machineName } = req.body ?? {};
     const deviceCode = crypto.randomUUID();
