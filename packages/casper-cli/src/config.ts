@@ -49,7 +49,9 @@ const config = new Conf<CasperConfig>({
 // (e.g. `casper daemon start` after `casper auth login`) use the same value.
 // Without this, Math.random() produces a different suffix each time the module
 // loads, causing silent relay registration failures due to machineId mismatch.
-if (!config.has('machineId')) {
+// config.has() returns true for defaults even when never written; check the raw
+// store instead so we only skip the write if a value was actually persisted.
+if (!('machineId' in config.store)) {
   config.set('machineId', defaults.machineId);
 }
 
