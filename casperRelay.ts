@@ -106,6 +106,17 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
   }
   setInterval(pruneExpired, 60_000).unref?.();
 
+  // Prune stale rate-limit entries on the same 60s cadence (separate from
+  // pruneExpired so per-request calls stay O(1) instead of O(#distinct IPs)).
+  setInterval(() => {
+    const now = Date.now();
+    for (const [ip, hits] of deviceInitHits) {
+      const recent = hits.filter((t) => now - t < DEVICE_INIT_RATE_WINDOW_MS);
+      if (recent.length === 0) deviceInitHits.delete(ip);
+      else deviceInitHits.set(ip, recent);
+    }
+  }, 60_000).unref?.();
+
   // ── CLI daemon namespace ────────────────────────────────────────────────────
 
   const relayNs = io.of('/relay');

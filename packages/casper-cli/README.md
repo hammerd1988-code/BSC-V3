@@ -116,11 +116,11 @@ the database). Understanding what survives a restart is important for operators:
    but can no longer be forwarded. Approval and abort requests return
    409 ("Machine is no longer online").
 
-**Note:** There is currently no server-side approval timeout. If a destructive
-command is awaiting approval and the operator does not respond, the directive
-stays in `awaiting_approval` status until the 1-hour in-memory retention prune
-removes it (or the daemon disconnects). The daemon's local tool loop blocks on
-the approval indefinitely.
+**Note:** Both the relay server and the daemon enforce a 5-minute approval
+timeout. If a destructive command is awaiting approval and the operator does
+not respond within 5 minutes, the daemon auto-denies the command and the
+relay marks the directive as failed, notifying the web client so stale
+approval cards are cleaned up.
 
 ## License
 

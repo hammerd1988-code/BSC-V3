@@ -47,6 +47,10 @@ function parseAllowedOrigins(): string[] {
 async function startServer() {
   const app = express();
   const isProd = process.env.NODE_ENV === 'production';
+  // Trust the first proxy hop (Railway, Render, etc.) so that req.ip reflects
+  // the real client IP rather than the load-balancer's address. This is required
+  // for per-client rate limiting in casperRelay to work correctly.
+  app.set('trust proxy', 1);
   const allowedOrigins = parseAllowedOrigins();
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
@@ -54,11 +58,6 @@ async function startServer() {
       origin: allowedOrigins.length > 0 ? allowedOrigins : (isProd ? false : '*'),
     },
   });
-
-  // Trust the first proxy hop (Railway, Render, etc.) so that req.ip reflects
-  // the real client IP rather than the load-balancer's address. This is required
-  // for per-client rate limiting in casperRelay to work correctly.
-  app.set('trust proxy', 1);
 
   // Express runs on 3001 in dev (Vite runs separately on 5173).
   // In production, PORT env var is set by the host.
