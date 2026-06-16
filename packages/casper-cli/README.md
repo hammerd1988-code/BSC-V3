@@ -4,9 +4,32 @@
 
 ## Installation
 
+### From npm
+
 ```bash
 npm install -g @bsc/casper-cli
 ```
+
+### Standalone Binary (no Node.js required)
+
+Download the prebuilt binary for your platform from the
+[releases page](https://github.com/hammerd1988-code/BSC-V3/releases), or build
+from source:
+
+```bash
+cd packages/casper-cli
+npm install
+npm run build:binary
+```
+
+Binaries are written to `bin/dist/`:
+- `casper-linux-x64` — Linux x64
+- `casper-macos-x64` — macOS Intel
+- `casper-macos-arm64` — macOS Apple Silicon
+- `casper-win-x64.exe` — Windows x64
+
+Move the appropriate binary to a directory on your `PATH` and rename it to
+`casper` (or `casper.exe` on Windows).
 
 ## Quick Start
 

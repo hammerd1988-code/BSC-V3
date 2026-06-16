@@ -1,9 +1,20 @@
-const CACHE_NAME = 'bsc-offline-shell-v1';
+const CACHE_NAME = 'bsc-offline-shell-v2';
 const OFFLINE_ASSETS = [
   '/',
+  '/offline.html',
   '/manifest.json',
+  '/icons/icon-48x48.png',
+  '/icons/icon-72x72.png',
+  '/icons/icon-96x96.png',
+  '/icons/icon-128x128.png',
+  '/icons/icon-144x144.png',
+  '/icons/icon-152x152.png',
+  '/icons/icon-180x180.png',
   '/icons/icon-192x192.png',
+  '/icons/icon-384x384.png',
   '/icons/icon-512x512.png',
+  '/icons/icon-maskable-192x192.png',
+  '/icons/icon-maskable-512x512.png',
   '/sounds/bsc-notification.wav',
 ];
 
@@ -39,7 +50,7 @@ self.addEventListener('fetch', (event) => {
           caches.open(CACHE_NAME).then((cache) => cache.put('/', copy));
           return response;
         })
-        .catch(() => caches.match('/') || Response.error())
+        .catch(() => caches.match('/offline.html').then((r) => r || caches.match('/') || Response.error()))
     );
     return;
   }
@@ -67,7 +78,7 @@ self.addEventListener('push', (event) => {
   const options = {
     body: payload.body || payload.messagePreview || 'New neural activity detected.',
     icon: payload.icon || '/icons/icon-192x192.png',
-    badge: payload.badge || '/icons/icon-192x192.png',
+    badge: payload.badge || '/icons/icon-96x96.png',
     tag: payload.tag || `bsc-${payload.type || 'notification'}`,
     data: {
       url: payload.url || payload.data?.url || '/',
