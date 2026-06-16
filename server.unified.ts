@@ -70,6 +70,8 @@ function parseAllowedOrigins(): string[] {
 async function startServer() {
   const app = express();
   const isProd = process.env.NODE_ENV === 'production';
+  // Trust the first proxy hop (Railway) so req.ip reflects the real client IP.
+  app.set('trust proxy', 1);
   const allowedOrigins = parseAllowedOrigins();
   const httpServer = createServer(app);
 
