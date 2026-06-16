@@ -47,9 +47,10 @@ function parseAllowedOrigins(): string[] {
 async function startServer() {
   const app = express();
   const isProd = process.env.NODE_ENV === 'production';
-  // Railway terminates TLS at its proxy layer; trust X-Forwarded-* headers
-  // so req.ip resolves to the real client IP (needed for rate limiting).
-  app.set('trust proxy', true);
+  // Trust the first proxy hop (Railway, Render, etc.) so that req.ip reflects
+  // the real client IP rather than the load-balancer's address. This is required
+  // for per-client rate limiting in casperRelay to work correctly.
+  app.set('trust proxy', 1);
   const allowedOrigins = parseAllowedOrigins();
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
@@ -152,10 +153,11 @@ async function startServer() {
     }
   });
 
-  // ── Text-to-Speech (OpenAI Ash) ──
+  // ── Text-to-Speech (OpenAI) ──
+  const OPENAI_TTS_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'] as const;
   app.post('/api/tts', async (req, res) => {
     try {
-      const { text, speed } = req.body;
+      const { text, voice, speed } = req.body;
 
       if (!text || typeof text !== 'string') {
         return res.status(400).json({ error: 'text is required' });
@@ -164,11 +166,12 @@ async function startServer() {
       const apiKey = process.env.OPENAI_TTS_KEY || process.env.OPENAI_API_KEY;
       if (!apiKey) {
         console.warn('[tts] OPENAI_TTS_KEY/OPENAI_API_KEY is not configured');
-        return res.status(503).json({ error: 'OpenAI Ash TTS unavailable' });
+        return res.status(503).json({ error: 'OpenAI TTS unavailable' });
       }
 
       const input = text.slice(0, 4096);
       const speechSpeed = typeof speed === 'number' ? Math.max(0.25, Math.min(4.0, speed)) : 1.05;
+      const selectedVoice = typeof voice === 'string' && OPENAI_TTS_VOICES.includes(voice as any) ? voice : 'ash';
 
       const response = await fetch('https://api.openai.com/v1/audio/speech', {
         method: 'POST',
@@ -178,7 +181,7 @@ async function startServer() {
         },
         body: JSON.stringify({
           model: 'tts-1',
-          voice: 'ash',
+          voice: selectedVoice,
           input,
           speed: speechSpeed,
           response_format: 'mp3',
@@ -188,7 +191,7 @@ async function startServer() {
       if (!response.ok) {
         const errText = await response.text();
         console.warn(`[tts] OpenAI returned ${response.status}: ${errText.slice(0, 300)}`);
-        return res.status(503).json({ error: 'OpenAI Ash TTS unavailable' });
+        return res.status(503).json({ error: 'OpenAI TTS unavailable' });
       }
 
       const audioBuffer = Buffer.from(await response.arrayBuffer());
@@ -257,7 +260,7 @@ async function startServer() {
 
   // ── TTS voices available ──
   app.get('/api/tts/voices', (req, res) => {
-    const voices: Array<{ id: string; label: string; provider: string; description: string }> = [
+    const voices: Array<{ id: string; label: string; provider: string; description: string; tag?: string }> = [
       { id: 'browser', label: 'Browser Native', provider: 'browser', description: 'Built-in browser TTS (free, no API key)' },
     ];
     if (process.env.MIMO_API_KEY) {
@@ -271,7 +274,19 @@ async function startServer() {
       );
     }
     if (process.env.OPENAI_TTS_KEY || process.env.OPENAI_API_KEY) {
-      voices.push({ id: 'openai-ash', label: 'OpenAI — Ash', provider: 'openai', description: 'OpenAI TTS-1 — Ash voice' });
+      voices.push(
+        { id: 'openai-ash', label: 'OpenAI — Ash', provider: 'openai', description: 'OpenAI TTS-1 — Ash (Casper\'s voice)', tag: 'casper' },
+        { id: 'openai-alloy', label: 'OpenAI — Alloy', provider: 'openai', description: 'OpenAI TTS-1 — Alloy voice' },
+        { id: 'openai-ballad', label: 'OpenAI — Ballad', provider: 'openai', description: 'OpenAI TTS-1 — Ballad voice' },
+        { id: 'openai-coral', label: 'OpenAI — Coral', provider: 'openai', description: 'OpenAI TTS-1 — Coral voice' },
+        { id: 'openai-echo', label: 'OpenAI — Echo', provider: 'openai', description: 'OpenAI TTS-1 — Echo voice' },
+        { id: 'openai-fable', label: 'OpenAI — Fable', provider: 'openai', description: 'OpenAI TTS-1 — Fable voice' },
+        { id: 'openai-nova', label: 'OpenAI — Nova', provider: 'openai', description: 'OpenAI TTS-1 — Nova voice' },
+        { id: 'openai-onyx', label: 'OpenAI — Onyx', provider: 'openai', description: 'OpenAI TTS-1 — Onyx voice' },
+        { id: 'openai-sage', label: 'OpenAI — Sage', provider: 'openai', description: 'OpenAI TTS-1 — Sage voice' },
+        { id: 'openai-shimmer', label: 'OpenAI — Shimmer', provider: 'openai', description: 'OpenAI TTS-1 — Shimmer voice' },
+        { id: 'openai-verse', label: 'OpenAI — Verse', provider: 'openai', description: 'OpenAI TTS-1 — Verse voice' },
+      );
     }
     res.json({ voices });
   });

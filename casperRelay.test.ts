@@ -485,4 +485,148 @@ describe('directive approval and abort', () => {
     const res = await post(`${env.url}/api/casper/relay/directive/nonexistent/abort`, {}, 'good');
     expect(res.status).toBe(404);
   });
+
+  it('approval after timeout returns 409 (directive no longer awaiting_approval)', async () => {
+    // The server-side timeout marks directives as failed; a late approval
+    // response must be rejected rather than flip the status back.
+    const directiveP = waitForRelayMessage(daemon, 'directive');
+    const { json } = await post(`${env.url}/api/casper/relay/directive`, { machineId: 'm1', command: 'sleep 99' }, 'good');
+    const directiveId = json.directiveId as string;
+    await directiveP;
+
+    // Daemon raises an approval request.
+    daemon.emit('relay:message', {
+      type: 'cli:approval_request', directiveId,
+      tool: 'local__shell', args: { command: 'sleep 99' }, reason: 'Long-running',
+    });
+    await waitForEvent(webClient, 'relay:approval_request');
+
+    // Simulate timeout: manually mark the directive as failed (mirrors the
+    // server timeout callback without waiting 5 minutes in tests).
+    daemon.emit('relay:message', {
+      type: 'directive:complete', directiveId, status: 'failed',
+      response: 'Approval timed out (no response within 5 minutes).',
+    });
+    await waitForEvent(webClient, 'relay:directive_complete');
+
+    // A late approval attempt must be rejected.
+    const late = await post(`${env.url}/api/casper/relay/approval`, { directiveId, approved: true }, 'good');
+    expect(late.status).toBe(409);
+    expect(late.json.error).toMatch(/no longer awaiting approval/i);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. Device-init rate limiting
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('device-init rate limiting', () => {
+  let env: TestEnv;
+
+  beforeAll(async () => { env = await startEnv(); });
+  afterAll(async () => { await stopEnv(env); });
+  beforeEach(() => { setupAuthMocks(); });
+
+  it('returns 429 after 10 device-init calls per minute from the same IP', async () => {
+    // The first 10 requests within the rate-limit window must succeed.
+    for (let i = 0; i < 10; i++) {
+      const res = await post(`${env.url}/api/casper/relay/device/init`, { machineId: `rate-m-${i}` });
+      expect(res.status).toBe(200);
+    }
+
+    // The 11th request within the same window must be rate-limited.
+    const blocked = await post(`${env.url}/api/casper/relay/device/init`, { machineId: 'rate-m-11' });
+    expect(blocked.status).toBe(429);
+    expect(blocked.json.error).toMatch(/too many requests/i);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. Server-side approval timeout
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('server-side approval timeout', () => {
+  let env: TestEnv;
+  let daemon: ClientSocket;
+  let webClient: ClientSocket;
+
+  beforeAll(async () => {
+    setupAuthMocks();
+    const devices = [
+      { machine_id: 'm1', user_id: TEST_USER_ID, revoked: false, token_hash: hashToken(DAEMON_TOKEN) },
+    ];
+    env = await startEnv(devices);
+
+    daemon = makeClient(env, '/relay', { auth: { token: DAEMON_TOKEN } });
+    daemon.connect();
+    await waitForEvent(daemon, 'connect');
+    daemon.emit('relay:message', { type: 'cli:register', machine: MACHINE_INFO });
+    await waitForRelayMessage(daemon, 'relay:ack');
+
+    webClient = makeClient(env);
+    webClient.connect();
+    await waitForEvent(webClient, 'connect');
+    webClient.emit('relay:subscribe', { token: 'valid-supabase-token' });
+    await waitForEvent(webClient, 'relay:subscribed');
+  });
+
+  afterAll(async () => { await stopEnv(env); });
+
+  beforeEach(() => { setupAuthMocks(); });
+
+  it('emits relay:directive_complete with failed after approval timeout', async () => {
+    let fireApprovalTimeout: (() => void) | null = null;
+    let directiveId!: string;
+
+    // Intercept only the server-side 300 000 ms approval-timeout setTimeout so
+    // it can be fired immediately in the test without waiting 5 real minutes.
+    // All other setTimeout calls are forwarded to the real implementation.
+    // vi.useFakeTimers() is deliberately NOT used here because it fakes
+    // setImmediate which disrupts Socket.IO's internal async I/O.
+    const origSetTimeout = globalThis.setTimeout;
+    const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(
+      (fn: TimerHandler, delay?: number, ...args: unknown[]): ReturnType<typeof setTimeout> => {
+        if (delay === 5 * 60 * 1000) {
+          fireApprovalTimeout = () => { if (typeof fn === 'function') fn(...(args as [])); };
+          // Return a stub with .unref so setTimeout(...).unref?.() doesn't throw.
+          return { unref: () => {} } as unknown as ReturnType<typeof setTimeout>;
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return origSetTimeout(fn, delay, ...(args as any[])) as unknown as ReturnType<typeof setTimeout>;
+      },
+    );
+
+    try {
+      const directiveP = waitForRelayMessage(daemon, 'directive');
+      const { json } = await post(
+        `${env.url}/api/casper/relay/directive`,
+        { machineId: 'm1', command: 'risky-op' },
+        'good',
+      );
+      directiveId = json.directiveId as string;
+      await directiveP;
+
+      daemon.emit('relay:message', {
+        type: 'cli:approval_request', directiveId,
+        tool: 'local__shell', args: { command: 'risky-op' }, reason: 'Needs approval',
+      });
+      // Awaiting relay:approval_request ensures the server has already called
+      // setTimeout(callback, 300 000) before we restore the spy.
+      await waitForEvent(webClient, 'relay:approval_request');
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(fireApprovalTimeout).not.toBeNull();
+
+    const completeP = waitForEvent<{ status: string; directiveId: string }>(
+      webClient, 'relay:directive_complete', 2000,
+    );
+    // Manually trigger the approval timeout; the server emits relay:directive_complete.
+    fireApprovalTimeout!();
+
+    const complete = await completeP;
+    expect(complete.status).toBe('failed');
+    expect(complete.directiveId).toBe(directiveId);
+  });
 });

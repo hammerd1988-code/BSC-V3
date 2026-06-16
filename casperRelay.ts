@@ -103,13 +103,19 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
     for (const [id, d] of directives) {
       if (now - d.createdAt > DIRECTIVE_RETENTION_MS) directives.delete(id);
     }
+  }
+  setInterval(pruneExpired, 60_000).unref?.();
+
+  // Prune stale rate-limit entries on the same 60s cadence (separate from
+  // pruneExpired so per-request calls stay O(1) instead of O(#distinct IPs)).
+  setInterval(() => {
+    const now = Date.now();
     for (const [ip, hits] of deviceInitHits) {
       const recent = hits.filter((t) => now - t < DEVICE_INIT_RATE_WINDOW_MS);
       if (recent.length === 0) deviceInitHits.delete(ip);
       else deviceInitHits.set(ip, recent);
     }
-  }
-  setInterval(pruneExpired, 60_000).unref?.();
+  }, 60_000).unref?.();
 
   // ── CLI daemon namespace ────────────────────────────────────────────────────
 
@@ -516,7 +522,7 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
       return res.status(404).json({ success: false, error: 'Directive not found.' });
     }
     if (directive.status !== 'awaiting_approval') {
-      return res.status(409).json({ success: false, error: 'Directive is no longer awaiting approval (may have timed out).' });
+      return res.status(409).json({ success: false, error: 'Directive is no longer awaiting approval.' });
     }
     const conn = machines.get(directive.machineId);
     if (!conn) {
