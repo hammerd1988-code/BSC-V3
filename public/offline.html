@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#ff003c" />
+  <title>BSC — Offline</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #050505;
+      color: #e0e0e0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+    .container {
+      text-align: center;
+      max-width: 400px;
+    }
+    .icon { font-size: 4rem; margin-bottom: 1rem; }
+    h1 {
+      font-size: 1.5rem;
+      color: #ff003c;
+      margin-bottom: 0.5rem;
+    }
+    p {
+      color: #888;
+      line-height: 1.6;
+      margin-bottom: 1.5rem;
+    }
+    button {
+      background: #ff003c;
+      color: #fff;
+      border: none;
+      padding: 0.75rem 2rem;
+      border-radius: 6px;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button:hover { opacity: 0.85; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="icon">📡</div>
+    <h1>Neural Link Interrupted</h1>
+    <p>You appear to be offline. Check your connection and try again.</p>
+    <button onclick="window.location.reload()">Retry Connection</button>
+  </div>
+</body>
+</html>
