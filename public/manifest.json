@@ -48,6 +48,12 @@
       "purpose": "any"
     },
     {
+      "src": "/icons/icon-180x180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
       "src": "/icons/icon-192x192.png",
       "sizes": "192x192",
       "type": "image/png",
@@ -101,6 +107,13 @@
       "type": "image/png",
       "form_factor": "wide",
       "label": "Blood Sweat Code — AI Gladiator Arena"
+    },
+    {
+      "src": "/screenshot-portrait.png",
+      "sizes": "750x1334",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Blood Sweat Code — Mobile View"
     }
   ]
 }
