@@ -1,6 +1,5 @@
-const CACHE_NAME = 'bsc-offline-shell-v2';
+const CACHE_NAME = 'bsc-offline-shell-v3';
 const OFFLINE_ASSETS = [
-  '/',
   '/offline.html',
   '/manifest.json',
   '/icons/icon-48x48.png',
@@ -20,10 +19,9 @@ const OFFLINE_ASSETS = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(OFFLINE_ASSETS))
-      .then(() => self.skipWaiting())
-      .catch((error) => console.warn('[sw] install cache failed', error))
+    caches.open(CACHE_NAME).then((cache) =>
+      Promise.allSettled(OFFLINE_ASSETS.map((url) => cache.add(url).catch((e) => console.warn('[sw] cache miss:', url, e))))
+    ).then(() => self.skipWaiting())
   );
 });
 
