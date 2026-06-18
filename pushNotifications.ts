@@ -301,6 +301,66 @@ export function registerPushRoutes(app: express.Express, supabase: SupabaseClien
     }
   });
 
+  // Native push for the Capacitor mobile app. Stores the APNs/FCM device token
+  // (distinct from Web Push subscriptions). Server-side dispatch to APNs/FCM is
+  // a follow-up that requires provider credentials.
+  app.post('/api/push/register-device', async (req, res) => {
+    try {
+      const { userId, token, platform } = req.body ?? {};
+      if (!userId || typeof token !== 'string' || !token) {
+        return res.status(400).json({ error: 'userId and a device token are required' });
+      }
+      if (platform !== 'ios' && platform !== 'android') {
+        return res.status(400).json({ error: 'platform must be "ios" or "android"' });
+      }
+
+      const ownsProfile = await verifyUserOwnsProfile(req, supabase, userId);
+      if (!ownsProfile) {
+        return res.status(401).json({ error: 'Unauthorized device registration request' });
+      }
+
+      const { error } = await supabase.from('device_push_tokens').upsert({
+        user_id: userId,
+        token,
+        platform,
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'token' });
+
+      if (error) throw error;
+      res.status(200).json({ success: true });
+    } catch (error: any) {
+      console.error('[push] Device registration failed:', error);
+      res.status(500).json({ error: error?.message || 'Failed to register device token' });
+    }
+  });
+
+  app.post('/api/push/unregister-device', async (req, res) => {
+    try {
+      const { userId, token } = req.body ?? {};
+      if (!userId || typeof token !== 'string' || !token) {
+        return res.status(400).json({ error: 'userId and a device token are required' });
+      }
+
+      const ownsProfile = await verifyUserOwnsProfile(req, supabase, userId);
+      if (!ownsProfile) {
+        return res.status(401).json({ error: 'Unauthorized device unregistration request' });
+      }
+
+      const { error } = await supabase
+        .from('device_push_tokens')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq('user_id', userId)
+        .eq('token', token);
+
+      if (error) throw error;
+      res.status(200).json({ success: true });
+    } catch (error: any) {
+      console.error('[push] Device unregistration failed:', error);
+      res.status(500).json({ error: error?.message || 'Failed to unregister device token' });
+    }
+  });
+
   app.post('/api/push/unsubscribe', async (req, res) => {
     try {
       const { userId, endpoint } = req.body ?? {};

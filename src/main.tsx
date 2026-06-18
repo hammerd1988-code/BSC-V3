@@ -7,6 +7,7 @@ import { AuthProvider } from './AuthContext.tsx';
 import { CallProvider } from './CallContext.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import { registerServiceWorker } from './lib/notifications.ts';
+import { initMobileApp } from './lib/mobile.ts';
 import { SubscriptionProvider } from './lib/subscription.tsx';
 
 // Global handler for stale-chunk errors that occur outside React's error boundary
@@ -45,6 +46,9 @@ window.addEventListener('load', () => {
 });
 
 void registerServiceWorker();
+
+// Native-only setup (splash, status bar, hardware back button); no-ops on web.
+void initMobileApp();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
