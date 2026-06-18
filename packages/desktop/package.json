@@ -1,0 +1,38 @@
+{
+  "name": "@bsc/desktop",
+  "version": "0.1.0",
+  "description": "Blood Sweat Code desktop app — Electron shell with local LLM access (LM Studio / Ollama) and embedded Casper CLI",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "build:electron": "node scripts/build.mjs",
+    "dev": "npm run build:electron && electron .",
+    "lint": "tsc --noEmit",
+    "start": "electron .",
+    "dist": "npm run build:electron && electron-builder",
+    "dist:win": "npm run build:electron && electron-builder --win",
+    "dist:mac": "npm run build:electron && electron-builder --mac",
+    "dist:linux": "npm run build:electron && electron-builder --linux",
+    "pack": "npm run build:electron && electron-builder --dir"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hammerd1988-code/BSC-V3.git",
+    "directory": "packages/desktop"
+  }
+}
