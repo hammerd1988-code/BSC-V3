@@ -1,0 +1,57 @@
+name: Desktop App — Build Installers
+
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            casper_target: node20-linux-x64
+            casper_out: casper
+          - os: macos-latest
+            casper_target: node20-macos-arm64
+            casper_out: casper
+          - os: windows-latest
+            casper_target: node20-win-x64
+            casper_out: casper.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # 1. Build the Casper CLI sidecar binary for this platform and drop it
+      #    where electron-builder's extraResources glob expects it.
+      - name: Build Casper CLI binary
+        working-directory: packages/casper-cli
+        shell: bash
+        run: |
+          npm ci
+          npm run bundle
+          mkdir -p ../desktop/resources/casper
+          node node_modules/@yao-pkg/pkg/lib-es5/bin.js bundle/casper.cjs \
+            --targets ${{ matrix.casper_target }} \
+            --output ../desktop/resources/casper/${{ matrix.casper_out }} \
+            --no-bytecode
+
+      # 2. Build + publish the Electron installer for this platform.
+      - name: Build desktop installer
+        working-directory: packages/desktop
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm ci
+          npm run build:electron
+          npx electron-builder --publish always

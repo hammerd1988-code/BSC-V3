@@ -1,0 +1,54 @@
+appId: org.bloodsweatcode.desktop
+productName: Blood Sweat Code
+copyright: Copyright © Blood Sweat Code
+
+directories:
+  output: release
+  buildResources: build
+
+# Bundle the compiled Electron entrypoints plus the package manifest. The web UI
+# itself is loaded remotely from bloodsweatcode.org, so no frontend assets ship
+# inside the installer.
+files:
+  - dist-electron/**/*
+  - package.json
+
+# The Casper CLI binary is dropped into resources/casper by the release workflow
+# (electron/casperBridge.ts looks for it there). The glob is optional so local
+# `electron-builder --dir` runs without a prebuilt CLI still succeed.
+extraResources:
+  - from: resources/casper
+    to: casper
+    filter:
+      - "**/*"
+
+publish:
+  provider: github
+  owner: hammerd1988-code
+  repo: BSC-V3
+
+win:
+  target:
+    - nsis
+  icon: build/icon.ico
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Development
+  icon: build/icon.png
