@@ -11,3 +11,7 @@ coverage/
 .google-credentials/
 *.json.key
 service-account*.json
+
+# Capacitor iOS project — generated on demand on macOS (CocoaPods), not committed.
+# The Android project IS committed (builds on any OS incl. Linux CI).
+/ios/
