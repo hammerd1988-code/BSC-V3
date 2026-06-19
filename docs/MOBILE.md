@@ -66,6 +66,45 @@ Point a device/emulator at a LAN dev server during development:
 CAP_SERVER_URL=http://192.168.1.20:3001 npm run mobile:sync
 ```
 
+## Server-side push delivery (FCM + APNs)
+
+The mobile client registers its device token via `POST /api/push/register-device`
+(see `src/lib/mobile.ts`) and the server stores it in the `device_push_tokens`
+table. `sendPushNotification` in `pushNotifications.ts` then fans every
+notification out across **all** channels the recipient has: browser Web Push
+(VAPID) **and** native mobile push — Android over Firebase Cloud Messaging,
+iOS over APNs. The native transport lives in `nativePush.ts`.
+
+Each channel is independently gated by env config and is a clean no-op when its
+credentials are absent, so nothing breaks if you only ship one platform.
+
+### Configure (Railway env vars)
+
+**Android — Firebase Cloud Messaging**
+
+1. Firebase console → your project → Project settings → **Service accounts** →
+   *Generate new private key* (downloads a JSON file).
+2. Set `FCM_SERVICE_ACCOUNT` to the **entire JSON on one line**.
+
+**iOS — APNs (.p8 token auth)**
+
+1. Apple Developer → Certificates, IDs & Profiles → **Keys** → create a key with
+   *Apple Push Notifications service (APNs)* enabled; download the `.p8`.
+2. Set:
+   - `APNS_KEY` — the `.p8` contents (literal newlines may be escaped as `\n`)
+   - `APNS_KEY_ID` — the key's 10-char ID
+   - `APNS_TEAM_ID` — your Apple Team ID
+   - `APNS_BUNDLE_ID` — defaults to `org.bloodsweatcode.app`
+   - `APNS_PRODUCTION` — `true` for TestFlight/App Store builds, else sandbox
+
+See `.env.example` for the full list. Tokens that providers report as
+unregistered/invalid are automatically marked `is_active = false`.
+
+> **Note:** On Android, Capacitor's `@capacitor/push-notifications` yields an FCM
+> registration token; on iOS it yields the raw APNs device token. `nativePush.ts`
+> routes each platform's tokens to the matching transport — no client change
+> needed.
+
 ## CI
 
 `.github/workflows/mobile-release.yml` (tags `mobile-v*` or manual dispatch):
