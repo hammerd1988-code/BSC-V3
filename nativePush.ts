@@ -4,13 +4,17 @@
  * Web Push (VAPID) lives in pushNotifications.ts; this module delivers to the
  * APNs/FCM device tokens stored in `device_push_tokens` by the mobile client
  * (see src/lib/mobile.ts + supabase/migrations/0045_device_push_tokens.sql):
- *   - Android tokens  → Firebase Cloud Messaging (firebase-admin)
+ *   - Android tokens  → Firebase Cloud Messaging HTTP v1 API
  *   - iOS tokens      → Apple Push Notification service (apns2, .p8 token auth)
  *
- * Both transports are gated behind environment configuration and no-op cleanly
- * when their credentials are absent, so deployments without push secrets are
- * unaffected. Tokens that providers report as stale/invalid are deactivated.
+ * FCM is called over plain HTTPS using a service-account JWT signed with the
+ * built-in `node:crypto` module — no Firebase SDK dependency (see AGENTS.md
+ * "No Firebase"). Both transports are gated behind environment configuration
+ * and no-op cleanly when their credentials are absent, so deployments without
+ * push secrets are unaffected. Tokens that providers report as stale/invalid
+ * are deactivated.
  */
+import crypto from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 export interface NativePushMessage {
@@ -20,7 +24,7 @@ export interface NativePushMessage {
   url: string;
   /** Custom key/value payload; coerced to strings for FCM compatibility. */
   data?: Record<string, unknown>;
-  /** Collapse/thread key (FCM collapseKey, APNs collapseId). */
+  /** Collapse/thread key (FCM collapse_key, APNs collapseId). */
   tag?: string;
   badge?: number;
   /** When true, deliver with high priority (DMs/calls). */
@@ -38,18 +42,45 @@ type DeviceTokenRow = {
   platform: 'ios' | 'android';
 };
 
-// firebase-admin and apns2 are imported lazily so they're only loaded when
-// configured, and never add startup cost to deployments that don't use them.
-type FcmMessaging = import('firebase-admin').messaging.Messaging;
+type ServiceAccount = {
+  client_email: string;
+  private_key: string;
+  project_id: string;
+};
+
+// apns2 is imported lazily so it's only loaded when configured.
 type ApnsClient = import('apns2').ApnsClient;
 
 const APNS_BUNDLE_ID = process.env.APNS_BUNDLE_ID || 'org.bloodsweatcode.app';
+const FCM_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 
-let fcmMessaging: FcmMessaging | null | undefined;
+let serviceAccount: ServiceAccount | null | undefined;
+let cachedAccessToken: { value: string; expiresAt: number } | null = null;
 let apnsClient: ApnsClient | null | undefined;
 
+function getServiceAccount(): ServiceAccount | null {
+  if (serviceAccount !== undefined) return serviceAccount;
+  const raw = process.env.FCM_SERVICE_ACCOUNT;
+  if (!raw) {
+    serviceAccount = null;
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as ServiceAccount;
+    if (!parsed.client_email || !parsed.private_key || !parsed.project_id) {
+      throw new Error('service account JSON missing client_email/private_key/project_id');
+    }
+    serviceAccount = parsed;
+  } catch (err) {
+    console.error('[native-push] Invalid FCM_SERVICE_ACCOUNT:', err);
+    serviceAccount = null;
+  }
+  return serviceAccount;
+}
+
 function isFcmConfigured(): boolean {
-  return Boolean(process.env.FCM_SERVICE_ACCOUNT || process.env.GOOGLE_APPLICATION_CREDENTIALS);
+  return getServiceAccount() !== null;
 }
 
 function isApnsConfigured(): boolean {
@@ -60,31 +91,58 @@ export function isNativePushConfigured(): boolean {
   return isFcmConfigured() || isApnsConfigured();
 }
 
-async function getFcm(): Promise<FcmMessaging | null> {
-  if (fcmMessaging !== undefined) return fcmMessaging;
-  if (!isFcmConfigured()) {
-    fcmMessaging = null;
+function base64url(input: Buffer | string): string {
+  return Buffer.from(input)
+    .toString('base64')
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+}
+
+/** Mint (and cache) a Google OAuth2 access token from the service account. */
+async function getFcmAccessToken(sa: ServiceAccount): Promise<string | null> {
+  const now = Math.floor(Date.now() / 1000);
+  if (cachedAccessToken && cachedAccessToken.expiresAt - 60 > now) {
+    return cachedAccessToken.value;
+  }
+
+  const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claims = base64url(
+    JSON.stringify({
+      iss: sa.client_email,
+      scope: FCM_SCOPE,
+      aud: FCM_TOKEN_URL,
+      iat: now,
+      exp: now + 3600,
+    }),
+  );
+  const signingInput = `${header}.${claims}`;
+  const signature = base64url(
+    crypto.createSign('RSA-SHA256').update(signingInput).sign(sa.private_key),
+  );
+  const assertion = `${signingInput}.${signature}`;
+
+  const res = await fetch(FCM_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion,
+    }),
+  });
+
+  if (!res.ok) {
+    console.error('[native-push] FCM token exchange failed:', res.status, await res.text());
     return null;
   }
 
-  try {
-    const admin = (await import('firebase-admin')).default;
-    const appName = 'bsc-native-push';
-    const existing = admin.apps.find((a) => a?.name === appName);
-    const app = existing ?? admin.initializeApp(
-      {
-        credential: process.env.FCM_SERVICE_ACCOUNT
-          ? admin.credential.cert(JSON.parse(process.env.FCM_SERVICE_ACCOUNT))
-          : admin.credential.applicationDefault(),
-      },
-      appName,
-    );
-    fcmMessaging = admin.messaging(app);
-  } catch (err) {
-    console.error('[native-push] FCM init failed:', err);
-    fcmMessaging = null;
-  }
-  return fcmMessaging;
+  const json = (await res.json()) as { access_token?: string; expires_in?: number };
+  if (!json.access_token) return null;
+  cachedAccessToken = {
+    value: json.access_token,
+    expiresAt: now + (json.expires_in ?? 3600),
+  };
+  return json.access_token;
 }
 
 async function getApns(): Promise<ApnsClient | null> {
@@ -134,39 +192,57 @@ async function sendFcm(
   tokens: string[],
   msg: NativePushMessage,
 ): Promise<number> {
-  const messaging = await getFcm();
-  if (!messaging || tokens.length === 0) return 0;
+  const sa = getServiceAccount();
+  if (!sa || tokens.length === 0) return 0;
 
+  const accessToken = await getFcmAccessToken(sa);
+  if (!accessToken) return 0;
+
+  const url = `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`;
   const data = { ...stringifyData(msg.data), url: msg.url, title: msg.title, body: msg.body };
-  const results = await messaging.sendEach(
-    tokens.map((token) => ({
-      token,
-      notification: { title: msg.title, body: msg.body },
-      data,
-      android: {
-        priority: (msg.highPriority ? 'high' : 'normal') as 'high' | 'normal',
-        collapseKey: msg.tag,
-        notification: { tag: msg.tag },
-      },
-    })),
-  );
+  const android = {
+    priority: msg.highPriority ? 'HIGH' : 'NORMAL',
+    ...(msg.tag ? { collapse_key: msg.tag } : {}),
+    notification: msg.tag ? { tag: msg.tag } : {},
+  };
 
   let sent = 0;
   await Promise.all(
-    results.responses.map(async (res, i) => {
-      if (res.success) {
-        sent += 1;
-        return;
-      }
-      const code = res.error?.code;
-      if (
-        code === 'messaging/registration-token-not-registered' ||
-        code === 'messaging/invalid-registration-token' ||
-        code === 'messaging/invalid-argument'
-      ) {
-        await deactivateToken(supabase, tokens[i]);
-      } else {
-        console.warn('[native-push] FCM delivery failed:', code || res.error?.message);
+    tokens.map(async (token) => {
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            message: { token, notification: { title: msg.title, body: msg.body }, data, android },
+          }),
+        });
+
+        if (res.ok) {
+          sent += 1;
+          return;
+        }
+
+        const errBody = (await res.json().catch(() => ({}))) as {
+          error?: { status?: string; details?: Array<{ errorCode?: string }> };
+        };
+        const status = errBody.error?.status;
+        const errorCode = errBody.error?.details?.find((d) => d.errorCode)?.errorCode;
+        if (
+          res.status === 404 ||
+          status === 'NOT_FOUND' ||
+          errorCode === 'UNREGISTERED' ||
+          errorCode === 'INVALID_ARGUMENT'
+        ) {
+          await deactivateToken(supabase, token);
+        } else {
+          console.warn('[native-push] FCM delivery failed:', res.status, status || errorCode);
+        }
+      } catch (err) {
+        console.warn('[native-push] FCM request error:', err);
       }
     }),
   );
