@@ -9,6 +9,7 @@ import { NetworkTutorial } from './components/NetworkTutorial';
 import { FloatingTourLauncher } from './components/FloatingTourLauncher';
 import { DesktopControlCenter } from './components/DesktopControlCenter';
 import { AskCasperProvider } from './components/AskCasperWidget';
+import { ImageLightboxProvider } from './components/ImageLightbox';
 import { updateDailyStreak } from './lib/achievements';
 import { registerNativePush } from './lib/mobile';
 import { supabase } from './supabase';
@@ -173,6 +174,7 @@ export default function App() {
 
   return (
     <AskCasperProvider>
+    <ImageLightboxProvider>
     <div className="bsc-classic-stage min-h-screen bg-background text-foreground">
       <div className="bsc-rift bsc-rift-a" />
       <div className="bsc-rift bsc-rift-b" />
@@ -253,6 +255,7 @@ export default function App() {
       <DesktopControlCenter />
       <Navigation />
     </div>
+    </ImageLightboxProvider>
     </AskCasperProvider>
   );
 }
