@@ -210,6 +210,7 @@ export async function unregisterNativePush(token: string): Promise<void> {
  * No-ops on web or when no token was registered.
  */
 export async function unregisterCurrentNativePush(): Promise<void> {
+  if (!registeredToken && pushListenerHandles.length === 0) return;
   const token = registeredToken;
   registeredToken = null;
   await clearPushListeners();
