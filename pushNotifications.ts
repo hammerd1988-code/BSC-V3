@@ -1,6 +1,7 @@
 import type express from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import webPush from 'web-push';
+import { sendNativePush, type NativePushResult } from './nativePush.js';
 
 export type PushEventType = 'dm' | 'comment' | 'mention';
 
@@ -189,12 +190,12 @@ async function deactivateSubscription(supabase: SupabaseClient, endpoint: string
   if (error) console.warn('[push] Failed to deactivate stale subscription:', error.message);
 }
 
-export async function sendPushNotification(
+async function sendWebPush(
   supabase: SupabaseClient,
   input: PushNotificationInput,
 ): Promise<{ attempted: number; sent: number; skipped: boolean }> {
   if (!ensureWebPushConfigured()) {
-    console.warn('[push] VAPID env vars are not fully configured; skipping push delivery.');
+    console.warn('[push] VAPID env vars are not fully configured; skipping web push delivery.');
     return { attempted: 0, sent: 0, skipped: true };
   }
 
@@ -234,6 +235,40 @@ export async function sendPushNotification(
   }));
 
   return { attempted: rows.length, sent, skipped: false };
+}
+
+/**
+ * Deliver a notification across every channel the recipient has registered:
+ * browser Web Push (VAPID) and native mobile push (FCM/APNs). Each channel is
+ * independently gated by its own env config and no-ops when unconfigured.
+ */
+export async function sendPushNotification(
+  supabase: SupabaseClient,
+  input: PushNotificationInput,
+): Promise<{ attempted: number; sent: number; skipped: boolean }> {
+  const payload = makePayload(input);
+
+  const [web, native] = await Promise.all([
+    sendWebPush(supabase, input),
+    sendNativePush(supabase, {
+      recipientUserId: input.recipientUserId,
+      title: payload.title,
+      body: payload.body,
+      url: payload.url,
+      tag: payload.tag,
+      data: payload.data,
+      highPriority: input.type === 'dm',
+    }).catch((err): NativePushResult => {
+      console.warn('[push] Native push error:', err);
+      return { attempted: 0, sent: 0, skipped: true };
+    }),
+  ]);
+
+  return {
+    attempted: web.attempted + native.attempted,
+    sent: web.sent + native.sent,
+    skipped: web.skipped && native.skipped,
+  };
 }
 
 async function createInAppNotificationIfNeeded(supabase: SupabaseClient, input: PushNotificationInput) {
