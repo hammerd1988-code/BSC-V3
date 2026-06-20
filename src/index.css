@@ -1060,3 +1060,49 @@ div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1):hover {
   height: 0;
   pointer-events: none;
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Native shell support — safe areas (notch / home indicator), native-feel
+   touch behaviour for the Capacitor app + installed PWA, and desktop chrome.
+   These are inert in a normal browser tab: env() insets resolve to 0 and the
+   .bsc-native / .bsc-desktop hooks are only set inside the app shells.
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* Padding utilities that expand to clear the device safe areas. The bottom
+   variant keeps the base 0.5rem (matching the nav's py-2) on normal screens
+   and grows by the home-indicator inset on notched devices. */
+.pt-safe { padding-top: env(safe-area-inset-top, 0px); }
+.pb-safe { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem); }
+.pl-safe { padding-left: env(safe-area-inset-left, 0px); }
+.pr-safe { padding-right: env(safe-area-inset-right, 0px); }
+
+/* Main scroll region: clear the fixed bottom nav (~6rem) plus the home bar. */
+.pb-app-shell { padding-bottom: calc(6rem + env(safe-area-inset-bottom, 0px)); }
+
+/* Native touch feel: kill the grey tap-flash and the whole-document
+   rubber-band/pull-to-refresh so it reads like a real app rather than a page
+   in a box. Text remains selectable for accessibility. */
+html.bsc-native {
+  -webkit-tap-highlight-color: transparent;
+}
+html.bsc-native,
+html.bsc-native body {
+  overscroll-behavior-y: none;
+}
+/* Suppress the iOS long-press callout on interactive chrome only. */
+html.bsc-native a,
+html.bsc-native button,
+html.bsc-native [role="button"] {
+  -webkit-touch-callout: none;
+}
+
+/* Desktop shell: a branded scrollbar so the Electron window feels bespoke. */
+html.bsc-desktop ::-webkit-scrollbar { width: 10px; height: 10px; }
+html.bsc-desktop ::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.03); }
+html.bsc-desktop ::-webkit-scrollbar-thumb {
+  background: rgba(255, 0, 0, 0.35);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+html.bsc-desktop ::-webkit-scrollbar-thumb:hover { background: rgba(255, 0, 0, 0.55); background-clip: content-box; }
