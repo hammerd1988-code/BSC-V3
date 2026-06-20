@@ -153,8 +153,12 @@ export async function registerNativePush(): Promise<string | null> {
       ]);
 
       await PushNotifications.register();
-    })().catch((err) => {
+    })().catch(async (err) => {
       console.warn('[mobile] push listener setup failed:', err);
+      await Promise.allSettled(
+        pushListenerHandles.map((handle) => Promise.resolve().then(() => handle.remove())),
+      );
+      pushListenerHandles = [];
       pushInitStarted = false;
       if (!settled) {
         settled = true;
