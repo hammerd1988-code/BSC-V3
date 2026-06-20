@@ -10,6 +10,7 @@ import { cn } from '../lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 import { playCommentSound, playMentionSound } from '../lib/sounds';
 import { NotificationEnableButton } from './NotificationEnableButton';
+import { unregisterCurrentNativePush } from '../lib/mobile';
 import { useAskCasper } from './AskCasperWidget';
 import { ReportModal } from './ReportModal';
 import { useSubscription } from '../lib/subscription';
@@ -312,6 +313,8 @@ export const Navigation: React.FC = () => {
   const handleLogout = async () => {
     setIsLoggingOut(true);
     try {
+      // Drop this device's push token while the session can still authorize it.
+      await unregisterCurrentNativePush();
       await supabase.auth.signOut();
       setShowUserMenu(false);
       navigate('/');

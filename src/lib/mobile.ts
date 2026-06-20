@@ -16,6 +16,8 @@ import { getValidSession } from './authSession';
 export type MobilePlatform = 'ios' | 'android' | 'web';
 
 let initialized = false;
+let pushInitStarted = false;
+let registeredToken: string | null = null;
 
 /** True only when running inside the native Capacitor shell. */
 export function isNativeApp(): boolean {
@@ -40,6 +42,12 @@ export async function getPlatform(): Promise<MobilePlatform> {
 export async function initMobileApp(): Promise<void> {
   if (initialized || !isNativeApp()) return;
   initialized = true;
+
+  // Hook for native-only styling (safe areas, native touch feel, etc.).
+  document.documentElement.classList.add('bsc-native');
+  void getPlatform().then((p) => {
+    if (p !== 'web') document.documentElement.classList.add(`bsc-native-${p}`);
+  });
 
   try {
     const [{ SplashScreen }, { StatusBar, Style }, { App }] = await Promise.all([
@@ -85,6 +93,10 @@ async function getAuthContext(): Promise<{ userId: string; token: string } | nul
  */
 export async function registerNativePush(): Promise<string | null> {
   if (!isNativeApp()) return null;
+  // Register once per app session; repeated calls (e.g. on every auth change)
+  // must not stack duplicate native listeners.
+  if (pushInitStarted) return registeredToken;
+  pushInitStarted = true;
 
   const { PushNotifications } = await import('@capacitor/push-notifications');
 
@@ -114,6 +126,7 @@ export async function registerNativePush(): Promise<string | null> {
           console.warn('[mobile] device token registration failed:', err);
         }
       }
+      registeredToken = token.value;
       if (!settled) {
         settled = true;
         resolve(token.value);
@@ -122,6 +135,7 @@ export async function registerNativePush(): Promise<string | null> {
 
     void PushNotifications.addListener('registrationError', (err) => {
       console.warn('[mobile] push registration error:', err);
+      pushInitStarted = false;
       if (!settled) {
         settled = true;
         resolve(null);
@@ -159,4 +173,17 @@ export async function unregisterNativePush(token: string): Promise<void> {
   } catch (err) {
     console.warn('[mobile] device token unregistration failed:', err);
   }
+}
+
+/**
+ * Unregister whichever device token was registered this session. Call on
+ * sign-out, before the auth session is torn down so the request can authorize.
+ * No-ops on web or when no token was registered.
+ */
+export async function unregisterCurrentNativePush(): Promise<void> {
+  if (!registeredToken) return;
+  const token = registeredToken;
+  registeredToken = null;
+  pushInitStarted = false;
+  await unregisterNativePush(token);
 }

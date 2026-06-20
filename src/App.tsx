@@ -7,8 +7,10 @@ import { Navigation } from './components/Navigation';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { NetworkTutorial } from './components/NetworkTutorial';
 import { FloatingTourLauncher } from './components/FloatingTourLauncher';
+import { DesktopControlCenter } from './components/DesktopControlCenter';
 import { AskCasperProvider } from './components/AskCasperWidget';
 import { updateDailyStreak } from './lib/achievements';
+import { registerNativePush } from './lib/mobile';
 import { supabase } from './supabase';
 
 const Feed = lazy(() => import('./components/Feed').then((m) => ({ default: m.Feed })));
@@ -102,6 +104,9 @@ export default function App() {
       sessionStorage.removeItem('bsc_referral');
       void processReferral(currentUser.id, referralCode);
     }
+
+    // Register this device for native push (Capacitor app only; no-op on web).
+    void registerNativePush();
   }, [currentUser?.id]);
 
   const processReferral = async (newUserId: string, referrerUsername: string) => {
@@ -190,7 +195,7 @@ export default function App() {
         }} />
       )}
 
-      <main className="relative z-10 pb-24">
+      <main className="relative z-10 pt-safe pb-app-shell">
         <Suspense fallback={<LoadingScreen />}>
           <Routes>
             <Route path="/" element={<Feed />} />
@@ -245,6 +250,7 @@ export default function App() {
         </Suspense>
       </main>
       <FloatingTourLauncher />
+      <DesktopControlCenter />
       <Navigation />
     </div>
     </AskCasperProvider>
