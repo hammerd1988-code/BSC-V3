@@ -18,6 +18,7 @@ export type MobilePlatform = 'ios' | 'android' | 'web';
 let initialized = false;
 let pushInitStarted = false;
 let registeredToken: string | null = null;
+let pushListenerHandles: Array<{ remove: () => Promise<void> | void }> = [];
 
 /** True only when running inside the native Capacitor shell. */
 export function isNativeApp(): boolean {
@@ -109,48 +110,57 @@ export async function registerNativePush(): Promise<string | null> {
   return new Promise<string | null>((resolve) => {
     let settled = false;
 
-    void PushNotifications.addListener('registration', async (token) => {
-      const platform = await getPlatform();
-      const auth = await getAuthContext();
-      if (auth && (platform === 'ios' || platform === 'android')) {
-        try {
-          await fetch('/api/push/register-device', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${auth.token}`,
-            },
-            body: JSON.stringify({ userId: auth.userId, token: token.value, platform }),
-          });
-        } catch (err) {
-          console.warn('[mobile] device token registration failed:', err);
-        }
-      }
-      registeredToken = token.value;
-      if (!settled) {
-        settled = true;
-        resolve(token.value);
-      }
-    });
+    void (async () => {
+      pushListenerHandles = await Promise.all([
+        PushNotifications.addListener('registration', async (token) => {
+          const platform = await getPlatform();
+          const auth = await getAuthContext();
+          if (auth && (platform === 'ios' || platform === 'android')) {
+            try {
+              await fetch('/api/push/register-device', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: 'Bearer ' + auth.token,
+                },
+                body: JSON.stringify({ userId: auth.userId, token: token.value, platform }),
+              });
+            } catch (err) {
+              console.warn('[mobile] device token registration failed:', err);
+            }
+          }
+          registeredToken = token.value;
+          if (!settled) {
+            settled = true;
+            resolve(token.value);
+          }
+        }),
+        PushNotifications.addListener('registrationError', (err) => {
+          console.warn('[mobile] push registration error:', err);
+          pushInitStarted = false;
+          if (!settled) {
+            settled = true;
+            resolve(null);
+          }
+        }),
+        // Tapping a notification navigates to its target URL when present.
+        PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+          const url = action.notification.data?.url;
+          if (typeof url === 'string' && url.startsWith('/')) {
+            window.location.assign(url);
+          }
+        }),
+      ]);
 
-    void PushNotifications.addListener('registrationError', (err) => {
-      console.warn('[mobile] push registration error:', err);
+      await PushNotifications.register();
+    })().catch((err) => {
+      console.warn('[mobile] push listener setup failed:', err);
       pushInitStarted = false;
       if (!settled) {
         settled = true;
         resolve(null);
       }
     });
-
-    // Tapping a notification navigates to its target URL when present.
-    void PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
-      const url = action.notification.data?.url;
-      if (typeof url === 'string' && url.startsWith('/')) {
-        window.location.assign(url);
-      }
-    });
-
-    void PushNotifications.register();
   });
 }
 
@@ -166,7 +176,7 @@ export async function unregisterNativePush(token: string): Promise<void> {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${auth.token}`,
+        Authorization: 'Bearer ' + auth.token,
       },
       body: JSON.stringify({ userId: auth.userId, token }),
     });
@@ -184,6 +194,8 @@ export async function unregisterCurrentNativePush(): Promise<void> {
   if (!registeredToken) return;
   const token = registeredToken;
   registeredToken = null;
+  await Promise.all(pushListenerHandles.map((handle) => handle.remove()));
+  pushListenerHandles = [];
   pushInitStarted = false;
   await unregisterNativePush(token);
 }
