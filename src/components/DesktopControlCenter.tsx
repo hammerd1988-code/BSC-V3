@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Cpu,
@@ -477,8 +477,8 @@ function TabButton({
 }: {
   active: boolean;
   onClick: () => void;
-  icon: React.ReactNode;
-  children: React.ReactNode;
+  icon: ReactNode;
+  children: ReactNode;
 }) {
   return (
     <button

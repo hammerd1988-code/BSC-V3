@@ -14,10 +14,12 @@
 import { getValidSession } from './authSession';
 
 export type MobilePlatform = 'ios' | 'android' | 'web';
+type PushListenerHandle = { remove: () => Promise<void> | void };
 
 let initialized = false;
 let pushInitStarted = false;
 let registeredToken: string | null = null;
+let pushListenerHandles: PushListenerHandle[] = [];
 
 /** True only when running inside the native Capacitor shell. */
 export function isNativeApp(): boolean {
@@ -84,6 +86,35 @@ async function getAuthContext(): Promise<{ userId: string; token: string } | nul
   }
 }
 
+async function registerCurrentDeviceToken(token: string, platform: MobilePlatform): Promise<void> {
+  const auth = await getAuthContext();
+  if (!auth || (platform !== 'ios' && platform !== 'android')) return;
+  try {
+    await fetch('/api/push/register-device', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + auth.token,
+      },
+      body: JSON.stringify({ userId: auth.userId, token, platform }),
+    });
+  } catch (err) {
+    console.warn('[mobile] device token registration failed:', err);
+  }
+}
+
+async function clearPushListeners(): Promise<void> {
+  const handles = pushListenerHandles;
+  pushListenerHandles = [];
+  await Promise.all(handles.map(async (handle) => {
+    try {
+      await handle.remove();
+    } catch {
+      // Best-effort cleanup only.
+    }
+  }));
+}
+
 /**
  * Register the device for native push and persist its APNs/FCM token via
  * `/api/push/register-device`. Also wires listeners so received notifications
@@ -108,49 +139,47 @@ export async function registerNativePush(): Promise<string | null> {
 
   return new Promise<string | null>((resolve) => {
     let settled = false;
-
-    void PushNotifications.addListener('registration', async (token) => {
-      const platform = await getPlatform();
-      const auth = await getAuthContext();
-      if (auth && (platform === 'ios' || platform === 'android')) {
-        try {
-          await fetch('/api/push/register-device', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${auth.token}`,
-            },
-            body: JSON.stringify({ userId: auth.userId, token: token.value, platform }),
-          });
-        } catch (err) {
-          console.warn('[mobile] device token registration failed:', err);
-        }
-      }
-      registeredToken = token.value;
+    const settle = (value: string | null) => {
       if (!settled) {
         settled = true;
-        resolve(token.value);
+        resolve(value);
       }
-    });
+    };
 
-    void PushNotifications.addListener('registrationError', (err) => {
-      console.warn('[mobile] push registration error:', err);
-      pushInitStarted = false;
-      if (!settled) {
-        settled = true;
-        resolve(null);
+    void (async () => {
+      try {
+        pushListenerHandles = [
+          await PushNotifications.addListener('registration', async (token) => {
+            const platform = await getPlatform();
+            await registerCurrentDeviceToken(token.value, platform);
+            registeredToken = token.value;
+            settle(token.value);
+          }),
+          await PushNotifications.addListener('registrationError', (err) => {
+            console.warn('[mobile] push registration error:', err);
+            registeredToken = null;
+            pushInitStarted = false;
+            void clearPushListeners();
+            settle(null);
+          }),
+          // Tapping a notification navigates to its target URL when present.
+          await PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+            const url = action.notification.data?.url;
+            if (typeof url === 'string' && url.startsWith('/')) {
+              window.location.assign(url);
+            }
+          }),
+        ];
+
+        await PushNotifications.register();
+      } catch (err) {
+        console.warn('[mobile] push listener setup failed:', err);
+        registeredToken = null;
+        pushInitStarted = false;
+        await clearPushListeners();
+        settle(null);
       }
-    });
-
-    // Tapping a notification navigates to its target URL when present.
-    void PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
-      const url = action.notification.data?.url;
-      if (typeof url === 'string' && url.startsWith('/')) {
-        window.location.assign(url);
-      }
-    });
-
-    void PushNotifications.register();
+    })();
   });
 }
 
@@ -166,7 +195,7 @@ export async function unregisterNativePush(token: string): Promise<void> {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${auth.token}`,
+        Authorization: 'Bearer ' + auth.token,
       },
       body: JSON.stringify({ userId: auth.userId, token }),
     });
@@ -181,9 +210,10 @@ export async function unregisterNativePush(token: string): Promise<void> {
  * No-ops on web or when no token was registered.
  */
 export async function unregisterCurrentNativePush(): Promise<void> {
-  if (!registeredToken) return;
   const token = registeredToken;
   registeredToken = null;
+  await clearPushListeners();
   pushInitStarted = false;
+  if (!token) return;
   await unregisterNativePush(token);
 }
