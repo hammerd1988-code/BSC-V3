@@ -5,7 +5,7 @@
 
 create table if not exists public.device_push_tokens (
     id         text primary key default gen_random_uuid()::text,
-    user_id    text not null references public.users(id) on delete cascade,
+    user_id    uuid not null references public.users(id) on delete cascade,
     token      text not null unique,
     platform   text not null check (platform in ('ios', 'android')),
     is_active  boolean not null default true,

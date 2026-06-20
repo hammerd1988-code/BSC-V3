@@ -8,6 +8,7 @@ import { CallProvider } from './CallContext.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import { registerServiceWorker } from './lib/notifications.ts';
 import { initMobileApp } from './lib/mobile.ts';
+import { isDesktopApp } from './lib/desktop.ts';
 import { SubscriptionProvider } from './lib/subscription.tsx';
 
 // Global handler for stale-chunk errors that occur outside React's error boundary
@@ -49,6 +50,9 @@ void registerServiceWorker();
 
 // Native-only setup (splash, status bar, hardware back button); no-ops on web.
 void initMobileApp();
+
+// Desktop shell hook for bespoke chrome (branded scrollbar, etc.); no-op on web.
+if (isDesktopApp()) document.documentElement.classList.add('bsc-desktop');
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
