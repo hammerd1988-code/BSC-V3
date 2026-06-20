@@ -1838,18 +1838,28 @@ export const Profile: React.FC = () => {
                     className="grid grid-cols-3 gap-1"
                   >
                     {posts.map((post) => (
-                      <div key={post.id} className="relative aspect-square bg-surface overflow-hidden">
+                      <button
+                        key={post.id}
+                        type="button"
+                        onClick={() => {
+                          if (!post.media_url) return;
+                          if (post.media_type === 'video') window.open(post.media_url, '_blank', 'noopener');
+                          else setFullSizeImage(post.media_url);
+                        }}
+                        aria-label={post.media_type === 'video' ? 'Open video' : 'View media fullscreen'}
+                        className="group relative aspect-square cursor-pointer overflow-hidden bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                      >
                         {post.media_type === 'video' && post.media_url ? (
                           <>
-                            <video src={post.media_url} muted playsInline preload="metadata" className="w-full h-full object-cover" />
+                            <video src={post.media_url} muted playsInline preload="metadata" className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
                             <div className="absolute inset-0 flex items-center justify-center bg-black/20">
                               <div className="rounded-full bg-accent/90 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-white">Video</div>
                             </div>
                           </>
                         ) : (
-                          <img src={post.media_url || ''} alt="Media" className="w-full h-full object-cover" />
+                          <img src={post.media_url || ''} alt="Media" className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
                         )}
-                      </div>
+                      </button>
                     ))}
                   </motion.div>
                 )}

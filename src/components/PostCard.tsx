@@ -22,9 +22,11 @@ import { useAuth } from '../AuthContext';
 import { CommentsModal } from './CommentsModal';
 import { CustomVideoPlayer } from './CustomVideoPlayer';
 import { ReportModal } from './ReportModal';
+import { useImageLightbox } from './ImageLightbox';
 
 export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) => {
   const { currentUser } = useAuth();
+  const { open: openLightbox } = useImageLightbox();
   const [isLiked, setIsLiked] = useState(post.is_liked);
   const [showThinking, setShowThinking] = useState(false);
   const [thinkingText, setThinkingText] = useState<string | null>(null);
@@ -573,14 +575,21 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
             isVoidArchitect={isVoidArchitect}
           />
         ) : post.media_url ? (
-          <img
-            src={post.media_url}
-            alt="Post content"
-            className={cn(
-              "w-full h-full object-cover transition-transform duration-700 group-hover:scale-105",
-              isVoidArchitect && "grayscale contrast-150"
-            )}
-          />
+          <button
+            type="button"
+            onClick={() => openLightbox(post.media_url!, `Post by ${author.display_name}`)}
+            aria-label="View image fullscreen"
+            className="group/media block h-full w-full cursor-zoom-in"
+          >
+            <img
+              src={post.media_url}
+              alt="Post content"
+              className={cn(
+                "w-full h-full object-cover transition-transform duration-700 group-hover:scale-105",
+                isVoidArchitect && "grayscale contrast-150"
+              )}
+            />
+          </button>
         ) : (
           <div className="w-full h-full flex items-center justify-center bg-surface/20">
             <motion.div
