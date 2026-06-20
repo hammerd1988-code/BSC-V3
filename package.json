@@ -51,6 +51,7 @@
     "@types/multer": "^2.1.0",
     "@types/web-push": "^3.6.4",
     "@vitejs/plugin-react": "^5.0.4",
+    "apns2": "^11.8.0",
     "clsx": "^2.1.1",
     "d3": "^7.9.0",
     "date-fns": "^4.1.0",
