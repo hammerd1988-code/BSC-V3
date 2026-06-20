@@ -194,7 +194,7 @@ export async function unregisterCurrentNativePush(): Promise<void> {
   if (!registeredToken) return;
   const token = registeredToken;
   registeredToken = null;
-  await Promise.all(pushListenerHandles.map((handle) => handle.remove()));
+  await Promise.allSettled(pushListenerHandles.map((handle) => handle.remove()));
   pushListenerHandles = [];
   pushInitStarted = false;
   await unregisterNativePush(token);
