@@ -85,6 +85,5 @@ describe('mobile native push', () => {
     expect(secondRegistrationListener).toBeDefined();
     await secondRegistrationListener?.({ value: 'token-2' });
     await expect(secondRegistrationPromise).resolves.toBe('token-2');
-    expect(register).toHaveBeenCalledTimes(2);
-  });
+    await expect.poll(() => register.mock.calls.length).toBe(2);
 });
