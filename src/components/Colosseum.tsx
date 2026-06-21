@@ -2363,13 +2363,13 @@ function GladiatorInspectPopup({ gladiator, onClose }: { gladiator: Gladiator; o
           </div>
           <span className="inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[9px] font-black uppercase tracking-widest" style={{ color: badge.color, borderColor: `${badge.color}55`, backgroundColor: `${badge.color}12` }}><BadgeIcon className="h-3 w-3" /> {badge.label}</span>
         </div>
-        <div className="relative mt-6 grid grid-cols-4 gap-3">
+        <div className="relative mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <StatBar label="SPD" value={gladiator.stats.speed} color={gladiator.glow_color} />
           <StatBar label="ACC" value={gladiator.stats.accuracy} color="#00e5ff" />
           <StatBar label="CRTV" value={gladiator.stats.creativity} color="#f9ff6b" />
           <StatBar label="END" value={gladiator.stats.endurance} color="#ff2bd6" />
         </div>
-        <div className="relative mt-5 grid grid-cols-4 gap-3 text-center">
+        <div className="relative mt-5 grid grid-cols-2 gap-3 text-center sm:grid-cols-4">
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-green-200">{gladiator.wins}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Wins</p></div>
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-red-200">{gladiator.losses}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Losses</p></div>
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-yellow-200">{gladiator.cred}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">CRED</p></div>
@@ -3443,7 +3443,7 @@ function GladiatorCard({ gladiator, active, onSelect, actionLabel, onAction }: {
               <BadgeIcon className="h-3 w-3" /> {badge.label}
             </span>
           </div>
-          <div className="mt-4 grid grid-cols-4 gap-3">
+          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <StatBar label="SPD" value={gladiator.stats.speed} color={gladiator.glow_color} />
             <StatBar label="ACC" value={gladiator.stats.accuracy} color="#00e5ff" />
             <StatBar label="CRTV" value={gladiator.stats.creativity} color="#f9ff6b" />
@@ -6265,7 +6265,7 @@ export const Colosseum: React.FC = () => {
           <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
             <div>
               <p className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-200">Unified Bot System</p>
-              <h2 className="mt-2 text-2xl font-black uppercase tracking-[0.14em] text-white">Persona Bots Are Gladiators Now</h2>
+              <h2 className="mt-2 text-lg font-black uppercase tracking-[0.14em] text-white sm:text-2xl">Persona Bots Are Gladiators Now</h2>
               <p className="mt-3 text-sm leading-6 text-zinc-400">Browse the Platform Gladiator Bot Roster below, pick a persona that gets under your skin, choose Speed Round, Debug Battle, or Code Golf, then hit Challenge. Each profile now exposes ability, personality style, code execution style, signature moves, and a cinematic avatar.</p>
             </div>
             <div className="grid grid-cols-3 gap-2 text-center">
@@ -6308,30 +6308,30 @@ export const Colosseum: React.FC = () => {
                 initial={{ scale: 0.94, y: 18 }}
                 animate={{ scale: 1, y: 0 }}
                 exit={{ scale: 0.94, y: 18 }}
-                className="relative w-full max-w-3xl overflow-hidden rounded-[2rem] border border-red-400/35 bg-zinc-950 p-6 shadow-[0_0_70px_rgba(255,23,68,0.28)]"
+                className="relative w-full max-w-3xl overflow-hidden rounded-[2rem] border border-red-400/35 bg-zinc-950 p-4 shadow-[0_0_70px_rgba(255,23,68,0.28)] sm:p-6"
               >
                 <div className="pointer-events-none absolute inset-0 opacity-35" style={{ background: `radial-gradient(circle at 20% 0%, ${selectedOpponent.glow_color}66, transparent 34%), radial-gradient(circle at 100% 100%, rgba(0,229,255,0.22), transparent 35%)` }} />
                 <div className="relative">
-                  <div className="mb-5 flex items-start justify-between gap-4">
-                    <div className="flex items-start gap-5">
+                  <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start sm:gap-5">
                       <AnimatedGladiatorAvatar gladiator={selectedOpponent} size="lg" label={selectedOpponent.name} active />
-                      <div>
+                      <div className="text-center sm:text-left">
                       <p className="text-[10px] font-black uppercase tracking-[0.34em] text-red-300">Pre-Battle Lock</p>
-                      <h2 className="mt-2 text-3xl font-black uppercase tracking-[0.14em] text-white">{selectedOpponent.name} Accepts</h2>
+                      <h2 className="mt-2 text-xl font-black uppercase tracking-[0.14em] text-white sm:text-3xl">{selectedOpponent.name} Accepts</h2>
                       <p className="mt-2 text-sm leading-6 text-zinc-400">{profileLine(selectedOpponent.botProfile)}</p>
                       </div>
                     </div>
-                    <button type="button" onClick={() => setChallengeModalOpen(false)} className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white">Close</button>
+                    <button type="button" onClick={() => setChallengeModalOpen(false)} className="self-center rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white sm:self-auto">Close</button>
                   </div>
 
-                  <blockquote className="rounded-3xl border border-white/10 bg-black/50 p-5 text-lg font-black uppercase leading-8 tracking-[0.12em] text-white">
+                  <blockquote className="rounded-3xl border border-white/10 bg-black/50 p-4 text-sm font-black uppercase leading-7 tracking-[0.12em] text-white sm:p-5 sm:text-lg sm:leading-8">
                     “{pickDialogue(selectedOpponent.botProfile?.pre_battle_lines)}”
                   </blockquote>
 
                   <div className="mt-5 grid gap-4 md:grid-cols-[0.9fr_1.1fr]">
                     <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-4">
                       <p className="text-[10px] font-black uppercase tracking-[0.24em] text-zinc-500">Countdown</p>
-                      <p className="mt-2 text-6xl font-black text-red-200 drop-shadow-[0_0_24px_rgba(255,23,68,0.85)]">{countdown || 'GO'}</p>
+                      <p className="mt-2 text-4xl font-black text-red-200 drop-shadow-[0_0_24px_rgba(255,23,68,0.85)] sm:text-6xl">{countdown || 'GO'}</p>
                       <p className="mt-2 text-xs leading-5 text-zinc-500">When the gate opens, your submitted code is judged against the bot’s AI solution for correctness, speed, and elegance.</p>
                     </div>
                     <div className="rounded-3xl border border-cyan-300/20 bg-cyan-950/10 p-4">
@@ -6403,7 +6403,7 @@ export const Colosseum: React.FC = () => {
                   <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[10px] font-black uppercase tracking-[0.26em] text-zinc-300">
                     <Skull className="h-3.5 w-3.5 text-red-400" /> Cyber Gladiator Pit
                   </div>
-                  <h2 className="mt-5 text-4xl font-black uppercase leading-none tracking-tight text-white sm:text-6xl">
+                  <h2 className="mt-5 text-2xl font-black uppercase leading-none tracking-tight text-white sm:text-4xl md:text-6xl">
                     Build the bot.<br />Win the crowd.
                   </h2>
                   <p className="mt-5 max-w-xl text-sm leading-7 text-zinc-300">
@@ -6691,7 +6691,7 @@ export const Colosseum: React.FC = () => {
           <div className="mb-5 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
             <div>
               <p className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-200">Platform Gladiator Bot Roster</p>
-              <h2 className="mt-1 text-2xl font-black uppercase tracking-[0.16em] text-white">Pick Your Persona Opponent</h2>
+              <h2 className="mt-1 text-lg font-black uppercase tracking-[0.16em] text-white sm:text-2xl">Pick Your Persona Opponent</h2>
               <p className="mt-2 max-w-3xl text-xs leading-6 text-zinc-400">Browse cinematic 3D-style bot avatars, stats, ability profiles, code style, and signature moves. Challenge starts a real coding match: your submitted solution is judged against the bot’s generated answer and the result is archived.</p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -6990,8 +6990,8 @@ export const Colosseum: React.FC = () => {
                 {battleResult && (
                   <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mt-4 rounded-3xl border border-yellow-300/25 bg-yellow-950/10 p-4">
                     <p className="text-[10px] font-black uppercase tracking-[0.28em] text-yellow-200">Casper's Verdict Screen</p>
-                    <h3 className="mt-2 text-2xl font-black uppercase tracking-[0.14em] text-white">{battleResult.winnerName} Wins</h3>
-                    <div className="mt-3 grid gap-3 sm:grid-cols-4">
+                    <h3 className="mt-2 text-lg font-black uppercase tracking-[0.14em] text-white sm:text-2xl">{battleResult.winnerName} Wins</h3>
+                    <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
                       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-white">{battleResult.userScore}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Your Score</p></div>
                       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-white">{battleResult.botScore}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Bot Score</p></div>
                       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-yellow-200">+{battleResult.xpAwarded}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">XP</p></div>

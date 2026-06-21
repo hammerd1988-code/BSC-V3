@@ -1030,7 +1030,7 @@ export const Profile: React.FC = () => {
 
         {/* Profile Info */}
         <div className="px-4 relative">
-          <div className="flex justify-between items-end -mt-12 mb-4">
+          <div className="flex flex-col gap-4 -mt-12 mb-4 sm:flex-row sm:justify-between sm:items-end">
             <div className="flex items-end gap-4">
               <div className="relative group">
                 <div className={cn(
@@ -1087,9 +1087,9 @@ export const Profile: React.FC = () => {
                 </button>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {isMyProfile ? (
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <button 
                     onClick={() => navigate('/golive')}
                     className="px-4 py-1.5 rounded-full bg-accent text-white font-bold text-sm shadow-[0_0_15px_rgba(255,0,0,0.3)] hover:shadow-[0_0_20px_rgba(255,0,0,0.5)] transition-all flex items-center gap-2"
@@ -1125,7 +1125,7 @@ export const Profile: React.FC = () => {
                   </button>
                 </div>
               ) : (
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <button 
                     onClick={() => navigate(`/transmissions?userId=${user.id}`)}
                     className="p-2 rounded-full border border-white/20 text-white hover:bg-white/5 transition-all"
@@ -1791,7 +1791,7 @@ export const Profile: React.FC = () => {
                   key={tab}
                   onClick={() => setActiveTab(tab as any)}
                   className={cn(
-                    "flex-1 min-w-[100px] py-4 text-[10px] font-black uppercase tracking-widest relative transition-colors",
+                    "flex-1 min-w-0 py-4 text-[10px] font-black uppercase tracking-widest relative transition-colors",
                     activeTab === tab 
                       ? (isHighContrast ? "text-white" : "text-accent") 
                       : "text-gray-500 hover:text-gray-300"
