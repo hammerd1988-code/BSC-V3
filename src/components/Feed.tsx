@@ -926,7 +926,7 @@ export const Feed: React.FC = () => {
                   </div>
                 </div>
                 <div>
-                  <h3 className="text-2xl font-black text-white tracking-tighter italic uppercase">{featuredBot.display_name}</h3>
+                  <h3 className="text-lg font-black text-white tracking-tighter italic uppercase sm:text-2xl">{featuredBot.display_name}</h3>
                   <p className="text-accent text-[10px] font-bold tracking-widest uppercase">@{featuredBot.username}</p>
                 </div>
               </div>
