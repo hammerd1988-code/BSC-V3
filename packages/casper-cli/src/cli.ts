@@ -43,13 +43,31 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
 
     conversationHistory.push({ role: 'user', content: input });
 
+    // Show spinner until first token arrives, then switch to live streaming.
     const spinner = ora({ text: chalk.dim('Casper is thinking...'), spinner: 'dots' }).start();
+    let firstToken = true;
+    let streamedResponse = '';
 
     try {
       const response = await runToolLoop(conversationHistory, {
         model: opts.model,
         tools: LOCAL_TOOL_SPECS,
+        onToken: (token) => {
+          if (firstToken) {
+            spinner.stop();
+            process.stdout.write('\n');
+            firstToken = false;
+          }
+          process.stdout.write(chalk.white(token));
+          streamedResponse += token;
+        },
         onToolCall: (name, args) => {
+          // If we were streaming text before a tool call, add a newline.
+          if (!firstToken) {
+            process.stdout.write('\n');
+            firstToken = true; // Reset so spinner shows again after tool calls.
+          }
+          spinner.start();
           spinner.text = chalk.dim(`  ⚙ ${name}(${JSON.stringify(args).slice(0, 60)}...)`);
         },
         onToolResult: (name, result: any) => {
@@ -58,12 +76,18 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         },
       });
 
-      spinner.stop();
-      conversationHistory.push({ role: 'assistant', content: response });
+      if (firstToken) {
+        // No tokens were streamed (shouldn't happen, but handle gracefully).
+        spinner.stop();
+        if (response) {
+          console.log('');
+          console.log(chalk.white(response));
+        }
+      }
 
-      console.log('');
-      console.log(chalk.white(response));
-      console.log('');
+      // Use the streamed content or the returned response for history.
+      conversationHistory.push({ role: 'assistant', content: streamedResponse || response });
+      console.log('\n');
     } catch (err: any) {
       spinner.stop();
       console.error(chalk.red(`\n  Error: ${err.message}\n`));

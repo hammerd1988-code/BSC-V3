@@ -79,3 +79,27 @@ export async function chatCompletion(
     max_tokens: 4096,
   });
 }
+
+/**
+ * Send a streaming chat completion request. Returns an async iterable of
+ * chunks that the caller can consume token-by-token while also accumulating
+ * tool_calls.
+ */
+export async function chatCompletionStream(
+  client: OpenAI,
+  messages: ChatMessage[],
+  tools: ToolSpec[],
+  model?: string,
+): Promise<AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>> {
+  const modelName = model || getConfig('model');
+  return client.chat.completions.create({
+    model: modelName,
+    messages: messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+    tools: tools.length > 0
+      ? tools as OpenAI.Chat.Completions.ChatCompletionTool[]
+      : undefined,
+    temperature: 0.7,
+    max_tokens: 4096,
+    stream: true,
+  });
+}
