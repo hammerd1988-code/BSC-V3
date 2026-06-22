@@ -199,7 +199,8 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
         }
         case 'tool:start':
         case 'tool:stdout':
-        case 'tool:result': {
+        case 'tool:result':
+        case 'llm:token': {
           const directive = directives.get(message.directiveId);
           if (!directive || directive.machineId !== machineId) return;
           if (directive.status === 'pending') directive.status = 'running';
