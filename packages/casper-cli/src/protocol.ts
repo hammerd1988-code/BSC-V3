@@ -88,6 +88,12 @@ export interface DirectiveCompleteMessage {
   toolCalls?: Array<{ name: string; result: unknown }>;
 }
 
+export interface LlmTokenMessage {
+  type: 'llm:token';
+  directiveId: string;
+  token: string;
+}
+
 export type CliToRelayMessage =
   | CliRegisterMessage
   | CliHeartbeatMessage
@@ -96,7 +102,8 @@ export type CliToRelayMessage =
   | ToolStdoutMessage
   | ToolResultMessage
   | ApprovalRequestMessage
-  | DirectiveCompleteMessage;
+  | DirectiveCompleteMessage
+  | LlmTokenMessage;
 
 export interface DirectiveMessage {
   type: 'directive';

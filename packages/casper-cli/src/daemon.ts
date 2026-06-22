@@ -122,6 +122,9 @@ export async function startDaemon(opts: { relayUrl?: string }): Promise<void> {
       const response = await runToolLoop(messages, {
         model: getConfig('model'),
         tools: LOCAL_TOOL_SPECS,
+        onToken: (token) => {
+          send({ type: 'llm:token', directiveId: directive.id, token });
+        },
         onToolCall: (name, args) => {
           if (abortedDirectives.has(directive.id)) throw new Error('Directive aborted by operator.');
           send({ type: 'tool:start', directiveId: directive.id, toolName: name, args });
