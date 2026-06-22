@@ -123,6 +123,7 @@ export async function startDaemon(opts: { relayUrl?: string }): Promise<void> {
         model: getConfig('model'),
         tools: LOCAL_TOOL_SPECS,
         onToken: (token) => {
+          if (abortedDirectives.has(directive.id)) return;
           send({ type: 'llm:token', directiveId: directive.id, token });
         },
         onToolCall: (name, args) => {

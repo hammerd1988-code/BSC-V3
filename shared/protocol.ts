@@ -111,6 +111,13 @@ export interface DirectiveCompleteMessage {
   toolCalls?: Array<{ name: string; result: unknown }>;
 }
 
+// LLM streaming token (CLI → Railway → Web/Mobile for live response rendering)
+export interface LlmTokenMessage {
+  type: 'llm:token';
+  directiveId: string;
+  token: string;
+}
+
 export type CliToRelayMessage =
   | CliRegisterMessage
   | CliHeartbeatMessage
@@ -119,7 +126,8 @@ export type CliToRelayMessage =
   | ToolStdoutMessage
   | ToolResultMessage
   | ApprovalRequestMessage
-  | DirectiveCompleteMessage;
+  | DirectiveCompleteMessage
+  | LlmTokenMessage;
 
 // ── Railway → CLI messages ────────────────────────────────────────────────────
 
