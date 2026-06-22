@@ -3,6 +3,7 @@ import { createLlmClient, chatCompletionStream, type ChatMessage, type ToolSpec 
 import { executeLocalTool } from '../tools/index.js';
 import { isDestructive, confirmAction } from '../utils/security.js';
 import { detectProjectContext } from '../context.js';
+import { loadProjectInstructions } from '../init.js';
 import chalk from 'chalk';
 
 const MAX_TOOL_ROUNDS = 10;
@@ -18,6 +19,7 @@ You are running as a CLI daemon on the user's local machine. You can:
 - Run git operations
 - Start/stop background processes (dev servers, builds, etc.)
 - Get system information
+- Scrape web pages (fetch URLs, extract text/markdown/links)
 
 When using tools, be efficient. Chain operations logically. Report results concisely.
 If a command might be destructive (rm -rf, force push, etc.), warn the user first.`;
@@ -106,12 +108,16 @@ export async function runToolLoop(
 ): Promise<string> {
   const client = createLlmClient();
 
-  // Build system prompt, optionally enriched with project context.
+  // Build system prompt, optionally enriched with project context and instructions.
   let systemPrompt = CASPER_SYSTEM_PROMPT;
   if (opts.projectContext !== false) {
     const ctx = detectProjectContext();
     if (ctx) {
       systemPrompt += `\n\n--- PROJECT CONTEXT ---\n${ctx}`;
+    }
+    const instr = loadProjectInstructions();
+    if (instr) {
+      systemPrompt += `\n\n--- PROJECT INSTRUCTIONS ---\n${instr}`;
     }
   }
 
