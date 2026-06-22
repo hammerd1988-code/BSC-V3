@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { getConfig } from './config.js';
 
@@ -105,13 +106,41 @@ function getGitInfo(dir: string): { branch?: string; remote?: string } {
     const configPath = path.join(dir, '.git', 'config');
     if (fs.existsSync(configPath)) {
       const gitConfig = fs.readFileSync(configPath, 'utf-8');
-      remote = gitConfig.match(/url\s*=\s*(\S+)/)?.[1];
+      const rawRemote = gitConfig.match(/url\s*=\s*(\S+)/)?.[1];
+      remote = rawRemote ? sanitizeRemoteUrl(rawRemote) : undefined;
     }
 
     return { branch, remote };
   } catch {
     return {};
   }
+}
+
+/**
+ * Strip embedded credentials from git remote URLs.
+ * e.g. https://token@github.com/owner/repo → https://github.com/owner/repo
+ */
+function sanitizeRemoteUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.username = '';
+    parsed.password = '';
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    // SSH-style remotes (git@github.com:owner/repo.git) have no credentials to strip.
+    return url;
+  }
+}
+
+/**
+ * Replace the user's home directory with ~ in a path.
+ */
+function redactHomePath(p: string): string {
+  const home = os.homedir();
+  if (p.startsWith(home)) {
+    return '~' + p.slice(home.length);
+  }
+  return p;
 }
 
 /**
@@ -158,7 +187,7 @@ export function detectProjectContext(): string | null {
   if (info.dependencies && info.dependencies.length > 0) {
     lines.push(`Key deps: ${info.dependencies.join(', ')}`);
   }
-  lines.push(`Working dir: ${cwd}`);
+  lines.push(`Working dir: ${redactHomePath(cwd)}`);
 
   return lines.join('\n');
 }
