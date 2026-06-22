@@ -20,7 +20,7 @@ export async function runOnce(command: string, opts: ExecOptions): Promise<void>
   ];
 
   try {
-    await runToolLoop(messages, {
+    const response = await runToolLoop(messages, {
       model: opts.model,
       tools: LOCAL_TOOL_SPECS,
       onToken: (token) => {
@@ -44,7 +44,10 @@ export async function runOnce(command: string, opts: ExecOptions): Promise<void>
       },
     });
 
-    if (firstToken) spinner.stop();
+    if (firstToken) {
+      spinner.stop();
+      if (response) process.stdout.write(response);
+    }
     process.stdout.write('\n');
   } catch (err: any) {
     spinner.stop();
