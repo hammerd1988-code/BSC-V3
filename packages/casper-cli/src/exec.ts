@@ -9,20 +9,33 @@ export interface ExecOptions {
 }
 
 /**
- * Run a single command through Casper and print the result.
+ * Run a single command through Casper and stream the result to stdout.
  */
 export async function runOnce(command: string, opts: ExecOptions): Promise<void> {
   const spinner = ora({ text: chalk.dim('Casper is working...'), spinner: 'dots' }).start();
+  let firstToken = true;
 
   const messages: ChatMessage[] = [
     { role: 'user', content: command },
   ];
 
   try {
-    const response = await runToolLoop(messages, {
+    await runToolLoop(messages, {
       model: opts.model,
       tools: LOCAL_TOOL_SPECS,
+      onToken: (token) => {
+        if (firstToken) {
+          spinner.stop();
+          firstToken = false;
+        }
+        process.stdout.write(token);
+      },
       onToolCall: (name) => {
+        if (!firstToken) {
+          process.stdout.write('\n');
+          firstToken = true;
+        }
+        spinner.start();
         spinner.text = chalk.dim(`  ⚙ ${name}`);
       },
       onToolResult: (name, result: any) => {
@@ -31,8 +44,8 @@ export async function runOnce(command: string, opts: ExecOptions): Promise<void>
       },
     });
 
-    spinner.stop();
-    console.log(response);
+    if (firstToken) spinner.stop();
+    process.stdout.write('\n');
   } catch (err: any) {
     spinner.stop();
     console.error(chalk.red(`Error: ${err.message}`));
