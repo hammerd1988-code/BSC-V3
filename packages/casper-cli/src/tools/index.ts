@@ -3,6 +3,7 @@ import { readFile, writeFile, searchFiles, type ReadFileArgs, type WriteFileArgs
 import { executeGit, type GitArgs } from './git.js';
 import { startProcess, stopProcess, listProcesses, type ProcessStartArgs, type ProcessStopArgs } from './process.js';
 import { getSystemInfo } from './system.js';
+import { scrapeUrl, type ScrapeArgs } from './scrape.js';
 import open from 'open';
 import { audit } from '../utils/logger.js';
 
@@ -37,6 +38,8 @@ export async function executeLocalTool(name: string, args: Record<string, unknow
       return listProcesses();
     case 'system_info':
       return getSystemInfo();
+    case 'scrape':
+      return scrapeUrl(args as unknown as ScrapeArgs);
     case 'open_browser': {
       const url = String(args.url || '');
       if (!url) return { ok: false, data: null, error: 'url is required' };
@@ -54,3 +57,4 @@ export { readFile, writeFile, searchFiles } from './files.js';
 export { executeGit } from './git.js';
 export { startProcess, stopProcess, listProcesses } from './process.js';
 export { getSystemInfo } from './system.js';
+export { scrapeUrl } from './scrape.js';

@@ -4,10 +4,13 @@ import ora from 'ora';
 import { runToolLoop } from './llm/tool-loop.js';
 import { LOCAL_TOOL_SPECS } from './tool-specs.js';
 import type { ChatMessage } from './llm/client.js';
+import { saveSession, loadSession, getLastSessionId } from './sessions.js';
+import { loadProjectInstructions } from './init.js';
 
 export interface ReplOptions {
   model: string;
   preferLocal: boolean;
+  resume?: string;
 }
 
 const BANNER = `
@@ -20,7 +23,32 @@ ${chalk.magenta('╚════════════════════
 export async function startRepl(opts: ReplOptions): Promise<void> {
   console.log(BANNER);
   console.log(chalk.dim(`  Model: ${opts.model}${opts.preferLocal ? ' (local)' : ''}`));
-  console.log(chalk.dim(`  Type your message, or 'exit' to quit.\n`));
+
+  // Load project-specific instructions if .casper/instructions.md exists
+  const projectInstr = loadProjectInstructions();
+  if (projectInstr) {
+    console.log(chalk.dim(`  Project instructions: loaded from .casper/instructions.md`));
+  }
+
+  let conversationHistory: ChatMessage[] = [];
+  let sessionId: string | undefined;
+
+  // Resume a previous session if requested
+  if (opts.resume) {
+    const resumeId = opts.resume === 'last' ? getLastSessionId() : opts.resume;
+    if (resumeId) {
+      const session = loadSession(resumeId);
+      if (session) {
+        conversationHistory = session.messages;
+        sessionId = session.id;
+        console.log(chalk.dim(`  Resumed session: ${session.title} (${session.messageCount} messages)`));
+      } else {
+        console.log(chalk.yellow(`  Session "${resumeId}" not found — starting fresh.`));
+      }
+    }
+  }
+
+  console.log(chalk.dim(`  Type your message, or 'exit' to quit. Use '/save' to save session.\n`));
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -28,17 +56,39 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     prompt: chalk.cyan('casper> '),
   });
 
-  const conversationHistory: ChatMessage[] = [];
-
   rl.prompt();
 
   rl.on('line', async (line) => {
     const input = line.trim();
     if (!input) { rl.prompt(); return; }
     if (input === 'exit' || input === 'quit' || input === '.exit') {
+      // Auto-save on exit if there's conversation history
+      if (conversationHistory.length > 0) {
+        sessionId = saveSession(conversationHistory, opts.model, sessionId);
+        console.log(chalk.dim(`\n  Session saved: ${sessionId}`));
+      }
       console.log(chalk.magenta('\n  Until next time. 🔮\n'));
       rl.close();
       process.exit(0);
+    }
+
+    // Slash commands
+    if (input === '/save') {
+      if (conversationHistory.length === 0) {
+        console.log(chalk.dim('  Nothing to save yet.'));
+      } else {
+        sessionId = saveSession(conversationHistory, opts.model, sessionId);
+        console.log(chalk.green(`  Session saved: ${sessionId}`));
+      }
+      rl.prompt();
+      return;
+    }
+    if (input === '/clear') {
+      conversationHistory = [];
+      sessionId = undefined;
+      console.log(chalk.dim('  Conversation cleared.'));
+      rl.prompt();
+      return;
     }
 
     conversationHistory.push({ role: 'user', content: input });

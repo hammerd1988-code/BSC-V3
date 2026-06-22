@@ -148,6 +148,24 @@ export const LOCAL_TOOL_SPECS: ToolSpec[] = [
   {
     type: 'function',
     function: {
+      name: `${PREFIX}${SEP}scrape`,
+      description: '[Local] Fetch and extract content from a web page. Supports text, markdown, HTML, links, and headers output formats. Use this to read documentation, check APIs, or gather data from websites.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'URL to scrape.' },
+          selector: { type: 'string', description: 'CSS-like selector to extract a specific element (#id, .class, or tag name). Omit to get the full page.' },
+          format: { type: 'string', description: 'Output format: "text" (default), "markdown", "html", "links" (extract all URLs), or "headers" (HTTP response headers).' },
+          max_bytes: { type: 'number', description: 'Maximum response body bytes to read (default 512KB, max 2MB).' },
+          timeout_ms: { type: 'number', description: 'Request timeout in ms (default 30000, max 120000).' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: `${PREFIX}${SEP}open_browser`,
       description: '[Local] Open a URL in the system default browser.',
       parameters: {
