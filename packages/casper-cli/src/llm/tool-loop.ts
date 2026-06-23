@@ -4,6 +4,7 @@ import { executeLocalTool } from '../tools/index.js';
 import { isDestructive, confirmAction } from '../utils/security.js';
 import { detectProjectContext } from '../context.js';
 import { loadProjectInstructions } from '../init.js';
+import { getPluginToolSpecs, isPluginTool, extractPluginName, loadPlugin } from '../plugins/index.js';
 import chalk from 'chalk';
 
 const MAX_TOOL_ROUNDS = 10;
@@ -20,9 +21,11 @@ You are running as a CLI daemon on the user's local machine. You can:
 - Start/stop background processes (dev servers, builds, etc.)
 - Get system information
 - Scrape web pages (fetch URLs, extract text/markdown/links)
+- Use custom plugins installed by the user (tools prefixed with plugin__)
 
 When using tools, be efficient. Chain operations logically. Report results concisely.
-If a command might be destructive (rm -rf, force push, etc.), warn the user first.`;
+If a command might be destructive (rm -rf, force push, etc.), warn the user first.
+Plugin tools (plugin__*) are user-defined extensions — use them when they match the task.`;
 
 export interface ToolLoopOptions {
   model?: string;
@@ -126,8 +129,12 @@ export async function runToolLoop(
     ...messages,
   ];
 
+  // Merge built-in tools with discovered plugin tools
+  const pluginSpecs = getPluginToolSpecs();
+  const allTools = [...opts.tools, ...pluginSpecs];
+
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const stream = await chatCompletionStream(client, allMessages, opts.tools, opts.model);
+    const stream = await chatCompletionStream(client, allMessages, allTools, opts.model);
     const { content, toolCalls, finishReason } = await consumeStream(stream, opts.onToken);
 
     // If model wants to call tools
@@ -167,6 +174,25 @@ export async function runToolLoop(
               content: JSON.stringify({ ok: false, error: 'User denied this command.' }),
             });
             continue;
+          }
+        }
+
+        // Security check for dangerous plugins
+        if (isPluginTool(toolName)) {
+          const pluginName = extractPluginName(toolName);
+          const plugin = loadPlugin(pluginName);
+          if (plugin?.manifest.dangerous) {
+            const approved = opts.confirm
+              ? await opts.confirm(`Plugin "${pluginName}" is marked dangerous`)
+              : await confirmAction(`Casper wants to run dangerous plugin: ${chalk.red(pluginName)}`);
+            if (!approved) {
+              allMessages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: JSON.stringify({ ok: false, error: 'User denied this plugin execution.' }),
+              });
+              continue;
+            }
           }
         }
 

@@ -6,6 +6,7 @@ import { LOCAL_TOOL_SPECS } from './tool-specs.js';
 import type { ChatMessage } from './llm/client.js';
 import { saveSession, loadSession, getLastSessionId } from './sessions.js';
 import { loadProjectInstructions } from './init.js';
+import { discoverPlugins } from './plugins/index.js';
 
 export interface ReplOptions {
   model: string;
@@ -30,6 +31,13 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     console.log(chalk.dim(`  Project instructions: loaded from .casper/instructions.md`));
   }
 
+  // Show loaded plugins
+  const { plugins } = discoverPlugins();
+  if (plugins.length > 0) {
+    const names = plugins.map(p => chalk.cyan(p.manifest.name)).join(chalk.dim(', '));
+    console.log(chalk.dim(`  Plugins: `) + names);
+  }
+
   let conversationHistory: ChatMessage[] = [];
   let sessionId: string | undefined;
 
@@ -48,7 +56,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     }
   }
 
-  console.log(chalk.dim(`  Type your message, or 'exit' to quit. Use '/save' to save session.\n`));
+  console.log(chalk.dim(`  Type your message, or 'exit' to quit. '/help' for commands.\n`));
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -87,6 +95,34 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       conversationHistory = [];
       sessionId = undefined;
       console.log(chalk.dim('  Conversation cleared.'));
+      rl.prompt();
+      return;
+    }
+    if (input === '/plugins') {
+      const { plugins: currentPlugins, errors } = discoverPlugins();
+      if (currentPlugins.length === 0 && errors.length === 0) {
+        console.log(chalk.dim('  No plugins loaded. Run ') + chalk.cyan('casper plugin init my-tool') + chalk.dim(' to create one.'));
+      } else {
+        console.log(chalk.magenta('\n  Loaded plugins:'));
+        for (const p of currentPlugins) {
+          const badge = p.scope === 'project' ? chalk.cyan('[project]') : chalk.magenta('[global]');
+          console.log(`    ${badge} ${chalk.bold.cyan(p.manifest.name)} ${chalk.dim(`v${p.manifest.version}`)} — ${p.manifest.description}`);
+        }
+        for (const e of errors) {
+          console.log(`    ${chalk.red('✗')} ${e.plugin}: ${e.message}`);
+        }
+        console.log('');
+      }
+      rl.prompt();
+      return;
+    }
+    if (input === '/help') {
+      console.log(chalk.magenta('\n  Commands:'));
+      console.log(chalk.dim('    /save     ') + 'Save current session');
+      console.log(chalk.dim('    /clear    ') + 'Clear conversation history');
+      console.log(chalk.dim('    /plugins  ') + 'Show loaded plugins');
+      console.log(chalk.dim('    /help     ') + 'Show this help');
+      console.log(chalk.dim('    exit      ') + 'Save & quit\n');
       rl.prompt();
       return;
     }
