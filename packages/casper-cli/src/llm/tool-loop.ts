@@ -34,7 +34,7 @@ export interface ToolLoopOptions {
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
   onToolResult?: (name: string, result: unknown) => void;
   /** Override for destructive-command confirmation (e.g. remote approval in daemon mode). */
-  confirm?: (command: string) => Promise<boolean>;
+  confirm?: (detail: string, context?: { type: 'shell' | 'plugin'; toolName: string }) => Promise<boolean>;
   /** Inject project context into the system prompt. Defaults to true. */
   projectContext?: boolean;
 }
@@ -165,7 +165,7 @@ export async function runToolLoop(
         // Security check for destructive commands
         if (toolName === 'local__shell' && typeof args.command === 'string' && isDestructive(args.command)) {
           const approved = opts.confirm
-            ? await opts.confirm(args.command)
+            ? await opts.confirm(args.command, { type: 'shell', toolName: 'local__shell' })
             : await confirmAction(`Casper wants to run: ${chalk.red(args.command)}`);
           if (!approved) {
             allMessages.push({
@@ -183,7 +183,7 @@ export async function runToolLoop(
           const plugin = loadPlugin(pluginName);
           if (plugin?.manifest.dangerous) {
             const approved = opts.confirm
-              ? await opts.confirm(`Plugin "${pluginName}" is marked dangerous`)
+              ? await opts.confirm(pluginName, { type: 'plugin', toolName: `plugin__${pluginName}` })
               : await confirmAction(`Casper wants to run dangerous plugin: ${chalk.red(pluginName)}`);
             if (!approved) {
               allMessages.push({
