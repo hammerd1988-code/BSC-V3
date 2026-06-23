@@ -79,6 +79,9 @@ export async function executePlugin(
       }
     }, timeout);
 
+    // Suppress EPIPE errors on stdin (can fire if spawn fails before write completes)
+    proc.stdin.on('error', () => {});
+
     // Write args to stdin and close
     proc.stdin.write(JSON.stringify(args));
     proc.stdin.end();
