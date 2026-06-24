@@ -7,6 +7,7 @@ import { getConfig, setConfig } from './config.js';
 import { loginFlow, logout, authStatus } from './auth.js';
 import { initProject } from './init.js';
 import { listSessions, deleteSession } from './sessions.js';
+import { pluginList, pluginInfo, pluginInit, pluginRemove } from './plugins/index.js';
 import chalk from 'chalk';
 
 const VERSION = '0.1.0';
@@ -164,6 +165,40 @@ session
     } else {
       console.log(chalk.yellow(`  Session not found: ${id}`));
     }
+  });
+
+// Plugin management
+const plugin = program.command('plugin').description('Manage Casper plugins (custom AI tools)');
+
+plugin
+  .command('list')
+  .description('List all installed plugins')
+  .action(() => {
+    pluginList();
+  });
+
+plugin
+  .command('info <name>')
+  .description('Show detailed info about a plugin')
+  .action((name) => {
+    pluginInfo(name);
+  });
+
+plugin
+  .command('init <name>')
+  .description('Create a new plugin scaffold')
+  .option('-g, --global', 'Create as a global plugin (available in all projects)')
+  .option('--runtime <runtime>', 'Entry script runtime: node, python, bash (default: node)')
+  .action((name, opts) => {
+    pluginInit(name, { global: opts.global, runtime: opts.runtime });
+  });
+
+plugin
+  .command('remove <name>')
+  .description('Remove an installed plugin')
+  .option('-g, --global', 'Remove from global plugins only')
+  .action((name, opts) => {
+    pluginRemove(name, { global: opts.global });
   });
 
 program.parse();
