@@ -7,6 +7,7 @@ import { getConfig, setConfig } from './config.js';
 import { loginFlow, logout, authStatus } from './auth.js';
 import { initProject } from './init.js';
 import { listSessions, deleteSession } from './sessions.js';
+import { orchestrate } from './swarm/index.js';
 import chalk from 'chalk';
 
 const VERSION = '0.1.0';
@@ -164,6 +165,23 @@ session
     } else {
       console.log(chalk.yellow(`  Session not found: ${id}`));
     }
+  });
+
+// Swarm orchestration
+program
+  .command('orchestrate <objective...>')
+  .description('Decompose a complex task and run sub-agents in parallel')
+  .option('--model <model>', 'LLM model for agents', 'gpt-4.1-mini')
+  .option('--parallel <n>', 'Max parallel agents (default: 4)', '4')
+  .option('--max-tasks <n>', 'Max subtasks to decompose into (default: 10)', '10')
+  .option('--dry-run', 'Show the plan without executing')
+  .action(async (objective, opts) => {
+    await orchestrate(objective.join(' '), {
+      model: opts.model,
+      maxParallel: parseInt(opts.parallel, 10) || 4,
+      maxTasks: parseInt(opts.maxTasks, 10) || 10,
+      dryRun: opts.dryRun,
+    });
   });
 
 program.parse();
