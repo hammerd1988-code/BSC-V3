@@ -74,6 +74,14 @@ export async function executeAgent(
         toolCallQueue.set(name, queue);
         opts.callbacks?.onToolCall?.(task.id, name, args);
 
+        toolCallLog.push({
+          toolName: name,
+          args,
+          ok: true,
+          durationMs: 0,
+          timestamp: Date.now(),
+        });
+
         // Track file modifications
         if (name === 'local__write_file' && typeof args.path === 'string') {
           if (!filesModified.includes(args.path)) {
