@@ -6,9 +6,9 @@
  * collects results, and produces a final review/summary.
  */
 import { EventEmitter } from 'events';
-import chalk from 'chalk';
 import { executeAgent, type AgentCallbacks } from './agent.js';
 import { createLlmClient, chatCompletion } from '../llm/client.js';
+import { confirmAction } from '../utils/security.js';
 import type { ChatMessage } from '../llm/client.js';
 import type { SwarmPlan, SubTask, AgentReport, SwarmProgress } from './types.js';
 import { formatDuration, truncate } from './utils.js';
@@ -48,6 +48,8 @@ export class Orchestrator extends EventEmitter {
   private activeAgents: Set<string> = new Set();
   private startTime: number = 0;
   private opts: OrchestratorOptions;
+  /** Serializes destructive-command confirmations across concurrent agents. */
+  private confirmQueue: Promise<void> = Promise.resolve();
 
   constructor(plan: SwarmPlan, opts: OrchestratorOptions = {}) {
     super();
@@ -70,7 +72,13 @@ export class Orchestrator extends EventEmitter {
       const ready = this.getReadyTasks();
 
       if (ready.length === 0 && this.activeAgents.size === 0) {
-        // Deadlock — tasks have unresolvable dependencies
+        // Deadlock — tasks have unresolvable dependencies; mark them failed
+        for (const task of this.plan.tasks) {
+          if (task.status === 'pending') {
+            task.status = 'failed';
+            task.error = 'Deadlock: unresolvable or missing dependency';
+          }
+        }
         break;
       }
 
@@ -82,7 +90,11 @@ export class Orchestrator extends EventEmitter {
 
       // Spawn agents for ready tasks (up to maxParallel)
       const slotsAvailable = this.plan.maxParallel - this.activeAgents.size;
-      const toSpawn = ready.slice(0, Math.max(1, slotsAvailable));
+      if (slotsAvailable <= 0) {
+        await this.waitForAnyCompletion();
+        continue;
+      }
+      const toSpawn = ready.slice(0, slotsAvailable);
 
       // Run these agents in parallel
       const agentPromises = toSpawn.map(task => this.runAgent(task));
@@ -160,6 +172,7 @@ export class Orchestrator extends EventEmitter {
       model: this.opts.model ?? this.plan.model,
       context: depContext || undefined,
       callbacks,
+      confirm: this.serialConfirm,
     });
 
     // Update task state
@@ -167,7 +180,7 @@ export class Orchestrator extends EventEmitter {
     task.result = report.result;
     task.error = report.error;
     task.completedAt = Date.now();
-    task.toolCallLog = report.toolCallLog;
+    // Keep task.toolCallLog as built by orchestrator callbacks (has full args + timing)
     task.filesModified = report.filesModified;
 
     this.reports.set(task.id, report);
@@ -220,12 +233,10 @@ export class Orchestrator extends EventEmitter {
    * Wait for any active agent to complete.
    */
   private waitForAnyCompletion(): Promise<void> {
+    const initialSize = this.activeAgents.size;
     return new Promise(resolve => {
       const check = () => {
-        const current = new Set(
-          this.plan.tasks.filter(t => t.status === 'running').map(t => t.id)
-        );
-        if (current.size < this.activeAgents.size || current.size === 0) {
+        if (this.activeAgents.size < initialSize || this.activeAgents.size === 0) {
           resolve();
         } else {
           setTimeout(check, 100);
@@ -234,6 +245,25 @@ export class Orchestrator extends EventEmitter {
       setTimeout(check, 100);
     });
   }
+
+  /**
+   * Serialized confirm — queues destructive-command confirmations so that
+   * concurrent agents don't fight over stdin.
+   */
+  private serialConfirm = (command: string): Promise<boolean> => {
+    const result = this.confirmQueue.then(() =>
+      confirmAction(`[swarm agent] ${command}`)
+    );
+    this.confirmQueue = result.then(
+      () => undefined,
+      (err) => {
+        // Log stdin errors so they aren't silently swallowed
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[swarm] confirm error: ${msg}`);
+      }
+    );
+    return result;
+  };
 
   /**
    * Use the LLM to review all agent results and produce a summary.

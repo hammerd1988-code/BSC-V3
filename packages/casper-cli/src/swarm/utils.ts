@@ -14,5 +14,6 @@ export function formatDuration(ms: number): string {
 
 export function truncate(str: string, maxLen: number): string {
   if (str.length <= maxLen) return str;
+  if (maxLen <= 3) return str.slice(0, maxLen);
   return str.slice(0, maxLen - 3) + '...';
 }

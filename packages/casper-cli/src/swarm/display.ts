@@ -71,6 +71,9 @@ export function printProgress(progress: SwarmProgress): void {
 
 function buildProgressBar(completed: number, failed: number, running: number, remaining: number, total: number): string {
   const width = 20;
+  if (total === 0) {
+    return NEON('[') + DIM('░'.repeat(width)) + NEON(']');
+  }
   const cChars = Math.round((completed / total) * width);
   const fChars = Math.round((failed / total) * width);
   const rChars = Math.round((running / total) * width);
