@@ -50,6 +50,8 @@ export class Orchestrator extends EventEmitter {
   private opts: OrchestratorOptions;
   /** Serializes destructive-command confirmations across concurrent agents. */
   private confirmQueue: Promise<void> = Promise.resolve();
+  /** Tracks all spawned agent promises so they can be properly awaited. */
+  private allAgentPromises: Promise<void>[] = [];
 
   constructor(plan: SwarmPlan, opts: OrchestratorOptions = {}) {
     super();
@@ -96,17 +98,23 @@ export class Orchestrator extends EventEmitter {
       }
       const toSpawn = ready.slice(0, slotsAvailable);
 
-      // Run these agents in parallel
-      const agentPromises = toSpawn.map(task => this.runAgent(task));
+      // Run these agents in parallel; attach .catch() so unhandled rejections
+      // don't crash the process — runAgent's finally ensures activeAgents cleanup.
+      const promises = toSpawn.map(task => {
+        const p = this.runAgent(task).catch(err => {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[swarm] unexpected error in agent ${task.id}: ${msg}`);
+        });
+        this.allAgentPromises.push(p);
+        return p;
+      });
 
       // Wait for at least one to complete before checking for more work
-      await Promise.race(agentPromises);
+      await Promise.race(promises);
     }
 
-    // Wait for any remaining active agents
-    while (this.activeAgents.size > 0) {
-      await this.waitForAnyCompletion();
-    }
+    // Wait for all remaining agent promises to settle
+    await Promise.allSettled(this.allAgentPromises);
 
     this.emitProgress();
 
@@ -125,73 +133,77 @@ export class Orchestrator extends EventEmitter {
     this.opts.onAgentStart?.(task);
     this.emitProgress();
 
-    // Build context from completed dependency results
-    const depContext = task.dependsOn
-      .map(depId => {
-        const report = this.reports.get(depId);
-        if (!report) return null;
-        const depTask = this.plan.tasks.find(t => t.id === depId);
-        return `[${depId}: ${depTask?.description ?? 'unknown'}]\nResult: ${truncate(report.result ?? '(no output)', 500)}`;
-      })
-      .filter(Boolean)
-      .join('\n\n');
+    try {
+      // Build context from completed dependency results
+      const depContext = task.dependsOn
+        .map(depId => {
+          const report = this.reports.get(depId);
+          if (!report) return null;
+          const depTask = this.plan.tasks.find(t => t.id === depId);
+          return `[${depId}: ${depTask?.description ?? 'unknown'}]\nResult: ${truncate(report.result ?? '(no output)', 500)}`;
+        })
+        .filter(Boolean)
+        .join('\n\n');
 
-    const callbacks: AgentCallbacks = {
-      onToken: this.opts.onAgentToken,
-      onToolCall: (taskId, toolName, args) => {
-        const t = this.plan.tasks.find(t => t.id === taskId);
-        if (t) {
-          t.toolCallLog.push({
-            toolName,
-            args,
-            ok: true,
-            durationMs: 0,
-            timestamp: Date.now(),
-          });
-        }
-        this.emitProgress();
-      },
-      onToolResult: (taskId, toolName, ok) => {
-        const t = this.plan.tasks.find(t => t.id === taskId);
-        if (t && t.toolCallLog.length > 0) {
-          const last = t.toolCallLog[t.toolCallLog.length - 1];
-          last.ok = ok;
-          last.durationMs = Date.now() - last.timestamp;
-        }
-        this.emitProgress();
-      },
-      onFileModified: (taskId, filePath) => {
-        const t = this.plan.tasks.find(t => t.id === taskId);
-        if (t && !t.filesModified.includes(filePath)) {
-          t.filesModified.push(filePath);
-        }
-      },
-    };
+      const callbacks: AgentCallbacks = {
+        onToken: this.opts.onAgentToken,
+        onToolCall: (taskId, toolName, args) => {
+          const t = this.plan.tasks.find(t => t.id === taskId);
+          if (t) {
+            t.toolCallLog.push({
+              toolName,
+              args,
+              ok: true,
+              durationMs: 0,
+              timestamp: Date.now(),
+            });
+          }
+          this.emitProgress();
+        },
+        onToolResult: (taskId, toolName, ok) => {
+          const t = this.plan.tasks.find(t => t.id === taskId);
+          if (t && t.toolCallLog.length > 0) {
+            const last = t.toolCallLog[t.toolCallLog.length - 1];
+            last.ok = ok;
+            last.durationMs = Date.now() - last.timestamp;
+          }
+          this.emitProgress();
+        },
+        onFileModified: (taskId, filePath) => {
+          const t = this.plan.tasks.find(t => t.id === taskId);
+          if (t && !t.filesModified.includes(filePath)) {
+            t.filesModified.push(filePath);
+          }
+        },
+      };
 
-    const report = await executeAgent(task, {
-      model: this.opts.model ?? this.plan.model,
-      context: depContext || undefined,
-      callbacks,
-      confirm: this.serialConfirm,
-    });
+      const report = await executeAgent(task, {
+        model: this.opts.model ?? this.plan.model,
+        context: depContext || undefined,
+        callbacks,
+        confirm: this.serialConfirm,
+      });
 
-    // Update task state
-    task.status = report.status;
-    task.result = report.result;
-    task.error = report.error;
-    task.completedAt = Date.now();
-    // Keep task.toolCallLog as built by orchestrator callbacks (has full args + timing)
-    task.filesModified = report.filesModified;
+      // Update task state
+      task.status = report.status;
+      task.result = report.result;
+      task.error = report.error;
+      task.completedAt = Date.now();
+      // Keep task.toolCallLog as built by orchestrator callbacks (has full args + timing)
+      task.filesModified = report.filesModified;
 
-    this.reports.set(task.id, report);
-    this.activeAgents.delete(task.id);
+      this.reports.set(task.id, report);
 
-    this.opts.onAgentComplete?.(task, report);
-    this.emitProgress();
+      this.opts.onAgentComplete?.(task, report);
+      this.emitProgress();
 
-    // If this task failed, cancel dependents
-    if (report.status === 'failed') {
-      this.cancelDependents(task.id);
+      // If this task failed, cancel dependents
+      if (report.status === 'failed') {
+        this.cancelDependents(task.id);
+      }
+    } finally {
+      // Always remove from activeAgents so the scheduler is never stuck
+      this.activeAgents.delete(task.id);
     }
   }
 

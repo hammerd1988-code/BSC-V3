@@ -87,6 +87,12 @@ export async function planTasks(
     filesModified: [],
   }));
 
+  // Strip dependency IDs that don't reference a real task — they would cause a deadlock.
+  const taskIds = new Set(tasks.map(t => t.id));
+  for (const task of tasks) {
+    task.dependsOn = task.dependsOn.filter(dep => taskIds.has(dep));
+  }
+
   return {
     objective,
     tasks,

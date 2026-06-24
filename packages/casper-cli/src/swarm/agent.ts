@@ -52,6 +52,7 @@ export async function executeAgent(
     : '';
 
   const messages: ChatMessage[] = [
+    { role: 'system', content: AGENT_SYSTEM_SUFFIX },
     {
       role: 'user',
       content: `## Your Assignment\n\n${task.description}${contextBlock}\n\nComplete this task. Be thorough and report what you accomplished.`,
@@ -73,14 +74,6 @@ export async function executeAgent(
         queue.push(callId);
         toolCallQueue.set(name, queue);
         opts.callbacks?.onToolCall?.(task.id, name, args);
-
-        toolCallLog.push({
-          toolName: name,
-          args,
-          ok: true,
-          durationMs: 0,
-          timestamp: Date.now(),
-        });
 
         // Track file modifications
         if (name === 'local__write_file' && typeof args.path === 'string') {
