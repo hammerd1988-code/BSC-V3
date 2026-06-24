@@ -57,7 +57,6 @@ const args = [
   bundlePath,
   '--targets', targets.join(','),
   '--output', resolve(outDir, 'casper'),
-  '--no-bytecode',
 ];
 
 try {
