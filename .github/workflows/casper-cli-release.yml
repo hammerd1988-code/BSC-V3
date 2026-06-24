@@ -41,8 +41,7 @@ jobs:
         run: |
           node node_modules/@yao-pkg/pkg/lib-es5/bin.js bundle/casper.cjs \
             --targets ${{ matrix.target }} \
-            --output bin/dist/casper \
-            --no-bytecode
+            --output bin/dist/casper
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
