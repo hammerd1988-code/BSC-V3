@@ -143,15 +143,18 @@ export async function startDaemon(opts: { relayUrl?: string }): Promise<void> {
             },
           });
         },
-        confirm: async (command: string) => {
+        confirm: async (detail: string, context?: { type: 'shell' | 'plugin'; toolName: string }) => {
           if (approvalLevel === 'auto') return true;
+          const ctx = context ?? { type: 'shell', toolName: 'local__shell' };
           send({
             type: 'cli:approval_request',
             directiveId: directive.id,
             machineId: machine.machineId,
-            toolName: 'local__shell',
-            args: { command },
-            reason: `Casper wants to run a potentially destructive command: ${command}`,
+            toolName: ctx.toolName,
+            args: ctx.type === 'plugin' ? { plugin: detail } : { command: detail },
+            reason: ctx.type === 'plugin'
+              ? `Casper wants to run a dangerous plugin: ${detail}`
+              : `Casper wants to run a potentially destructive command: ${detail}`,
           });
           return new Promise<boolean>((resolve) => {
             const timer = setTimeout(() => {

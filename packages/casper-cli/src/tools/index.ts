@@ -4,6 +4,7 @@ import { executeGit, type GitArgs } from './git.js';
 import { startProcess, stopProcess, listProcesses, type ProcessStartArgs, type ProcessStopArgs } from './process.js';
 import { getSystemInfo } from './system.js';
 import { scrapeUrl, type ScrapeArgs } from './scrape.js';
+import { isPluginTool, executePluginTool } from '../plugins/index.js';
 import open from 'open';
 import { audit } from '../utils/logger.js';
 
@@ -17,6 +18,11 @@ export type ToolResult = {
  * Execute a local tool by name. Returns a standardized ToolResult.
  */
 export async function executeLocalTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  // Route plugin tools to the plugin executor
+  if (isPluginTool(name)) {
+    return executePluginTool(name, args);
+  }
+
   const op = name.replace('local__', '');
 
   switch (op) {
