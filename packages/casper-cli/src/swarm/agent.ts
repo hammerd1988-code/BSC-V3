@@ -33,11 +33,19 @@ export async function executeAgent(
     model: string;
     context?: string;
     callbacks?: AgentCallbacks;
+    confirm?: (command: string) => Promise<boolean>;
   },
 ): Promise<AgentReport> {
   const startTime = Date.now();
   const toolCallLog: ToolCallEntry[] = [];
   const filesModified: string[] = [];
+
+  // Track pending tool call args and start times for accurate logging
+  // Use a counter-based key so multiple calls to the same tool in one round don't collide.
+  let toolCallCounter = 0;
+  const pendingToolCalls = new Map<number, { args: Record<string, unknown>; startTime: number }>();
+  // Maps tool name → queue of pending call IDs (FIFO, matching tool-loop execution order)
+  const toolCallQueue = new Map<string, number[]>();
 
   const contextBlock = opts.context
     ? `\n\n--- CONTEXT FROM PRIOR TASKS ---\n${opts.context}`
@@ -54,10 +62,16 @@ export async function executeAgent(
     const result = await runToolLoop(messages, {
       model: opts.model,
       tools: LOCAL_TOOL_SPECS,
+      confirm: opts.confirm,
       onToken: (token) => {
         opts.callbacks?.onToken?.(task.id, token);
       },
       onToolCall: (name, args) => {
+        const callId = toolCallCounter++;
+        pendingToolCalls.set(callId, { args, startTime: Date.now() });
+        const queue = toolCallQueue.get(name) ?? [];
+        queue.push(callId);
+        toolCallQueue.set(name, queue);
         opts.callbacks?.onToolCall?.(task.id, name, args);
 
         // Track file modifications
@@ -71,13 +85,18 @@ export async function executeAgent(
       onToolResult: (name, rawResult: unknown) => {
         const r = rawResult as { ok?: boolean } | null;
         const ok = r?.ok !== false;
-        const durationMs = Date.now() - startTime;
+        const queue = toolCallQueue.get(name);
+        const callId = queue?.shift();
+        const pending = callId !== undefined ? pendingToolCalls.get(callId) : undefined;
+        const callArgs = pending?.args ?? {};
+        const durationMs = pending ? Date.now() - pending.startTime : 0;
+        if (callId !== undefined) pendingToolCalls.delete(callId);
         toolCallLog.push({
           toolName: name,
-          args: {},
+          args: callArgs,
           ok,
-          durationMs: 0,
-          timestamp: Date.now(),
+          durationMs,
+          timestamp: Date.now() - durationMs,
         });
         opts.callbacks?.onToolResult?.(task.id, name, ok, durationMs);
       },

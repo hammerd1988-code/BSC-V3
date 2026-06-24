@@ -49,7 +49,7 @@ export async function orchestrate(
     planSpinner.stop();
     const msg = err instanceof Error ? err.message : String(err);
     console.error(chalk.red(`  Failed to plan: ${msg}`));
-    process.exit(1);
+    throw err;
   }
 
   if (opts.maxParallel) {
@@ -83,9 +83,9 @@ export async function orchestrate(
 
   let review: string;
   try {
-    // Clear the progress line before review
-    printReviewBanner();
     review = await orchestrator.run();
+    // Show the review banner after execution completes
+    printReviewBanner();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(chalk.red(`\n  Swarm error: ${msg}`));

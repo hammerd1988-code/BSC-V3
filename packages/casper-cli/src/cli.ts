@@ -98,7 +98,12 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         console.log(chalk.dim('  Example: /swarm Build auth system, add tests, update docs'));
       } else {
         console.log('');
-        await orchestrate(objective, { model: opts.model });
+        try {
+          await orchestrate(objective, { model: opts.model });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(chalk.red(`  Swarm failed: ${msg}`));
+        }
       }
       rl.prompt();
       return;
