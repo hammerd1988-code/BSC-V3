@@ -6,6 +6,7 @@ import { LOCAL_TOOL_SPECS } from './tool-specs.js';
 import type { ChatMessage } from './llm/client.js';
 import { saveSession, loadSession, getLastSessionId } from './sessions.js';
 import { loadProjectInstructions } from './init.js';
+import { orchestrate } from './swarm/index.js';
 
 export interface ReplOptions {
   model: string;
@@ -48,7 +49,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     }
   }
 
-  console.log(chalk.dim(`  Type your message, or 'exit' to quit. Use '/save' to save session.\n`));
+  console.log(chalk.dim(`  Type your message, or 'exit' to quit. '/help' for commands.\n`));
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -87,6 +88,28 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       conversationHistory = [];
       sessionId = undefined;
       console.log(chalk.dim('  Conversation cleared.'));
+      rl.prompt();
+      return;
+    }
+    if (input.startsWith('/swarm ')) {
+      const objective = input.slice(7).trim();
+      if (!objective) {
+        console.log(chalk.dim('  Usage: /swarm <objective>'));
+        console.log(chalk.dim('  Example: /swarm Build auth system, add tests, update docs'));
+      } else {
+        console.log('');
+        await orchestrate(objective, { model: opts.model });
+      }
+      rl.prompt();
+      return;
+    }
+    if (input === '/help') {
+      console.log(chalk.magenta('\n  Commands:'));
+      console.log(chalk.dim('    /save          ') + 'Save current session');
+      console.log(chalk.dim('    /clear         ') + 'Clear conversation history');
+      console.log(chalk.dim('    /swarm <task>   ') + 'Decompose task and run sub-agents in parallel');
+      console.log(chalk.dim('    /help          ') + 'Show this help');
+      console.log(chalk.dim('    exit           ') + 'Save & quit\n');
       rl.prompt();
       return;
     }
