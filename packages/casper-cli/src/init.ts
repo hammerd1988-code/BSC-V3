@@ -73,6 +73,9 @@ export async function initProject(opts: { force?: boolean } = {}): Promise<void>
   // Write instructions.md
   fs.writeFileSync(path.join(casperDir, 'instructions.md'), DEFAULT_INSTRUCTIONS, 'utf-8');
 
+  // Create plugins directory
+  fs.mkdirSync(path.join(casperDir, 'plugins'), { recursive: true });
+
   // Auto-generate a context snapshot
   const ctx = detectProjectContext();
   if (ctx) {
@@ -97,11 +100,13 @@ export async function initProject(opts: { force?: boolean } = {}): Promise<void>
   console.log(chalk.white(`  Created:`));
   console.log(chalk.dim(`    ${CASPER_DIR}/config.yml       — project settings`));
   console.log(chalk.dim(`    ${CASPER_DIR}/instructions.md  — custom AI instructions`));
+  console.log(chalk.dim(`    ${CASPER_DIR}/plugins/          — custom plugins directory`));
   if (ctx) {
     console.log(chalk.dim(`    ${CASPER_DIR}/context-snapshot.txt — detected project info`));
   }
   console.log('');
   console.log(chalk.dim(`  Edit instructions.md to teach Casper about your project.`));
+  console.log(chalk.dim(`  Create plugins with: casper plugin init <name>`));
   console.log(chalk.dim(`  Casper will read these files automatically when you run commands here.`));
 }
 
