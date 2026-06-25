@@ -346,9 +346,10 @@ export const CasperContentManager: React.FC = () => {
 
   // Refresh time-dependent memos every 60s so streamsThisWeek / creatorAgeDays stay accurate
   useEffect(() => {
+    if (!currentUser) return;
     const id = window.setInterval(() => setClockTick(Date.now()), 60_000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [currentUser]);
 
   // Track component mount state to avoid state updates after unmount in async loops
   useEffect(() => {
@@ -400,10 +401,13 @@ export const CasperContentManager: React.FC = () => {
           item != null &&
           typeof item === 'object' &&
           typeof (item as Record<string, unknown>).id === 'string' &&
+          typeof (item as Record<string, unknown>).type === 'string' &&
           typeof (item as Record<string, unknown>).prompt === 'string' &&
+          typeof (item as Record<string, unknown>).status === 'string' &&
+          typeof (item as Record<string, unknown>).aspectRatio === 'string' &&
           typeof (item as Record<string, unknown>).createdAt === 'string',
       );
-      setForgeAssets(validated);
+      setForgeAssets(validated.slice(0, 24));
     } catch (error) {
       console.warn('[VisualForge] Failed to restore generated media gallery:', error);
     }
@@ -787,6 +791,7 @@ export const CasperContentManager: React.FC = () => {
         await new Promise((resolve) => window.setTimeout(resolve, attempt < 3 ? 2500 : 5000));
         if (!mountedRef.current) return;
         const status = await getRunwayTask(taskId);
+        if (!mountedRef.current) return;
         const assetUrl = status.assetUrl || status.output?.[0] || null;
         updateForgeAsset(assetId, { status: status.status, assetUrl });
 
@@ -802,14 +807,16 @@ export const CasperContentManager: React.FC = () => {
         }
       }
 
-      setForgeProgress('Render still running at Runway. Leave this panel open and tap Refresh Status on the asset.');
+      if (mountedRef.current) setForgeProgress('Render still running at Runway. Leave this panel open and tap Refresh Status on the asset.');
     } catch (error: any) {
       console.error('[VisualForge] Generation failed:', error);
-      updateForgeAsset(assetId, { status: 'FAILED', error: error?.message || 'Generation failed.' });
-      setForgeError(error?.message || 'Visual Forge generation failed.');
-      setForgeProgress('Forge fault detected — adjust prompt or settings and retry.');
+      if (mountedRef.current) {
+        updateForgeAsset(assetId, { status: 'FAILED', error: error?.message || 'Generation failed.' });
+        setForgeError(error?.message || 'Visual Forge generation failed.');
+        setForgeProgress('Forge fault detected — adjust prompt or settings and retry.');
+      }
     } finally {
-      setForgeLoading(false);
+      if (mountedRef.current) setForgeLoading(false);
     }
   };
 
