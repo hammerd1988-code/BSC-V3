@@ -28,6 +28,37 @@ export function isNativeApp(): boolean {
   return cap?.isNativePlatform?.() === true;
 }
 
+/**
+ * Fire a short haptic/vibration pulse for tactile feedback on touch devices.
+ *
+ * Uses the Web Vibration API, which Android (browser + Capacitor WebView)
+ * honours. iOS does not implement `navigator.vibrate`, so this is a no-op there
+ * (the guard below skips entirely) — real iOS haptics would require the
+ * `@capacitor/haptics` plugin once the iOS target is wired up. It's also a no-op
+ * on devices without vibration hardware, so callers can sprinkle it freely on
+ * taps, confirmations, and destructive-action prompts without guarding for
+ * platform.
+ */
+export type HapticStyle = 'light' | 'medium' | 'heavy' | 'success' | 'warning' | 'error';
+
+const HAPTIC_PATTERNS: Record<HapticStyle, number | number[]> = {
+  light: 8,
+  medium: 18,
+  heavy: 32,
+  success: [12, 40, 12],
+  warning: [20, 60, 20],
+  error: [40, 80, 40, 80, 40],
+};
+
+export function haptic(style: HapticStyle = 'light'): void {
+  if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
+  try {
+    navigator.vibrate(HAPTIC_PATTERNS[style]);
+  } catch {
+    /* vibration can throw if the page isn't focused — ignore */
+  }
+}
+
 /** Resolve the concrete platform the app is running on. */
 export async function getPlatform(): Promise<MobilePlatform> {
   if (!isNativeApp()) return 'web';
