@@ -1108,7 +1108,7 @@ html.bsc-desktop ::-webkit-scrollbar-thumb {
 html.bsc-desktop ::-webkit-scrollbar-thumb:hover { background: rgba(255, 0, 0, 0.55); background-clip: content-box; }
 
 /* Remote Ops PIN gate: shake the dots on an incorrect/mismatched entry. */
-@keyframes shake {
+@keyframes remoteops-shake {
   0%, 100% { transform: translateX(0); }
   20% { transform: translateX(-8px); }
   40% { transform: translateX(8px); }
