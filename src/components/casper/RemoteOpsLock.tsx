@@ -156,7 +156,7 @@ useEffect(() => {
             : 'Remote Ops can run commands on your machines — confirm it\u2019s you.'}
         </p>
 
-        <div className={cn('mt-7 flex gap-3', shake && 'animate-[shake_0.4s]')}>
+        <div className={cn('mt-7 flex gap-3', shake && 'animate-[remoteops-shake_0.4s]')}>
           {Array.from({ length: PIN_LENGTH }).map((_, i) => (
             <span
               key={i}
