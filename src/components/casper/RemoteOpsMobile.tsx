@@ -187,7 +187,12 @@ export const RemoteOpsMobile: React.FC<{ ctrl: RemoteOpsController }> = ({ ctrl 
                       role="button"
                       tabIndex={0}
                       onClick={() => pickMachine(m.machineId)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') pickMachine(m.machineId); }}
+onKeyDown={(e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    pickMachine(m.machineId);
+  }
+}}
                       className={cn(
                         'flex items-center justify-between gap-2 rounded-2xl border px-3.5 py-3 transition active:scale-[0.99]',
                         selectedMachineId === m.machineId ? 'border-cyan-400/50 bg-cyan-500/10' : 'border-white/10 bg-black/30',
