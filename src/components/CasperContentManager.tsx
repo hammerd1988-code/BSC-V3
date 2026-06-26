@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
@@ -306,6 +306,7 @@ function SubagentTree({ agents, onCancel }: { agents: CasperSubagent[]; onCancel
 export const CasperContentManager: React.FC = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
+  const mountedRef = useRef(true);
   const [scheduled, setScheduled] = useState<ScheduledContent[]>([]);
   const [ideas, setIdeas] = useState<ContentIdea[]>([]);
   const [clips, setClips] = useState<ContentClip[]>([]);
@@ -341,6 +342,20 @@ export const CasperContentManager: React.FC = () => {
   const [streamCadenceTarget, setStreamCadenceTarget] = useState<number>(2);
   const [copilotPlan, setCopilotPlan] = useState('');
   const [trustChecklist, setTrustChecklist] = useState<TrustChecklist>(TRUST_CHECKLIST_DEFAULTS);
+  const [clockTick, setClockTick] = useState(() => Date.now());
+
+  // Refresh time-dependent memos every 60s so streamsThisWeek / creatorAgeDays stay accurate
+  useEffect(() => {
+    if (!currentUser) return;
+    const id = window.setInterval(() => setClockTick(Date.now()), 60_000);
+    return () => window.clearInterval(id);
+  }, [currentUser]);
+
+  // Track component mount state to avoid state updates after unmount in async loops
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const loadData = async () => {
     if (!currentUser) return;
@@ -378,7 +393,21 @@ export const CasperContentManager: React.FC = () => {
     if (!currentUser) return;
     try {
       const stored = window.localStorage.getItem(`casper-visual-forge-${currentUser.id}`);
-      if (stored) setForgeAssets(JSON.parse(stored) as GeneratedMediaAsset[]);
+      if (!stored) return;
+      const parsed: unknown = JSON.parse(stored);
+      if (!Array.isArray(parsed)) return;
+      const validated = parsed.filter(
+        (item): item is GeneratedMediaAsset =>
+          item != null &&
+          typeof item === 'object' &&
+          typeof (item as Record<string, unknown>).id === 'string' &&
+          typeof (item as Record<string, unknown>).type === 'string' &&
+          typeof (item as Record<string, unknown>).prompt === 'string' &&
+          typeof (item as Record<string, unknown>).status === 'string' &&
+          typeof (item as Record<string, unknown>).aspectRatio === 'string' &&
+          typeof (item as Record<string, unknown>).createdAt === 'string',
+      );
+      setForgeAssets(validated.slice(0, 24));
     } catch (error) {
       console.warn('[VisualForge] Failed to restore generated media gallery:', error);
     }
@@ -454,8 +483,8 @@ export const CasperContentManager: React.FC = () => {
   const creatorAgeDays = useMemo(() => {
     if (!currentUser?.created_at) return 0;
     const createdMs = new Date(currentUser.created_at).getTime();
-    return Math.max(0, Math.floor((Date.now() - createdMs) / (24 * 60 * 60 * 1000)));
-  }, [currentUser?.created_at]);
+    return Math.max(0, Math.floor((clockTick - createdMs) / (24 * 60 * 60 * 1000)));
+  }, [currentUser?.created_at, clockTick]);
 
   const engagementRate = useMemo(() => {
     if (!videos.length) return 0;
@@ -464,9 +493,9 @@ export const CasperContentManager: React.FC = () => {
   }, [videos]);
 
   const streamsThisWeek = useMemo(() => {
-    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const oneWeekAgo = clockTick - 7 * 24 * 60 * 60 * 1000;
     return streams.filter((stream) => stream.started_at && new Date(stream.started_at).getTime() >= oneWeekAgo).length;
-  }, [streams]);
+  }, [streams, clockTick]);
 
   const avgStreamViewers = useMemo(() => {
     if (!streams.length) return 0;
@@ -757,9 +786,12 @@ export const CasperContentManager: React.FC = () => {
       }
 
       for (let attempt = 1; attempt <= 30; attempt += 1) {
+        if (!mountedRef.current) return;
         setForgeProgress(`Rendering in the forge: pulse ${attempt}/30 — task ${taskId.slice(0, 8)}...`);
         await new Promise((resolve) => window.setTimeout(resolve, attempt < 3 ? 2500 : 5000));
+        if (!mountedRef.current) return;
         const status = await getRunwayTask(taskId);
+        if (!mountedRef.current) return;
         const assetUrl = status.assetUrl || status.output?.[0] || null;
         updateForgeAsset(assetId, { status: status.status, assetUrl });
 
@@ -775,14 +807,16 @@ export const CasperContentManager: React.FC = () => {
         }
       }
 
-      setForgeProgress('Render still running at Runway. Leave this panel open and tap Refresh Status on the asset.');
+      if (mountedRef.current) setForgeProgress('Render still running at Runway. Leave this panel open and tap Refresh Status on the asset.');
     } catch (error: any) {
       console.error('[VisualForge] Generation failed:', error);
-      updateForgeAsset(assetId, { status: 'FAILED', error: error?.message || 'Generation failed.' });
-      setForgeError(error?.message || 'Visual Forge generation failed.');
-      setForgeProgress('Forge fault detected — adjust prompt or settings and retry.');
+      if (mountedRef.current) {
+        updateForgeAsset(assetId, { status: 'FAILED', error: error?.message || 'Generation failed.' });
+        setForgeError(error?.message || 'Visual Forge generation failed.');
+        setForgeProgress('Forge fault detected — adjust prompt or settings and retry.');
+      }
     } finally {
-      setForgeLoading(false);
+      if (mountedRef.current) setForgeLoading(false);
     }
   };
 
