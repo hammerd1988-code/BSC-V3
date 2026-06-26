@@ -99,26 +99,25 @@ export const RemoteOpsLock: React.FC<{ userId: string; children: React.ReactNode
   }, [stored, fail]);
 
   // Advance the flow whenever a full-length PIN is entered.
-  useEffect(() => {
-    if (active.length !== PIN_LENGTH) return;
-    if (isSetup) {
-      if (stage === 'enter') {
-        setTimeout(() => { setStage('confirm'); }, 120);
-      } else {
-        if (confirmEntry === entry) {
-          void completeSetup(confirmEntry);
-        } else {
-          setEntry('');
-          setConfirmEntry('');
-          setStage('enter');
-          fail('PINs did not match. Start over.');
-        }
-      }
+useEffect(() => {
+  if (active.length !== PIN_LENGTH) return;
+  if (isSetup) {
+    if (stage === 'enter') {
+      setTimeout(() => { setStage('confirm'); }, 120);
     } else {
-      void attemptUnlock(entry);
+      if (confirmEntry === entry) {
+        void completeSetup(confirmEntry);
+      } else {
+        setEntry('');
+        setConfirmEntry('');
+        setStage('enter');
+        fail('PINs did not match. Start over.');
+      }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
+  } else {
+    void attemptUnlock(entry);
+  }
+}, [active, isSetup, stage, confirmEntry, entry, completeSetup, attemptUnlock, fail]);
 
   const press = (key: string) => {
     setErrorMsg(null);
