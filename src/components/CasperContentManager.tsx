@@ -349,7 +349,7 @@ export const CasperContentManager: React.FC = () => {
     if (!currentUser) return;
     const id = window.setInterval(() => setClockTick(Date.now()), 60_000);
     return () => window.clearInterval(id);
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   // Track component mount state to avoid state updates after unmount in async loops
   useEffect(() => {
