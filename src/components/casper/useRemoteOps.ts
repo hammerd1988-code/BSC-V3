@@ -94,22 +94,29 @@ export function useRemoteOps(): RemoteOpsController {
     setStream((prev) => [...prev.slice(-400), makeEntry(kind, text)]);
   }, []);
 
-  const refreshMachines = useCallback(async () => {
-    try {
-      setLoadingMachines(true);
-      const list = await listRelayMachines();
-      setMachines(list);
-      setSelectedMachineId((prev) => {
-        if (prev && list.some((m) => m.machineId === prev)) return prev;
-        return list.find((m) => m.online)?.machineId ?? list[0]?.machineId ?? null;
-      });
-      setError(null);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoadingMachines(false);
-    }
-  }, []);
+const refreshMachines = useCallback(async () => {
+  if (!currentUser) {
+    setMachines([]);
+    setSelectedMachineId(null);
+    setError(null);
+    setLoadingMachines(false);
+    return;
+  }
+  try {
+    setLoadingMachines(true);
+    const list = await listRelayMachines();
+    setMachines(list);
+    setSelectedMachineId((prev) => {
+      if (prev && list.some((m) => m.machineId === prev)) return prev;
+      return list.find((m) => m.online)?.machineId ?? list[0]?.machineId ?? null;
+    });
+    setError(null);
+  } catch (e: any) {
+    setError(e.message);
+  } finally {
+    setLoadingMachines(false);
+  }
+}, [currentUser]);
 
   useEffect(() => {
     refreshMachines();
