@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useEffect, useState } from 'react';
+import { motion, AnimatePresence, useDragControls } from 'motion/react';
 import {
-  Terminal, RefreshCw, Send, XCircle, ChevronDown, Plus, Monitor, Power, Link2, X,
+  Terminal, RefreshCw, Send, XCircle, ChevronDown, Plus, Monitor, Power, Link2, X, Loader2,
 } from 'lucide-react';
 import { haptic } from '../../lib/mobile';
 import { cn } from '../../lib/utils';
@@ -20,16 +20,35 @@ export const RemoteOpsMobile: React.FC<{ ctrl: RemoteOpsController }> = ({ ctrl 
   const {
     machines, selectedMachine, selectedMachineId, setSelectedMachineId, loadingMachines,
     command, setCommand, stream, activeDirectiveId, approvals, linkCode, setLinkCode, linkStatus,
-    error, logRef, refreshMachines, dispatchDirective, abortActive, answerApproval, linkDevice, revoke,
+    error, revokingId, logRef, refreshMachines, dispatchDirective, abortActive, answerApproval, linkDevice, revoke,
   } = ctrl;
 
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [revokeArmed, setRevokeArmed] = useState<string | null>(null);
+  const dragControls = useDragControls();
+
+  // Auto-disarm a pending revoke confirmation after a few seconds.
+  useEffect(() => {
+    if (!revokeArmed) return;
+    const t = setTimeout(() => setRevokeArmed(null), 3000);
+    return () => clearTimeout(t);
+  }, [revokeArmed]);
 
   const openSheet = () => { haptic('light'); setSheetOpen(true); };
   const pickMachine = (id: string) => {
     haptic('medium');
     setSelectedMachineId(id);
     setSheetOpen(false);
+  };
+  const handleRevoke = (machineId: string) => {
+    if (revokeArmed === machineId) {
+      haptic('heavy');
+      setRevokeArmed(null);
+      void revoke(machineId);
+    } else {
+      haptic('warning');
+      setRevokeArmed(machineId);
+    }
   };
 
   const hasMachines = machines.length > 0;
@@ -153,24 +172,31 @@ export const RemoteOpsMobile: React.FC<{ ctrl: RemoteOpsController }> = ({ ctrl 
         {sheetOpen && (
           <>
             <motion.div
-              className="fixed inset-0 z-30 bg-black/60 backdrop-blur-sm"
+              className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setSheetOpen(false)}
             />
             <motion.div
-              className="fixed inset-x-0 bottom-0 z-40 max-h-[82vh] overflow-hidden rounded-t-3xl border-t border-white/10 bg-[#0a0a0f] pb-safe"
+              className="fixed inset-x-0 bottom-0 z-[70] max-h-[82vh] overflow-hidden rounded-t-3xl border-t border-white/10 bg-[#0a0a0f] pb-safe"
               initial={{ y: '100%' }}
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 32, stiffness: 320 }}
               drag="y"
+              dragListener={false}
+              dragControls={dragControls}
               dragConstraints={{ top: 0, bottom: 0 }}
               dragElastic={{ top: 0, bottom: 0.6 }}
               onDragEnd={(_, info) => { if (info.offset.y > 120 || info.velocity.y > 600) { haptic('light'); setSheetOpen(false); } }}
             >
-              <div className="flex justify-center pt-3">
+              {/* Drag handle — the only region that initiates the swipe-to-dismiss
+                  gesture, so buttons in the sheet body always receive clean taps. */}
+              <div
+                className="flex cursor-grab touch-none justify-center pt-3 pb-1"
+                onPointerDown={(e) => dragControls.start(e)}
+              >
                 <span className="h-1.5 w-10 rounded-full bg-white/20" />
               </div>
               <div className="flex items-center justify-between px-5 pt-3">
@@ -208,11 +234,25 @@ onKeyDown={(e) => {
                         </span>
                       </span>
                       <button
-                        onClick={(e) => { e.stopPropagation(); haptic('warning'); revoke(m.machineId); }}
-                        className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-zinc-600 active:scale-90 hover:text-red-400"
-                        aria-label={`Revoke ${m.machineName}`}
+                        onClick={(e) => { e.stopPropagation(); handleRevoke(m.machineId); }}
+                        disabled={revokingId === m.machineId}
+                        className={cn(
+                          'grid h-9 shrink-0 place-items-center rounded-full transition active:scale-90 disabled:opacity-60',
+                          revokeArmed === m.machineId
+                            ? 'w-auto gap-1.5 bg-red-500/20 px-3 text-[10px] font-black uppercase tracking-wider text-red-300'
+                            : 'w-9 text-zinc-600 hover:text-red-400',
+                        )}
+                        aria-label={revokeArmed === m.machineId ? `Confirm unlink ${m.machineName}` : `Unlink ${m.machineName}`}
                       >
-                        <Power className="h-4 w-4" />
+                        {revokingId === m.machineId ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : revokeArmed === m.machineId ? (
+                          <>
+                            <Power className="h-3.5 w-3.5" /> Unlink?
+                          </>
+                        ) : (
+                          <Power className="h-4 w-4" />
+                        )}
                       </button>
                     </div>
                   </li>

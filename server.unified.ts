@@ -1107,6 +1107,21 @@ app.post("/api/cred/exchange", async (req, res) => {
     }
   });
 
+  // Casper CLI install scripts — must be registered before the SPA fallback so
+  // `curl https://bloodsweatcode.org/install.sh | sh` gets the script, not index.html.
+  const serveInstallScript = (file: string, contentType: string) =>
+    (_req: express.Request, res: express.Response) => {
+      const scriptPath = path.join(__dirname, 'scripts', file);
+      if (!fs.existsSync(scriptPath)) {
+        return res.status(404).type('text/plain').send(`# ${file} not found`);
+      }
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.send(fs.readFileSync(scriptPath, 'utf8'));
+    };
+  app.get('/install.sh', serveInstallScript('install.sh', 'text/x-shellscript; charset=utf-8'));
+  app.get('/install.ps1', serveInstallScript('install.ps1', 'text/plain; charset=utf-8'));
+
   // Serve built frontend from dist/ if it exists
   if (fs.existsSync(distPath)) {
     app.use(express.static(distPath));
