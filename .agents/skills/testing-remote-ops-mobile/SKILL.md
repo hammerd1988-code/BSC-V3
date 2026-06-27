@@ -27,7 +27,7 @@ Because the mobile layout is gated on viewport width too (not just native), it i
 The CLI lives at `packages/casper-cli/`; build with `npm install && npm run build` (tsc → `dist/index.js`).
 1. `node packages/casper-cli/dist/index.js auth login` → prints an 8-char userCode (e.g. `39QN-GBJH`).
 2. In the mobile bottom-sheet "Link a device" input, type the userCode and tap **Link**.
-3. `node packages/casper-cli/dist/index.js daemon` → registers + heartbeats. After REFRESH the machine shows **Online** with real OS (win32 10.0.20348), CLI version (v0.1.0), and process count.
+3. `node packages/casper-cli/dist/index.js daemon start` → registers + heartbeats. After REFRESH the machine shows **Online** with fields like OS, CLI version (v0.1.0), and process count.
 
 ## Test assertions (observable)
 - **T1 layout**: 375px → mobile single column; ≥1280px → desktop sidebar+console. Each replaces the other cleanly.
