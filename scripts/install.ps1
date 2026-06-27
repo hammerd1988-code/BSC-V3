@@ -63,7 +63,8 @@ Write-Host "OK Installed casper -> $dest" -ForegroundColor Green
 # Add the install dir to the user PATH if it isn't already there.
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if (-not ($userPath -split ';' | Where-Object { $_ -eq $InstallDir })) {
-  [Environment]::SetEnvironmentVariable('Path', "$userPath;$InstallDir", 'User')
+  $newPath = if ($userPath) { "$userPath;$InstallDir" } else { $InstallDir }
+  [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
   $env:Path = "$env:Path;$InstallDir"
   Write-Host "Added $InstallDir to your user PATH (restart your terminal to pick it up)." -ForegroundColor Cyan
 }

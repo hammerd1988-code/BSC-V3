@@ -1111,7 +1111,8 @@ app.post("/api/cred/exchange", async (req, res) => {
   // `curl https://bloodsweatcode.org/install.sh | sh` gets the script, not index.html.
   const serveInstallScript = (file: string, contentType: string) =>
     (_req: express.Request, res: express.Response) => {
-      const scriptPath = path.join(__dirname, 'scripts', file);
+      // Pin to a bare filename inside scripts/ — defence-in-depth against path traversal.
+      const scriptPath = path.join(__dirname, 'scripts', path.basename(file));
       if (!fs.existsSync(scriptPath)) {
         return res.status(404).type('text/plain').send(`# ${file} not found`);
       }
