@@ -39,11 +39,13 @@ jobs:
       - run: npm run bundle
       - name: Package binary
         shell: bash
-        run: node node_modules/@yao-pkg/pkg/lib-es5/bin.js bundle/casper.cjs --targets ${{ matrix.target }} --output bin/dist/casper
+        # Output to a per-platform filename so each release asset is distinct.
+        # (A shared "casper"/"casper.exe" name made every build collide into one asset.)
+        run: node node_modules/@yao-pkg/pkg/lib-es5/bin.js bundle/casper.cjs --targets ${{ matrix.target }} --output "bin/dist/${{ matrix.artifact }}"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: packages/casper-cli/bin/dist/*
+          path: packages/casper-cli/bin/dist/${{ matrix.artifact }}
 
   release:
     needs: build
