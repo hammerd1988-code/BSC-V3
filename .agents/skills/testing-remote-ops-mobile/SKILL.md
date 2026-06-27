@@ -14,8 +14,11 @@ Because the mobile layout is gated on viewport width too (not just native), it i
 
 ## Devin Secrets Needed
 - `SUPABASE_SERVICE_ROLE_KEY` — magic-link generation for test auth
-- `VITE_SUPABASE_URL` / project ref `kxfhxrdrlvnvtzdeuvwb` — auth endpoints
-- anon (publishable) key `${SUPABASE_PERISHABLE_KEY}` — token verification
+- `VITE_SUPABASE_URL` — auth endpoints (project ref `kxfhxrdrlvnvtzdeuvwb`)
+- `VITE_SUPABASE_ANON_KEY` — token verification. This env var accepts either the
+  legacy JWT (`eyJ…`) or the newer **publishable** (`sb_publishable_…`) key format
+  for the anon/client role; both work. Reference the env var by name rather than
+  pasting the literal value.
 
 ## Setup
 - Test against production `https://bloodsweatcode.org/casper/remote` (deploys on Railway, NOT Vercel — ignore Vercel CI failures).
@@ -27,7 +30,7 @@ Because the mobile layout is gated on viewport width too (not just native), it i
 The CLI lives at `packages/casper-cli/`; build with `npm install && npm run build` (tsc → `dist/index.js`).
 1. `node packages/casper-cli/dist/index.js auth login` → prints an 8-char userCode (e.g. `39QN-GBJH`).
 2. In the mobile bottom-sheet "Link a device" input, type the userCode and tap **Link**.
-3. `node packages/casper-cli/dist/index.js daemon start` → registers + heartbeats. After REFRESH the machine shows **Online** with fields like OS, CLI version (v0.1.0), and process count.
+3. `node packages/casper-cli/dist/index.js daemon start` → registers + heartbeats. After REFRESH the machine shows **Online** with real OS (win32 10.0.20348), CLI version (v0.1.0), and process count.
 
 ## Test assertions (observable)
 - **T1 layout**: 375px → mobile single column; ≥1280px → desktop sidebar+console. Each replaces the other cleanly.
