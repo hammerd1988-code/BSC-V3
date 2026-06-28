@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Loader2, Monitor, Power, RefreshCw, Send, Terminal, Link2, XCircle } from 'lucide-react';
 import { StreamConsole, ApprovalCard, MachineHealthCard } from './RemoteOpsShared';
 import type { RemoteOpsController } from './useRemoteOps';
@@ -8,8 +8,23 @@ export const RemoteOpsDesktop: React.FC<{ ctrl: RemoteOpsController }> = ({ ctrl
   const {
     machines, selectedMachine, selectedMachineId, setSelectedMachineId, loadingMachines,
     command, setCommand, stream, activeDirectiveId, approvals, linkCode, setLinkCode, linkStatus,
-    error, logRef, refreshMachines, dispatchDirective, abortActive, answerApproval, linkDevice, revoke,
+    error, revokingId, logRef, refreshMachines, dispatchDirective, abortActive, answerApproval, linkDevice, revoke,
   } = ctrl;
+
+  const [revokeArmed, setRevokeArmed] = useState<string | null>(null);
+  useEffect(() => {
+    if (!revokeArmed) return;
+    const t = setTimeout(() => setRevokeArmed(null), 3000);
+    return () => clearTimeout(t);
+  }, [revokeArmed]);
+  const handleRevoke = (machineId: string) => {
+    if (revokeArmed === machineId) {
+      setRevokeArmed(null);
+      void revoke(machineId);
+    } else {
+      setRevokeArmed(machineId);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#050508] px-4 py-6 text-white">
@@ -48,26 +63,42 @@ export const RemoteOpsDesktop: React.FC<{ ctrl: RemoteOpsController }> = ({ ctrl
                 <ul className="space-y-2">
                   {machines.map((m) => (
                     <li key={m.machineId}>
-                      <button
-                        onClick={() => setSelectedMachineId(m.machineId)}
-                        className={`flex w-full items-center justify-between rounded-2xl border px-3 py-2.5 text-left transition ${
+                      <div
+                        className={`flex w-full items-center justify-between gap-2 rounded-2xl border px-3 py-2.5 transition ${
                           selectedMachineId === m.machineId
                             ? 'border-cyan-400/50 bg-cyan-500/10'
                             : 'border-white/10 bg-black/30 hover:border-white/25'
                         }`}
                       >
-                        <span className="flex items-center gap-2 text-xs font-bold">
-                          <Monitor className="h-3.5 w-3.5 text-zinc-400" />
-                          {m.machineName}
-                        </span>
-                        <span className="flex items-center gap-2">
+                        <button
+                          onClick={() => setSelectedMachineId(m.machineId)}
+                          className="flex min-w-0 flex-1 items-center gap-2 text-left text-xs font-bold"
+                        >
+                          <Monitor className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                          <span className="truncate">{m.machineName}</span>
+                        </button>
+                        <span className="flex shrink-0 items-center gap-2">
                           <span className={`h-2 w-2 rounded-full ${m.online ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
-                          <Power
-                            className="h-3.5 w-3.5 text-zinc-600 hover:text-red-400"
-                            onClick={(e) => { e.stopPropagation(); revoke(m.machineId); }}
-                          />
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleRevoke(m.machineId); }}
+                            disabled={revokingId === m.machineId}
+                            className={`flex items-center gap-1 rounded-full transition disabled:opacity-60 ${
+                              revokeArmed === m.machineId
+                                ? 'bg-red-500/20 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-red-300'
+                                : 'text-zinc-600 hover:text-red-400'
+                            }`}
+                            aria-label={revokeArmed === m.machineId ? `Confirm unlink ${m.machineName}` : `Unlink ${m.machineName}`}
+                          >
+                            {revokingId === m.machineId ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : revokeArmed === m.machineId ? (
+                              <><Power className="h-3 w-3" /> Unlink?</>
+                            ) : (
+                              <Power className="h-3.5 w-3.5" />
+                            )}
+                          </button>
                         </span>
-                      </button>
+                      </div>
                     </li>
                   ))}
                 </ul>
