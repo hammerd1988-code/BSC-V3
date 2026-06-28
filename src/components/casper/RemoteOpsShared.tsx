@@ -190,8 +190,8 @@ export const OnboardingPanel: React.FC<{
   onLink: () => void;
   linkStatus: string | null;
 }> = ({ linkCode, setLinkCode, onLink, linkStatus }) => {
-  const steps = [
-    { title: 'Install the Casper CLI', body: 'Download the binary for your OS from the GitHub release, or run the install script.', code: 'curl -fsSL bloodsweatcode.org/install.sh | sh' },
+  const steps: Array<{ title: string; body: string; code: string | null; winCode?: string }> = [
+    { title: 'Install the Casper CLI', body: 'One line installs the right binary for your OS — no Node.js needed. macOS / Linux:', code: 'curl -fsSL bloodsweatcode.org/install.sh | sh', winCode: 'irm bloodsweatcode.org/install.ps1 | iex' },
     { title: 'Authenticate the machine', body: 'In a terminal on the machine you want to control, start the device login.', code: 'casper auth login' },
     { title: 'Enter the code below', body: 'Casper prints an 8-character code. Type it here to link the machine to your account.', code: null },
   ];
@@ -220,6 +220,14 @@ export const OnboardingPanel: React.FC<{
                 <code className="mt-2 block overflow-x-auto rounded-lg border border-white/5 bg-black/50 px-2.5 py-1.5 font-mono text-[11px] text-cyan-200">
                   {step.code}
                 </code>
+              )}
+              {step.winCode && (
+                <>
+                  <p className="mt-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Windows (PowerShell):</p>
+                  <code className="mt-1 block overflow-x-auto rounded-lg border border-white/5 bg-black/50 px-2.5 py-1.5 font-mono text-[11px] text-cyan-200">
+                    {step.winCode}
+                  </code>
+                </>
               )}
             </div>
           </li>
