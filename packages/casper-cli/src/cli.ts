@@ -1,6 +1,6 @@
 import readline from 'readline';
 import chalk from 'chalk';
-import ora from 'ora';
+import ora from './utils/spinner.js';
 import { runToolLoop } from './llm/tool-loop.js';
 import { LOCAL_TOOL_SPECS } from './tool-specs.js';
 import type { ChatMessage } from './llm/client.js';

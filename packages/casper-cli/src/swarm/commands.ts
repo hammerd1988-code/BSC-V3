@@ -2,7 +2,7 @@
  * CLI commands for the Casper Swarm.
  */
 import chalk from 'chalk';
-import ora from 'ora';
+import ora from '../utils/spinner.js';
 import { planTasks } from './planner.js';
 import { Orchestrator } from './orchestrator.js';
 import {
