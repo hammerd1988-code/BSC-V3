@@ -13,8 +13,11 @@ import process from 'node:process';
 export function openUrl(url: string): void {
   try {
     if (process.platform === 'win32') {
-      // `start` is a cmd builtin; the empty "" is the window-title argument.
-      spawn('cmd', ['/c', 'start', '', url], {
+      // Use rundll32 instead of `cmd /c start`: cmd treats unquoted `&`, `|`,
+      // `<`, `>` in a URL as command separators/redirection, which both breaks
+      // query strings and is a command-injection vector. rundll32 passes the
+      // URL straight to the protocol handler with no shell parsing.
+      spawn('rundll32', ['url.dll,FileProtocolHandler', url], {
         detached: true,
         stdio: 'ignore',
       }).unref();
