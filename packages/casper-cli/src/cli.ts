@@ -17,7 +17,7 @@ export interface ReplOptions {
 
 const BANNER = `
 ${chalk.magenta('╔══════════════════════════════════════════╗')}
-${chalk.magenta('║')}  ${chalk.bold.cyan('🔮 Casper CLI')} ${chalk.dim('v0.1.0')}                     ${chalk.magenta('║')}
+${chalk.magenta('║')}  ${chalk.bold.cyan('🔮 Casper CLI')} ${chalk.dim('v0.1.1')}                     ${chalk.magenta('║')}
 ${chalk.magenta('║')}  ${chalk.dim('Ghost in the machine. At your service.')} ${chalk.magenta('║')}
 ${chalk.magenta('╚══════════════════════════════════════════╝')}
 `;
