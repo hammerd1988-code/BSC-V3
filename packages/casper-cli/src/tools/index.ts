@@ -50,8 +50,10 @@ export async function executeLocalTool(name: string, args: Record<string, unknow
       const url = String(args.url || '');
       if (!url) return { ok: false, data: null, error: 'url is required' };
       audit('open_browser', { url });
+      // openUrl is best-effort and swallows failures, so report the attempt
+      // rather than implying the browser definitely opened.
       openUrl(url);
-      return { ok: true, data: { opened: url } };
+      return { ok: true, data: { attempted: url } };
     }
     default:
       return { ok: false, data: null, error: `Unknown local tool: ${name}` };
