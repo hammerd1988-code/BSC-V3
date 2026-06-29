@@ -5,7 +5,7 @@ import { startProcess, stopProcess, listProcesses, type ProcessStartArgs, type P
 import { getSystemInfo } from './system.js';
 import { scrapeUrl, type ScrapeArgs } from './scrape.js';
 import { isPluginTool, executePluginTool } from '../plugins/index.js';
-import open from 'open';
+import { openUrl } from '../utils/open-url.js';
 import { audit } from '../utils/logger.js';
 
 export type ToolResult = {
@@ -50,7 +50,7 @@ export async function executeLocalTool(name: string, args: Record<string, unknow
       const url = String(args.url || '');
       if (!url) return { ok: false, data: null, error: 'url is required' };
       audit('open_browser', { url });
-      await open(url);
+      openUrl(url);
       return { ok: true, data: { opened: url } };
     }
     default:

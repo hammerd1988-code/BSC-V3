@@ -1,6 +1,5 @@
 import chalk from 'chalk';
-import ora from 'ora';
-import open from 'open';
+import { openUrl } from './utils/open-url.js';
 import { getConfig, setConfig, deleteConfig } from './config.js';
 
 /**
@@ -69,13 +68,9 @@ export async function loginFlow(opts: { relayUrl?: string } = {}): Promise<void>
   console.log(`   Your code: ${chalk.bold.cyan(init.userCode)}`);
   console.log(chalk.dim(`   Enter it at: ${init.verificationUrl}`));
   console.log('');
-  try {
-    await open(init.verificationUrl);
-  } catch {
-    // Browser open is best-effort; the URL is printed above.
-  }
+  openUrl(init.verificationUrl);
 
-  const spinner = ora('Waiting for approval…').start();
+  console.log(chalk.dim('   Waiting for approval...'));
   const intervalMs = Math.max(2, init.interval || 5) * 1000;
   const deadline = Date.now() + (init.expiresIn || 600) * 1000;
 
@@ -95,15 +90,15 @@ export async function loginFlow(opts: { relayUrl?: string } = {}): Promise<void>
     if (poll.status === 'authorized' && poll.accessToken) {
       setConfig('accessToken', poll.accessToken);
       if (poll.userId) setConfig('userId', poll.userId);
-      spinner.succeed(chalk.green('Machine linked. Run: casper daemon start'));
+      console.log(chalk.green('   \u2714 Machine linked. Run: casper daemon start'));
       return;
     }
     if (poll.status === 'expired') {
-      spinner.fail(chalk.red('Code expired. Run casper auth login again.'));
+      console.log(chalk.red('   \u2717 Code expired. Run casper auth login again.'));
       return;
     }
   }
-  spinner.fail(chalk.red('Timed out waiting for approval.'));
+  console.log(chalk.red('   \u2717 Timed out waiting for approval.'));
 }
 
 export function logout(): void {
