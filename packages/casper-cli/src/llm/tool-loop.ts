@@ -1,3 +1,5 @@
+import os from 'node:os';
+import process from 'node:process';
 import type OpenAI from 'openai';
 import { createLlmClient, chatCompletionStream, type ChatMessage, type ToolSpec } from './client.js';
 import { executeLocalTool } from '../tools/index.js';
@@ -26,6 +28,31 @@ You are running as a CLI daemon on the user's local machine. You can:
 When using tools, be efficient. Chain operations logically. Report results concisely.
 If a command might be destructive (rm -rf, force push, etc.), warn the user first.
 Plugin tools (plugin__*) are user-defined extensions — use them when they match the task.`;
+
+/**
+ * Describe the host OS and the shell `local__shell` runs under, so the model
+ * uses native command syntax on the first try instead of guessing (e.g. a
+ * Unix `ls` that fails on Windows before falling back to `dir`).
+ */
+function buildEnvironmentPrompt(): string {
+  if (process.platform === 'win32') {
+    return [
+      '--- HOST ENVIRONMENT ---',
+      `OS: Windows (${os.release()})`,
+      'Shell: local__shell runs commands via cmd.exe. Use Windows command syntax,',
+      'NOT Unix: `dir` not `ls`, `type` not `cat`, `findstr` not `grep`,',
+      '`copy`/`move`/`del` not `cp`/`mv`/`rm`. For richer commands, invoke PowerShell',
+      'explicitly, e.g. `powershell -Command "Get-ChildItem"`. Use `\\` path separators.',
+    ].join('\n');
+  }
+  const kind = process.platform === 'darwin' ? 'macOS' : 'Linux';
+  return [
+    '--- HOST ENVIRONMENT ---',
+    `OS: ${kind} (${os.release()})`,
+    'Shell: local__shell runs commands via a POSIX shell. Use Unix command syntax',
+    '(`ls`, `cat`, `grep`, `cp`, `mv`, `rm`) and `/` path separators.',
+  ].join('\n');
+}
 
 export interface ToolLoopOptions {
   model?: string;
@@ -112,7 +139,7 @@ export async function runToolLoop(
   const client = createLlmClient();
 
   // Build system prompt, optionally enriched with project context and instructions.
-  let systemPrompt = CASPER_SYSTEM_PROMPT;
+  let systemPrompt = `${CASPER_SYSTEM_PROMPT}\n\n${buildEnvironmentPrompt()}`;
   if (opts.projectContext !== false) {
     const ctx = detectProjectContext();
     if (ctx) {
