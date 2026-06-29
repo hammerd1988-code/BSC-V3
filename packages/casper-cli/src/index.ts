@@ -11,7 +11,7 @@ import { orchestrate } from './swarm/index.js';
 import { pluginList, pluginInfo, pluginInit, pluginRemove } from './plugins/index.js';
 import chalk from 'chalk';
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 
 const program = new Command();
 

@@ -34,7 +34,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 120_000;
 const MAX_REDIRECTS = 5;
 
-const USER_AGENT = 'CasperCLI/0.1.0 (+https://bloodsweatcode.org)';
+const USER_AGENT = 'CasperCLI/0.1.1 (+https://bloodsweatcode.org)';
 
 function fetch(url: string, opts: {
   maxBytes: number;

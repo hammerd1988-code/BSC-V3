@@ -1,4 +1,4 @@
-# Casper CLI installer (Windows) — https://bloodsweatcode.org/install.ps1
+# Casper CLI installer (Windows) - https://bloodsweatcode.org/install.ps1
 #
 #   irm https://bloodsweatcode.org/install.ps1 | iex
 #
@@ -20,7 +20,7 @@ function Fail($msg) { Write-Host "X $msg" -ForegroundColor Red; exit 1 }
 # Only x64 binaries are published for Windows today.
 $arch = $env:PROCESSOR_ARCHITECTURE
 if ($arch -ne 'AMD64' -and $arch -ne 'x86') {
-  Write-Host "! Detected architecture '$arch' — installing the x64 build (runs under emulation on Arm)." -ForegroundColor Yellow
+  Write-Host "! Detected architecture '$arch' - installing the x64 build (runs under emulation on Arm)." -ForegroundColor Yellow
 }
 $asset = 'casper-win-x64.exe'
 
