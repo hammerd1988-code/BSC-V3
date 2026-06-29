@@ -16,7 +16,7 @@ import type {
   ProcessInfo,
 } from './protocol.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
 
