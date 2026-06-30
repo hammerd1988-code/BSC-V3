@@ -43,6 +43,18 @@ export async function sendRelayDirective(params: {
   return parseJson(res);
 }
 
+export async function uploadRelayFile(params: {
+  machineId?: string;
+  fileName: string;
+  contentBase64: string;
+}): Promise<{ transferId: string; machineId: string; size: number }> {
+  const res = await authedFetch('/api/casper/relay/file', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+  return parseJson(res);
+}
+
 export async function abortRelayDirective(directiveId: string): Promise<void> {
   const res = await authedFetch(`/api/casper/relay/directive/${encodeURIComponent(directiveId)}/abort`, {
     method: 'POST',

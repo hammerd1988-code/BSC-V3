@@ -9,9 +9,27 @@ import {
   respondRelayApproval,
   approveRelayDevice,
   revokeRelayMachine,
+  uploadRelayFile,
   type RelayMachine,
   type RelayConversationTurn,
 } from '../../lib/casperRelay';
+
+// Largest file the relay will accept (matches the server-side MAX_UPLOAD_BYTES).
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+
+// Read a File into a base64 string (no data: prefix) for JSON transport.
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read file.'));
+    reader.onload = () => {
+      const result = String(reader.result ?? '');
+      const comma = result.indexOf(',');
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 export interface StreamEntry {
   id: string;
@@ -69,6 +87,8 @@ export interface RemoteOpsController {
   answerApproval: (approval: PendingApproval, approved: boolean) => Promise<void>;
   linkDevice: () => Promise<void>;
   revoke: (machineId: string) => Promise<void>;
+  uploadFiles: (files: FileList | File[]) => Promise<void>;
+  uploading: boolean;
 }
 
 /**
@@ -89,6 +109,7 @@ export function useRemoteOps(): RemoteOpsController {
   const [linkStatus, setLinkStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
   const historyRef = useRef<RelayConversationTurn[]>([]);
   const logRef = useRef<HTMLDivElement | null>(null);
 
@@ -170,6 +191,20 @@ const refreshMachines = useCallback(async () => {
         : [...prev, data]);
       appendEntry('system', `Approval requested: ${data.toolName} — ${data.reason}`);
     };
+    const onFileReceived = (data: { ok: boolean; fileName?: string; relativePath?: string; error?: string }) => {
+      if (data.ok && data.relativePath) {
+        appendEntry('system', `File saved on machine: ${data.relativePath}`);
+        // Surface the saved path in the command box so the operator can
+        // immediately reference it in a directive.
+        setCommand((prev) => {
+          const ref = data.relativePath as string;
+          if (!prev.trim()) return `Use the file ${ref} `;
+          return prev.includes(ref) ? prev : `${prev}${prev.endsWith(' ') ? '' : ' '}${ref} `;
+        });
+      } else {
+        appendEntry('error', `File transfer failed${data.fileName ? ` (${data.fileName})` : ''}: ${data.error ?? 'unknown error'}`);
+      }
+    };
     const onComplete = (data: { directiveId: string; status: string; response: string }) => {
       appendEntry(data.status === 'completed' ? 'response' : 'error', data.response || `Directive ${data.status}.`);
       if (data.response) historyRef.current = [...historyRef.current.slice(-19), { role: 'casper', text: data.response }];
@@ -184,6 +219,7 @@ const refreshMachines = useCallback(async () => {
     socket.on('relay:tool_stdout', onToolStdout);
     socket.on('relay:tool_result', onToolResult);
     socket.on('relay:approval_request', onApproval);
+    socket.on('relay:file_received', onFileReceived);
     socket.on('relay:directive_complete', onComplete);
 
     return () => {
@@ -197,6 +233,7 @@ const refreshMachines = useCallback(async () => {
       socket.off('relay:tool_stdout', onToolStdout);
       socket.off('relay:tool_result', onToolResult);
       socket.off('relay:approval_request', onApproval);
+      socket.off('relay:file_received', onFileReceived);
       socket.off('relay:directive_complete', onComplete);
     };
   }, [currentUser, appendEntry, refreshMachines]);
@@ -275,6 +312,38 @@ const refreshMachines = useCallback(async () => {
     }
   }, [refreshMachines]);
 
+  const uploadFiles = useCallback(async (files: FileList | File[]) => {
+    const list = Array.from(files);
+    if (list.length === 0) return;
+    setUploading(true);
+    setError(null);
+    try {
+      for (const file of list) {
+        if (file.size === 0) {
+          appendEntry('error', `Skipped empty file: ${file.name}`);
+          continue;
+        }
+        if (file.size > MAX_UPLOAD_BYTES) {
+          appendEntry('error', `${file.name} is too large (max ${Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024))}MB).`);
+          continue;
+        }
+        appendEntry('system', `Uploading ${file.name} (${Math.ceil(file.size / 1024)} KB)…`);
+        try {
+          const contentBase64 = await fileToBase64(file);
+          await uploadRelayFile({
+            machineId: selectedMachineId ?? undefined,
+            fileName: file.name,
+            contentBase64,
+          });
+        } catch (e: any) {
+          appendEntry('error', `Upload failed (${file.name}): ${e.message}`);
+        }
+      }
+    } finally {
+      setUploading(false);
+    }
+  }, [appendEntry, selectedMachineId]);
+
   const selectedMachine = machines.find((m) => m.machineId === selectedMachineId) ?? null;
 
   return {
@@ -300,5 +369,7 @@ const refreshMachines = useCallback(async () => {
     answerApproval,
     linkDevice,
     revoke,
+    uploadFiles,
+    uploading,
   };
 }

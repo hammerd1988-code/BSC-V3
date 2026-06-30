@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Loader2, Monitor, Power, RefreshCw, Send, Terminal, Link2, XCircle } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Loader2, Monitor, Power, RefreshCw, Send, Terminal, Link2, XCircle, Paperclip, Upload } from 'lucide-react';
 import { StreamConsole, ApprovalCard, MachineHealthCard } from './RemoteOpsShared';
 import type { RemoteOpsController } from './useRemoteOps';
 
@@ -9,9 +9,13 @@ export const RemoteOpsDesktop: React.FC<{ ctrl: RemoteOpsController }> = ({ ctrl
     machines, selectedMachine, selectedMachineId, setSelectedMachineId, loadingMachines,
     command, setCommand, stream, activeDirectiveId, approvals, linkCode, setLinkCode, linkStatus,
     error, revokingId, logRef, refreshMachines, dispatchDirective, abortActive, answerApproval, linkDevice, revoke,
+    uploadFiles, uploading,
   } = ctrl;
 
   const [revokeArmed, setRevokeArmed] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const canAttach = Boolean(selectedMachine?.online) && !uploading;
   useEffect(() => {
     if (!revokeArmed) return;
     const t = setTimeout(() => setRevokeArmed(null), 3000);
@@ -132,7 +136,23 @@ export const RemoteOpsDesktop: React.FC<{ ctrl: RemoteOpsController }> = ({ ctrl
           </aside>
 
           {/* Console panel */}
-          <section className="flex min-h-[60vh] flex-col rounded-3xl border border-white/10 bg-black/35">
+          <section
+            className={`relative flex min-h-[60vh] flex-col rounded-3xl border bg-black/35 transition ${dragOver ? 'border-cyan-400/70' : 'border-white/10'}`}
+            onDragOver={(e) => { if (canAttach) { e.preventDefault(); setDragOver(true); } }}
+            onDragLeave={(e) => { if (e.currentTarget === e.target) setDragOver(false); }}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              if (canAttach && e.dataTransfer.files.length > 0) void uploadFiles(e.dataTransfer.files);
+            }}
+          >
+            {dragOver && (
+              <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center rounded-3xl bg-cyan-500/10 backdrop-blur-sm">
+                <span className="flex items-center gap-2 text-sm font-black uppercase tracking-[0.2em] text-cyan-200">
+                  <Upload className="h-5 w-5" /> Drop to send to {selectedMachine?.machineName ?? 'machine'}
+                </span>
+              </div>
+            )}
             <StreamConsole stream={stream} logRef={logRef} className="flex-1 p-4" />
 
             {approvals.map((approval) => (
@@ -143,6 +163,25 @@ export const RemoteOpsDesktop: React.FC<{ ctrl: RemoteOpsController }> = ({ ctrl
 
             <div className="border-t border-white/10 p-3">
               <div className="flex gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files.length > 0) void uploadFiles(e.target.files);
+                    e.target.value = '';
+                  }}
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!canAttach}
+                  title={selectedMachine?.online ? 'Attach files to send to this machine' : 'Machine must be online to attach files'}
+                  className="flex shrink-0 items-center gap-2 rounded-2xl border border-white/10 bg-black/50 px-3.5 py-2.5 text-zinc-300 transition hover:border-cyan-400/40 disabled:opacity-40"
+                  aria-label="Attach files"
+                >
+                  {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
+                </button>
                 <input
                   value={command}
                   onChange={(e) => setCommand(e.target.value)}
