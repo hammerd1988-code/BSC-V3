@@ -64,6 +64,10 @@ interface PendingDeviceAuth {
 
 const DEVICE_AUTH_TTL_MS = 10 * 60 * 1000;
 const DIRECTIVE_RETENTION_MS = 60 * 60 * 1000;
+// Max decoded upload size. Kept under the 12mb express.json body cap once the
+// ~33% base64 overhead is added (8MB raw ≈ 10.7MB encoded).
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+const FILE_TRANSFER_TTL_MS = 2 * 60 * 1000;
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000; // Match daemon-side timeout
 const DEVICE_INIT_RATE_LIMIT = 10; // Max requests per IP per minute
 const DEVICE_INIT_RATE_WINDOW_MS = 60_000;
@@ -83,6 +87,7 @@ function generateUserCode(): string {
 export function registerCasperRelay(io: SocketServer, app: Express, supabase: SupabaseClient): void {
   const machines = new Map<string, ConnectedMachine>(); // machineId -> connection
   const directives = new Map<string, ActiveDirective>(); // directiveId -> state
+  const fileTransfers = new Map<string, { userId: string; machineId: string; fileName: string; createdAt: number }>();
   const deviceAuths = new Map<string, PendingDeviceAuth>(); // deviceCode -> flow
   const userCodeIndex = new Map<string, string>(); // userCode -> deviceCode
 
@@ -102,6 +107,9 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
     }
     for (const [id, d] of directives) {
       if (now - d.createdAt > DIRECTIVE_RETENTION_MS) directives.delete(id);
+    }
+    for (const [id, t] of fileTransfers) {
+      if (now - t.createdAt > FILE_TRANSFER_TTL_MS) fileTransfers.delete(id);
     }
   }
   setInterval(pruneExpired, 60_000).unref?.();
@@ -234,6 +242,13 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
           if (!directive || directive.machineId !== machineId) return;
           directive.status = message.status;
           emitToUser(directive.userId, 'relay:directive_complete', { ...message, machineId });
+          break;
+        }
+        case 'file:received': {
+          const transfer = fileTransfers.get(message.transferId);
+          if (!transfer || transfer.machineId !== machineId) return;
+          fileTransfers.delete(message.transferId);
+          emitToUser(transfer.userId, 'relay:file_received', { ...message, machineId });
           break;
         }
       }
@@ -537,6 +552,68 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
     } satisfies RelayToCliMessage);
     directive.status = approved ? 'running' : 'cancelled';
     res.json({ success: true });
+  });
+
+  // ── File push ───────────────────────────────────────────────────────────────
+
+  // Operator uploads a file from web/mobile; the relay forwards it to the
+  // online daemon, which writes it into its working-directory inbox so a
+  // subsequent directive can act on it. The daemon acks via `file:received`,
+  // relayed back to the operator as `relay:file_received`.
+  app.post('/api/casper/relay/file', async (req: Request, res: Response) => {
+    const profile = await requireCasperAuth(req, res, supabase);
+    if (!profile) return;
+    const { machineId, fileName, contentBase64 } = req.body ?? {};
+    if (!fileName || typeof fileName !== 'string') {
+      return res.status(400).json({ success: false, error: 'fileName is required.' });
+    }
+    if (!contentBase64 || typeof contentBase64 !== 'string') {
+      return res.status(400).json({ success: false, error: 'contentBase64 is required.' });
+    }
+
+    // Validate the payload decodes to a sane size before forwarding.
+    let size: number;
+    try {
+      size = Buffer.from(contentBase64, 'base64').length;
+    } catch {
+      return res.status(400).json({ success: false, error: 'contentBase64 is not valid base64.' });
+    }
+    if (size === 0) {
+      return res.status(400).json({ success: false, error: 'File is empty.' });
+    }
+    if (size > MAX_UPLOAD_BYTES) {
+      return res.status(413).json({ success: false, error: `File exceeds the ${Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024))}MB limit.` });
+    }
+
+    // Resolve the target: explicit machineId, or first online machine the user owns.
+    let conn: ConnectedMachine | undefined;
+    if (machineId && typeof machineId === 'string') {
+      conn = machines.get(machineId);
+      if (conn && conn.userId !== profile.id) conn = undefined;
+    } else {
+      conn = [...machines.values()].find((m) => m.userId === profile.id);
+    }
+    if (!conn) {
+      return res.status(409).json({ success: false, error: 'No online machine found. Start `casper daemon start` on your machine first.' });
+    }
+
+    const transferId = crypto.randomUUID();
+    fileTransfers.set(transferId, {
+      userId: profile.id,
+      machineId: conn.machine.machineId,
+      fileName,
+      createdAt: Date.now(),
+    });
+
+    conn.socket.emit('relay:message', {
+      type: 'file:push',
+      transferId,
+      fileName,
+      contentBase64,
+      size,
+    } satisfies RelayToCliMessage);
+
+    res.json({ success: true, transferId, machineId: conn.machine.machineId, size });
   });
 
   console.log('[relay] Casper CLI relay registered (/relay namespace + /api/casper/relay/*)');

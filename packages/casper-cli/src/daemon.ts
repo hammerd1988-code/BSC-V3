@@ -1,4 +1,6 @@
 import os from 'os';
+import path from 'path';
+import fs from 'fs/promises';
 import chalk from 'chalk';
 import { io, type Socket } from 'socket.io-client';
 import { getConfig } from './config.js';
@@ -19,6 +21,32 @@ import type {
 const VERSION = '0.1.1';
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
+const INBOX_DIRNAME = 'casper-inbox';
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+
+// Reduce an operator-supplied filename to a safe basename so a push can never
+// escape the inbox (no path separators, no traversal, no leading dots/dashes).
+function sanitizeFileName(raw: string): string {
+  const base = path.basename(raw.replace(/\\/g, '/')).replace(/[\x00-\x1f<>:"|?*]/g, '_').trim();
+  const cleaned = base.replace(/^[.\-\s]+/, '').slice(0, 200);
+  return cleaned || `upload-${Date.now()}`;
+}
+
+// Avoid clobbering an existing file by suffixing "-1", "-2", … before the ext.
+async function uniquePath(dir: string, fileName: string): Promise<string> {
+  const ext = path.extname(fileName);
+  const stem = fileName.slice(0, fileName.length - ext.length);
+  let candidate = path.join(dir, fileName);
+  for (let i = 1; i < 1000; i++) {
+    try {
+      await fs.access(candidate);
+      candidate = path.join(dir, `${stem}-${i}${ext}`);
+    } catch {
+      return candidate;
+    }
+  }
+  return path.join(dir, `${stem}-${Date.now()}${ext}`);
+}
 
 function machineInfo(): MachineInfo {
   return {
@@ -66,6 +94,42 @@ export async function startDaemon(opts: { relayUrl?: string }): Promise<void> {
   });
 
   const send = (message: CliToRelayMessage) => socket.emit('relay:message', message);
+
+  async function receiveFile(message: { transferId: string; fileName: string; contentBase64: string }): Promise<void> {
+    try {
+      const buffer = Buffer.from(message.contentBase64, 'base64');
+      if (buffer.length === 0) throw new Error('Empty file.');
+      if (buffer.length > MAX_UPLOAD_BYTES) {
+        throw new Error(`File exceeds the ${Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024))}MB limit.`);
+      }
+      const workingDir = getConfig('workingDirectory');
+      const inboxDir = path.join(workingDir, INBOX_DIRNAME);
+      await fs.mkdir(inboxDir, { recursive: true });
+      const fullPath = await uniquePath(inboxDir, sanitizeFileName(message.fileName));
+      await fs.writeFile(fullPath, buffer);
+      const relativePath = path.relative(workingDir, fullPath);
+      audit('file_received', { transferId: message.transferId, path: fullPath, size: buffer.length });
+      console.log(chalk.green(`   ⬇ Received file: ${relativePath} (${buffer.length} bytes)`));
+      send({
+        type: 'file:received',
+        transferId: message.transferId,
+        ok: true,
+        fileName: path.basename(fullPath),
+        path: fullPath,
+        relativePath,
+        size: buffer.length,
+      });
+    } catch (e: any) {
+      console.log(chalk.red(`   ✗ File push failed: ${e.message}`));
+      send({
+        type: 'file:received',
+        transferId: message.transferId,
+        ok: false,
+        fileName: message.fileName,
+        error: e.message || 'Failed to write file.',
+      });
+    }
+  }
 
   // directiveId -> resolver for a pending remote approval
   const pendingApprovals = new Map<string, (approved: boolean) => void>();
@@ -206,6 +270,9 @@ export async function startDaemon(opts: { relayUrl?: string }): Promise<void> {
         console.log(message.approved
           ? chalk.green('   ✓ Operator approved.')
           : chalk.red('   ✗ Operator denied.'));
+        break;
+      case 'file:push':
+        void receiveFile(message);
         break;
     }
   });

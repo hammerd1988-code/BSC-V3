@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence, useDragControls } from 'motion/react';
 import {
-  Terminal, RefreshCw, Send, XCircle, ChevronDown, Plus, Monitor, Power, Link2, X, Loader2,
+  Terminal, RefreshCw, Send, XCircle, ChevronDown, Plus, Monitor, Power, Link2, X, Loader2, Paperclip,
 } from 'lucide-react';
 import { haptic } from '../../lib/mobile';
 import { cn } from '../../lib/utils';
@@ -21,11 +21,14 @@ export const RemoteOpsMobile: React.FC<{ ctrl: RemoteOpsController }> = ({ ctrl 
     machines, selectedMachine, selectedMachineId, setSelectedMachineId, loadingMachines,
     command, setCommand, stream, activeDirectiveId, approvals, linkCode, setLinkCode, linkStatus,
     error, revokingId, logRef, refreshMachines, dispatchDirective, abortActive, answerApproval, linkDevice, revoke,
+    uploadFiles, uploading,
   } = ctrl;
 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [revokeArmed, setRevokeArmed] = useState<string | null>(null);
   const dragControls = useDragControls();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const canAttach = Boolean(selectedMachine?.online) && !uploading && !activeDirectiveId;
 
   // Auto-disarm a pending revoke confirmation after a few seconds.
   useEffect(() => {
@@ -135,6 +138,24 @@ export const RemoteOpsMobile: React.FC<{ ctrl: RemoteOpsController }> = ({ ctrl 
           {/* Docked command bar */}
           <div className="border-t border-white/10 bg-[#050508]/95 px-3 pb-safe pt-2.5 backdrop-blur-xl">
             <div className="flex items-end gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files && e.target.files.length > 0) void uploadFiles(e.target.files);
+                  e.target.value = '';
+                }}
+              />
+              <button
+                onClick={() => { haptic('light'); fileInputRef.current?.click(); }}
+                disabled={!canAttach}
+                className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl border border-white/10 bg-black/50 text-zinc-300 transition active:scale-90 disabled:opacity-40"
+                aria-label="Attach files"
+              >
+                {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
+              </button>
               <textarea
                 value={command}
                 onChange={(e) => setCommand(e.target.value)}

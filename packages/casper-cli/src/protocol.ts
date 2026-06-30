@@ -94,6 +94,17 @@ export interface LlmTokenMessage {
   token: string;
 }
 
+export interface FileReceivedMessage {
+  type: 'file:received';
+  transferId: string;
+  ok: boolean;
+  fileName?: string;
+  path?: string;
+  relativePath?: string;
+  size?: number;
+  error?: string;
+}
+
 export type CliToRelayMessage =
   | CliRegisterMessage
   | CliHeartbeatMessage
@@ -103,7 +114,8 @@ export type CliToRelayMessage =
   | ToolResultMessage
   | ApprovalRequestMessage
   | DirectiveCompleteMessage
-  | LlmTokenMessage;
+  | LlmTokenMessage
+  | FileReceivedMessage;
 
 export interface DirectiveMessage {
   type: 'directive';
@@ -133,8 +145,17 @@ export interface RelayAckMessage {
   sessionId: string;
 }
 
+export interface FilePushMessage {
+  type: 'file:push';
+  transferId: string;
+  fileName: string;
+  contentBase64: string;
+  size: number;
+}
+
 export type RelayToCliMessage =
   | DirectiveMessage
   | AbortMessage
   | ApprovalResponseMessage
-  | RelayAckMessage;
+  | RelayAckMessage
+  | FilePushMessage;
