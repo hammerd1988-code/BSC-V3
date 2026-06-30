@@ -118,6 +118,19 @@ export interface LlmTokenMessage {
   token: string;
 }
 
+// File transfer ack (CLI → Railway → Web/Mobile) — daemon reports the result of
+// writing a pushed file to disk on the machine.
+export interface FileReceivedMessage {
+  type: 'file:received';
+  transferId: string;
+  ok: boolean;
+  fileName?: string;
+  path?: string; // Absolute path the file was written to.
+  relativePath?: string; // Path relative to the machine's working directory.
+  size?: number;
+  error?: string;
+}
+
 export type CliToRelayMessage =
   | CliRegisterMessage
   | CliHeartbeatMessage
@@ -127,7 +140,8 @@ export type CliToRelayMessage =
   | ToolResultMessage
   | ApprovalRequestMessage
   | DirectiveCompleteMessage
-  | LlmTokenMessage;
+  | LlmTokenMessage
+  | FileReceivedMessage;
 
 // ── Railway → CLI messages ────────────────────────────────────────────────────
 
@@ -159,11 +173,22 @@ export interface RelayAckMessage {
   sessionId: string;
 }
 
+// File push (Railway → CLI) — operator uploaded a file from web/mobile; the
+// daemon writes it into its working directory's inbox so directives can act on it.
+export interface FilePushMessage {
+  type: 'file:push';
+  transferId: string;
+  fileName: string;
+  contentBase64: string;
+  size: number; // Decoded byte length, for validation.
+}
+
 export type RelayToCliMessage =
   | DirectiveMessage
   | AbortMessage
   | ApprovalResponseMessage
-  | RelayAckMessage;
+  | RelayAckMessage
+  | FilePushMessage;
 
 // ── REST API types (for mobile/web → Railway) ─────────────────────────────────
 
