@@ -194,6 +194,13 @@ function initialCasperCore(settings: any) {
         ? Number(tempRaw)
         : NaN;
   const temperature = Number.isFinite(tempNumber) && tempNumber >= 0 && tempNumber <= 2 ? tempNumber : 0.7;
+  // Tool-call round budget override. 0 (blank) = use the server default.
+  // Mirrors the [1, 60] ceiling enforced server-side in casperTools.ts.
+  const roundsRaw = settings?.maxToolRounds ?? settings?.max_tool_rounds;
+  const roundsNumber =
+    typeof roundsRaw === 'number' ? roundsRaw : typeof roundsRaw === 'string' ? Number(roundsRaw) : NaN;
+  const maxToolRounds =
+    Number.isFinite(roundsNumber) && roundsNumber >= 1 ? Math.min(60, Math.floor(roundsNumber)) : 0;
   return {
     apiKey: settings?.apiKey || settings?.api_key || '',
     endpoint: settings?.endpoint || settings?.api_base_url || settings?.apiBaseUrl || '',
@@ -201,6 +208,7 @@ function initialCasperCore(settings: any) {
     customModelId: modelValue === 'custom_model' ? settings?.model || '' : '',
     temperature,
     systemPromptOverride: settings?.systemPromptOverride || settings?.system_prompt_override || settings?.systemPrompt || '',
+    maxToolRounds,
   };
 }
 
@@ -671,6 +679,8 @@ export const Casper: React.FC = () => {
       const resolvedModel = resolveCasperModel(aiCoreForm.model, aiCoreForm.customModelId);
       const trimmedSystemPrompt = aiCoreForm.systemPromptOverride.trim();
       const clampedTemperature = Math.max(0, Math.min(2, Number(aiCoreForm.temperature) || 0));
+      const roundsValue = Math.floor(Number(aiCoreForm.maxToolRounds) || 0);
+      const clampedRounds = roundsValue >= 1 ? Math.min(60, roundsValue) : 0;
       const nextSettings = {
         ...(aiSettings || {}),
         apiKey: aiCoreForm.apiKey.trim() || undefined,
@@ -679,6 +689,7 @@ export const Casper: React.FC = () => {
         model: resolvedModel || undefined,
         temperature: clampedTemperature,
         systemPromptOverride: trimmedSystemPrompt || undefined,
+        maxToolRounds: clampedRounds >= 1 ? clampedRounds : undefined,
       };
 
       if (!aiCoreForm.apiKey.trim()) delete nextSettings.apiKey;
@@ -688,6 +699,10 @@ export const Casper: React.FC = () => {
       }
       if (!resolvedModel) delete nextSettings.model;
       if (!trimmedSystemPrompt) delete nextSettings.systemPromptOverride;
+      if (clampedRounds < 1) {
+        delete nextSettings.maxToolRounds;
+        delete nextSettings.max_tool_rounds;
+      }
 
       const { error } = await supabase.from('users').update({ ai_settings: nextSettings }).eq('id', currentUser.id);
       if (error) throw error;
@@ -1835,6 +1850,30 @@ export const Casper: React.FC = () => {
                   Appended to Casper's surface persona for your account.
                   Doesn't replace identity guardrails — adds your custom
                   guidance on top.
+                </p>
+              </div>
+
+              {/* Tool-call round budget — how many tool-calling rounds Casper
+                  may take per directive before it stops and summarizes.
+                  Raise this for slower local models that need more steps to
+                  finish multi-step work. Blank = server default. */}
+              <div className="mt-5">
+                <label className="block text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500 mb-2 ml-1">Max Tool Rounds (Optional)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  step={1}
+                  value={aiCoreForm.maxToolRounds || ''}
+                  onChange={(e) => setAiCoreForm((prev) => ({ ...prev, maxToolRounds: Number(e.target.value) }))}
+                  placeholder="Default (25)"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-cyan-500/50 transition-all"
+                />
+                <p className="mt-1 text-[10px] leading-relaxed text-zinc-500">
+                  How many tool-calling rounds Casper may take per directive
+                  before it stops and summarizes. Raise it (up to 60) if your
+                  local model keeps running out of tool calls on big tasks.
+                  Blank uses the default (25).
                 </p>
               </div>
 
