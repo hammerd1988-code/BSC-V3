@@ -48,18 +48,25 @@ import type { CasperMemorySystem } from './casperMemory.js';
 const TOOL_NAME_SEPARATOR = '__';
 const SHELL_TOOL_NAME = `shell${TOOL_NAME_SEPARATOR}exec`;
 
-// Hard upper bound on tool-calling loop rounds per directive. The model
-// can request multiple tools per round (parallel tool_calls); this is
-// the round count, not the per-call count. 10 rounds covers realistic
-// dev-agent plans (clone → detect → install → build → branch → edit →
-// commit → push → PR → summarize) without letting a confused or
-// adversarial response burn unbounded tokens.
-export const MAX_TOOL_CALL_ROUNDS = 10;
+// Default tool-calling loop rounds per directive. The model can request
+// multiple tools per round (parallel tool_calls); this is the round
+// count, not the per-call count. 25 rounds covers realistic dev-agent
+// plans (clone → detect → install → build → branch → edit → commit →
+// push → PR → summarize) with room for slower local models that burn a
+// round self-correcting (e.g. a Unix `ls` that fails on Windows before
+// retrying `dir`). Users can raise/lower this via ai_settings up to the
+// ceiling below.
+export const MAX_TOOL_CALL_ROUNDS = 25;
 
-// Hard upper bound on TOTAL tool calls in one directive across all
+// Default upper bound on TOTAL tool calls in one directive across all
 // rounds. Even if the model parallelizes, we cap the absolute number
 // of executions to keep cost + side-effects in check.
-export const MAX_TOOL_CALLS_PER_DIRECTIVE = 25;
+export const MAX_TOOL_CALLS_PER_DIRECTIVE = 60;
+
+// Hard ceilings for user-configurable overrides (ai_settings). These
+// stop a misconfigured or runaway value from burning unbounded tokens.
+export const MAX_TOOL_CALL_ROUNDS_CEILING = 60;
+export const MAX_TOOL_CALLS_PER_DIRECTIVE_CEILING = 150;
 
 // OpenAI-style tool spec (Chat Completions API).
 // Reference: https://platform.openai.com/docs/api-reference/chat/create#chat-create-tools

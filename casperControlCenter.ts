@@ -15,6 +15,8 @@ import {
   resolveShellMode,
   MAX_TOOL_CALL_ROUNDS,
   MAX_TOOL_CALLS_PER_DIRECTIVE,
+  MAX_TOOL_CALL_ROUNDS_CEILING,
+  MAX_TOOL_CALLS_PER_DIRECTIVE_CEILING,
   type LlmToolCall,
   type LlmToolCallResult,
   type ToolExecutionContext,
@@ -160,7 +162,23 @@ export type CasperUserAiSettings = {
   model?: string | null;
   temperature?: number | null;
   systemPromptOverride?: string | null;
+  // Per-user override for the tool-calling loop budget. Lets operators
+  // give slower local models more room to finish multi-step work before
+  // the loop reports "out of tool calls". Clamped to the ceilings in
+  // casperTools.ts when loaded.
+  maxToolRounds?: number | null;
+  maxToolCalls?: number | null;
 };
+
+// Coerce a raw ai_settings value into a positive integer within [1, ceiling],
+// or null when absent/invalid so the server default applies.
+function clampPositiveInt(raw: unknown, ceiling: number): number | null {
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+  if (!Number.isFinite(n)) return null;
+  const int = Math.floor(n);
+  if (int < 1) return null;
+  return Math.min(int, ceiling);
+}
 
 /**
  * Load the calling user's Casper LLM settings from `users.ai_settings`
@@ -198,6 +216,14 @@ async function loadUserAiSettings(
     const temperature = Number.isFinite(tempNumber) && tempNumber >= 0 && tempNumber <= 2 ? tempNumber : null;
     const systemPromptOverride =
       raw.systemPromptOverride ?? raw.system_prompt_override ?? raw.systemPrompt ?? null;
+    const maxToolRounds = clampPositiveInt(
+      raw.maxToolRounds ?? raw.max_tool_rounds,
+      MAX_TOOL_CALL_ROUNDS_CEILING,
+    );
+    const maxToolCalls = clampPositiveInt(
+      raw.maxToolCalls ?? raw.max_tool_calls,
+      MAX_TOOL_CALLS_PER_DIRECTIVE_CEILING,
+    );
     return {
       apiKey: typeof apiKey === 'string' ? apiKey.trim() || null : null,
       endpoint: typeof endpoint === 'string' ? endpoint.trim() || null : null,
@@ -205,6 +231,8 @@ async function loadUserAiSettings(
       temperature,
       systemPromptOverride:
         typeof systemPromptOverride === 'string' ? systemPromptOverride.trim() || null : null,
+      maxToolRounds,
+      maxToolCalls,
     };
   } catch {
     return {};
@@ -1429,6 +1457,8 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
         userSettings,
         toolCtx,
         history: conversationHistory,
+        maxToolRounds: userSettings.maxToolRounds ?? undefined,
+        maxToolCalls: userSettings.maxToolCalls ?? undefined,
       });
       executionText = execution.text;
       executionProvider = execution.provider;
