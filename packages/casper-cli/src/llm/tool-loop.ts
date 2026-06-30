@@ -36,16 +36,21 @@ Plugin tools (plugin__*) are user-defined extensions — use them when they matc
  */
 function buildEnvironmentPrompt(): string {
   if (process.platform === 'win32') {
+    const windowsShell = process.env.ComSpec || 'cmd.exe';
     return [
       '--- HOST ENVIRONMENT ---',
       `OS: Windows (${os.release()})`,
-      'Shell: local__shell runs commands via cmd.exe. Use Windows command syntax,',
+      `Shell: local__shell runs commands via ${windowsShell}. Use Windows command syntax,`,
       'NOT Unix: `dir` not `ls`, `type` not `cat`, `findstr` not `grep`,',
       '`copy`/`move`/`del` not `cp`/`mv`/`rm`. For richer commands, invoke PowerShell',
       'explicitly, e.g. `powershell -Command "Get-ChildItem"`. Use `\\` path separators.',
     ].join('\n');
   }
-  const kind = process.platform === 'darwin' ? 'macOS' : 'Linux';
+  const kind = process.platform === 'darwin'
+    ? 'macOS'
+    : process.platform === 'linux'
+      ? 'Linux'
+      : process.platform;
   return [
     '--- HOST ENVIRONMENT ---',
     `OS: ${kind} (${os.release()})`,
