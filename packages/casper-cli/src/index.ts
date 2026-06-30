@@ -9,6 +9,7 @@ import { initProject } from './init.js';
 import { listSessions, deleteSession } from './sessions.js';
 import { orchestrate } from './swarm/index.js';
 import { pluginList, pluginInfo, pluginInit, pluginRemove } from './plugins/index.js';
+import { runSettings, printAllSettings } from './settings.js';
 import chalk from 'chalk';
 
 const VERSION = '0.1.1';
@@ -124,6 +125,22 @@ config
   .action((key, value) => {
     setConfig(key, value);
     console.log(chalk.green(`Set ${key} = ${value}`));
+  });
+
+config
+  .command('list')
+  .alias('ls')
+  .description('Show all config values (secrets masked)')
+  .action(() => {
+    printAllSettings();
+  });
+
+// Interactive settings wizard — the friendly front door for config.
+program
+  .command('settings')
+  .description('Open the interactive settings menu (model, local LLM, API keys, approvals)')
+  .action(async () => {
+    await runSettings();
   });
 
 // Project initialization
