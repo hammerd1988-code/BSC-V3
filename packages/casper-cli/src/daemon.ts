@@ -115,7 +115,6 @@ export async function startDaemon(opts: { relayUrl?: string }): Promise<void> {
         transferId: message.transferId,
         ok: true,
         fileName: path.basename(fullPath),
-        path: fullPath,
         relativePath,
         size: buffer.length,
       });
