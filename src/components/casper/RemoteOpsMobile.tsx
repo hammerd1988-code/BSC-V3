@@ -28,7 +28,7 @@ export const RemoteOpsMobile: React.FC<{ ctrl: RemoteOpsController }> = ({ ctrl 
   const [revokeArmed, setRevokeArmed] = useState<string | null>(null);
   const dragControls = useDragControls();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const canAttach = Boolean(selectedMachine?.online) && !uploading && !activeDirectiveId;
+  const canAttach = Boolean(selectedMachine?.online) && !uploading;
 
   // Auto-disarm a pending revoke confirmation after a few seconds.
   useEffect(() => {

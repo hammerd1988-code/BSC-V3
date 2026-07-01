@@ -14,6 +14,7 @@
  *     long-lived relay token (hash stored in casper_cli_devices).
  */
 import crypto from 'crypto';
+import path from 'path';
 import type { Express, Request, Response } from 'express';
 import type { Server as SocketServer, Socket } from 'socket.io';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -71,6 +72,11 @@ const FILE_TRANSFER_TTL_MS = 2 * 60 * 1000;
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000; // Match daemon-side timeout
 const DEVICE_INIT_RATE_LIMIT = 10; // Max requests per IP per minute
 const DEVICE_INIT_RATE_WINDOW_MS = 60_000;
+
+function sanitizeUploadName(raw: string): string {
+  const base = path.basename(raw.replace(/\\/g, '/')).replace(/[\x00-\x1f<>:"|?*]/g, '_').trim();
+  return base.replace(/^[.\-\s]+/, '').slice(0, 200);
+}
 
 function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -571,13 +577,22 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
       return res.status(400).json({ success: false, error: 'contentBase64 is required.' });
     }
 
-    // Validate the payload decodes to a sane size before forwarding.
-    let size: number;
-    try {
-      size = Buffer.from(contentBase64, 'base64').length;
-    } catch {
+    // Defense-in-depth: sanitize the filename the same way the daemon will,
+    // and reject up front if nothing usable remains (e.g. a name of only
+    // path separators / traversal segments).
+    const safeName = sanitizeUploadName(fileName);
+    if (!safeName) {
+      return res.status(400).json({ success: false, error: 'fileName is invalid.' });
+    }
+
+    // `Buffer.from(str, 'base64')` never throws — it silently drops non-base64
+    // characters — so a try/catch can't detect malformed input. Validate the
+    // string explicitly (after stripping whitespace) before decoding.
+    const normalizedBase64 = contentBase64.replace(/\s+/g, '');
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalizedBase64) || normalizedBase64.length % 4 !== 0) {
       return res.status(400).json({ success: false, error: 'contentBase64 is not valid base64.' });
     }
+    const size = Buffer.from(normalizedBase64, 'base64').length;
     if (size === 0) {
       return res.status(400).json({ success: false, error: 'File is empty.' });
     }
@@ -601,14 +616,14 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
     fileTransfers.set(transferId, {
       userId: profile.id,
       machineId: conn.machine.machineId,
-      fileName,
+      fileName: safeName,
       createdAt: Date.now(),
     });
 
     conn.socket.emit('relay:message', {
       type: 'file:push',
       transferId,
-      fileName,
+      fileName: safeName,
       contentBase64,
       size,
     } satisfies RelayToCliMessage);

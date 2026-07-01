@@ -138,7 +138,7 @@ export const RemoteOpsDesktop: React.FC<{ ctrl: RemoteOpsController }> = ({ ctrl
           {/* Console panel */}
           <section
             className={`relative flex min-h-[60vh] flex-col rounded-3xl border bg-black/35 transition ${dragOver ? 'border-cyan-400/70' : 'border-white/10'}`}
-            onDragOver={(e) => { if (canAttach) { e.preventDefault(); setDragOver(true); } }}
+            onDragOver={(e) => { e.preventDefault(); if (canAttach) setDragOver(true); }}
             onDragLeave={(e) => { if (e.currentTarget === e.target) setDragOver(false); }}
             onDrop={(e) => {
               e.preventDefault();
