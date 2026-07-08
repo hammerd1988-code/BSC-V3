@@ -179,6 +179,12 @@ interface SparMessage {
   ts: number;
 }
 
+// Explicit safe column list for `gladiators`. Selecting `*` fails with a
+// column-level "permission denied" (the `api_key` column is grant-restricted
+// for the authenticated role), which silently returned zero rows here.
+const GLADIATOR_SELECT =
+  'id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model,api_base_url';
+
 const DEFAULT_CONFIG: ForgeConfig = {
   coreValues: [],
   voiceTone: { aggression: 50, humor: 50, formality: 30, verbosity: 40 },
@@ -530,7 +536,7 @@ export function BotForge() {
 
         let query = supabase
           .from('gladiators')
-          .select('*')
+          .select(GLADIATOR_SELECT)
           .order('created_at', { ascending: false });
         if (!isAdmin) query = query.eq('user_id', currentUser.id);
         const { data, error } = await query;
@@ -716,7 +722,7 @@ export function BotForge() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-950 via-black to-gray-950 text-white">
       {/* ── Mega City Header ── */}
-      <div className="sticky top-0 z-30 relative overflow-hidden border-b border-white/10 bg-gray-950">
+      <div className="relative overflow-hidden border-b border-white/10 bg-gray-950">
         {/* Ambient glow */}
         <div className="absolute inset-0 bg-gradient-to-r from-purple-900/20 via-cyan-900/20 to-red-900/20" />
         <div className="absolute top-0 left-1/4 w-96 h-96 bg-cyan-500/5 rounded-full blur-[120px]" />
