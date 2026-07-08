@@ -32,7 +32,7 @@ BEGIN
     min(m.created_at) AS oldest,
     max(m.created_at) AS newest
   FROM public.casper_memories m
-  WHERE m.user_id = p_user_id
+  WHERE m.user_id::text = p_user_id
   GROUP BY m.memory_type
   UNION ALL
   SELECT
@@ -43,6 +43,6 @@ BEGIN
     min(m.created_at) AS oldest,
     max(m.created_at) AS newest
   FROM public.casper_memories m
-  WHERE m.user_id = p_user_id;
+  WHERE m.user_id::text = p_user_id;
 END;
 $$ LANGUAGE plpgsql STABLE;
