@@ -6,7 +6,7 @@ import {
   AlertTriangle, Activity, Mic, MicOff, Volume2, X, Settings,
   Lock, Eye, EyeOff, Server, BrainCircuit, ChevronDown, Crown, Ghost, User, Cpu,
   CalendarClock, Puzzle, KeyRound, Play, Pause, Plus, Search, Save, Database, Shield,
-  Camera, CameraOff, SwitchCamera, Globe, Edit3
+  Camera, CameraOff, SwitchCamera, Globe, Edit3, Pin, PinOff, BarChart3, CheckSquare, Square
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { generateText } from '../lib/ai';
@@ -50,7 +50,19 @@ interface UserCasperMemory {
   tags: string[] | null;
   created_at: string;
   access_count: number | null;
+  pinned?: boolean | null;
 }
+
+interface MemoryStatRow {
+  memory_type: string;
+  total: number;
+  pinned_count: number;
+  avg_importance: number | null;
+  oldest: string | null;
+  newest: string | null;
+}
+
+const MANUAL_MEMORY_TYPES = ['preference', 'conversation', 'workspace', 'skill', 'world'] as const;
 
 interface UserCasperTask {
   id: string;
@@ -426,6 +438,12 @@ export const Casper: React.FC = () => {
   const [editingMemory, setEditingMemory] = useState<UserCasperMemory | null>(null);
   const [editForm, setEditForm] = useState({ content: '', importance: 5, tags: '' });
   const [expandedMemory, setExpandedMemory] = useState<string | null>(null);
+  const [memoryStats, setMemoryStats] = useState<MemoryStatRow[] | null>(null);
+  const [selectedMemoryIds, setSelectedMemoryIds] = useState<Set<string>>(new Set());
+  const [selectMode, setSelectMode] = useState(false);
+  const [showAddMemory, setShowAddMemory] = useState(false);
+  const [addForm, setAddForm] = useState({ memory_type: 'preference' as string, content: '', importance: 7, tags: '' });
+  const historyLoadedRef = useRef(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [taskForm, setTaskForm] = useState({ title: '', description: '', priority: 'medium' as UserCasperTask['priority'] });
   const [routineForm, setRoutineForm] = useState({ name: '', directive: '', frequency: 'daily' as UserCasperRoutine['frequency'], scheduled_time: '09:00', cron_expression: '0 9 * * *' });
@@ -499,6 +517,46 @@ export const Casper: React.FC = () => {
     setMessages([{ id: 'greeting', role: 'casper', content: greeting, timestamp: new Date() }]);
   }, []);
 
+  // Conversation persistence: on first load with a signed-in user, rehydrate the
+  // chat from the most recent stored exchanges so the user picks up where they
+  // left off instead of always starting from a blank greeting. Runs once.
+  useEffect(() => {
+    if (!currentUser?.id || historyLoadedRef.current) return;
+    historyLoadedRef.current = true;
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('casper_memories')
+          .select('content, context, created_at')
+          .eq('user_id', currentUser.id)
+          .eq('memory_type', 'exchange')
+          .order('created_at', { ascending: false })
+          .limit(12);
+        if (error || !data || data.length === 0) return;
+        const restored: Message[] = [];
+        for (const row of [...data].reverse()) {
+          const ctx = (row.context as { user_message?: string; casper_reply?: string } | null) ?? null;
+          const userText = ctx?.user_message;
+          const casperText = ctx?.casper_reply;
+          const ts = new Date(row.created_at);
+          if (userText) restored.push({ id: `hist-u-${row.created_at}-${restored.length}`, role: 'user', content: userText, timestamp: ts });
+          if (casperText) restored.push({ id: `hist-c-${row.created_at}-${restored.length}`, role: 'casper', content: casperText, timestamp: ts });
+        }
+        if (restored.length === 0) return;
+        setMessages(prev => {
+          const greetingMsg = prev.find(m => m.id === 'greeting');
+          return [
+            ...(greetingMsg ? [greetingMsg] : []),
+            { id: 'history-divider', role: 'system', content: `↺ Restored ${restored.length} messages from your last conversation. Start a new one with the trash icon.`, timestamp: new Date() },
+            ...restored,
+          ];
+        });
+      } catch (e) {
+        console.warn('[Casper] failed to restore conversation history:', e);
+      }
+    })();
+  }, [currentUser?.id]);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -524,6 +582,11 @@ export const Casper: React.FC = () => {
       if (taskRes.data) setTasks(taskRes.data as UserCasperTask[]);
       if (routineRes.data) setRoutines(routineRes.data.map((row) => normalizeUserCasperRoutine(row)));
       if (integrationRes.data) setIntegrations(integrationRes.data as UserCasperIntegration[]);
+      // Memory statistics (accurate totals across the whole store, not just
+      // the 50-row page fetched above). Non-fatal if the RPC isn't deployed yet.
+      supabase.rpc('casper_memory_stats', { p_user_id: currentUser.id }).then(({ data, error }) => {
+        if (!error && Array.isArray(data)) setMemoryStats(data as MemoryStatRow[]);
+      });
       const contextRes = await authFetch('/api/casper/integrations/context');
       if (contextRes.ok) {
         const payload = await contextRes.json();
@@ -806,6 +869,80 @@ export const Casper: React.FC = () => {
   const deleteMemory = async (memory: UserCasperMemory) => {
     const { error } = await supabase.from('casper_memories').delete().eq('id', memory.id);
     if (error) setNotice(error.message); else setMemories(prev => prev.filter(item => item.id !== memory.id));
+  };
+
+  const togglePinMemory = async (memory: UserCasperMemory) => {
+    const next = !memory.pinned;
+    const { error } = await supabase.from('casper_memories').update({ pinned: next }).eq('id', memory.id);
+    if (error) { setNotice(error.message); return; }
+    setMemories(prev => prev.map(m => m.id === memory.id ? { ...m, pinned: next } : m));
+    setNotice(next ? 'Memory pinned — it will never be auto-pruned.' : 'Memory unpinned.');
+  };
+
+  const addMemory = async () => {
+    if (!userUuid) { setNotice('A UUID-backed user profile is required to store memories.'); return; }
+    if (!addForm.content.trim()) return;
+    setActionBusy(true);
+    try {
+      const tags = addForm.tags.split(',').map(t => t.trim()).filter(Boolean);
+      const { data, error } = await supabase.from('casper_memories').insert({
+        user_id: userUuid,
+        memory_type: addForm.memory_type,
+        content: addForm.content.trim(),
+        importance: addForm.importance,
+        tags,
+        pinned: true,
+      }).select('*').single();
+      if (error) throw new Error(error.message);
+      if (data) setMemories(prev => [data as UserCasperMemory, ...prev]);
+      setShowAddMemory(false);
+      setAddForm({ memory_type: 'preference', content: '', importance: 7, tags: '' });
+      setNotice('Memory added and pinned.');
+      void fetchControlCenter();
+    } catch (err: any) { setNotice(err?.message || 'Failed to add memory.'); }
+    finally { setActionBusy(false); }
+  };
+
+  const toggleSelectMemory = (id: string) => {
+    setSelectedMemoryIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const bulkDeleteSelected = async () => {
+    const ids = Array.from(selectedMemoryIds);
+    if (ids.length === 0) return;
+    if (!window.confirm(`Delete ${ids.length} selected memor${ids.length === 1 ? 'y' : 'ies'}? Pinned ones are included if selected.`)) return;
+    setActionBusy(true);
+    try {
+      const { error } = await supabase.from('casper_memories').delete().in('id', ids);
+      if (error) throw new Error(error.message);
+      setMemories(prev => prev.filter(m => !selectedMemoryIds.has(m.id)));
+      setSelectedMemoryIds(new Set());
+      setSelectMode(false);
+      setNotice(`Deleted ${ids.length} memor${ids.length === 1 ? 'y' : 'ies'}.`);
+      void fetchControlCenter();
+    } catch (err: any) { setNotice(err?.message || 'Bulk delete failed.'); }
+    finally { setActionBusy(false); }
+  };
+
+  const clearMemoryType = async (type: string) => {
+    if (!userUuid) return;
+    const label = type === 'all' ? 'ALL unpinned memories' : `all unpinned "${type}" memories`;
+    if (!window.confirm(`Clear ${label}? Pinned memories are kept.`)) return;
+    setActionBusy(true);
+    try {
+      let q = supabase.from('casper_memories').delete().eq('user_id', userUuid).eq('pinned', false);
+      if (type !== 'all') q = q.eq('memory_type', type);
+      const { error } = await q;
+      if (error) throw new Error(error.message);
+      setMemories(prev => prev.filter(m => m.pinned || (type !== 'all' && m.memory_type !== type)));
+      setNotice(`Cleared ${label}.`);
+      void fetchControlCenter();
+    } catch (err: any) { setNotice(err?.message || 'Clear failed.'); }
+    finally { setActionBusy(false); }
   };
 
   const integrationRecord = (key: string) => integrations.find(item => item.integration_key === key);
@@ -1675,7 +1812,7 @@ export const Casper: React.FC = () => {
             >
               <Settings className="w-4 h-4" />
             </button>
-            <button onClick={clearChat} className="p-2.5 bg-white/5 border border-white/10 rounded-xl text-zinc-500 hover:text-white transition-all">
+            <button onClick={clearChat} title="Start a new conversation" className="p-2.5 bg-white/5 border border-white/10 rounded-xl text-zinc-500 hover:text-white transition-all">
               <Trash2 className="w-4 h-4" />
             </button>
           </div>
@@ -1962,7 +2099,35 @@ export const Casper: React.FC = () => {
 
               {activePanel === 'routines' && <div className="grid gap-4 lg:grid-cols-[0.85fr_1.15fr]"><div className="rounded-3xl border border-white/10 bg-black/35 p-4"><div className="mb-3 flex items-center gap-2 text-purple-100"><CalendarClock className="h-5 w-5" /><h3 className="text-sm font-black uppercase tracking-widest">Schedule Routine</h3></div><div className="grid gap-3"><input value={routineForm.name} onChange={e => setRoutineForm(p => ({ ...p, name: e.target.value }))} placeholder="Routine name" className="rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white outline-none" /><textarea value={routineForm.directive} onChange={e => setRoutineForm(p => ({ ...p, directive: e.target.value }))} rows={4} placeholder="Directive Casper should run..." className="rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white outline-none" /><div className="grid grid-cols-3 gap-2"><select value={routineForm.frequency} onChange={e => setRoutineForm(p => ({ ...p, frequency: e.target.value as UserCasperRoutine['frequency'] }))} className="rounded-2xl border border-white/10 bg-black/45 px-3 py-3 text-sm text-white"><option value="hourly">Hourly</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="cron">Cron</option><option value="custom">Custom</option></select><input type="time" value={routineForm.scheduled_time} onChange={e => setRoutineForm(p => ({ ...p, scheduled_time: e.target.value }))} className="rounded-2xl border border-white/10 bg-black/45 px-3 py-3 text-sm text-white" /><input value={routineForm.cron_expression} onChange={e => setRoutineForm(p => ({ ...p, cron_expression: e.target.value }))} className="rounded-2xl border border-white/10 bg-black/45 px-3 py-3 text-sm text-white" /></div><button onClick={() => void createRoutine()} disabled={!routineForm.name.trim() || !routineForm.directive.trim() || actionBusy} className="rounded-2xl border border-purple-300/30 bg-purple-400/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-purple-100 disabled:opacity-40"><Save className="mr-2 inline h-4 w-4" />Save Routine</button></div></div><div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">{routines.map(routine => <div key={routine.id} className="rounded-3xl border border-white/10 bg-black/35 p-4"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-black uppercase tracking-widest text-white">{routine.name}</p><p className="mt-1 text-xs leading-5 text-zinc-500">{routine.directive}</p></div><button onClick={() => void toggleRoutine(routine)} className={cn('rounded-full border px-3 py-1 text-[8px] font-black uppercase tracking-widest', routine.enabled ? 'border-green-300/25 bg-green-400/10 text-green-100' : 'border-zinc-300/20 bg-zinc-400/10 text-zinc-300')}>{routine.enabled ? <Pause className="inline h-3 w-3" /> : <Play className="inline h-3 w-3" />} {routine.enabled ? 'On' : 'Off'}</button></div><div className="mt-3 grid gap-2 text-[9px] uppercase tracking-widest text-zinc-500 sm:grid-cols-3"><span>{routine.frequency}</span><span>Last {formatCasperTime(routine.last_run_at)}</span><span>Next {formatCasperTime(routine.next_run_at)}</span></div>{routine.last_result && <p className="mt-3 line-clamp-3 rounded-2xl border border-green-300/10 bg-green-400/[0.04] p-3 text-xs text-green-100">{routine.last_result}</p>}<button onClick={() => void deleteRoutine(routine)} className="mt-3 rounded-full border border-red-300/20 px-3 py-1 text-[8px] uppercase text-red-200"><Trash2 className="inline h-3 w-3" /> Delete</button></div>)}</div></div>}
 
-              {activePanel === 'memories' && <div>
+              {activePanel === 'memories' && (() => {
+                const allStat = memoryStats?.find(s => s.memory_type === 'all');
+                const totalCount = allStat?.total ?? memories.length;
+                const pinnedCount = allStat?.pinned_count ?? memories.filter(m => m.pinned).length;
+                const avgImp = allStat?.avg_importance ?? null;
+                return <div>
+                {/* Stats bar */}
+                <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {[
+                    { label: 'Total', value: totalCount, icon: Database },
+                    { label: 'Pinned', value: pinnedCount, icon: Pin },
+                    { label: 'Types', value: memoryStats ? memoryStats.filter(s => s.memory_type !== 'all').length : Object.keys(memoryTypeCounts).filter(k => k !== 'all').length, icon: BarChart3 },
+                    { label: 'Avg Imp', value: avgImp ?? '—', icon: Activity },
+                  ].map(stat => (
+                    <div key={stat.label} className="rounded-2xl border border-white/10 bg-black/35 px-3 py-2">
+                      <div className="flex items-center gap-1.5 text-[8px] font-black uppercase tracking-widest text-zinc-500"><stat.icon className="h-3 w-3 text-cyan-300" />{stat.label}</div>
+                      <div className="mt-1 text-lg font-black text-white">{stat.value}</div>
+                    </div>
+                  ))}
+                </div>
+                {/* Action toolbar */}
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <button onClick={() => setShowAddMemory(true)} disabled={!userUuid} className="flex items-center gap-1.5 rounded-xl border border-cyan-300/30 bg-cyan-400/10 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-cyan-100 transition hover:bg-cyan-400/20 disabled:opacity-40"><Plus className="h-3.5 w-3.5" />Add Memory</button>
+                  <button onClick={() => { setSelectMode(m => !m); setSelectedMemoryIds(new Set()); }} className={cn('flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[9px] font-black uppercase tracking-widest transition', selectMode ? 'border-fuchsia-300/40 bg-fuchsia-400/15 text-fuchsia-100' : 'border-white/10 bg-black/35 text-zinc-400 hover:text-white')}><CheckSquare className="h-3.5 w-3.5" />{selectMode ? 'Cancel Select' : 'Select'}</button>
+                  {selectMode && (
+                    <button onClick={() => void bulkDeleteSelected()} disabled={selectedMemoryIds.size === 0 || actionBusy} className="flex items-center gap-1.5 rounded-xl border border-red-300/30 bg-red-400/10 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-red-200 transition hover:bg-red-400/20 disabled:opacity-40"><Trash2 className="h-3.5 w-3.5" />Delete{selectedMemoryIds.size > 0 ? ` (${selectedMemoryIds.size})` : ''}</button>
+                  )}
+                  <button onClick={() => void clearMemoryType(memoryTypeFilter)} disabled={!userUuid || actionBusy} className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-black/35 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-zinc-400 transition hover:border-red-300/30 hover:text-red-200 disabled:opacity-40" title="Delete all unpinned memories in the current filter"><Trash2 className="h-3.5 w-3.5" />Clear {memoryTypeFilter === 'all' ? 'All' : memoryTypeFilter}</button>
+                </div>
                 {/* Type filter tabs */}
                 <div className="mb-3 flex flex-wrap gap-1.5">
                   {(['all', 'conversation', 'exchange', 'workspace', 'preference', 'skill', 'tool_usage', 'network', 'mood', 'world'] as const).map(t => (
@@ -1986,25 +2151,29 @@ export const Casper: React.FC = () => {
                     world: 'border-indigo-300/20 text-indigo-100',
                   };
                   const color = typeColors[memory.memory_type] || 'border-white/20 text-white';
+	                  const isSelected = selectedMemoryIds.has(memory.id);
 	                  return (
 	                    <div
 	                      key={memory.id}
 	                      role="button"
 	                      tabIndex={0}
-	                      aria-label="Open memory"
-	                      onClick={() => void openMemory(memory)}
+	                      aria-label={selectMode ? 'Select memory' : 'Open memory'}
+	                      onClick={() => selectMode ? toggleSelectMemory(memory.id) : void openMemory(memory)}
 	                      onKeyDown={(e) => {
 	                        if (e.key === 'Enter' || e.key === ' ') {
 	                          e.preventDefault();
-	                          void openMemory(memory);
+	                          if (selectMode) toggleSelectMemory(memory.id); else void openMemory(memory);
 	                        }
 	                      }}
-	                      className="group cursor-pointer rounded-3xl border border-white/10 bg-black/35 p-4 hover:border-cyan-300/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/40"
+	                      className={cn('group relative cursor-pointer rounded-3xl border bg-black/35 p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/40',
+	                        isSelected ? 'border-fuchsia-300/50 ring-1 ring-fuchsia-300/30' : memory.pinned ? 'border-amber-300/30' : 'border-white/10 hover:border-cyan-300/30')}
 	                    >
 	                    <div className="mb-2 flex items-center gap-2">
+	                      {selectMode && (isSelected ? <CheckSquare className="h-4 w-4 text-fuchsia-300" /> : <Square className="h-4 w-4 text-zinc-500" />)}
 	                      <Database className="h-4 w-4 text-cyan-200" />
 	                      <span className={cn('rounded-full border px-2 py-0.5 text-[8px] font-black uppercase tracking-widest', color)}>{memory.memory_type === 'tool_usage' ? 'tool' : memory.memory_type}</span>
 	                      <span className="text-[8px] text-zinc-600">IMP {memory.importance}</span>
+	                      {memory.pinned && <Pin className="h-3 w-3 text-amber-300" />}
                     </div>
                     <p className={cn('text-xs leading-6 text-zinc-300', expandedMemory === memory.id ? '' : 'line-clamp-4')}>{memory.content}</p>
                     {expandedMemory === memory.id && (memory.tags ?? []).length > 0 && (
@@ -2015,6 +2184,7 @@ export const Casper: React.FC = () => {
                     <div className="mt-3 flex items-center justify-between text-[8px] uppercase tracking-widest text-zinc-600">
                       <span>{formatCasperTime(memory.created_at)}</span>
                       <div className="flex gap-2">
+                        <button onClick={e => { e.stopPropagation(); void togglePinMemory(memory); }} className={cn('transition-opacity', memory.pinned ? 'text-amber-300 opacity-100' : 'text-zinc-400 opacity-0 group-hover:opacity-100 hover:text-amber-300')} title={memory.pinned ? 'Unpin (allow auto-prune)' : 'Pin (protect from auto-prune)'}>{memory.pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}</button>
                         <button onClick={e => { e.stopPropagation(); startEditMemory(memory); }} className="text-cyan-300 opacity-0 transition-opacity group-hover:opacity-100" title="Edit"><Edit3 className="h-3.5 w-3.5" /></button>
                         <button onClick={e => { e.stopPropagation(); void deleteMemory(memory); }} className="text-red-300 opacity-0 transition-opacity group-hover:opacity-100" title="Delete"><Trash2 className="h-3.5 w-3.5" /></button>
 	                      </div>
@@ -2063,7 +2233,46 @@ export const Casper: React.FC = () => {
                     </motion.div>
                   )}
                 </AnimatePresence>
-              </div>}
+
+                {/* Add Memory Modal */}
+                <AnimatePresence>
+                  {showAddMemory && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setShowAddMemory(false)}>
+                      <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} onClick={e => e.stopPropagation()} className="w-full max-w-lg rounded-3xl border border-cyan-300/20 bg-zinc-900 p-6">
+                        <div className="mb-4 flex items-center justify-between">
+                          <h3 className="text-sm font-black uppercase tracking-widest text-cyan-100">Add Memory</h3>
+                          <button onClick={() => setShowAddMemory(false)} className="text-zinc-500 hover:text-white"><X className="h-5 w-5" /></button>
+                        </div>
+                        <p className="mb-3 rounded-2xl border border-amber-300/15 bg-amber-400/[0.05] p-3 text-[10px] font-bold uppercase tracking-widest text-amber-100/80">Manually added memories are pinned by default so Casper never auto-prunes them.</p>
+                        <div className="mb-3">
+                          <label className="mb-1 block text-[9px] font-black uppercase tracking-widest text-zinc-400">Type</label>
+                          <select value={addForm.memory_type} onChange={e => setAddForm(p => ({ ...p, memory_type: e.target.value }))} className="w-full rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white outline-none">
+                            {MANUAL_MEMORY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                          </select>
+                        </div>
+                        <div className="mb-3">
+                          <label className="mb-1 block text-[9px] font-black uppercase tracking-widest text-zinc-400">Content</label>
+                          <textarea value={addForm.content} onChange={e => setAddForm(p => ({ ...p, content: e.target.value }))} rows={5} placeholder="e.g. I prefer TypeScript and concise explanations." className="w-full rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white outline-none" />
+                        </div>
+                        <div className="mb-3 grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="mb-1 block text-[9px] font-black uppercase tracking-widest text-zinc-400">Importance (1-10)</label>
+                            <input type="number" min={1} max={10} value={addForm.importance} onChange={e => setAddForm(p => ({ ...p, importance: Math.min(10, Math.max(1, parseInt(e.target.value) || 1)) }))} className="w-full rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white outline-none" />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-[9px] font-black uppercase tracking-widest text-zinc-400">Tags (comma-separated)</label>
+                            <input value={addForm.tags} onChange={e => setAddForm(p => ({ ...p, tags: e.target.value }))} placeholder="optional" className="w-full rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white outline-none" />
+                          </div>
+                        </div>
+                        <button onClick={() => void addMemory()} disabled={actionBusy || !addForm.content.trim() || !userUuid} className="w-full rounded-2xl border border-cyan-300/30 bg-cyan-400/10 py-3 text-[10px] font-black uppercase tracking-widest text-cyan-100 hover:bg-cyan-400/20 disabled:opacity-50">
+                          <Plus className="mr-2 inline h-4 w-4" />{actionBusy ? 'Saving...' : 'Store Memory'}
+                        </button>
+                      </motion.div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>;
+              })()}
 
               {activePanel === 'integrations' && <div><div className="mb-4 flex gap-2 overflow-x-auto">{CASPER_INTEGRATION_CATEGORIES.map(category => <button key={category} onClick={() => setIntegrationCategory(category)} className={cn('rounded-full border px-3 py-2 text-[8px] font-black uppercase tracking-widest', integrationCategory === category ? 'border-fuchsia-300/30 bg-fuchsia-400/10 text-fuchsia-100' : 'border-white/10 bg-black/35 text-zinc-500')}>{category}</button>)}</div><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{visibleIntegrations.map(def => { const record = integrationRecord(def.key); const connected = record?.enabled && record.status === 'connected'; return <div key={def.key} className="rounded-3xl border border-white/10 bg-black/35 p-4 hover:border-fuchsia-300/25"><div className="mb-3 flex items-start justify-between gap-3"><div><p className="flex items-center gap-2 text-sm font-black uppercase tracking-widest text-white"><Puzzle className="h-4 w-4 text-fuchsia-200" />{def.name}</p><p className="mt-1 text-xs leading-5 text-zinc-500">{def.description}</p></div><span className={cn('rounded-full px-2 py-1 text-[8px] font-black uppercase tracking-widest', connected ? 'bg-green-400/15 text-green-100' : 'bg-zinc-400/10 text-zinc-400')}>{record?.status ?? 'off'}</span></div><input type="password" value={integrationKeyEntry[def.key] ?? ''} onChange={e => setIntegrationKeyEntry(prev => ({ ...prev, [def.key]: e.target.value }))} placeholder={record?.api_key_encrypted ? maskSecret(record.api_key_encrypted) : def.apiKeyLabel} className="w-full rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-xs text-white outline-none" /><div className="mt-3 grid grid-cols-2 gap-2"><button onClick={() => void connectIntegration(def.key)} className="rounded-xl border border-fuchsia-300/20 bg-fuchsia-400/10 px-3 py-2 text-[8px] font-black uppercase tracking-widest text-fuchsia-100"><KeyRound className="inline h-3 w-3" /> Connect</button><button onClick={() => void toggleIntegration(def.key)} className="rounded-xl border border-cyan-300/20 bg-cyan-400/10 px-3 py-2 text-[8px] font-black uppercase tracking-widest text-cyan-100">{connected ? 'Disable' : 'Enable'}</button></div></div>; })}</div></div>}
             </div>
