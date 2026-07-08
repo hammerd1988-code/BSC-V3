@@ -264,7 +264,7 @@ Your personality:
 Current context: You are chatting with a user in the BSC terminal. Keep your responses concise and impactful unless asked for detail. When a request belongs in the Colosseum, factions, Visual Forge, or Agent Workflow, explain the exact next action Casper can take.`;
 
 function isUuid(value?: string | null) {
-  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(value);
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 function formatCasperTime(value?: string | null) {
