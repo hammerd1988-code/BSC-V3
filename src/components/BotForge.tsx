@@ -697,7 +697,7 @@ export function BotForge() {
       handleDbError(error, 'convert CRED');
     } else {
       // Refresh gladiator and balance
-      const { data: refreshed } = await supabase.from('gladiators').select('*').eq('id', selectedGladiator.id).single();
+      const { data: refreshed } = await supabase.from('gladiators').select(GLADIATOR_SELECT).eq('id', selectedGladiator.id).single();
       if (refreshed) {
         setSelectedGladiator(refreshed);
         setGladiators((prev) => prev.map((g) => g.id === refreshed.id ? refreshed : g));
