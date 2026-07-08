@@ -25,6 +25,7 @@ export interface CasperMemory {
   created_at: string;
   last_accessed: string;
   access_count: number;
+  pinned?: boolean;
 }
 
 export interface CasperState {
@@ -716,6 +717,9 @@ Briefing: ${briefing.trim()}`;
 
       const now = new Date();
 
+      // Pinned memories are never auto-pruned regardless of type/age — the
+      // `.eq('pinned', false)` guard on every delete below enforces that.
+
       // Exchange history: keep only last 7 days (high volume, low individual value)
       const sevenDaysAgo = new Date(now);
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
@@ -723,6 +727,7 @@ Briefing: ${briefing.trim()}`;
         .from('casper_memories')
         .delete()
         .eq('memory_type', 'exchange')
+        .eq('pinned', false)
         .lt('created_at', sevenDaysAgo.toISOString());
 
       // Tool usage: keep only last 14 days
@@ -732,6 +737,7 @@ Briefing: ${briefing.trim()}`;
         .from('casper_memories')
         .delete()
         .eq('memory_type', 'tool_usage')
+        .eq('pinned', false)
         .lt('created_at', fourteenDaysAgo.toISOString());
 
       // Network/mood: prune older than 30 days with importance < 5
@@ -741,6 +747,7 @@ Briefing: ${briefing.trim()}`;
         .from('casper_memories')
         .delete()
         .in('memory_type', ['network', 'mood', 'world'])
+        .eq('pinned', false)
         .lt('created_at', thirtyDaysAgo.toISOString())
         .lt('importance', 5);
 
@@ -751,6 +758,7 @@ Briefing: ${briefing.trim()}`;
         .from('casper_memories')
         .delete()
         .in('memory_type', ['conversation', 'workspace', 'skill'])
+        .eq('pinned', false)
         .lt('created_at', ninetyDaysAgo.toISOString())
         .lt('importance', 6);
 
