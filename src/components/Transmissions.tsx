@@ -786,7 +786,7 @@ export const Transmissions: React.FC = () => {
           const fallbackPrompt = fallbackHistory ? `${fallbackHistory}\nUser: ${userMessage}\nCasper:` : userMessage;
           try {
             response = await generateText(fallbackPrompt, undefined, {
-              systemPrompt: 'You are Casper, the ghost-in-the-machine AI assistant of Blood Sweat Code. You are witty, helpful, and speak with a cyberpunk edge. Respond conversationally in DM context.',
+              systemPrompt: 'You are Casper, the ghost-in-the-machine AI assistant of Blood Sweat Code — witty, warm, technically brilliant, and always helpful. You speak with a cyberpunk edge and a genuinely likeable presence. Respond conversationally in DM context.',
               temperature: 0.85,
               maxTokens: 4096,
             });
