@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Download, Film, Image as ImageIcon, Loader2, Play, Send, Sparkles, Wand2, CalendarClock, Layers, Upload, RefreshCw, Scissors, PanelTop, Zap } from 'lucide-react';
+import { useAskCasper } from './AskCasperWidget';
+import { useCasperAction, type CasperSurfaceContext } from '../lib/casperSurface';
 import { getRunwayTask, requestRunwayGeneration, uploadStudioAsset, RunwayRequestError, type RunwayTaskResponse } from '../lib/runway';
 import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
 import { supabase, toDb } from '../supabase';
@@ -140,11 +142,13 @@ function getAssetUrl(result: RunwayTaskResponse): string | null {
 
 export function ContentCreationStudio() {
   const { currentUser } = useAuth();
+  const { setSurfaceContext, clearSurfaceContext } = useAskCasper();
   const [mode, setMode] = useState<StudioMode>('image');
   const [assets, setAssets] = useState<StudioAsset[]>(() => loadAssets());
   const [library, setLibrary] = useState<ForgeLibraryItem[]>(() => loadLibrary());
   const [selectedAssetId, setSelectedAssetId] = useState<string>('');
   const [prompt, setPrompt] = useState('Create a high-impact Blood Sweat Code arena artifact with neon cyan and magenta glitch energy.');
+  const [debouncedPrompt, setDebouncedPrompt] = useState(prompt);
   const [imagePreset, setImagePreset] = useState(IMAGE_PRESETS[0]);
   const [videoPreset, setVideoPreset] = useState(VIDEO_PRESETS[0]);
   const [ratio, setRatio] = useState<typeof RATIOS[number]>('16:9');
@@ -178,6 +182,44 @@ export function ContentCreationStudio() {
     finished: library.filter((item) => item.status === 'finished').length,
     published: library.filter((item) => item.status === 'published').length,
   }), [library]);
+
+  // Debounce the prompt so typing doesn't re-render the Ask Casper widget every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedPrompt(prompt), 500);
+    return () => clearTimeout(t);
+  }, [prompt]);
+
+  // Feed Visual Forge context into Ask Casper so the widget becomes a creation copilot.
+  useEffect(() => {
+    const surfaceContext: CasperSurfaceContext = {
+      surfaceId: 'visual-forge',
+      feature: 'Visual Forge',
+      surface: 'studio',
+      description: 'Visual Forge: image, video, thumbnail, faction propaganda, battle-card, and arena artifact lab.',
+      state: {
+        mode,
+        prompt: debouncedPrompt.slice(0, 240),
+        preset: mode === 'image' ? imagePreset : mode === 'video' ? videoPreset : thumbnailTemplate,
+        ratio: mode === 'video' ? videoRatio : mode === 'thumbnail' ? '16:9' : ratio,
+        duration: mode === 'video' ? duration : null,
+        generating,
+        assetCount: assets.length,
+        libraryCounts,
+      },
+      actions: [
+        { id: 'image', label: 'Image mode', icon: 'ImageIcon', event: { type: 'set-mode', payload: 'image' } },
+        { id: 'video', label: 'Video mode', icon: 'Film', event: { type: 'set-mode', payload: 'video' } },
+        { id: 'thumbnail', label: 'Thumbnail mode', icon: 'PanelTop', event: { type: 'set-mode', payload: 'thumbnail' } },
+        { id: 'generate', label: 'Generate', icon: 'Wand2', event: { type: 'generate' } },
+        { id: 'suggest', label: 'What should I create?', icon: 'Sparkles', prompt: 'What should I create in the Visual Forge right now?' },
+      ],
+    };
+    setSurfaceContext(surfaceContext);
+  }, [mode, debouncedPrompt, imagePreset, videoPreset, thumbnailTemplate, ratio, videoRatio, duration, generating, assets.length, libraryCounts, setSurfaceContext]);
+
+  useEffect(() => {
+    return () => clearSurfaceContext();
+  }, [clearSurfaceContext]);
 
   const addAsset = (asset: StudioAsset) => {
     setAssets((prev) => [asset, ...prev]);
@@ -254,6 +296,34 @@ export function ContentCreationStudio() {
     setStatus('Thumbnail exported to your reusable studio library.');
     return asset;
   };
+
+  // Allow Ask Casper to control the forge: switch modes, presets, and generate assets.
+  const surfaceActionRef = useRef({
+    mode, setMode, setPrompt, setImagePreset, setVideoPreset, generateImage, generateVideo, exportThumbnail,
+  });
+  useEffect(() => {
+    surfaceActionRef.current = { mode, setMode, setPrompt, setImagePreset, setVideoPreset, generateImage, generateVideo, exportThumbnail };
+  }, [mode, setMode, setPrompt, setImagePreset, setVideoPreset, generateImage, generateVideo, exportThumbnail]);
+
+  useCasperAction(
+    'visual-forge',
+    useCallback((event) => {
+      const r = surfaceActionRef.current;
+      const payload = event.payload;
+      if (event.type === 'set-mode' && (payload === 'image' || payload === 'video' || payload === 'thumbnail')) {
+        r.setMode(payload as StudioMode);
+      } else if (event.type === 'set-prompt' && typeof payload === 'string') {
+        r.setPrompt(payload);
+      } else if (event.type === 'set-preset' && typeof payload === 'string') {
+        if (IMAGE_PRESETS.includes(payload)) r.setImagePreset(payload);
+        if (VIDEO_PRESETS.includes(payload)) r.setVideoPreset(payload);
+      } else if (event.type === 'generate') {
+        if (r.mode === 'image') void r.generateImage(false);
+        else if (r.mode === 'video') void r.generateVideo();
+        else if (r.mode === 'thumbnail') void r.exportThumbnail();
+      }
+    }, []),
+  );
 
   const downloadAsset = async (asset = selectedAsset) => {
     if (!asset) return;
