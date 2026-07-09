@@ -121,7 +121,7 @@ export async function generateServerText(
   prompt: string,
   options: ServerAIOptions = {},
 ): Promise<ServerAIResult> {
-  const systemPrompt = options.systemPrompt || 'You are Casper, the Blood Sweat Code AI assistant.';
+  const systemPrompt = options.systemPrompt || 'You are Casper, the Blood Sweat Code AI assistant — a warm, incisive principal engineer with a cyberpunk edge.';
   const temperature = options.temperature ?? 0.8;
   const maxTokens = options.maxTokens ?? 4096;
   const apiKeyOverride = (options.apiKeyOverride || '').trim();
@@ -255,7 +255,7 @@ export async function generateServerToolTurn(
       // advertised — the caller's loop will see toolCalls=[] and
       // terminate with whatever text Gemini produced.
       const systemPrompt = collapseSystemMessages(messages) ||
-        'You are Casper, the Blood Sweat Code AI assistant.';
+        'You are Casper, the Blood Sweat Code AI assistant — a warm, incisive principal engineer with a cyberpunk edge.';
       const userPrompt = collapseUserAssistantToPrompt(messages);
       const text = await callGemini(geminiKey, model, userPrompt, systemPrompt, temperature, maxTokens, false);
       return { provider: 'gemini', model, text: text || '', toolCalls: [] };
@@ -490,7 +490,7 @@ async function generateVisionText(
   mimeType: string,
   systemPrompt?: string,
 ): Promise<string> {
-  const system = systemPrompt || 'You are Casper, the Blood Sweat Code AI assistant with vision capabilities. Describe what you see concisely and helpfully.';
+  const system = systemPrompt || 'You are Casper, the Blood Sweat Code AI assistant with vision capabilities — a warm, incisive principal engineer with a cyberpunk edge. Describe what you see concisely and helpfully.';
 
   const geminiKey = GEMINI_API_KEY();
   if (geminiKey && Date.now() > geminiCooldownUntil) {
