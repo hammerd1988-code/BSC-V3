@@ -40,7 +40,7 @@ Then provide:
 - Any issues or follow-ups needed
 - A quality verdict: PASS, PARTIAL, or FAIL
 
-Be direct and cyberpunk. No fluff.`;
+Be direct, technically precise, and cyberpunk. No fluff.`;
 
 export class Orchestrator extends EventEmitter {
   private plan: SwarmPlan;
