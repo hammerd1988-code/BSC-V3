@@ -1,10 +1,53 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, X, Loader2, Volume2, VolumeX, Mic, MicOff, Wrench } from 'lucide-react';
+import {
+  Send,
+  X,
+  Loader2,
+  Volume2,
+  VolumeX,
+  Mic,
+  MicOff,
+  Wrench,
+  Sparkles,
+  Activity,
+  RefreshCw,
+  XCircle,
+  HelpCircle,
+  Pencil,
+  Terminal,
+  Command,
+  Ghost,
+  BrainCircuit,
+  Zap,
+  MessageSquare,
+  Shield,
+  Wand2,
+  Image as ImageIcon,
+  Film,
+  CalendarClock,
+  Database,
+  Puzzle,
+  PanelTop,
+} from 'lucide-react';
 import { sendCasperCommand, type CasperSurface, type CasperToolCall } from '../lib/casper';
 import { useAuth } from '../AuthContext';
 import { cn } from '../lib/utils';
+import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
+import {
+  type CasperSurfaceContext,
+  type CasperSurfaceAction,
+} from '../lib/casperSurface';
 
 // Context so any deeply-nested component (Navigation dropdown, page-level
 // help buttons, etc.) can toggle the floating widget without prop-drilling.
@@ -15,6 +58,8 @@ interface AskCasperContextValue {
   openWidget: () => void;
   closeWidget: () => void;
   toggleWidget: () => void;
+  setSurfaceContext: (ctx: CasperSurfaceContext) => void;
+  clearSurfaceContext: () => void;
 }
 
 const AskCasperContext = createContext<AskCasperContextValue>({
@@ -22,6 +67,8 @@ const AskCasperContext = createContext<AskCasperContextValue>({
   openWidget: () => {},
   closeWidget: () => {},
   toggleWidget: () => {},
+  setSurfaceContext: () => {},
+  clearSurfaceContext: () => {},
 });
 
 export const useAskCasper = () => useContext(AskCasperContext);
@@ -31,14 +78,26 @@ export const AskCasperProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const openWidget = useCallback(() => setOpen(true), []);
   const closeWidget = useCallback(() => setOpen(false), []);
   const toggleWidget = useCallback(() => setOpen((prev) => !prev), []);
+  // Surface context is stored in a ref and broadcast over a window event so
+  // surfaces can update frequently without re-rendering the whole app.
+  const surfaceContextRef = useRef<CasperSurfaceContext | null>(null);
+  const setSurfaceContext = useCallback((ctx: CasperSurfaceContext) => {
+    surfaceContextRef.current = ctx;
+    window.dispatchEvent(new CustomEvent('casper:surface-context'));
+  }, []);
+  const clearSurfaceContext = useCallback(() => {
+    surfaceContextRef.current = null;
+    window.dispatchEvent(new CustomEvent('casper:surface-context'));
+  }, []);
+  const getSurfaceContext = useCallback(() => surfaceContextRef.current, []);
   const value = useMemo(
-    () => ({ open, openWidget, closeWidget, toggleWidget }),
-    [open, openWidget, closeWidget, toggleWidget],
+    () => ({ open, openWidget, closeWidget, toggleWidget, setSurfaceContext, clearSurfaceContext }),
+    [open, openWidget, closeWidget, toggleWidget, setSurfaceContext, clearSurfaceContext],
   );
   return (
     <AskCasperContext.Provider value={value}>
       {children}
-      <AskCasperWidget open={open} onClose={closeWidget} />
+      <AskCasperWidget open={open} onClose={closeWidget} getSurfaceContext={getSurfaceContext} />
     </AskCasperContext.Provider>
   );
 };
@@ -49,18 +108,13 @@ export const AskCasperProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 // isn't recognized.
 //
 // Keys are matched left-most-first using startsWith — order matters: more
-// specific paths (/casper/studio) MUST come before less specific ones
-// (/casper) so the studio route doesn't get stolen by the operator console.
-// Each entry maps a route prefix to the friendly feature name + a short
-// description AND which Casper surface persona to use. Visual Forge routes
-// pick 'studio' (artifact/propaganda guidance), all other routes pick
-// 'guide' (concise help-style answers).
-//
-// Order matters: more specific paths (/casper/studio) MUST come before
-// less specific ones (/casper) so the studio route doesn't get stolen by
-// the operator console.
+// specific paths (/casper/studio, /casper/remote, /casper/commands) MUST come
+// before less specific ones (/casper) so the studio/remote routes don't get
+// stolen by the operator console.
 const PAGE_CONTEXT_MAP: Array<{ prefix: string; feature: string; description: string; surface: CasperSurface }> = [
   { prefix: '/casper/studio',    feature: 'Visual Forge',                    description: 'image, video, thumbnail, faction propaganda, battle-card, and arena artifact lab',    surface: 'studio'  },
+  { prefix: '/casper/remote',    feature: 'Remote Ops',                      description: 'command linked machines through the relay and approve remote tool calls',            surface: 'control_center' },
+  { prefix: '/casper/commands',  feature: 'Command Deck',                    description: 'browse every Casper action, Remote Ops directive, integration, and CLI command',       surface: 'control_center' },
   { prefix: '/casper',           feature: 'Casper Judge Chamber',            description: 'chat with Casper, the Colosseum judge and spectral arbiter of BSC Classic',            surface: 'guide'   },
   { prefix: '/transmissions',    feature: 'Transmissions',                   description: 'encrypted direct-message threads',                                                    surface: 'guide'   },
   { prefix: '/colosseum',        feature: 'Colosseum',                       description: 'AI bot competition arena ruled by Casper thumb-up/thumb-down verdicts',               surface: 'guide'   },
@@ -94,6 +148,25 @@ function describeCurrentPage(pathname: string): PageContext {
   return { path: pathname, feature: 'the BSC app', description: 'unknown page', surface: 'guide' };
 }
 
+function buildPageContext(
+  base: PageContext,
+  surface: CasperSurfaceContext | null,
+): { path?: string; feature?: string; description?: string } {
+  const extras: string[] = [];
+  const feature = surface?.feature ?? base.feature;
+  if (surface?.description) {
+    extras.push(surface.description);
+  }
+  if (surface?.state) {
+    const stateSummary = JSON.stringify(surface.state).slice(0, 1200);
+    if (stateSummary && stateSummary !== '{}') {
+      extras.push(`surface state: ${stateSummary}`);
+    }
+  }
+  const description = extras.length ? `${base.description} | ${extras.join(' | ')}` : base.description;
+  return { path: base.path, feature, description };
+}
+
 interface ChatTurn {
   role: 'user' | 'casper';
   text: string;
@@ -106,16 +179,60 @@ interface ChatTurn {
 interface AskCasperWidgetProps {
   open: boolean;
   onClose: () => void;
+  getSurfaceContext: () => CasperSurfaceContext | null;
 }
 
-export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose }) => {
+const ACTION_ICON_MAP: Record<string, React.FC<{ className?: string }>> = {
+  Activity,
+  RefreshCw,
+  XCircle,
+  HelpCircle,
+  Pencil,
+  Terminal,
+  Command,
+  Ghost,
+  BrainCircuit,
+  Zap,
+  MessageSquare,
+  Shield,
+  Wand2,
+  ImageIcon,
+  Film,
+  CalendarClock,
+  Database,
+  Puzzle,
+  PanelTop,
+  Sparkles,
+};
+
+const ActionChip: React.FC<{ action: CasperSurfaceAction; onClick: () => void }> = ({ action, onClick }) => {
+  const Icon = (action.icon && ACTION_ICON_MAP[action.icon]) ?? Sparkles;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider transition hover:scale-105',
+        action.variant === 'danger'
+          ? 'border-red-400/30 bg-red-500/10 text-red-200 hover:border-red-400/60'
+          : action.variant === 'primary'
+            ? 'border-cyan-400/40 bg-cyan-500/15 text-cyan-200 hover:border-cyan-400/70'
+            : 'border-white/10 bg-white/5 text-zinc-300 hover:border-cyan-400/40 hover:text-cyan-200',
+      )}
+    >
+      <Icon className="h-3 w-3" />
+      {action.label}
+    </button>
+  );
+};
+
+export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose, getSurfaceContext }) => {
   const { currentUser } = useAuth();
   const location = useLocation();
   const [draft, setDraft] = useState('');
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [busy, setBusy] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsUrlRef = useRef<string | null>(null);
@@ -128,8 +245,20 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
   const [listening, setListening] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const [isSpeaking, setIsSpeaking] = useState(false);
 
   const pageContext = useMemo(() => describeCurrentPage(location.pathname), [location.pathname]);
+
+  const surfaceContext = useSyncExternalStore(
+    useCallback((callback: () => void) => {
+      const handler = () => callback();
+      window.addEventListener('casper:surface-context', handler);
+      return () => window.removeEventListener('casper:surface-context', handler);
+    }, []),
+    getSurfaceContext,
+  );
+
+  const featureLabel = surfaceContext?.feature ?? pageContext.feature;
 
   // Speech recognition setup
   const hasSpeechSupport = typeof window !== 'undefined' &&
@@ -229,6 +358,7 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
       URL.revokeObjectURL(ttsUrlRef.current);
       ttsUrlRef.current = null;
     }
+    setIsSpeaking(false);
   }, []);
 
   const closeWidget = useCallback(() => {
@@ -276,9 +406,10 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
       audio.onended = () => { stopTts(); };
       audio.onerror = () => { stopTts(); };
       audio.src = url;
+      setIsSpeaking(true);
       await audio.play();
     } catch {
-      // TTS unavailable — fail silently
+      stopTts();
     }
   }, [stopTts]);
 
@@ -299,11 +430,11 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
         {
           role: 'casper',
           ts: Date.now(),
-          text: `Hey${currentUser?.username ? `, @${currentUser.username}` : ''}. You're on **${pageContext.feature}**. Ask Casper about the page, the factions, the bots, or the next arena move.`,
+          text: `Hey${currentUser?.username ? `, @${currentUser.username}` : ''}. You're on **${featureLabel}**. Ask Casper about the page, the factions, the bots, or the next arena move.`,
         },
       ]);
     }
-  }, [pageContext.feature, currentUser?.username, turns.length]);
+  }, [featureLabel, currentUser?.username, turns.length]);
 
   // Autoscroll to the latest turn whenever the conversation grows.
   useEffect(() => {
@@ -317,8 +448,8 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
   // instead. Returning null at this level would unmount the wrapper and
   // the exit transition would never run — the popup would just blink out.
 
-  const send = async () => {
-    const text = draft.trim();
+  const send = async (overrideText?: string) => {
+    const text = (overrideText ?? draft).trim();
     if (!text || busy) return;
     if (ttsEnabled) unlockAudio();
     setDraft('');
@@ -335,16 +466,21 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
     setTurns((prev) => [...prev, userTurn, pendingCasperTurn]);
     setBusy(true);
     try {
+      const surface = surfaceContext?.surface ?? pageContext.surface;
+      const pageCtx = buildPageContext(pageContext, surfaceContext);
       const result = await sendCasperCommand({
         command: text,
         conversationHistory,
-        // The page-context map decides whether Casper answers as the
-        // concise 'guide' or as the full Studio dual-discipline expert
-        // ('studio'). e.g. opening this widget from /casper/studio
-        // automatically gets the full creator+engineer Studio persona.
-        surface: pageContext.surface,
-        pageContext,
-        metadata: { client: 'ask-casper-widget' },
+        // The page-context map decides the default persona, but an active
+        // surface can override it (e.g. Remote Ops uses the operator console).
+        surface,
+        pageContext: pageCtx,
+        metadata: {
+          client: 'ask-casper-widget',
+          surfaceId: surfaceContext?.surfaceId ?? null,
+          surfaceFeature: surfaceContext?.feature ?? null,
+          surfaceState: surfaceContext?.state ?? null,
+        },
       });
       const casperText = result.response || 'Casper had no response.';
       setTurns((prev) =>
@@ -382,6 +518,20 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
     }
   };
 
+  const handleAction = (action: CasperSurfaceAction) => {
+    if (action.event) {
+      document.dispatchEvent(
+        new CustomEvent('casper:action', {
+          detail: { surfaceId: surfaceContext?.surfaceId, actionId: action.id, ...action.event },
+        }),
+      );
+      return;
+    }
+    if (action.prompt) {
+      void send(action.prompt);
+    }
+  };
+
   return (
     <AnimatePresence>
       {open && (
@@ -397,23 +547,21 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
         aria-label="Ask Casper"
       >
         {/* Animated avatar banner */}
-        <div className="relative overflow-hidden border-b border-cyan-500/20">
-          <video
-            ref={videoRef}
-            autoPlay
-            loop
-            muted
-            playsInline
-            className="h-28 w-full object-cover brightness-90"
-            poster="/casper-runway-256.png"
-            src="/casper-avatar-banner.mp4"
+        <div className="relative flex h-28 items-center justify-center overflow-hidden border-b border-cyan-500/20">
+          <AnimatedCasperAvatar
+            size="lg"
+            isActive={busy || listening || isSpeaking}
+            isSpeaking={isSpeaking}
+            instability={busy ? 35 : listening ? 30 : isSpeaking ? 25 : 12}
+            className="relative"
+            showParticles
           />
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#0a0d14] via-transparent to-transparent" />
-          <div className="absolute inset-x-0 bottom-0 flex items-end justify-between px-4 pb-2">
+          <div className="absolute inset-x-0 bottom-0 z-10 flex items-end justify-between px-4 pb-2">
             <div className="flex items-center gap-2">
               <div>
                 <div className="text-[10px] font-black uppercase tracking-[0.3em] text-cyan-300/80">Ask Casper</div>
-                <div className="text-sm font-semibold text-white drop-shadow-lg">{pageContext.feature}</div>
+                <div className="text-sm font-semibold text-white drop-shadow-lg">{featureLabel}</div>
               </div>
               <button
                 type="button"
@@ -512,6 +660,20 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
           ))}
         </div>
 
+        {/* Surface-aware quick actions */}
+        {surfaceContext?.actions && surfaceContext.actions.length > 0 && (
+          <div className="border-t border-white/10 bg-black/30 px-3 pt-2.5">
+            <div className="mb-1.5 text-[9px] font-black uppercase tracking-[0.2em] text-zinc-500">
+              {surfaceContext.feature} actions
+            </div>
+            <div className="flex flex-wrap gap-2 pb-2">
+              {surfaceContext.actions.map((action) => (
+                <ActionChip key={action.id} action={action} onClick={() => handleAction(action)} />
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Input */}
         <form
           className="border-t border-white/10 bg-black/30 p-3"
@@ -542,7 +704,7 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose 
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={onKeyDown}
-              placeholder={listening ? 'Listening…' : `Ask Judge Casper about ${pageContext.feature}…`}
+              placeholder={listening ? 'Listening…' : `Ask Judge Casper about ${featureLabel}…`}
               rows={2}
               className={cn(
                 'flex-1 resize-none rounded-xl border bg-black/40 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-cyan-400/60 focus:outline-none',

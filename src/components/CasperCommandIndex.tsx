@@ -50,6 +50,7 @@ import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
 import { sendCasperCommand, type CasperCommandResponse, type CasperSurface } from '../lib/casper';
 import { DEFAULT_QUICK_ACTIONS, type QuickAction } from '../lib/casperQuickActions';
 import { AVAILABLE_CASPER_INTEGRATIONS } from '../lib/casperIntegrations';
+import { useCasperAction, type CasperSurfaceContext } from '../lib/casperSurface';
 import { cn } from '../lib/utils';
 import { haptic } from '../lib/mobile';
 
@@ -841,9 +842,10 @@ const CommandCard: React.FC<CommandCardProps> = ({
 export const CasperCommandIndex: React.FC = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
-  const { openWidget } = useAskCasper();
+  const { openWidget, setSurfaceContext, clearSurfaceContext } = useAskCasper();
 
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState('All');
   const [result, setResult] = useState<CasperCommandResponse | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -855,6 +857,55 @@ export const CasperCommandIndex: React.FC = () => {
   const armTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounce search so the Ask Casper surface context doesn't re-render on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 400);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // Feed the Command Deck context into Ask Casper so the widget can help navigate
+  // and filter the deck.
+  useEffect(() => {
+    const surfaceContext: CasperSurfaceContext = {
+      surfaceId: 'command-deck',
+      feature: 'Command Deck',
+      surface: 'control_center',
+      description: 'Browse every Casper action, Remote Ops directive, integration, and CLI command.',
+      state: {
+        search: debouncedSearch,
+        category: activeCategory,
+        totalCommands: ALL_COMMANDS.length,
+      },
+      actions: [
+        { id: 'open-remote', label: 'Open Remote Ops', icon: 'Terminal', event: { type: 'navigate', payload: '/casper/remote' } },
+        { id: 'open-casper', label: 'Open Neural Chat', icon: 'Ghost', event: { type: 'navigate', payload: '/casper' } },
+        { id: 'filter-remote', label: 'Remote Ops commands', icon: 'RefreshCw', event: { type: 'filter', payload: 'Remote Ops' } },
+        { id: 'filter-integrations', label: 'Integrations', icon: 'Puzzle', event: { type: 'filter', payload: 'Integrations' } },
+        { id: 'what-can-you-do', label: 'What can you do?', icon: 'HelpCircle', prompt: 'What can I do from the Command Deck?' },
+      ],
+    };
+    setSurfaceContext(surfaceContext);
+  }, [debouncedSearch, activeCategory, setSurfaceContext]);
+
+  useEffect(() => {
+    return () => clearSurfaceContext();
+  }, [clearSurfaceContext]);
+
+  useCasperAction(
+    'command-deck',
+    useCallback(
+      (event) => {
+        if (event.type === 'navigate' && typeof event.payload === 'string') {
+          navigate(event.payload);
+        } else if (event.type === 'filter' && typeof event.payload === 'string') {
+          setActiveCategory(event.payload);
+          setSearch('');
+        }
+      },
+      [navigate, setActiveCategory, setSearch],
+    ),
+  );
 
   const searchLower = search.trim().toLowerCase();
 
