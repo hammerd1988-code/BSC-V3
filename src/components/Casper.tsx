@@ -6,7 +6,7 @@ import {
   AlertTriangle, Activity, Mic, MicOff, Volume2, X, Settings,
   Lock, Eye, EyeOff, Server, BrainCircuit, ChevronDown, Crown, Ghost, User, Cpu,
   CalendarClock, Puzzle, KeyRound, Play, Pause, Plus, Search, Save, Database, Shield,
-  Camera, CameraOff, SwitchCamera, Globe, Edit3, Pin, PinOff, BarChart3, CheckSquare, Square
+  Camera, CameraOff, SwitchCamera, Globe, Edit3, Pin, PinOff, BarChart3, CheckSquare, Square, Command
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { generateText } from '../lib/ai';
@@ -310,6 +310,14 @@ const CASPER_CORE_SURFACES = [
     action: 'Open Forge',
     icon: BrainCircuit,
     route: '/casper/studio',
+  },
+  {
+    title: 'Command Deck',
+    label: 'Actions, directives, and commands',
+    description: 'Browse every Casper action, Remote Ops directive, integration, and CLI command in one place.',
+    action: 'Open Deck',
+    icon: Command,
+    route: '/casper/commands',
   },
 ];
 
@@ -2044,7 +2052,7 @@ export const Casper: React.FC = () => {
             </div>
             <span className="rounded-full border border-fuchsia-300/25 bg-fuchsia-400/10 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-fuchsia-100">Thumb up / thumb down authority</span>
           </div>
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
             {CASPER_CORE_SURFACES.map((surface) => {
               const Icon = surface.icon;
               return (

@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { isNativeApp } from '../lib/mobile';
 import { useRemoteOps } from './casper/useRemoteOps';
@@ -17,6 +18,16 @@ export const CasperRemoteOps: React.FC = () => {
   const { currentUser } = useAuth();
   const isMobile = useIsMobileLayout();
   const ctrl = useRemoteOps();
+  const [searchParams] = useSearchParams();
+  const [commandSeeded, setCommandSeeded] = useState(false);
+
+  useEffect(() => {
+    const commandFromUrl = searchParams.get('command');
+    if (!commandSeeded && commandFromUrl) {
+      ctrl.setCommand(commandFromUrl);
+      setCommandSeeded(true);
+    }
+  }, [searchParams, commandSeeded, ctrl.setCommand]);
 
   if (!currentUser) {
     return (
