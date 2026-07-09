@@ -16,6 +16,8 @@ import { cn } from '../lib/utils';
 import { casperAuthFetch } from '../lib/casperApi';
 import { formatDistanceToNow } from 'date-fns';
 import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
+import { useAskCasper } from './AskCasperWidget';
+import { useCasperAction, type CasperSurfaceContext } from '../lib/casperSurface';
 // State-of-the-art realtime conversation orb. Lazy-loaded so its three.js bundle
 // (~150kb gz) only ships when a user actually opens voice mode, keeping the
 // main feed/app bundle lean.
@@ -417,6 +419,7 @@ export const Casper: React.FC = () => {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
   const { canAccess, recordUsage } = useSubscription();
+  const { setSurfaceContext, clearSurfaceContext } = useAskCasper();
   const [upgradeGate, setUpgradeGate] = useState<FeatureGateResult | null>(null);
   const [aiSettings, setAiSettings] = useState<any>(currentUser?.ai_settings || {});
   const [showAiCore, setShowAiCore] = useState(false);
@@ -1573,6 +1576,51 @@ export const Casper: React.FC = () => {
   }, [playBooLaugh, speakOnce, unlockPersistentAudio, canAccess]);
 
   useEffect(() => () => { exitVoiceMode(); stopCamera(); }, [exitVoiceMode, stopCamera]);
+
+  // Feed Casper context into Ask Casper so the floating widget can navigate the
+  // control center and switch panels.
+  useEffect(() => {
+    const model = resolveCasperModel(aiCoreForm.model, aiCoreForm.customModelId);
+    const surfaceContext: CasperSurfaceContext = {
+      surfaceId: 'casper',
+      feature: 'Neural Chat',
+      surface: 'guide',
+      description: 'Casper neural chat and control center.',
+      state: {
+        activePanel,
+        showControlCenter,
+        model: model ?? 'platform_default',
+      },
+      actions: [
+        { id: 'missions', label: 'Missions', icon: 'Shield', event: { type: 'switch-panel', payload: 'missions' } },
+        { id: 'routines', label: 'Routines', icon: 'CalendarClock', event: { type: 'switch-panel', payload: 'routines' } },
+        { id: 'memories', label: 'Memories', icon: 'Database', event: { type: 'switch-panel', payload: 'memories' } },
+        { id: 'integrations', label: 'Integrations', icon: 'Puzzle', event: { type: 'switch-panel', payload: 'integrations' } },
+        { id: 'control-center', label: 'Control Center', icon: 'Command', event: { type: 'toggle-control-center' } },
+        { id: 'summarize', label: 'Summarize activity', icon: 'Activity', prompt: 'Summarize my current Casper missions, routines, memories, and integrations.' },
+      ],
+    };
+    setSurfaceContext(surfaceContext);
+  }, [activePanel, showControlCenter, aiCoreForm.model, aiCoreForm.customModelId, setSurfaceContext]);
+
+  useEffect(() => {
+    return () => clearSurfaceContext();
+  }, [clearSurfaceContext]);
+
+  useCasperAction(
+    'casper',
+    useCallback(
+      (event) => {
+        if (event.type === 'switch-panel' && typeof event.payload === 'string') {
+          setActivePanel(event.payload as UserPanel);
+          setShowControlCenter(true);
+        } else if (event.type === 'toggle-control-center') {
+          setShowControlCenter((prev) => !prev);
+        }
+      },
+      [setActivePanel, setShowControlCenter],
+    ),
+  );
 
   const sendMessage = useCallback(async () => {
     const text = input.trim();
