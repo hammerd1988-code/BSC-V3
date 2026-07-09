@@ -653,6 +653,18 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose,
                         ))}
                       </div>
                     )}
+                    {turn.role === 'casper' && !turn.pending && !turn.error && (
+                      <button
+                        type="button"
+                        onClick={() => { void speakText(turn.text); }}
+                        className="mt-1.5 inline-flex items-center gap-1.5 self-start rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-cyan-200 transition hover:border-cyan-400/60 hover:bg-cyan-500/20 hover:scale-105"
+                        aria-label="Replay Casper"
+                        title="Replay Casper"
+                      >
+                        <Volume2 className="h-3 w-3" />
+                        Replay
+                      </button>
+                    )}
                   </>
                 )}
               </div>
