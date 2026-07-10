@@ -79,7 +79,7 @@ export interface RemoteOpsController {
   setLinkCode: (value: string) => void;
   linkStatus: string | null;
   error: string | null;
-  revokingId: string | null;
+  revokingId: Set<string>;
   logRef: React.RefObject<HTMLDivElement | null>;
   refreshMachines: () => Promise<void>;
   dispatchDirective: (text?: string) => Promise<void>;
@@ -108,7 +108,7 @@ export function useRemoteOps(): RemoteOpsController {
   const [linkCode, setLinkCode] = useState('');
   const [linkStatus, setLinkStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [revokingId, setRevokingId] = useState<Set<string>>(new Set());
   const [uploading, setUploading] = useState(false);
   const historyRef = useRef<RelayConversationTurn[]>([]);
   const logRef = useRef<HTMLDivElement | null>(null);
@@ -297,7 +297,7 @@ const refreshMachines = useCallback(async () => {
   }, [linkCode, refreshMachines]);
 
   const revoke = useCallback(async (machineId: string) => {
-    setRevokingId(machineId);
+    setRevokingId((prev) => new Set([...prev, machineId]));
     setError(null);
     try {
       await revokeRelayMachine(machineId);
@@ -305,10 +305,10 @@ const refreshMachines = useCallback(async () => {
       setMachines((prev) => prev.filter((m) => m.machineId !== machineId));
       setSelectedMachineId((prev) => (prev === machineId ? null : prev));
       await refreshMachines();
-    } catch (e: any) {
-      setError(`Failed to unlink machine: ${e.message}`);
+    } catch (e: unknown) {
+      setError(`Failed to unlink machine: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
-      setRevokingId(null);
+      setRevokingId((prev) => { const next = new Set(prev); next.delete(machineId); return next; });
     }
   }, [refreshMachines]);
 
