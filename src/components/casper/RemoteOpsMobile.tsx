@@ -256,7 +256,7 @@ onKeyDown={(e) => {
                       </span>
                       <button
                         onClick={(e) => { e.stopPropagation(); handleRevoke(m.machineId); }}
-                        disabled={revokingId === m.machineId}
+                        disabled={revokingId.has(m.machineId)}
                         className={cn(
                           'grid h-9 shrink-0 place-items-center rounded-full transition active:scale-90 disabled:opacity-60',
                           revokeArmed === m.machineId
@@ -265,7 +265,7 @@ onKeyDown={(e) => {
                         )}
                         aria-label={revokeArmed === m.machineId ? `Confirm unlink ${m.machineName}` : `Unlink ${m.machineName}`}
                       >
-                        {revokingId === m.machineId ? (
+                        {revokingId.has(m.machineId) ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
                         ) : revokeArmed === m.machineId ? (
                           <>
