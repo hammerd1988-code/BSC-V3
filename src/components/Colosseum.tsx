@@ -1986,6 +1986,11 @@ function isSapphireGladiator(gladiator?: Gladiator | null) {
   );
 }
 
+function findCanonicalSapphire(gladiators: Gladiator[]) {
+  return gladiators.find((g) => String(g.id).toLowerCase() === SAPPHIRE_GLADIATOR_ID)
+    ?? gladiators.find(isSapphireGladiator);
+}
+
 function buildCombatChallengePrompt(type: ChallengeType, challenger: Gladiator, defender: Gladiator) {
   const challenge = challengeMeta(type);
   const directive = type === 'speed_round'
@@ -2276,7 +2281,7 @@ function avatarUrlForGladiator(gladiator: Gladiator) {
   return `https://api.dicebear.com/7.x/${style}/svg?seed=${encodeURIComponent(seed)}&backgroundColor=0a0a0f&size=256`;
 }
 
-function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active }: { gladiator?: Gladiator; size?: 'sm' | 'md' | 'lg' | 'xl'; label?: string; active?: boolean }) {
+function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active, onClick }: { gladiator?: Gladiator; size?: 'sm' | 'md' | 'lg' | 'xl'; label?: string; active?: boolean; onClick?: () => void }) {
   const glow = gladiator?.glow_color ?? '#ff1744';
   const avatarUrl = gladiator ? avatarUrlForGladiator(gladiator) : '';
   const sizeClass = size === 'xl' ? 'h-40 w-40' : size === 'lg' ? 'h-28 w-28' : size === 'sm' ? 'h-20 w-20' : 'h-24 w-24';
@@ -2292,8 +2297,12 @@ function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active }: { gl
           scale: active ? [1, 1.045, 1] : [1, 1.025, 1],
         }}
         transition={{ duration, repeat: Infinity, ease: 'easeInOut' }}
-        className={cn('group relative grid place-items-center overflow-hidden rounded-[1.65rem] border border-white/15 bg-zinc-950', sizeClass)}
+        className={cn('group relative grid place-items-center overflow-hidden rounded-[1.65rem] border border-white/15 bg-zinc-950', onClick ? 'cursor-pointer' : '', sizeClass)}
         style={{ boxShadow: `0 0 34px ${glow}55`, transformStyle: 'preserve-3d' }}
+        onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
+        role={onClick ? 'button' : undefined}
+        tabIndex={onClick ? 0 : undefined}
+        aria-label={onClick && gladiator ? `Inspect ${gladiator.name}` : undefined}
       >
         <div className="pointer-events-none absolute inset-0 opacity-45" style={{ background: `radial-gradient(circle at 50% 0%, ${glow}55, transparent 52%)` }} />
         {avatarUrl ? (
@@ -3394,7 +3403,7 @@ function RoundScoreBar({ label, score, maxScore, color, round }: { label: string
   );
 }
 
-function GladiatorCard({ gladiator, active, onSelect, actionLabel, onAction }: { gladiator: Gladiator; active?: boolean; onSelect?: () => void; actionLabel?: string; onAction?: () => void }) {
+function GladiatorCard({ gladiator, active, onSelect, actionLabel, onAction, onInspect }: { gladiator: Gladiator; active?: boolean; onSelect?: () => void; actionLabel?: string; onAction?: () => void; onInspect?: () => void }) {
   const badge = badgeFor(gladiator);
   const BadgeIcon = badge.icon;
   const profile = gladiator.botProfile;
@@ -3418,7 +3427,7 @@ function GladiatorCard({ gladiator, active, onSelect, actionLabel, onAction }: {
       <div className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/55 p-3">
         <div className="pointer-events-none absolute inset-0 opacity-35" style={{ background: `linear-gradient(135deg, ${gladiator.glow_color}33, transparent 45%, rgba(255,255,255,0.08))` }} />
         <div className="relative flex flex-col items-center gap-3">
-          <AnimatedGladiatorAvatar gladiator={gladiator} size="xl" label={gladiator.name} active={active} />
+          <AnimatedGladiatorAvatar gladiator={gladiator} size="xl" label={gladiator.name} active={active} onClick={onInspect} />
           <div className="rounded-full border border-white/10 bg-black/70 px-3 py-1 text-[8px] font-black uppercase tracking-[0.22em] text-cyan-100">
             Browseable 2.5s animated persona avatar
           </div>
@@ -3757,14 +3766,14 @@ function VictoryOverlay({ winnerName, loserName, winnerGlow, userWon }: { winner
   );
 }
 
-function CombatantPortrait({ gladiator, label }: { gladiator?: Gladiator; label: string }) {
+function CombatantPortrait({ gladiator, label, onInspect }: { gladiator?: Gladiator; label: string; onInspect?: (gladiator: Gladiator) => void }) {
   const glow = gladiator?.glow_color ?? '#ff1744';
 
   return (
     <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-black/70 p-4">
       <div className="pointer-events-none absolute inset-0 opacity-30" style={{ background: `radial-gradient(circle at 18% 18%, ${glow}66, transparent 34%)` }} />
       <div className="relative flex items-center gap-4">
-        <AnimatedGladiatorAvatar gladiator={gladiator} size="sm" active />
+        <AnimatedGladiatorAvatar gladiator={gladiator} size="sm" active onClick={gladiator && onInspect ? () => onInspect(gladiator) : undefined} />
         <div className="min-w-0">
           <p className="text-[9px] font-black uppercase tracking-[0.28em] text-zinc-500">{label}</p>
           <h3 className="mt-1 truncate text-base font-black uppercase tracking-[0.18em] text-white">{gladiator?.name ?? 'Unknown Combatant'}</h3>
@@ -3888,6 +3897,7 @@ function ArenaStage({
   replayProgress,
   challengerProgress,
   defenderProgress,
+  onInspect,
 }: {
   challenger?: Gladiator;
   defender?: Gladiator;
@@ -3895,6 +3905,7 @@ function ArenaStage({
   replayProgress: number;
   challengerProgress?: number;
   defenderProgress?: number;
+  onInspect?: (gladiator: Gladiator) => void;
 }) {
   const meta = challengeMeta(match.challenge_type);
   const Icon = meta.icon;
@@ -3974,7 +3985,7 @@ function ArenaStage({
             transition={{ duration: Math.max(1.4, 2.4 - battleHeat * 0.01), repeat: Infinity, ease: 'easeInOut' }}
             className="flex justify-center md:justify-start"
           >
-            <AnimatedGladiatorAvatar gladiator={challenger} size="xl" label={challenger?.name ?? 'Red Corner'} active />
+            <AnimatedGladiatorAvatar gladiator={challenger} size="xl" label={challenger?.name ?? 'Red Corner'} active onClick={challenger && onInspect ? () => onInspect(challenger) : undefined} />
           </motion.div>
 
           <div className="relative mx-auto grid h-36 w-36 place-items-center">
@@ -4027,7 +4038,7 @@ function ArenaStage({
             transition={{ duration: Math.max(1.35, 2.35 - battleHeat * 0.01), repeat: Infinity, ease: 'easeInOut', delay: 0.25 }}
             className="flex justify-center md:justify-end"
           >
-            <AnimatedGladiatorAvatar gladiator={defender} size="xl" label={defender?.name ?? 'Shadow Cage'} active />
+            <AnimatedGladiatorAvatar gladiator={defender} size="xl" label={defender?.name ?? 'Shadow Cage'} active onClick={defender && onInspect ? () => onInspect(defender) : undefined} />
           </motion.div>
         </div>
 
@@ -4193,7 +4204,7 @@ function LiveBattleCard({ match, challenger, defender, now, onSelect }: { match:
   );
 }
 
-function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSelectMatch, userGladiatorId, whisperUsed, onWhisperUsed, onCoachingMessage, onSkipCoaching }: {
+function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSelectMatch, userGladiatorId, whisperUsed, onWhisperUsed, onCoachingMessage, onSkipCoaching, onInspectGladiator }: {
   matches: MatchRow[];
   gladiatorById: Map<string, Gladiator>;
   simulation?: SimulationState | null;
@@ -4204,6 +4215,7 @@ function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSele
   onWhisperUsed: () => void;
   onCoachingMessage: (text: string) => void;
   onSkipCoaching: () => void;
+  onInspectGladiator?: (gladiator: Gladiator) => void;
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedMatchId = searchParams.get('match');
@@ -4440,10 +4452,11 @@ function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSele
                     replayProgress={replayProgress}
                     challengerProgress={challengerProgress}
                     defenderProgress={defenderProgress}
+                    onInspect={onInspectGladiator}
                   />
                   <div className="grid gap-4 md:grid-cols-2">
-                    <CombatantPortrait label="Red Corner" gladiator={challenger} />
-                    <CombatantPortrait label="Shadow Cage" gladiator={defender} />
+                    <CombatantPortrait label="Red Corner" gladiator={challenger} onInspect={onInspectGladiator} />
+                    <CombatantPortrait label="Shadow Cage" gladiator={defender} onInspect={onInspectGladiator} />
                   </div>
 
                   {/* Round indicator for multi-round sandbox battles */}
@@ -4849,12 +4862,14 @@ function BattleWatchPanel({
   onClose,
   onCoachingMessage,
   onSkipCoaching,
+  onInspectGladiator,
 }: {
   simulation: SimulationState;
   gladiatorById: Map<string, Gladiator>;
   onClose: () => void;
   onCoachingMessage: (text: string) => void;
   onSkipCoaching: () => void;
+  onInspectGladiator?: (gladiator: Gladiator) => void;
 }) {
   const challenger = gladiatorById.get(simulation.challengerId);
   const defender = gladiatorById.get(simulation.defenderId);
@@ -4909,7 +4924,14 @@ function BattleWatchPanel({
         <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
           {/* Challenger */}
           <div className="flex items-center gap-3">
-            <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-full border-2" style={{ borderColor: challenger?.glow_color ?? '#ff1744', boxShadow: `0 0 20px ${challenger?.glow_color ?? '#ff1744'}44` }}>
+            <div
+              className={cn('relative h-12 w-12 shrink-0 overflow-hidden rounded-full border-2', onInspectGladiator && challenger ? 'cursor-pointer' : '')}
+              style={{ borderColor: challenger?.glow_color ?? '#ff1744', boxShadow: `0 0 20px ${challenger?.glow_color ?? '#ff1744'}44` }}
+              onClick={() => challenger && onInspectGladiator?.(challenger)}
+              role={onInspectGladiator && challenger ? 'button' : undefined}
+              tabIndex={onInspectGladiator && challenger ? 0 : undefined}
+              aria-label={onInspectGladiator && challenger ? `Inspect ${challenger.name}` : undefined}
+            >
               {challenger ? <img src={avatarUrlForGladiator(challenger)} alt="" className="h-full w-full object-cover" /> : <Bot className="h-full w-full p-2 text-zinc-500" />}
             </div>
             <div>
@@ -4928,7 +4950,14 @@ function BattleWatchPanel({
               <p className="text-xs font-black uppercase tracking-[0.14em] text-white">{defender?.name ?? 'Unknown'}</p>
               <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">{defender?.wins ?? 0}W / {defender?.losses ?? 0}L</p>
             </div>
-            <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-full border-2" style={{ borderColor: defender?.glow_color ?? '#00e5ff', boxShadow: `0 0 20px ${defender?.glow_color ?? '#00e5ff'}44` }}>
+            <div
+              className={cn('relative h-12 w-12 shrink-0 overflow-hidden rounded-full border-2', onInspectGladiator && defender ? 'cursor-pointer' : '')}
+              style={{ borderColor: defender?.glow_color ?? '#00e5ff', boxShadow: `0 0 20px ${defender?.glow_color ?? '#00e5ff'}44` }}
+              onClick={() => defender && onInspectGladiator?.(defender)}
+              role={onInspectGladiator && defender ? 'button' : undefined}
+              tabIndex={onInspectGladiator && defender ? 0 : undefined}
+              aria-label={onInspectGladiator && defender ? `Inspect ${defender.name}` : undefined}
+            >
               {defender ? <img src={avatarUrlForGladiator(defender)} alt="" className="h-full w-full object-cover" /> : <Bot className="h-full w-full p-2 text-zinc-500" />}
             </div>
           </div>
@@ -5120,11 +5149,13 @@ export const Colosseum: React.FC = () => {
   const [botRosterSearch, setBotRosterSearch] = useState('');
   const [botRosterDifficulty, setBotRosterDifficulty] = useState<'all' | BotDifficulty>('all');
   const opponentRosterRef = React.useRef<HTMLElement>(null);
+  const liveArenaRef = React.useRef<HTMLDivElement>(null);
   const [challengeType, setChallengeType] = useState<ChallengeType>('speed_round');
   const [simulation, setSimulation] = useState<SimulationState | null>(null);
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(searchParams.get('match'));
   const [challengeModalOpen, setChallengeModalOpen] = useState(false);
   const [countdown, setCountdown] = useState(0);
+  const [challengeNonce, setChallengeNonce] = useState(Date.now());
   const [userSolution, setUserSolution] = useState('');
   const [latestBotSolution, setLatestBotSolution] = useState('');
   const [battleResult, setBattleResult] = useState<BattleResultState | null>(null);
@@ -5324,13 +5355,17 @@ export const Colosseum: React.FC = () => {
   const activeMatches = useMemo(() => matches.filter((match) => !match.completed_at), [matches]);
   const recentMatches = useMemo(() => matches.filter((match) => match.completed_at).slice(0, 6), [matches]);
   const sapphireWaitingBattles = useMemo(() => {
-    const sapphire = gladiators.find(isSapphireGladiator);
-    if (!sapphire) return [];
-    return activeMatches.filter((match) => match.challenger_id !== sapphire.id && match.defender_id !== sapphire.id);
-  }, [activeMatches, gladiators]);
+    const sapphire = findCanonicalSapphire(gladiators);
+    if (!sapphire || !currentUser) return [];
+    return activeMatches.filter((match) => {
+      if (match.challenger_id === sapphire.id || match.defender_id === sapphire.id) return false;
+      const challenger = gladiatorById.get(match.challenger_id);
+      return challenger?.user_id === currentUser.id;
+    });
+  }, [activeMatches, gladiators, currentUser?.id, gladiatorById]);
   const selectedGladiator = selectedGladiatorId ? gladiatorById.get(selectedGladiatorId) : null;
   const selectedOpponent = selectedOpponentId ? gladiatorById.get(selectedOpponentId) : null;
-  const challengeSeed = useMemo(() => `${selectedOpponent?.id ?? 'none'}-${challengeType}-${Date.now()}`, [selectedOpponent?.id, challengeType]);
+  const challengeSeed = useMemo(() => `${selectedOpponentId ?? 'none'}-${challengeType}-${challengeNonce}`, [selectedOpponentId, challengeType, challengeNonce]);
   const selectedCodingChallenge = useMemo(() => challengeFor(selectedOpponent?.botProfile, challengeType, challengeSeed), [selectedOpponent?.botProfile, challengeType, challengeSeed]);
   const selectedChallengeMeta = challengeMeta(challengeType);
   const battleInProgress = simulation?.status === 'booting' || simulation?.status === 'running';
@@ -5355,17 +5390,50 @@ export const Colosseum: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [countdown]);
 
+  const handleChallengeType = (next: ChallengeType) => {
+    const nonce = Date.now();
+    const seed = `${selectedOpponentId ?? 'none'}-${next}-${nonce}`;
+    setChallengeType(next);
+    setChallengeNonce(nonce);
+    setUserSolution(challengeFor(selectedOpponent?.botProfile, next, seed).starter);
+  };
+
+  const handleSelectOpponent = (id: string) => {
+    const opponent = gladiatorById.get(id);
+    const nonce = Date.now();
+    const seed = `${id}-${challengeType}-${nonce}`;
+    setSelectedOpponentId(id);
+    setChallengeNonce(nonce);
+    setUserSolution(challengeFor(opponent?.botProfile, challengeType, seed).starter);
+  };
+
   const openBotChallenge = (bot: Gladiator) => {
     if (!selectedGladiatorId) {
       const mine = gladiators.find((gladiator) => gladiator.user_id === currentUser?.id && gladiator.id !== bot.id);
       if (mine) setSelectedGladiatorId(mine.id);
     }
+    const nonce = Date.now();
+    const seed = `${bot.id}-${challengeType}-${nonce}`;
     setSelectedOpponentId(bot.id);
+    setChallengeNonce(nonce);
     setChallengeModalOpen(true);
     setCountdown(3);
     setLatestBotSolution('');
     setBattleResult(null);
-    setUserSolution(challengeFor(bot.botProfile, challengeType).starter);
+    setUserSolution(challengeFor(bot.botProfile, challengeType, seed).starter);
+  };
+
+  const handleActiveMatchClick = (match: MatchRow) => {
+    selectMatchAndSync(match.id, true);
+  };
+
+  const selectMatchAndSync = (matchId: string | null, scroll = false) => {
+    setSelectedMatchId(matchId);
+    const nextParams = new URLSearchParams(searchParams);
+    if (matchId) nextParams.set('match', matchId);
+    else nextParams.delete('match');
+    setSearchParams(nextParams);
+    if (scroll && matchId) liveArenaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const ensureUserGladiator = async (opponentId?: string) => {
@@ -5613,7 +5681,7 @@ export const Colosseum: React.FC = () => {
         `${defender.name} answers from the shadow cage.`,
       ];
       const bootLogs = [...logs, 'Private AI cores queued. Gate opens while server-side solutions warm up.'];
-      setSelectedMatchId(match.id);
+      selectMatchAndSync(match.id, true);
       // Sound effects + Casper commentary on battle start
       playDialUpSound();
       setTimeout(() => {
@@ -6015,23 +6083,49 @@ export const Colosseum: React.FC = () => {
 
   const letSapphireEnterWaitingBattle = async (match: MatchRow) => {
     const challenger = gladiatorById.get(match.challenger_id);
-    const sapphire = gladiators.find(isSapphireGladiator);
+    const sapphire = findCanonicalSapphire(gladiators);
     if (!challenger || !sapphire || starting || battleInProgress) return;
-    const existingDefender = gladiatorById.get(match.defender_id);
-    const codingChallenge = challengeFor(sapphire.botProfile, match.challenge_type);
-    const submittedSolution = WAITING_BATTLE_SAPPHIRE_STUB_SOLUTION;
+    if (challenger.user_id !== currentUser?.id) {
+      setNotice('Only the challenger who opened the pit can let Sapphire answer it.');
+      return;
+    }
+    const baseReplay = (match.replay_data && typeof match.replay_data === 'object') ? match.replay_data : {};
+    const baseCodingChallenge = challengeFor(sapphire.botProfile, match.challenge_type);
+    const codingChallenge: CodingChallenge = baseReplay.challenge_title
+      ? {
+        ...baseCodingChallenge,
+        title: String(baseReplay.challenge_title),
+        prompt: String(baseReplay.challenge_prompt),
+        expected: String(baseReplay.expected_solution_signals),
+        starter: typeof baseReplay.user_solution === 'string' ? baseReplay.user_solution : baseCodingChallenge.starter,
+      }
+      : baseCodingChallenge;
+    const submittedSolution = typeof baseReplay.user_solution === 'string' ? baseReplay.user_solution : WAITING_BATTLE_SAPPHIRE_STUB_SOLUTION;
     setChallengeType(match.challenge_type);
     setSelectedGladiatorId(sapphire.id);
     setSelectedOpponentId(challenger.id);
     setUserSolution(codingChallenge.starter);
     setNotice(`Sapphire is answering ${challenger.name}'s waiting ${formatChallenge(match.challenge_type)} battle.`);
-    setSelectedMatchId(match.id);
+    selectMatchAndSync(match.id, true);
     setStarting(true);
     setBattleResult(null);
     setLatestBotSolution('');
     setChallengeModalOpen(false);
+
+    let updatedMatch = match;
     try {
-      const baseReplay = (match.replay_data && typeof match.replay_data === 'object') ? match.replay_data : {};
+      const { error: defenderUpdateError } = await supabase.from('matches').update({ defender_id: sapphire.id }).eq('id', match.id);
+      if (defenderUpdateError) throw defenderUpdateError;
+      updatedMatch = { ...match, defender_id: sapphire.id };
+      setMatches((prev) => prev.map((m) => (m.id === match.id ? updatedMatch : m)));
+    } catch (defenderUpdateErr: any) {
+      console.error('[Colosseum] Sapphire could not assume defender slot', defenderUpdateErr);
+      setNotice('Sapphire could not enter the pit. The defender slot is locked or the match was already claimed.');
+      setStarting(false);
+      return;
+    }
+
+    try {
       const previousLog = Array.isArray(baseReplay.log) ? baseReplay.log : [];
       const bootLogs = [
         ...previousLog,
@@ -6077,7 +6171,7 @@ export const Colosseum: React.FC = () => {
           : 'Sapphire tunnel is unavailable; the waiting battle remains selectable with a persisted tunnel status.',
       ];
       runSimulation(
-        match,
+        updatedMatch,
         challenger,
         sapphire,
         match.challenge_type,
@@ -6112,7 +6206,7 @@ export const Colosseum: React.FC = () => {
         received_at: new Date().toISOString(),
       };
       runSimulation(
-        match,
+        updatedMatch,
         challenger,
         sapphire,
         match.challenge_type,
@@ -6218,6 +6312,7 @@ export const Colosseum: React.FC = () => {
             onClose={() => setBattleDocked(false)}
             onCoachingMessage={handleCoachingMessage}
             onSkipCoaching={handleSkipCoaching}
+            onInspectGladiator={(g) => setInspectedGladiator(g)}
           />
         )}
       </AnimatePresence>
@@ -6306,26 +6401,27 @@ export const Colosseum: React.FC = () => {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-40 grid place-items-center bg-black/80 p-4 backdrop-blur-xl"
+              className="fixed inset-0 z-[70] grid place-items-center bg-black/80 p-4 backdrop-blur-xl"
             >
               <motion.div
                 initial={{ scale: 0.94, y: 18 }}
                 animate={{ scale: 1, y: 0 }}
                 exit={{ scale: 0.94, y: 18 }}
-                className="relative w-full max-w-3xl overflow-hidden rounded-[2rem] border border-red-400/35 bg-zinc-950 p-4 shadow-[0_0_70px_rgba(255,23,68,0.28)] sm:p-6"
+                className="relative w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-[2rem] border border-red-400/35 bg-zinc-950 p-4 shadow-[0_0_70px_rgba(255,23,68,0.28)] sm:p-6"
               >
+                <button type="button" onClick={() => setChallengeModalOpen(false)} className="absolute right-4 top-4 z-10 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white">Close</button>
                 <div className="pointer-events-none absolute inset-0 opacity-35" style={{ background: `radial-gradient(circle at 20% 0%, ${selectedOpponent.glow_color}66, transparent 34%), radial-gradient(circle at 100% 100%, rgba(0,229,255,0.22), transparent 35%)` }} />
                 <div className="relative">
                   <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start sm:gap-5">
-                      <AnimatedGladiatorAvatar gladiator={selectedOpponent} size="lg" label={selectedOpponent.name} active />
+                      <AnimatedGladiatorAvatar gladiator={selectedOpponent} size="lg" label={selectedOpponent.name} active onClick={() => setInspectedGladiator(selectedOpponent)} />
                       <div className="text-center sm:text-left">
                       <p className="text-[10px] font-black uppercase tracking-[0.34em] text-red-300">Pre-Battle Lock</p>
                       <h2 className="mt-2 text-xl font-black uppercase tracking-[0.14em] text-white sm:text-3xl">{selectedOpponent.name} Accepts</h2>
                       <p className="mt-2 text-sm leading-6 text-zinc-400">{profileLine(selectedOpponent.botProfile)}</p>
                       </div>
                     </div>
-                    <button type="button" onClick={() => setChallengeModalOpen(false)} className="self-center rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white sm:self-auto">Close</button>
+
                   </div>
 
                   <blockquote className="rounded-3xl border border-white/10 bg-black/50 p-4 text-sm font-black uppercase leading-7 tracking-[0.12em] text-white sm:p-5 sm:text-lg sm:leading-8">
@@ -6645,18 +6741,21 @@ export const Colosseum: React.FC = () => {
           </form>
         </section>
 
-        <LiveArena
-          matches={matches}
-          gladiatorById={gladiatorById}
-          simulation={simulation}
-          selectedMatchId={selectedMatchId}
-          onSelectMatch={setSelectedMatchId}
-          userGladiatorId={selectedGladiatorId || undefined}
-          whisperUsed={whisperUsed}
-          onWhisperUsed={() => setWhisperUsed(true)}
-          onCoachingMessage={handleCoachingMessage}
-          onSkipCoaching={handleSkipCoaching}
-        />
+        <div ref={liveArenaRef}>
+          <LiveArena
+            matches={matches}
+            gladiatorById={gladiatorById}
+            simulation={simulation}
+            selectedMatchId={selectedMatchId}
+            onSelectMatch={setSelectedMatchId}
+            userGladiatorId={selectedGladiatorId || undefined}
+            whisperUsed={whisperUsed}
+            onWhisperUsed={() => setWhisperUsed(true)}
+            onCoachingMessage={handleCoachingMessage}
+            onSkipCoaching={handleSkipCoaching}
+            onInspectGladiator={(g) => setInspectedGladiator(g)}
+          />
+        </div>
 
         {sapphireWaitingBattles.length > 0 && (
           <section className="mt-6 overflow-hidden rounded-[2rem] border border-sky-300/25 bg-sky-950/10 p-5 shadow-[0_0_54px_rgba(56,189,248,0.12)] backdrop-blur-xl">
@@ -6780,9 +6879,10 @@ export const Colosseum: React.FC = () => {
                         key={bot.id}
                         gladiator={bot}
                         active={selectedOpponentId === bot.id}
-                        onSelect={() => setSelectedOpponentId(bot.id)}
+                        onSelect={() => handleSelectOpponent(bot.id)}
                         actionLabel="Challenge"
                         onAction={() => openBotChallenge(bot)}
+                        onInspect={() => setInspectedGladiator(bot)}
                       />
                     ))}
                   </div>
@@ -6838,6 +6938,7 @@ export const Colosseum: React.FC = () => {
                         setSelectedGladiatorId(gladiator.id);
                         opponentRosterRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
                       }}
+                      onInspect={() => setInspectedGladiator(gladiator)}
                     />
                   </React.Fragment>
                 ))}
@@ -6866,7 +6967,7 @@ export const Colosseum: React.FC = () => {
                   <button
                     key={challenge.id}
                     type="button"
-                    onClick={() => setChallengeType(challenge.id)}
+                    onClick={() => handleChallengeType(challenge.id)}
                     className={cn('rounded-2xl border p-4 text-left transition', active ? 'border-white/35 bg-white/10' : 'border-white/10 bg-white/[0.03] hover:border-white/25')}
                     style={{ boxShadow: active ? `0 0 22px ${challenge.accent}33` : undefined }}
                   >
@@ -6888,7 +6989,7 @@ export const Colosseum: React.FC = () => {
               </label>
               <label className="block">
                 <span className="mb-2 block text-[10px] font-black uppercase tracking-[0.24em] text-zinc-500">Shadow Cage</span>
-                <select value={selectedOpponentId} onChange={(event) => setSelectedOpponentId(event.target.value)} className="w-full rounded-2xl border border-white/10 bg-zinc-950 px-4 py-3 text-sm text-white outline-none">
+                <select value={selectedOpponentId} onChange={(event) => handleSelectOpponent(event.target.value)} className="w-full rounded-2xl border border-white/10 bg-zinc-950 px-4 py-3 text-sm text-white outline-none">
                   <option value="">Select opponent</option>
                   {opponents.map((gladiator) => <option key={gladiator.id} value={gladiator.id}>{gladiator.name} ({gladiator.wins}W)</option>)}
                 </select>
@@ -6898,7 +6999,7 @@ export const Colosseum: React.FC = () => {
             {selectedOpponent?.botProfile && (
               <div className="mt-5 overflow-hidden rounded-3xl border border-pink-300/20 bg-pink-950/10 p-4">
                 <div className="flex items-start gap-4">
-                  <AnimatedGladiatorAvatar gladiator={selectedOpponent} size="md" label={selectedOpponent.name} active />
+                  <AnimatedGladiatorAvatar gladiator={selectedOpponent} size="md" label={selectedOpponent.name} active onClick={() => setInspectedGladiator(selectedOpponent)} />
                   <div className="min-w-0 flex-1">
                     <p className="text-[10px] font-black uppercase tracking-[0.28em] text-pink-200">Selected Persona</p>
                     <h3 className="mt-1 text-xl font-black uppercase tracking-[0.14em] text-white">{selectedOpponent.name}</h3>
@@ -6947,11 +7048,11 @@ export const Colosseum: React.FC = () => {
                         style={{ backgroundColor: selectedChallengeMeta.accent }}
                       />
                       <div className="relative z-10 flex items-center gap-5">
-                        <AnimatedGladiatorAvatar gladiator={selectedGladiator ?? undefined} size="sm" label="Red" active />
+                        <AnimatedGladiatorAvatar gladiator={selectedGladiator ?? undefined} size="sm" label="Red" active onClick={selectedGladiator ? () => setInspectedGladiator(selectedGladiator) : undefined} />
                         <div className="grid h-16 w-16 place-items-center rounded-full border border-yellow-200/25 bg-black/75 shadow-[0_0_34px_rgba(250,204,21,0.22)]">
                           <Crown className="h-7 w-7 text-yellow-200" />
                         </div>
-                        <AnimatedGladiatorAvatar gladiator={selectedOpponent} size="sm" label="Shadow" active />
+                        <AnimatedGladiatorAvatar gladiator={selectedOpponent} size="sm" label="Shadow" active onClick={selectedOpponent ? () => setInspectedGladiator(selectedOpponent) : undefined} />
                       </div>
                     </div>
                     <div className="flex-1">
@@ -7056,6 +7157,7 @@ export const Colosseum: React.FC = () => {
                       replay_data: { log: simulation.log },
                     }}
                     replayProgress={Math.max(simulation.challengerProgress, simulation.defenderProgress)}
+                    onInspect={(g) => setInspectedGladiator(g)}
                   />
                   {simulation.challengeType === 'sandbox_build' ? (
                     <div className="grid gap-4 xl:grid-cols-2">
@@ -7199,9 +7301,9 @@ export const Colosseum: React.FC = () => {
                   key={match.id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => { setSelectedMatchId(match.id); }}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setSelectedMatchId(match.id); }}
-                  className="cursor-pointer rounded-2xl border border-red-500/20 bg-red-950/10 p-4 transition hover:border-red-500/40 hover:bg-red-900/15"
+                  onClick={() => handleActiveMatchClick(match)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleActiveMatchClick(match); }}
+                  className="cursor-pointer rounded-2xl border border-red-500/20 bg-red-950/10 p-4 transition hover:border-red-400/40 hover:bg-red-900/20"
                 >
                   <p className="text-xs font-black uppercase tracking-[0.18em] text-white">{gladiatorById.get(match.challenger_id)?.name ?? 'Unknown'} vs {gladiatorById.get(match.defender_id)?.name ?? 'Unknown'}</p>
                   <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-red-200">{formatChallenge(match.challenge_type)} in progress</p>
