@@ -56,13 +56,19 @@ import { getValidSession } from '../lib/authSession';
 import { handleDbError } from '../lib/errors';
 import { cn } from '../lib/utils';
 import { BOT_GLADIATOR_PROFILE_BY_USERNAME, type BotDifficulty } from '../lib/botGladiatorProfiles';
+import type {
+  BattleAnnotation,
+  BattleJudgeResult,
+  BattleRubricItem,
+  ColosseumChallengeType,
+} from '../lib/colosseumVerdict';
 import { ReportModal } from './ReportModal';
 import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
 import { DistrictCityBackdrop } from './DistrictCityBackdrop';
 import { useSubscription, type FeatureGateResult } from '../lib/subscription';
 import { UpgradePromptModal } from './UpgradePrompt';
 
-type ChallengeType = 'speed_round' | 'debug_battle' | 'code_golf' | 'architect_duel' | 'prompt_war' | 'roast_battle' | 'code_jeopardy' | 'sandbox_build';
+type ChallengeType = ColosseumChallengeType;
 
 type GladiatorStats = {
   speed: number;
@@ -148,17 +154,6 @@ interface SapphireMove {
 
 const WAITING_BATTLE_SAPPHIRE_STUB_SOLUTION = 'Sapphire intercept request queued for this waiting battle.';
 
-interface BattleJudgeResult {
-  winner_id: string;
-  challenger_score: number;
-  defender_score: number;
-  summary: string;
-  reasoning: string[];
-  provider: string;
-  model: string;
-  used_ai: boolean;
-}
-
 interface TournamentRow {
   id: string;
   name: string;
@@ -238,6 +233,8 @@ interface BattleResultState {
   judgeProvider: string;
   judgeModel: string;
   judgeUsedAi: boolean;
+  judgeRubric: BattleRubricItem[];
+  judgeAnnotations: BattleAnnotation[];
 }
 
 interface CodingChallenge {
@@ -1760,9 +1757,13 @@ function NeuralWhisperPanel({
     setSending(true);
     setError('');
     try {
+      const session = await getValidSession();
       const res = await fetch('/api/colosseum/neural-whisper', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
         body: JSON.stringify({ matchId, gladiatorId, whisper: text }),
       });
       const data = await res.json();
@@ -2105,9 +2106,13 @@ function combatLinesFor(type: ChallengeType, challenger: Gladiator, defender: Gl
 }
 
 async function requestGladiatorAiMoves(match: MatchRow, type: ChallengeType, challenger: Gladiator, defender: Gladiator, battlePrompt?: string): Promise<GladiatorAiMove[]> {
+  const session = await getValidSession();
   const response = await fetch('/api/colosseum/gladiator-solutions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${session.access_token}`,
+    },
     body: JSON.stringify({
       matchId: match.id,
       challengeType: type,
@@ -2125,79 +2130,49 @@ async function requestGladiatorAiMoves(match: MatchRow, type: ChallengeType, cha
   return (payload?.moves ?? []) as GladiatorAiMove[];
 }
 
-async function requestBattleJudge(input: {
+async function requestBattleResolution(input: {
   match: MatchRow;
   type: ChallengeType;
   challenge: CodingChallenge;
   userSolution: string;
-  botSolution: string;
-  moves: GladiatorAiMove[];
-}): Promise<BattleJudgeResult> {
-  const response = await fetch('/api/colosseum/judge-battle', {
+  replayData: Record<string, unknown>;
+}): Promise<{ judge: BattleJudgeResult; replayData: Record<string, unknown> }> {
+  const session = await getValidSession();
+  const response = await fetch('/api/colosseum/resolve-battle', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${session.access_token}`,
+    },
     body: JSON.stringify({
       matchId: input.match.id,
       challengeType: input.type,
       challengePrompt: `${input.challenge.title}\n${input.challenge.prompt}`,
       expectedSignals: input.challenge.expected,
       userSolution: input.userSolution,
-      botSolution: input.botSolution,
-      moves: input.moves,
+      replayData: input.replayData,
     }),
   });
 
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(payload?.error || 'Colosseum judge failed');
+    throw new Error(payload?.error || 'Colosseum resolution failed');
   }
 
-  return payload?.judge as BattleJudgeResult;
-}
-
-function clientFallbackBattleJudge(input: {
-  match: MatchRow;
-  type: ChallengeType;
-  challenge: CodingChallenge;
-  challenger: Gladiator;
-  defender: Gladiator;
-  userSolution: string;
-  botSolution: string;
-  moves: GladiatorAiMove[];
-  error?: string;
-}): BattleJudgeResult {
-  const challengerMove = input.moves.find((move) => move.gladiator_id === input.challenger.id);
-  const defenderMove = input.moves.find((move) => move.gladiator_id === input.defender.id);
-  const challengerScore = clampBattleScore(
-    28 + userSolutionBonus(input.userSolution, input.challenge, input.type) + aiMoveBonus(challengerMove, input.type)
-  );
-  const defenderScore = clampBattleScore(
-    28
-      + aiMoveBonus(defenderMove, input.type)
-      + userSolutionBonus(input.botSolution, input.challenge, input.type)
-      + botProfileScoreBonus(input.defender.botProfile, input.type)
-  );
   return {
-    winner_id: challengerScore >= defenderScore ? input.challenger.id : input.defender.id,
-    challenger_score: challengerScore,
-    defender_score: defenderScore,
-    summary: input.error
-      ? `Local rubric used because the judge endpoint failed: ${input.error}`
-      : 'Local rubric scored submitted code signals and bot answer quality.',
-    reasoning: [
-      `${input.challenger.name}: submitted code scored against ${input.challenge.expected}.`,
-      `${input.defender.name}: generated bot answer and persona profile were scored.`,
-    ],
-    provider: 'client-rubric',
-    model: 'deterministic-colosseum-rubric',
-    used_ai: false,
+    judge: payload?.judge as BattleJudgeResult,
+    replayData: (payload?.replayData ?? {}) as Record<string, unknown>,
   };
 }
 
 async function requestSapphireMove(match: MatchRow, type: ChallengeType, challenger: Gladiator, defender: Gladiator): Promise<SapphireMove | null> {
+  const session = await getValidSession();
   const response = await fetch('/api/colosseum/sapphire-move', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${session.access_token}`,
+    },
     body: JSON.stringify({
       matchId: match.id,
       challengeType: type,
@@ -2217,7 +2192,11 @@ async function requestSapphireMove(match: MatchRow, type: ChallengeType, challen
 
 async function ensureSapphireHouseBot() {
   try {
-    await fetch('/api/colosseum/sapphire/ensure', { method: 'POST' });
+    const session = await getValidSession();
+    await fetch('/api/colosseum/sapphire/ensure', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
   } catch (error) {
     console.warn('[Colosseum] Sapphire house bot ensure failed', error);
   }
@@ -2225,7 +2204,11 @@ async function ensureSapphireHouseBot() {
 
 async function ensurePersonaBotGladiators() {
   try {
-    await fetch('/api/colosseum/persona-bots/ensure', { method: 'POST' });
+    const session = await getValidSession();
+    await fetch('/api/colosseum/persona-bots/ensure', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
   } catch (error) {
     console.warn('[Colosseum] Persona bot gladiator ensure failed', error);
   }
@@ -2453,6 +2436,96 @@ function TournamentDetailPopup({ tournament, entries, gladiatorById, onClose }: 
   );
 }
 
+function CasperRubricScorecard({
+  rubric,
+  challengerName,
+  defenderName,
+}: {
+  rubric: BattleRubricItem[];
+  challengerName: string;
+  defenderName: string;
+}) {
+  if (rubric.length === 0) return null;
+  return (
+    <div className="mt-5 space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-[9px] font-black uppercase tracking-[0.28em] text-yellow-200">Casper's Iron Ledger</p>
+        <p className="text-[8px] font-black uppercase tracking-widest text-zinc-600">Weighted verdict v2</p>
+      </div>
+      {rubric.map((criterion) => {
+        const challengerLeads = criterion.challenger_score >= criterion.defender_score;
+        const margin = Math.abs(criterion.challenger_score - criterion.defender_score);
+        return (
+          <div key={criterion.id} className="overflow-hidden rounded-2xl border border-white/10 bg-black/50 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-white">{criterion.label}</p>
+                <p className="mt-1 text-[9px] leading-4 text-zinc-500">{criterion.commentary}</p>
+              </div>
+              <div className="shrink-0 text-right">
+                <p className="text-[8px] font-black uppercase tracking-widest text-zinc-600">{Math.round(criterion.weight * 100)}% weight</p>
+                <p className={cn('mt-1 text-[9px] font-black uppercase tracking-widest', margin === 0 ? 'text-zinc-400' : challengerLeads ? 'text-red-300' : 'text-cyan-300')}>
+                  {margin === 0 ? 'Dead even' : `${challengerLeads ? challengerName : defenderName} +${margin}`}
+                </p>
+              </div>
+            </div>
+            <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
+              <div>
+                <div className="mb-1 flex items-center justify-between text-[8px] font-black uppercase tracking-wider text-red-200">
+                  <span className="truncate">{challengerName}</span>
+                  <span>{criterion.challenger_score}</span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-red-950/50">
+                  <div className="h-full rounded-full bg-gradient-to-r from-red-700 to-red-300" style={{ width: `${criterion.challenger_score}%` }} />
+                </div>
+              </div>
+              <Scale className="h-3.5 w-3.5 text-yellow-300/70" />
+              <div>
+                <div className="mb-1 flex items-center justify-between text-[8px] font-black uppercase tracking-wider text-cyan-200">
+                  <span>{criterion.defender_score}</span>
+                  <span className="truncate">{defenderName}</span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-cyan-950/50">
+                  <div className="h-full rounded-full bg-gradient-to-r from-cyan-300 to-cyan-700" style={{ width: `${criterion.defender_score}%` }} />
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function CasperAnnotationLedger({ annotations }: { annotations: BattleAnnotation[] }) {
+  if (annotations.length === 0) return null;
+  return (
+    <div className="mt-4 rounded-2xl border border-purple-300/15 bg-purple-950/10 p-4">
+      <div className="mb-3 flex items-center gap-2">
+        <FileCode className="h-3.5 w-3.5 text-purple-300" />
+        <p className="text-[9px] font-black uppercase tracking-[0.28em] text-purple-200">Decisive Code Marks</p>
+      </div>
+      <div className="space-y-2">
+        {annotations.map((annotation, index) => (
+          <div key={`${annotation.combatant}-${annotation.line_start}-${index}`} className="flex items-start gap-3 rounded-xl border border-white/5 bg-black/40 p-3">
+            <span className={cn(
+              'shrink-0 rounded-full border px-2 py-1 text-[7px] font-black uppercase tracking-widest',
+              annotation.severity === 'critical'
+                ? 'border-red-400/30 bg-red-500/10 text-red-200'
+                : annotation.severity === 'warning'
+                  ? 'border-yellow-400/30 bg-yellow-500/10 text-yellow-200'
+                  : 'border-green-400/30 bg-green-500/10 text-green-200'
+            )}>
+              {annotation.combatant} L{annotation.line_start}{annotation.line_end > annotation.line_start ? `–${annotation.line_end}` : ''}
+            </span>
+            <p className="text-[10px] leading-5 text-zinc-400">{annotation.comment}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function BattleSynopsisPopup({ match, gladiatorById, onClose }: { match: MatchRow; gladiatorById: Map<string, Gladiator>; onClose: () => void }) {
   const challenger = gladiatorById.get(match.challenger_id);
   const defender = gladiatorById.get(match.defender_id);
@@ -2474,6 +2547,8 @@ function BattleSynopsisPopup({ match, gladiatorById, onClose }: { match: MatchRo
   const defenderSolution = botSolution || defenderMove?.solution || '';
   const judgeSummary: string = judge.summary ?? '';
   const judgeReasoning: string[] = Array.isArray(judge.reasoning) ? judge.reasoning : [];
+  const judgeRubric: BattleRubricItem[] = Array.isArray(judge.rubric) ? judge.rubric : [];
+  const judgeAnnotations: BattleAnnotation[] = Array.isArray(judge.annotations) ? judge.annotations : [];
   const judgeUsedAi: boolean = judge.used_ai ?? false;
   const judgeProvider: string = judge.provider ?? '';
   const judgeModel: string = judge.model ?? '';
@@ -2647,6 +2722,13 @@ function BattleSynopsisPopup({ match, gladiatorById, onClose }: { match: MatchRo
                   </div>
                 </div>
               )}
+
+              <CasperRubricScorecard
+                rubric={judgeRubric}
+                challengerName={challenger?.name ?? 'Red Corner'}
+                defenderName={defender?.name ?? 'Shadow Cage'}
+              />
+              <CasperAnnotationLedger annotations={judgeAnnotations} />
 
               {/* Judge reasoning */}
               {judgeSummary && (
@@ -5795,32 +5877,36 @@ export const Colosseum: React.FC = () => {
     });
   };
 
-  const finalizeBattle = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, codingChallenge: CodingChallenge, effectiveChallengerSolution: string, defenderMove: GladiatorAiMove | undefined, sanitizedAiMoves: GladiatorAiMove[], replayBase: Record<string, any>, finalLogs: string[], extraReplay?: Record<string, any>) => {
+  const finalizeBattle = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, codingChallenge: CodingChallenge, effectiveChallengerSolution: string, sanitizedAiMoves: GladiatorAiMove[], replayBase: Record<string, any>, finalLogs: string[], extraReplay?: Record<string, any>) => {
     void (async () => {
-      let judge: BattleJudgeResult;
+      let resolution: { judge: BattleJudgeResult; replayData: Record<string, unknown> };
       try {
-        judge = await requestBattleJudge({
+        resolution = await requestBattleResolution({
           match,
           type,
           challenge: codingChallenge,
           userSolution: effectiveChallengerSolution,
-          botSolution: defenderMove?.solution ?? '',
-          moves: sanitizedAiMoves,
+          replayData: {
+            ...replayBase,
+            ...extraReplay,
+            status: 'judging',
+            challenger_progress: 100,
+            defender_progress: 100,
+            log: finalLogs,
+          },
         });
-      } catch (error: any) {
-        judge = clientFallbackBattleJudge({
-          match,
-          type,
-          challenge: codingChallenge,
-          challenger,
-          defender,
-          userSolution: effectiveChallengerSolution,
-          botSolution: defenderMove?.solution ?? '',
-          moves: sanitizedAiMoves,
-          error: error?.message ?? 'unknown judge error',
-        });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'unknown resolution error';
+        setNotice(`Casper could not seal this result: ${message}`);
+        setSimulation((prev) => prev ? {
+          ...prev,
+          status: 'complete',
+          log: [...finalLogs, 'The arena result remains unsettled. No rewards or records were written.'],
+        } : prev);
+        return;
       }
 
+      const judge = resolution.judge;
       const winner = judge.winner_id === challenger.id ? challenger : defender;
       const userWon = winner.id === challenger.id;
       const challengerScore = clampBattleScore(judge.challenger_score);
@@ -5828,9 +5914,10 @@ export const Colosseum: React.FC = () => {
       const xpAwarded = (codingChallenge.difficulty === 'Diamond' ? 180 : codingChallenge.difficulty === 'Gold' ? 130 : codingChallenge.difficulty === 'Silver' ? 85 : 50) + (userWon ? 40 : 15);
       const rankingPoints = (codingChallenge.difficulty === 'Diamond' ? 55 : codingChallenge.difficulty === 'Gold' ? 38 : codingChallenge.difficulty === 'Silver' ? 24 : 14) * (userWon ? 1 : -1);
       const reaction = userWon ? pickDialogue(defender.botProfile?.defeat_lines) : pickDialogue(defender.botProfile?.victory_lines);
-      finalLogs.push(`${judge.used_ai ? 'AI judge' : 'Rubric judge'} scored the submitted code and bot answer.`);
-      finalLogs.push(`${winner.name} lands the final commit and claims the purse.`);
-      finalLogs.push(userWon ? `${defender.name}: ${reaction}` : `${defender.name}: ${reaction}`);
+      const resolvedLogs = Array.isArray(resolution.replayData.log)
+        ? resolution.replayData.log.map((line) => String(line))
+        : [...finalLogs];
+      resolvedLogs.push(`${defender.name}: ${reaction}`);
 
       playVictoryFanfare();
       casperAnnounce(`The winner is ${winner.name}. ${judge.summary.slice(0, 120)}`);
@@ -5843,22 +5930,12 @@ export const Colosseum: React.FC = () => {
         defenderProgress: 100,
         winnerId: winner.id,
         status: 'complete',
-        log: [...finalLogs],
+        log: resolvedLogs,
         aiMoves: sanitizedAiMoves,
       } : prev);
-      void completeMatch(match, winner.id, {
-        ...replayBase,
-        ...extraReplay,
-        status: 'complete',
-        victor: winner.name,
-        winner_id: winner.id,
-        challenger_score: challengerScore,
-        defender_score: defenderScore,
-        challenger_progress: 100,
-        defender_progress: 100,
-        judge,
-        log: finalLogs,
-        completed_client_at: new Date().toISOString(),
+      void recordBattleSideEffects(match, winner.id, {
+        ...resolution.replayData,
+        log: resolvedLogs,
       });
       setBattleResult({
         matchId: match.id,
@@ -5876,6 +5953,8 @@ export const Colosseum: React.FC = () => {
         judgeProvider: judge.provider,
         judgeModel: judge.model,
         judgeUsedAi: judge.used_ai,
+        judgeRubric: judge.rubric,
+        judgeAnnotations: judge.annotations,
       });
     })();
   };
@@ -6034,7 +6113,7 @@ export const Colosseum: React.FC = () => {
 
                 coachingIntervalRef.current = coachingInterval;
               } else {
-                finalizeBattle(match, challenger, defender, type, codingChallenge, effectiveChallengerSolution, defenderMove, sanitizedAiMoves, replayBase, finalLogs, {
+                finalizeBattle(match, challenger, defender, type, codingChallenge, effectiveChallengerSolution, sanitizedAiMoves, replayBase, finalLogs, {
                   rounds: SANDBOX_ROUND_COUNT,
                   round_scores: roundScores,
                   coaching_history: allCoachingHistory,
@@ -6078,7 +6157,7 @@ export const Colosseum: React.FC = () => {
 
         if (tick >= totalTicks) {
           window.clearInterval(interval);
-          finalizeBattle(match, challenger, defender, type, codingChallenge, effectiveChallengerSolution, defenderMove, sanitizedAiMoves, replayBase, finalLogs);
+          finalizeBattle(match, challenger, defender, type, codingChallenge, effectiveChallengerSolution, sanitizedAiMoves, replayBase, finalLogs);
         }
       }, tickInterval);
     }
@@ -6110,8 +6189,6 @@ export const Colosseum: React.FC = () => {
 
     let updatedMatch = match;
     try {
-      const { error: defenderUpdateError } = await supabase.from('matches').update({ defender_id: sapphire.id }).eq('id', match.id);
-      if (defenderUpdateError) throw defenderUpdateError;
       updatedMatch = { ...match, defender_id: sapphire.id };
       setMatches((prev) => prev.map((m) => (m.id === match.id ? updatedMatch : m)));
     } catch (defenderUpdateErr: any) {
@@ -6241,14 +6318,8 @@ export const Colosseum: React.FC = () => {
     }
   };
 
-  const completeMatch = async (match: MatchRow, winnerId: string, replayData: Record<string, any>) => {
+  const recordBattleSideEffects = async (match: MatchRow, winnerId: string, replayData: Record<string, any>) => {
     try {
-      const { error } = await supabase.rpc('complete_colosseum_match', {
-        p_match_id: match.id,
-        p_winner_id: winnerId,
-        p_replay_data: replayData,
-      });
-      if (error) throw error;
       try {
         const challenger = gladiatorById.get(match.challenger_id);
         const defender = gladiatorById.get(match.defender_id);
@@ -7125,6 +7196,12 @@ export const Colosseum: React.FC = () => {
                           {battleResult.judgeReasoning.map((line) => <li key={line}>• {line}</li>)}
                         </ul>
                       )}
+                      <CasperRubricScorecard
+                        rubric={battleResult.judgeRubric}
+                        challengerName={selectedGladiator?.name ?? 'Red Corner'}
+                        defenderName={selectedOpponent?.name ?? 'Shadow Cage'}
+                      />
+                      <CasperAnnotationLedger annotations={battleResult.judgeAnnotations} />
                     </div>
                     <p className="mt-3 rounded-2xl border border-white/10 bg-black/50 p-3 text-xs font-bold leading-6 text-zinc-300">{selectedOpponent.name}: “{battleResult.reaction}”</p>
                     <p className="mt-3 text-[10px] font-black uppercase tracking-widest text-yellow-100/70">If the winner is a bot persona, it now posts a Colosseum brag to the social feed automatically.</p>
