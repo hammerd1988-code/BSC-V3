@@ -3,6 +3,11 @@ import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { v5 as uuidv5 } from 'uuid';
 import { BOT_PERSONAS } from './src/lib/botPersonas.js';
 import { BOT_GLADIATOR_PROFILES, SAPPHIRE_GLADIATOR_PROFILE, botStatsToPercent } from './src/lib/botGladiatorProfiles.js';
+import {
+  normalizeBattleJudgeResult,
+  rubricTemplateForChallenge,
+  type ColosseumChallengeType,
+} from './src/lib/colosseumVerdict.js';
 import { generateServerText, isServerAiConfigured } from './serverAi.js';
 import { generateImage as comfyGenerateImage, generateGladiatorAvatar as comfyGenerateAvatar, isComfyUIConfigured } from './comfyuiProvider.js';
 
@@ -18,7 +23,6 @@ function openaiCompatibleBaseUrl() {
   return (process.env.VITE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
 }
 const SAPPHIRE_API_URL = (process.env.SAPPHIRE_API_URL || 'https://sapphire.bloodsweatcode.site').replace(/\/$/, '');
-type ColosseumChallengeType = 'speed_round' | 'debug_battle' | 'code_golf' | 'architect_duel' | 'prompt_war' | 'roast_battle' | 'code_jeopardy' | 'sandbox_build';
 const CHALLENGE_BRIEFS: Record<ColosseumChallengeType, string> = {
   speed_round: 'Solve the task as quickly as possible while keeping the implementation correct and readable.',
   debug_battle: 'Find and fix the defect. Explain the root cause and provide corrected code or a precise patch.',
@@ -32,6 +36,66 @@ const CHALLENGE_BRIEFS: Record<ColosseumChallengeType, string> = {
 
 function botGladiatorId(username: string): string { return uuidv5(`bot-gladiator-${username}`, BOT_UUID_NAMESPACE); }
 function botEmail(username: string): string { return `${username}@bots.bloodsweatcode.site`; }
+
+function extractBearerToken(req: Request): string | null {
+  const authorization = req.headers.authorization;
+  const authHeader = Array.isArray(authorization) ? authorization[0] : authorization;
+  const match = authHeader?.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() || null;
+}
+
+async function authenticatedRequestUser(req: Request, supabase: SupabaseClient): Promise<User | null> {
+  const bearerToken = extractBearerToken(req);
+  if (!bearerToken) return null;
+  const { data, error } = await supabase.auth.getUser(bearerToken);
+  return error ? null : data.user;
+}
+
+function isLoopbackRequest(req: Request) {
+  const address = req.socket.remoteAddress ?? '';
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
+async function userOwnsOpenMatch(supabase: SupabaseClient, matchId: string, authUid: string) {
+  const { data: match, error: matchError } = await supabase
+    .from('matches')
+    .select('challenger_id,completed_at')
+    .eq('id', matchId)
+    .maybeSingle();
+  if (matchError || !match || match.completed_at) return false;
+
+  const { data: challenger, error: challengerError } = await supabase
+    .from('gladiators')
+    .select('user_id')
+    .eq('id', match.challenger_id)
+    .maybeSingle();
+  if (challengerError || !challenger) return false;
+
+  const { data: owner, error: ownerError } = await supabase
+    .from('users')
+    .select('auth_uid')
+    .eq('id', challenger.user_id)
+    .maybeSingle();
+  return !ownerError && String(owner?.auth_uid ?? '') === authUid;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (isRecord(error) && typeof error.message === 'string') return error.message;
+  return 'Unknown Colosseum error';
+}
+
+function serializedJsonBytes(value: unknown): number | null {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), 'utf8');
+  } catch {
+    return null;
+  }
+}
 
 async function findBotAuthUserIdByEmail(supabase: SupabaseClient, email: string) {
   const normalizedEmail = email.toLowerCase();
@@ -470,19 +534,28 @@ function fallbackColosseumJudge(input: { challengeType: ColosseumChallengeType; 
   const defenderSolutionScore = solutionSignalScore(input.botSolution ?? '', input.challengeType, input.expectedSignals);
   const challengerScore = clampScore(challengerSolutionScore * 0.72 + gladiatorBaseScore(input.challenger, input.challengeType) * 0.28);
   const defenderScore = clampScore(defenderSolutionScore * 0.72 + gladiatorBaseScore(input.defender, input.challengeType) * 0.28);
-  return {
-    winner_id: challengerScore >= defenderScore ? input.challenger.id : input.defender.id,
-    challenger_score: challengerScore,
-    defender_score: defenderScore,
-    summary: input.providerError ? `Casper invoked the rule judge because the AI throne was unavailable: ${input.providerError}` : 'Casper rules by code signals, expected requirements, and combat stats.',
-    reasoning: [
-      `${input.challenger.name}: solution signal ${challengerSolutionScore}/100 plus stat pressure.`,
-      `${input.defender.name}: solution signal ${defenderSolutionScore}/100 plus stat pressure.`,
-    ],
+  const summary = input.providerError
+    ? `Casper invoked the rule judge because the AI throne was unavailable: ${input.providerError}`
+    : 'Casper rules by code signals, expected requirements, and combat stats.';
+  return normalizeBattleJudgeResult({
+    raw: {
+      winner_id: challengerScore >= defenderScore ? input.challenger.id : input.defender.id,
+      challenger_score: challengerScore,
+      defender_score: defenderScore,
+      summary,
+      reasoning: [
+        `${input.challenger.name}: solution signal ${challengerSolutionScore}/100 plus stat pressure.`,
+        `${input.defender.name}: solution signal ${defenderSolutionScore}/100 plus stat pressure.`,
+      ],
+    },
+    challengeType: input.challengeType,
+    challengerId: String(input.challenger.id),
+    defenderId: String(input.defender.id),
     provider: 'rule-judge',
     model: 'deterministic-colosseum-rubric',
-    used_ai: false,
-  };
+    usedAi: false,
+    fallbackSummary: summary,
+  });
 }
 
 function extractJsonObject(text: string) {
@@ -510,6 +583,7 @@ async function judgeColosseumBattle(input: {
     return fallbackColosseumJudge({ ...input, providerError: 'No OPENROUTER_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY configured.' });
   }
   const isSandbox = input.challengeType === 'sandbox_build';
+  const rubricTemplate = rubricTemplateForChallenge(input.challengeType);
   const sandboxJudgeCriteria = isSandbox
     ? `\n\nSANDBOX BUILD JUDGING CRITERIA (weight these equally):
 1. WORKING PRODUCT (25%) — Does the HTML actually work? Are all features functional?
@@ -519,7 +593,7 @@ async function judgeColosseumBattle(input: {
 
 Extract the <code> section from each solution and evaluate the actual HTML/CSS/JS product.`
     : '';
-  const result = await generateServerText(`Casper is judging this ${isSandbox ? 'sandbox build battle' : 'coding battle'}. Pick the winner from the two gladiator ids and score both 0-100.
+  const result = await generateServerText(`Casper is judging this ${isSandbox ? 'sandbox build battle' : 'coding battle'}. Score both combatants with the supplied weighted rubric.
 
 Challenge type: ${input.challengeType}
 Challenge:
@@ -538,7 +612,18 @@ name=${input.defender.name}
 solution:
 ${input.botSolution || '(no defender solution returned)'}
 
-Return JSON with keys: winner_id, challenger_score, defender_score, summary, reasoning (array of short strings).`, {
+Rubric template:
+${JSON.stringify(rubricTemplate)}
+
+Return JSON with:
+- winner_id
+- challenger_score and defender_score
+- summary
+- reasoning: array of short verdict lines
+- rubric: one item per template criterion with id, label, weight, challenger_score, defender_score, commentary
+- annotations: up to 8 decisive code notes with combatant (challenger|defender), line_start, line_end, severity (strength|warning|critical), criterion, comment
+
+The weighted rubric scores must support the declared winner. Return concise evidence, never private chain-of-thought.`, {
     systemPrompt: isSandbox
       ? 'You are CASPER, the Blood Sweat Code Colosseum judge. You are evaluating SANDBOX BUILD battles where gladiators build real products. Judge the FINISHED PRODUCT — does it work, does it look good, is the code clean, is it creative? Deliver a verdict. Return only JSON.'
       : 'You are CASPER, the Blood Sweat Code Colosseum judge and Caesar-like arbiter. Score actual submitted code and bot solution quality. Deliver an authoritative thumb-up/thumb-down verdict. Return only JSON.',
@@ -549,19 +634,16 @@ Return JSON with keys: winner_id, challenger_score, defender_score, summary, rea
   if (!result.text) return fallbackColosseumJudge({ ...input, providerError: result.lastError || 'AI judge returned no text.' });
   try {
     const parsed = extractJsonObject(result.text);
-    const winnerId = [input.challenger.id, input.defender.id].map(String).includes(String(parsed.winner_id))
-      ? String(parsed.winner_id)
-      : (Number(parsed.challenger_score ?? 0) >= Number(parsed.defender_score ?? 0) ? input.challenger.id : input.defender.id);
-    return {
-      winner_id: winnerId,
-      challenger_score: clampScore(Number(parsed.challenger_score ?? 0)),
-      defender_score: clampScore(Number(parsed.defender_score ?? 0)),
-      summary: String(parsed.summary ?? 'Casper scored the submitted solutions.'),
-      reasoning: Array.isArray(parsed.reasoning) ? parsed.reasoning.map((line: any) => String(line)).slice(0, 5) : [],
+    return normalizeBattleJudgeResult({
+      raw: parsed,
+      challengeType: input.challengeType,
+      challengerId: String(input.challenger.id),
+      defenderId: String(input.defender.id),
       provider: result.provider,
       model: result.model,
-      used_ai: true,
-    };
+      usedAi: true,
+      fallbackSummary: 'Casper scored the submitted solutions.',
+    });
   } catch (error: any) {
     return fallbackColosseumJudge({ ...input, providerError: error?.message ?? 'AI judge parse failed.' });
   }
@@ -798,8 +880,11 @@ async function ensureSapphireHouseBot(supabase: SupabaseClient) {
 }
 
 export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) {
-  app.post('/api/colosseum/persona-bots/ensure', async (_req, res) => {
+  app.post('/api/colosseum/persona-bots/ensure', async (req, res) => {
     try {
+      if (!(await authenticatedRequestUser(req, supabase))) {
+        return res.status(401).json({ success: false, error: 'Authentication required.' });
+      }
       const gladiators = await ensurePersonaBotGladiators(supabase);
       return res.json({ success: true, gladiators });
     } catch (error: any) {
@@ -808,8 +893,11 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
     }
   });
 
-  app.post('/api/colosseum/sapphire/ensure', async (_req, res) => {
+  app.post('/api/colosseum/sapphire/ensure', async (req, res) => {
     try {
+      if (!(await authenticatedRequestUser(req, supabase))) {
+        return res.status(401).json({ success: false, error: 'Authentication required.' });
+      }
       const gladiator = await ensureSapphireHouseBot(supabase);
       return res.json({ success: true, gladiator });
     } catch (error: any) {
@@ -821,7 +909,14 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
   app.post('/api/colosseum/sapphire-move', async (req, res) => {
     const startedAt = Date.now();
     try {
+      const authUser = await authenticatedRequestUser(req, supabase);
+      if (!authUser) {
+        return res.status(401).json({ success: false, error: 'Authentication required.' });
+      }
       const { matchId, challengeType, challengerId, defenderId, prompt } = req.body ?? {};
+      if (!matchId || !(await userOwnsOpenMatch(supabase, String(matchId), authUser.id))) {
+        return res.status(403).json({ success: false, error: 'Only the challenger owner can request this move.' });
+      }
       const sapphire = await ensureSapphireHouseBot(supabase);
 
       let match: any = null;
@@ -847,6 +942,28 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
       const defender = (combatants ?? []).find((gladiator: any) => String(gladiator.id) === String(defenderLookup));
       const sapphireInMatch = [challenger, defender].some(isSapphireRecord)
         || [challengerLookup, defenderLookup].map(String).includes(String(sapphire.id));
+      if (match?.id) {
+        const { data: existingArtifact, error: existingArtifactError } = await supabase
+          .from('match_solution_artifacts')
+          .select('source,prompt,solution,latency_ms,received_at')
+          .eq('match_id', match.id)
+          .eq('gladiator_id', sapphire.id)
+          .maybeSingle();
+        if (existingArtifactError) throw existingArtifactError;
+        if (existingArtifact?.solution) {
+          return res.json({
+            success: true,
+            move: {
+              source: existingArtifact.source,
+              prompt: existingArtifact.prompt,
+              solution: existingArtifact.solution,
+              latency_ms: existingArtifact.latency_ms,
+              received_at: existingArtifact.received_at,
+            },
+            replayed: true,
+          });
+        }
+      }
 
       const normalizedChallengeType = (match?.challenge_type ?? challengeType ?? 'speed_round') as ColosseumChallengeType;
       const sapphirePrompt = buildSapphireChallengePrompt({
@@ -889,6 +1006,7 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
         await supabase
           .from('matches')
           .update({
+            defender_id: waitingIntercept ? sapphire.id : match.defender_id,
             replay_data: {
               ...existingReplay,
               sapphire_move: move,
@@ -908,6 +1026,19 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
             },
           })
           .eq('id', match.id);
+        const { error: artifactError } = await supabase
+          .from('match_solution_artifacts')
+          .upsert({
+            match_id: match.id,
+            gladiator_id: sapphire.id,
+            source: move.source,
+            model: move.source === 'sapphire-api' ? 'sapphire-live' : 'sapphire-fallback',
+            prompt: move.prompt,
+            solution: move.solution,
+            latency_ms: Math.max(0, Number(move.latency_ms ?? 0)),
+            received_at: move.received_at,
+          }, { onConflict: 'match_id,gladiator_id' });
+        if (artifactError) throw artifactError;
       }
 
       return res.json({ success: true, move });
@@ -919,7 +1050,15 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
 
   app.post('/api/colosseum/gladiator-solutions', async (req, res) => {
     try {
+      const isInternal = isLoopbackRequest(req);
+      const authUser = await authenticatedRequestUser(req, supabase);
+      if (!authUser && !isInternal) {
+        return res.status(401).json({ success: false, error: 'Authentication required.' });
+      }
       const { matchId, challengeType, challengerId, defenderId, prompt } = req.body ?? {};
+      if (!matchId || (!isInternal && (!authUser || !(await userOwnsOpenMatch(supabase, String(matchId), authUser.id))))) {
+        return res.status(403).json({ success: false, error: 'Only the challenger owner can request combat solutions.' });
+      }
       let match: any = null;
       if (matchId) {
         const { data, error } = await supabase.from('matches').select('*').eq('id', matchId).maybeSingle();
@@ -942,6 +1081,31 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
       const challenger = (combatants ?? []).find((gladiator: any) => String(gladiator.id) === String(normalizedChallengerId));
       const defender = (combatants ?? []).find((gladiator: any) => String(gladiator.id) === String(normalizedDefenderId));
       if (!challenger || !defender) return res.status(404).json({ success: false, error: 'Combatants not found' });
+      if (match?.id) {
+        const { data: existingArtifacts, error: existingArtifactError } = await supabase
+          .from('match_solution_artifacts')
+          .select('gladiator_id,source,model,prompt,solution,latency_ms,received_at')
+          .eq('match_id', match.id)
+          .in('gladiator_id', [normalizedChallengerId, normalizedDefenderId]);
+        if (existingArtifactError) throw existingArtifactError;
+        if ((existingArtifacts ?? []).length === 2 && existingArtifacts?.every((artifact) => artifact.solution)) {
+          const existingMoves = existingArtifacts.map((artifact) => {
+            const gladiator = String(artifact.gladiator_id) === String(challenger.id) ? challenger : defender;
+            return {
+              gladiator_id: String(artifact.gladiator_id),
+              gladiator_name: String(gladiator.name),
+              source: String(artifact.source),
+              model: String(artifact.model),
+              uses_custom_key: false,
+              prompt: String(artifact.prompt ?? ''),
+              solution: String(artifact.solution),
+              latency_ms: Math.max(0, Number(artifact.latency_ms ?? 0)),
+              received_at: artifact.received_at ?? new Date().toISOString(),
+            };
+          });
+          return res.json({ success: true, moves: existingMoves, replayed: true });
+        }
+      }
 
       const results = await Promise.allSettled([
         generateGladiatorMove({ matchId, challengeType: normalizedChallengeType, gladiator: challenger, opponent: defender, prompt }),
@@ -993,6 +1157,20 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
             },
           })
           .eq('id', match.id);
+        const artifactRows = moves.map((move) => ({
+          match_id: match.id,
+          gladiator_id: String(move.gladiator_id),
+          source: String(move.source),
+          model: String(move.model),
+          prompt: String(move.prompt ?? ''),
+          solution: String(move.solution ?? ''),
+          latency_ms: Math.max(0, Number(move.latency_ms ?? 0)),
+          received_at: move.received_at ?? new Date().toISOString(),
+        }));
+        const { error: artifactError } = await supabase
+          .from('match_solution_artifacts')
+          .upsert(artifactRows, { onConflict: 'match_id,gladiator_id' });
+        if (artifactError) throw artifactError;
       }
 
       return res.json({ success: true, moves });
@@ -1004,7 +1182,15 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
 
   app.post('/api/colosseum/judge-battle', async (req, res) => {
     try {
+      const isInternal = isLoopbackRequest(req);
+      const authUser = await authenticatedRequestUser(req, supabase);
+      if (!authUser && !isInternal) {
+        return res.status(401).json({ success: false, error: 'Authentication required.' });
+      }
       const { matchId, challengeType, challengePrompt, expectedSignals, userSolution, botSolution } = req.body ?? {};
+      if (!matchId || (!isInternal && (!authUser || !(await userOwnsOpenMatch(supabase, String(matchId), authUser.id))))) {
+        return res.status(403).json({ success: false, error: 'Only the challenger owner can request a judgement.' });
+      }
       let match: any = null;
       if (matchId) {
         const { data, error } = await supabase.from('matches').select('*').eq('id', matchId).maybeSingle();
@@ -1039,10 +1225,193 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
     }
   });
 
+  app.post('/api/colosseum/resolve-battle', async (req, res) => {
+    try {
+      const bearerToken = extractBearerToken(req);
+      if (!bearerToken) {
+        return res.status(401).json({ success: false, error: 'Missing Supabase session bearer token.' });
+      }
+
+      const { data: authData, error: authError } = await supabase.auth.getUser(bearerToken);
+      if (authError || !authData.user) {
+        return res.status(401).json({ success: false, error: 'Invalid or expired Supabase session.' });
+      }
+
+      const {
+        matchId,
+        challengeType,
+        challengePrompt,
+        expectedSignals,
+        userSolution,
+        replayData,
+      } = req.body ?? {};
+      if (!matchId) {
+        return res.status(400).json({ success: false, error: 'matchId is required for battle resolution' });
+      }
+      const replayBytes = replayData ? serializedJsonBytes(replayData) : 0;
+      if (replayBytes === null) {
+        return res.status(400).json({ success: false, error: 'Battle replay must be valid JSON.' });
+      }
+      if (replayBytes > 1_500_000) {
+        return res.status(413).json({ success: false, error: 'Battle replay exceeds the 1.5 MB resolution limit.' });
+      }
+
+      const { data: match, error: matchError } = await supabase
+        .from('matches')
+        .select('*')
+        .eq('id', matchId)
+        .maybeSingle();
+      if (matchError) throw matchError;
+      if (!match) return res.status(404).json({ success: false, error: 'Match not found' });
+      if (match.completed_at) {
+        return res.status(409).json({ success: false, error: 'Match is already complete' });
+      }
+
+      const { data: combatants, error: combatantError } = await supabase
+        .from('gladiators')
+        .select(`${SAFE_GLADIATOR_SELECT},api_key,bot_profile:bot_gladiator_profiles(*)`)
+        .in('id', [match.challenger_id, match.defender_id]);
+      if (combatantError) throw combatantError;
+      const challenger = (combatants ?? []).find((gladiator) => String(gladiator.id) === String(match.challenger_id));
+      const defender = (combatants ?? []).find((gladiator) => String(gladiator.id) === String(match.defender_id));
+      if (!challenger || !defender) {
+        return res.status(404).json({ success: false, error: 'Combatants not found' });
+      }
+
+      const { data: challengerOwner, error: ownerError } = await supabase
+        .from('users')
+        .select('auth_uid')
+        .eq('id', challenger.user_id)
+        .maybeSingle();
+      if (ownerError) throw ownerError;
+      if (String(challengerOwner?.auth_uid ?? '') !== authData.user.id) {
+        return res.status(403).json({ success: false, error: 'Only the challenger owner can resolve this match' });
+      }
+
+      const normalizedChallengeType = (match.challenge_type ?? challengeType ?? 'speed_round') as ColosseumChallengeType;
+      const storedReplay = isRecord(match.replay_data) ? match.replay_data : {};
+      const storedPrompt = typeof storedReplay.challenge_prompt === 'string' ? storedReplay.challenge_prompt : '';
+      const storedExpectedSignals = typeof storedReplay.expected_solution_signals === 'string'
+        ? storedReplay.expected_solution_signals
+        : '';
+      const authoritativePrompt = storedPrompt || String(challengePrompt ?? CHALLENGE_BRIEFS[normalizedChallengeType]);
+      const { data: artifacts, error: artifactError } = await supabase
+        .from('match_solution_artifacts')
+        .select('gladiator_id,solution')
+        .eq('match_id', match.id);
+      if (artifactError) throw artifactError;
+      const challengerArtifact = (artifacts ?? []).find((artifact) => String(artifact.gladiator_id) === String(challenger.id));
+      let defenderArtifact = (artifacts ?? []).find((artifact) => String(artifact.gladiator_id) === String(defender.id));
+
+      if (!defenderArtifact?.solution) {
+        const regeneratedMove = await generateGladiatorMove({
+            matchId: match.id,
+            challengeType: normalizedChallengeType,
+            gladiator: defender,
+            opponent: challenger,
+            prompt: authoritativePrompt,
+          })
+          .catch(() => ({
+            gladiator_id: defender.id,
+            source: 'server-deterministic-fallback',
+            model: 'deterministic-colosseum-gladiator',
+            prompt: authoritativePrompt,
+            solution: localFallbackSolution({
+              challengeType: normalizedChallengeType,
+              gladiator: defender,
+              opponent: challenger,
+              prompt: authoritativePrompt,
+            }),
+            latency_ms: 0,
+            received_at: new Date().toISOString(),
+          }));
+        const { error: regeneratedArtifactError } = await supabase
+          .from('match_solution_artifacts')
+          .upsert({
+            match_id: match.id,
+            gladiator_id: String(regeneratedMove.gladiator_id),
+            source: String(regeneratedMove.source),
+            model: String(regeneratedMove.model),
+            prompt: String(regeneratedMove.prompt ?? ''),
+            solution: String(regeneratedMove.solution ?? ''),
+            latency_ms: Math.max(0, Number(regeneratedMove.latency_ms ?? 0)),
+            received_at: regeneratedMove.received_at ?? new Date().toISOString(),
+          }, { onConflict: 'match_id,gladiator_id' });
+        if (regeneratedArtifactError) throw regeneratedArtifactError;
+        defenderArtifact = {
+          gladiator_id: regeneratedMove.gladiator_id,
+          solution: regeneratedMove.solution,
+        };
+      }
+
+      const submittedChallengerSolution = typeof userSolution === 'string' && userSolution.trim()
+        ? userSolution.slice(0, 500_000)
+        : String(challengerArtifact?.solution ?? '');
+      const judge = await judgeColosseumBattle({
+        challengeType: normalizedChallengeType,
+        challengePrompt: authoritativePrompt,
+        expectedSignals: storedExpectedSignals || String(expectedSignals ?? ''),
+        challenger,
+        defender,
+        userSolution: submittedChallengerSolution,
+        botSolution: String(defenderArtifact.solution),
+      });
+      const winner = judge.winner_id === challenger.id ? challenger : defender;
+      const submittedReplay = isRecord(replayData) ? replayData : {};
+      const baseReplay = { ...storedReplay, ...submittedReplay };
+      const replayLog = Array.isArray(baseReplay.log)
+        ? baseReplay.log.map((line) => String(line)).slice(-250)
+        : [];
+      const completedReplay = {
+        ...baseReplay,
+        status: 'complete',
+        victor: winner.name,
+        winner_id: judge.winner_id,
+        challenger_score: judge.challenger_score,
+        defender_score: judge.defender_score,
+        challenger_progress: 100,
+        defender_progress: 100,
+        judge,
+        log: [
+          ...replayLog,
+          `${judge.used_ai ? 'Casper AI' : 'Casper rubric'} scored every combat criterion.`,
+          `${winner.name} lands the final commit and claims the purse.`,
+        ],
+        completed_server_at: new Date().toISOString(),
+      };
+
+      const { data: resolvedMatch, error: resolutionError } = await supabase.rpc('resolve_colosseum_match_server', {
+        p_match_id: match.id,
+        p_winner_id: judge.winner_id,
+        p_replay_data: completedReplay,
+        p_actor_auth_uid: authData.user.id,
+        p_judgement: judge,
+      });
+      if (resolutionError) throw resolutionError;
+
+      return res.json({
+        success: true,
+        match: resolvedMatch,
+        judge,
+        replayData: completedReplay,
+      });
+    } catch (error: unknown) {
+      console.error('[colosseum:resolve-battle]', error);
+      return res.status(502).json({ success: false, error: errorMessage(error) || 'Colosseum resolution failed' });
+    }
+  });
+
   // Neural Whisper — 1x per battle coaching hint
   app.post('/api/colosseum/neural-whisper', async (req, res) => {
     try {
+      const authUser = await authenticatedRequestUser(req, supabase);
+      if (!authUser) {
+        return res.status(401).json({ success: false, error: 'Authentication required.' });
+      }
       const { matchId, gladiatorId, whisper } = req.body ?? {};
+      if (!matchId || !(await userOwnsOpenMatch(supabase, String(matchId), authUser.id))) {
+        return res.status(403).json({ success: false, error: 'Only the challenger owner can send a neural whisper.' });
+      }
       if (!matchId || !gladiatorId || !whisper?.trim()) {
         return res.status(400).json({ success: false, error: 'matchId, gladiatorId, and whisper text are required' });
       }
