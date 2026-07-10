@@ -2300,6 +2300,7 @@ function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active, onClic
         className={cn('group relative grid place-items-center overflow-hidden rounded-[1.65rem] border border-white/15 bg-zinc-950', onClick ? 'cursor-pointer' : '', sizeClass)}
         style={{ boxShadow: `0 0 34px ${glow}55`, transformStyle: 'preserve-3d' }}
         onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
+        onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onClick(); } } : undefined}
         role={onClick ? 'button' : undefined}
         tabIndex={onClick ? 0 : undefined}
         aria-label={onClick && gladiator ? `Inspect ${gladiator.name}` : undefined}
@@ -4928,6 +4929,7 @@ function BattleWatchPanel({
               className={cn('relative h-12 w-12 shrink-0 overflow-hidden rounded-full border-2', onInspectGladiator && challenger ? 'cursor-pointer' : '')}
               style={{ borderColor: challenger?.glow_color ?? '#ff1744', boxShadow: `0 0 20px ${challenger?.glow_color ?? '#ff1744'}44` }}
               onClick={() => challenger && onInspectGladiator?.(challenger)}
+              onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onInspectGladiator && challenger) { e.preventDefault(); onInspectGladiator(challenger); } }}
               role={onInspectGladiator && challenger ? 'button' : undefined}
               tabIndex={onInspectGladiator && challenger ? 0 : undefined}
               aria-label={onInspectGladiator && challenger ? `Inspect ${challenger.name}` : undefined}
@@ -4954,6 +4956,7 @@ function BattleWatchPanel({
               className={cn('relative h-12 w-12 shrink-0 overflow-hidden rounded-full border-2', onInspectGladiator && defender ? 'cursor-pointer' : '')}
               style={{ borderColor: defender?.glow_color ?? '#00e5ff', boxShadow: `0 0 20px ${defender?.glow_color ?? '#00e5ff'}44` }}
               onClick={() => defender && onInspectGladiator?.(defender)}
+              onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onInspectGladiator && defender) { e.preventDefault(); onInspectGladiator(defender); } }}
               role={onInspectGladiator && defender ? 'button' : undefined}
               tabIndex={onInspectGladiator && defender ? 0 : undefined}
               aria-label={onInspectGladiator && defender ? `Inspect ${defender.name}` : undefined}
@@ -6101,16 +6104,9 @@ export const Colosseum: React.FC = () => {
       }
       : baseCodingChallenge;
     const submittedSolution = typeof baseReplay.user_solution === 'string' ? baseReplay.user_solution : WAITING_BATTLE_SAPPHIRE_STUB_SOLUTION;
-    setChallengeType(match.challenge_type);
-    setSelectedGladiatorId(sapphire.id);
-    setSelectedOpponentId(challenger.id);
-    setUserSolution(codingChallenge.starter);
-    setNotice(`Sapphire is answering ${challenger.name}'s waiting ${formatChallenge(match.challenge_type)} battle.`);
-    selectMatchAndSync(match.id, true);
+
+    // Lock the flow first, then attempt the DB update before committing any UI state.
     setStarting(true);
-    setBattleResult(null);
-    setLatestBotSolution('');
-    setChallengeModalOpen(false);
 
     let updatedMatch = match;
     try {
@@ -6124,6 +6120,17 @@ export const Colosseum: React.FC = () => {
       setStarting(false);
       return;
     }
+
+    // DB update succeeded — now commit all UI state changes.
+    setChallengeType(match.challenge_type);
+    setSelectedGladiatorId(sapphire.id);
+    setSelectedOpponentId(challenger.id);
+    setUserSolution(codingChallenge.starter);
+    setNotice(`Sapphire is answering ${challenger.name}'s waiting ${formatChallenge(match.challenge_type)} battle.`);
+    selectMatchAndSync(match.id, true);
+    setBattleResult(null);
+    setLatestBotSolution('');
+    setChallengeModalOpen(false);
 
     try {
       const previousLog = Array.isArray(baseReplay.log) ? baseReplay.log : [];
@@ -7302,7 +7309,7 @@ export const Colosseum: React.FC = () => {
                   role="button"
                   tabIndex={0}
                   onClick={() => handleActiveMatchClick(match)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleActiveMatchClick(match); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleActiveMatchClick(match); } }}
                   className="cursor-pointer rounded-2xl border border-red-500/20 bg-red-950/10 p-4 transition hover:border-red-400/40 hover:bg-red-900/20"
                 >
                   <p className="text-xs font-black uppercase tracking-[0.18em] text-white">{gladiatorById.get(match.challenger_id)?.name ?? 'Unknown'} vs {gladiatorById.get(match.defender_id)?.name ?? 'Unknown'}</p>
