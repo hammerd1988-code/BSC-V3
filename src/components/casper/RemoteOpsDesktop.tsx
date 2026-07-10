@@ -85,7 +85,7 @@ export const RemoteOpsDesktop: React.FC<{ ctrl: RemoteOpsController }> = ({ ctrl
                           <span className={`h-2 w-2 rounded-full ${m.online ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
                           <button
                             onClick={(e) => { e.stopPropagation(); handleRevoke(m.machineId); }}
-                            disabled={revokingId === m.machineId}
+                            disabled={revokingId.has(m.machineId)}
                             className={`flex items-center gap-1 rounded-full transition disabled:opacity-60 ${
                               revokeArmed === m.machineId
                                 ? 'bg-red-500/20 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-red-300'
@@ -93,7 +93,7 @@ export const RemoteOpsDesktop: React.FC<{ ctrl: RemoteOpsController }> = ({ ctrl
                             }`}
                             aria-label={revokeArmed === m.machineId ? `Confirm unlink ${m.machineName}` : `Unlink ${m.machineName}`}
                           >
-                            {revokingId === m.machineId ? (
+                            {revokingId.has(m.machineId) ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
                             ) : revokeArmed === m.machineId ? (
                               <><Power className="h-3 w-3" /> Unlink?</>
