@@ -84,7 +84,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Unknown Colosseum error';
+  if (error instanceof Error) return error.message;
+  if (isRecord(error) && typeof error.message === 'string') return error.message;
+  return 'Unknown Colosseum error';
+}
+
+function serializedJsonBytes(value: unknown): number | null {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), 'utf8');
+  } catch {
+    return null;
+  }
 }
 
 async function findBotAuthUserIdByEmail(supabase: SupabaseClient, email: string) {
@@ -1238,7 +1248,11 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
       if (!matchId) {
         return res.status(400).json({ success: false, error: 'matchId is required for battle resolution' });
       }
-      if (replayData && JSON.stringify(replayData).length > 1_500_000) {
+      const replayBytes = replayData ? serializedJsonBytes(replayData) : 0;
+      if (replayBytes === null) {
+        return res.status(400).json({ success: false, error: 'Battle replay must be valid JSON.' });
+      }
+      if (replayBytes > 1_500_000) {
         return res.status(413).json({ success: false, error: 'Battle replay exceeds the 1.5 MB resolution limit.' });
       }
 
@@ -1255,7 +1269,7 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
 
       const { data: combatants, error: combatantError } = await supabase
         .from('gladiators')
-        .select(SAFE_GLADIATOR_SELECT)
+        .select(`${SAFE_GLADIATOR_SELECT},api_key,bot_profile:bot_gladiator_profiles(*)`)
         .in('id', [match.challenger_id, match.defender_id]);
       if (combatantError) throw combatantError;
       const challenger = (combatants ?? []).find((gladiator) => String(gladiator.id) === String(match.challenger_id));

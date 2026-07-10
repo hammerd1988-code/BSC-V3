@@ -2135,8 +2135,6 @@ async function requestBattleResolution(input: {
   type: ChallengeType;
   challenge: CodingChallenge;
   userSolution: string;
-  botSolution: string;
-  moves: GladiatorAiMove[];
   replayData: Record<string, unknown>;
 }): Promise<{ judge: BattleJudgeResult; replayData: Record<string, unknown> }> {
   const session = await getValidSession();
@@ -2152,8 +2150,6 @@ async function requestBattleResolution(input: {
       challengePrompt: `${input.challenge.title}\n${input.challenge.prompt}`,
       expectedSignals: input.challenge.expected,
       userSolution: input.userSolution,
-      botSolution: input.botSolution,
-      moves: input.moves,
       replayData: input.replayData,
     }),
   });
@@ -5881,7 +5877,7 @@ export const Colosseum: React.FC = () => {
     });
   };
 
-  const finalizeBattle = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, codingChallenge: CodingChallenge, effectiveChallengerSolution: string, defenderMove: GladiatorAiMove | undefined, sanitizedAiMoves: GladiatorAiMove[], replayBase: Record<string, any>, finalLogs: string[], extraReplay?: Record<string, any>) => {
+  const finalizeBattle = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, codingChallenge: CodingChallenge, effectiveChallengerSolution: string, sanitizedAiMoves: GladiatorAiMove[], replayBase: Record<string, any>, finalLogs: string[], extraReplay?: Record<string, any>) => {
     void (async () => {
       let resolution: { judge: BattleJudgeResult; replayData: Record<string, unknown> };
       try {
@@ -5890,8 +5886,6 @@ export const Colosseum: React.FC = () => {
           type,
           challenge: codingChallenge,
           userSolution: effectiveChallengerSolution,
-          botSolution: defenderMove?.solution ?? '',
-          moves: sanitizedAiMoves,
           replayData: {
             ...replayBase,
             ...extraReplay,
@@ -6119,7 +6113,7 @@ export const Colosseum: React.FC = () => {
 
                 coachingIntervalRef.current = coachingInterval;
               } else {
-                finalizeBattle(match, challenger, defender, type, codingChallenge, effectiveChallengerSolution, defenderMove, sanitizedAiMoves, replayBase, finalLogs, {
+                finalizeBattle(match, challenger, defender, type, codingChallenge, effectiveChallengerSolution, sanitizedAiMoves, replayBase, finalLogs, {
                   rounds: SANDBOX_ROUND_COUNT,
                   round_scores: roundScores,
                   coaching_history: allCoachingHistory,
@@ -6163,7 +6157,7 @@ export const Colosseum: React.FC = () => {
 
         if (tick >= totalTicks) {
           window.clearInterval(interval);
-          finalizeBattle(match, challenger, defender, type, codingChallenge, effectiveChallengerSolution, defenderMove, sanitizedAiMoves, replayBase, finalLogs);
+          finalizeBattle(match, challenger, defender, type, codingChallenge, effectiveChallengerSolution, sanitizedAiMoves, replayBase, finalLogs);
         }
       }, tickInterval);
     }
