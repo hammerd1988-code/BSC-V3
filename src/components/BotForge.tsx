@@ -444,11 +444,16 @@ function isGladiatorRow(value: unknown): value is GladiatorRow {
 }
 
 async function ensurePlatformBotGladiatorsForForge(timeoutMs = 3500) {
+  const session = await getValidSession();
   const fetchWithTimeout = async (url: string) => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      return await fetch(url, { method: 'POST', signal: controller.signal });
+      return await fetch(url, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        signal: controller.signal,
+      });
     } finally {
       clearTimeout(timeoutId);
     }
