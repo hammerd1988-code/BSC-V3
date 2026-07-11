@@ -102,7 +102,7 @@ describe('public Colosseum replay safety', () => {
     const routes = readFileSync(resolve(process.cwd(), 'colosseumRoutes.ts'), 'utf8');
     const route = routes
       .split("app.get('/api/colosseum/replay/:matchId'")[1]
-      ?.split("app.post('/api/colosseum/gladiator-solutions'")[0] ?? '';
+      ?.split("app.get('/api/colosseum/replay/:matchId/seals'")[0] ?? '';
 
     expect(route).toContain('publicReplayAllowed(match)');
     expect(route).toContain('sanitizePublicReplayData');
