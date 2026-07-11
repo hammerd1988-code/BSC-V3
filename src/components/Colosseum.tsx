@@ -165,6 +165,7 @@ interface TournamentRow {
   started_at: string | null;
   completed_at: string | null;
   bracket: any;
+  champion_gladiator_id: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -177,6 +178,19 @@ interface TournamentEntryRow {
   user_id: string | null;
   seed: number | null;
   joined_at: string;
+}
+
+interface TournamentMatchRow {
+  id: string;
+  tournament_id: string;
+  round_number: number;
+  position: number;
+  slot_a_gladiator_id: string | null;
+  slot_b_gladiator_id: string | null;
+  winner_gladiator_id: string | null;
+  match_id: string | null;
+  status: 'waiting' | 'ready' | 'running' | 'complete';
+  resolution: 'battle' | 'bye' | null;
 }
 
 interface TournamentFormState {
@@ -2384,14 +2398,34 @@ function GladiatorInspectPopup({ gladiator, onClose }: { gladiator: Gladiator; o
   );
 }
 
-function TournamentDetailPopup({ tournament, entries, gladiatorById, onClose }: { tournament: TournamentRow; entries: TournamentEntryRow[]; gladiatorById: Map<string, Gladiator>; onClose: () => void }) {
+function TournamentDetailPopup({
+  tournament,
+  entries,
+  matches,
+  gladiatorById,
+  myGladiatorIds,
+  onFight,
+  onWatch,
+  onInspect,
+  onClose,
+}: {
+  tournament: TournamentRow;
+  entries: TournamentEntryRow[];
+  matches: TournamentMatchRow[];
+  gladiatorById: Map<string, Gladiator>;
+  myGladiatorIds: Set<string>;
+  onFight: (match: TournamentMatchRow, tournament: TournamentRow) => void;
+  onWatch: (matchId: string) => void;
+  onInspect: (gladiator: Gladiator) => void;
+  onClose: () => void;
+}) {
   const meta = challengeMeta(tournament.challenge_type);
   const Icon = meta.icon;
   const statusColor = tournament.status === 'open' ? '#22c55e' : tournament.status === 'scheduled' ? '#facc15' : tournament.status === 'running' ? '#ef4444' : '#71717a';
   const bracket = Array.isArray(tournament.bracket) ? tournament.bracket : [];
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
-      <motion.div initial={{ scale: 0.92, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.92, y: 20 }} onClick={(e) => e.stopPropagation()} className="relative mx-4 max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-[2rem] border-2 border-cyan-400/40 bg-black/95 p-6 shadow-[0_0_60px_rgba(0,229,255,0.15)]">
+      <motion.div initial={{ scale: 0.92, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.92, y: 20 }} onClick={(e) => e.stopPropagation()} className="relative mx-4 max-h-[88vh] w-full max-w-6xl overflow-y-auto rounded-[2rem] border-2 border-cyan-400/40 bg-black/95 p-6 shadow-[0_0_60px_rgba(0,229,255,0.15)]">
         <div className="pointer-events-none absolute inset-0 rounded-[2rem] opacity-25 bg-[radial-gradient(circle_at_20%_0%,rgba(0,229,255,0.4),transparent_34%)]" />
         <button type="button" onClick={onClose} className="absolute right-4 top-4 rounded-full border border-white/10 bg-white/5 p-2 text-zinc-400 hover:text-white"><ArrowLeft className="h-4 w-4" /></button>
         <div className="relative">
@@ -2425,7 +2459,47 @@ function TournamentDetailPopup({ tournament, entries, gladiatorById, onClose }: 
               ); })}</div>
             </div>
           )}
-          {bracket.length > 0 && (
+          {matches.length > 0 ? (
+            <div className="mt-6">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <p className="text-[9px] font-black uppercase tracking-[0.3em] text-cyan-200">Live Elimination Grid</p>
+                {tournament.champion_gladiator_id && <p className="text-[9px] font-black uppercase tracking-[0.22em] text-yellow-200">Champion: {gladiatorById.get(tournament.champion_gladiator_id)?.name ?? 'Unknown'}</p>}
+              </div>
+              <div className="flex gap-4 overflow-x-auto pb-3">
+                {Array.from(new Set(matches.map((match) => match.round_number))).sort((a, b) => a - b).map((round) => (
+                  <div key={round} className="w-64 shrink-0">
+                    <p className="mb-2 text-center text-[9px] font-black uppercase tracking-[0.24em] text-zinc-500">Round {round}</p>
+                    <div className="space-y-3">
+                      {matches.filter((match) => match.round_number === round).sort((a, b) => a.position - b.position).map((match) => {
+                        const slotA = match.slot_a_gladiator_id ? gladiatorById.get(match.slot_a_gladiator_id) : null;
+                        const slotB = match.slot_b_gladiator_id ? gladiatorById.get(match.slot_b_gladiator_id) : null;
+                        const canFight = match.status === 'ready' && [match.slot_a_gladiator_id, match.slot_b_gladiator_id].some((id) => id && myGladiatorIds.has(id));
+                        return (
+                          <div key={match.id} className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+                            <div className="mb-2 flex items-center justify-between">
+                              <span className="font-mono text-[9px] text-red-300">R{round}M{match.position}</span>
+                              <span className="text-[8px] font-black uppercase tracking-widest text-zinc-500">{match.resolution === 'bye' ? 'Bye Advanced' : match.status}</span>
+                            </div>
+                            {[slotA, slotB].map((gladiator, index) => (
+                              <button key={`${match.id}-${index}`} type="button" disabled={!gladiator} onClick={() => gladiator && onInspect(gladiator)} className={`mb-1 flex w-full items-center gap-2 rounded-xl border px-2 py-2 text-left transition last:mb-0 ${gladiator?.id === match.winner_gladiator_id ? 'border-yellow-300/35 bg-yellow-400/10' : 'border-white/5 bg-black/45'} ${gladiator ? 'hover:border-cyan-300/30' : 'cursor-default opacity-40'}`}>
+                                <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-full border border-white/10 bg-zinc-900">
+                                  {gladiator?.avatar_url ? <img src={gladiator.avatar_url} alt="" className="h-full w-full object-cover" /> : <span className="text-[9px] text-zinc-600">?</span>}
+                                </span>
+                                <span className="truncate text-[9px] font-black uppercase tracking-widest text-white">{gladiator?.name ?? 'Awaiting victor'}</span>
+                                {gladiator?.id === match.winner_gladiator_id && <Crown className="ml-auto h-3.5 w-3.5 text-yellow-300" />}
+                              </button>
+                            ))}
+                            {canFight && <button type="button" onClick={() => onFight(match, tournament)} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-red-300/35 bg-red-500/15 px-3 py-2 text-[8px] font-black uppercase tracking-[0.2em] text-red-100 transition hover:bg-red-500/25"><Swords className="h-3.5 w-3.5" /> Fight This Node</button>}
+                            {match.match_id && <button type="button" onClick={() => onWatch(match.match_id!)} className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-cyan-300/25 bg-cyan-500/10 px-3 py-2 text-[8px] font-black uppercase tracking-[0.2em] text-cyan-100 transition hover:bg-cyan-500/20"><Eye className="h-3.5 w-3.5" /> {match.status === 'running' ? 'Watch Live' : 'View Battle'}</button>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : bracket.length > 0 && (
             <div className="mt-4 max-h-40 overflow-y-auto rounded-2xl border border-white/10 bg-black/60 p-3 font-mono text-[10px] leading-5 text-cyan-100">
               {bracket.slice(0, 16).map((slot: any, idx: number) => <p key={`${slot.entry_id ?? slot.gladiator_id}-${idx}`}><span className="text-red-300">R{slot.round}M{slot.match}</span> Seed {slot.seed}: {gladiatorById.get(String(slot.gladiator_id))?.name ?? slot.gladiator_id}</p>)}
             </div>
@@ -4774,6 +4848,7 @@ function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSele
 function TournamentPanel({
   tournaments,
   entries,
+  matches,
   gladiatorById,
   myGladiators,
   selectedGladiator,
@@ -4783,9 +4858,11 @@ function TournamentPanel({
   joiningTournamentId,
   onCreate,
   onJoin,
+  onInspect,
 }: {
   tournaments: TournamentRow[];
   entries: TournamentEntryRow[];
+  matches: TournamentMatchRow[];
   gladiatorById: Map<string, Gladiator>;
   myGladiators: Gladiator[];
   selectedGladiator: Gladiator | null;
@@ -4795,6 +4872,7 @@ function TournamentPanel({
   joiningTournamentId: string;
   onCreate: (event: React.FormEvent) => void;
   onJoin: (tournament: TournamentRow) => void;
+  onInspect: (tournament: TournamentRow) => void;
 }) {
   const myGladiatorIds = useMemo(() => new Set(myGladiators.map((gladiator) => gladiator.id)), [myGladiators]);
   const entriesByTournament = useMemo(() => {
@@ -4852,6 +4930,7 @@ function TournamentPanel({
       <div className="grid gap-4 lg:grid-cols-2">
         {tournaments.length ? tournaments.map((tournament) => {
           const tournamentEntries = entriesByTournament.get(tournament.id) ?? [];
+          const circuitMatches = matches.filter((match) => match.tournament_id === tournament.id);
           const entered = tournamentEntries.some((entry) => myGladiatorIds.has(String(entry.gladiator_id)));
           const locked = tournament.status !== 'open';
           const bracket = Array.isArray(tournament.bracket) ? tournament.bracket : [];
@@ -4882,8 +4961,8 @@ function TournamentPanel({
                     <p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Threshold</p>
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                    <p className="text-lg font-black text-white">{bracket.length}</p>
-                    <p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Bracket</p>
+                    <p className="text-lg font-black text-white">{circuitMatches.length || bracket.length}</p>
+                    <p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Nodes</p>
                   </div>
                 </div>
 
@@ -4923,6 +5002,9 @@ function TournamentPanel({
                 >
                   {joiningTournamentId === tournament.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Users className="h-4 w-4" />}
                   {entered ? 'Gladiator Entered' : locked ? 'Signups Locked' : selectedGladiator ? `Enter ${selectedGladiator.name}` : 'Select Gladiator To Enter'}
+                </button>
+                <button type="button" onClick={() => onInspect(tournament)} className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-cyan-300/20 bg-cyan-500/10 px-4 py-3 text-[10px] font-black uppercase tracking-[0.22em] text-cyan-100 transition hover:border-cyan-300/40 hover:bg-cyan-400/15">
+                  <CircuitBoard className="h-4 w-4" /> Open Circuit
                 </button>
               </div>
             </motion.div>
@@ -5263,6 +5345,7 @@ export const Colosseum: React.FC = () => {
 
   const [tournaments, setTournaments] = useState<TournamentRow[]>([]);
   const [tournamentEntries, setTournamentEntries] = useState<TournamentEntryRow[]>([]);
+  const [tournamentMatches, setTournamentMatches] = useState<TournamentMatchRow[]>([]);
   const [creatingTournament, setCreatingTournament] = useState(false);
   const [joiningTournamentId, setJoiningTournamentId] = useState('');
   const [tournamentForm, setTournamentForm] = useState<TournamentFormState>({
@@ -5275,6 +5358,7 @@ export const Colosseum: React.FC = () => {
   const [battleDocked, setBattleDocked] = useState(false);
   const [inspectedGladiator, setInspectedGladiator] = useState<Gladiator | null>(null);
   const [inspectedTournament, setInspectedTournament] = useState<TournamentRow | null>(null);
+  const [pendingTournamentMatchId, setPendingTournamentMatchId] = useState('');
   const [inspectedMatch, setInspectedMatch] = useState<MatchRow | null>(null);
   const [roundTransition, setRoundTransition] = useState<{ round: number; totalRounds: number; label: string; phase: 'intro' | 'fight' } | null>(null);
   const [showWinnerReveal, setShowWinnerReveal] = useState<{ winner: Gladiator; loser: Gladiator; summary: string } | null>(null);
@@ -5355,16 +5439,19 @@ export const Colosseum: React.FC = () => {
   const fetchTournaments = useCallback(async () => {
     try {
       await supabase.rpc('start_due_tournaments');
-      const [{ data: tournamentRows, error: tournamentError }, { data: entryRows, error: entryError }] = await Promise.all([
+      const [{ data: tournamentRows, error: tournamentError }, { data: entryRows, error: entryError }, { data: circuitRows, error: circuitError }] = await Promise.all([
         supabase.from('tournaments').select('*').order('created_at', { ascending: false }).limit(20),
         supabase.from('tournament_entries').select('*').order('joined_at', { ascending: true }),
+        supabase.from('tournament_matches').select('*').order('round_number', { ascending: true }).order('position', { ascending: true }),
       ]);
 
       if (tournamentError) throw tournamentError;
       if (entryError) throw entryError;
+      if (circuitError && circuitError.code !== '42P01') throw circuitError;
 
       setTournaments((tournamentRows ?? []) as TournamentRow[]);
       setTournamentEntries((entryRows ?? []) as TournamentEntryRow[]);
+      setTournamentMatches((circuitRows ?? []) as TournamentMatchRow[]);
     } catch (err) {
       console.warn('[Colosseum] Tournament tables unavailable or migration pending', err);
     }
@@ -5404,6 +5491,7 @@ export const Colosseum: React.FC = () => {
       .channel('colosseum-tournaments')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tournaments' }, () => void fetchTournaments())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tournament_entries' }, () => void fetchTournaments())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tournament_matches' }, () => void fetchTournaments())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [fetchTournaments]);
@@ -5493,6 +5581,7 @@ export const Colosseum: React.FC = () => {
   };
 
   const openBotChallenge = (bot: Gladiator) => {
+    setPendingTournamentMatchId('');
     if (!selectedGladiatorId) {
       const mine = gladiators.find((gladiator) => gladiator.user_id === currentUser?.id && gladiator.id !== bot.id);
       if (mine) setSelectedGladiatorId(mine.id);
@@ -5506,6 +5595,30 @@ export const Colosseum: React.FC = () => {
     setLatestBotSolution('');
     setBattleResult(null);
     setUserSolution(challengeFor(bot.botProfile, challengeType, seed).starter);
+  };
+
+  const openThresholdCircuitMatch = (match: TournamentMatchRow, tournament: TournamentRow) => {
+    const first = match.slot_a_gladiator_id ? gladiatorById.get(match.slot_a_gladiator_id) : null;
+    const second = match.slot_b_gladiator_id ? gladiatorById.get(match.slot_b_gladiator_id) : null;
+    const mine = [first, second].find((gladiator) => gladiator?.user_id === currentUser?.id);
+    const opponent = [first, second].find((gladiator) => gladiator && gladiator.id !== mine?.id);
+    if (!mine || !opponent || match.status !== 'ready') {
+      setNotice('Only a combatant in a ready Threshold Circuit node can open this gate.');
+      return;
+    }
+    const nonce = Date.now();
+    const seed = `${match.id}-${tournament.challenge_type}-${nonce}`;
+    setSelectedGladiatorId(mine.id);
+    setSelectedOpponentId(opponent.id);
+    setChallengeType(tournament.challenge_type);
+    setPendingTournamentMatchId(match.id);
+    setChallengeNonce(nonce);
+    setChallengeModalOpen(true);
+    setCountdown(3);
+    setLatestBotSolution('');
+    setBattleResult(null);
+    setUserSolution(challengeFor(opponent.botProfile, tournament.challenge_type, seed).starter);
+    setInspectedTournament(null);
   };
 
   const handleActiveMatchClick = (match: MatchRow) => {
@@ -5745,6 +5858,7 @@ export const Colosseum: React.FC = () => {
           challenger_id: challenger.id,
           defender_id: defender.id,
           challenge_type: activeChallengeType,
+          tournament_match_id: pendingTournamentMatchId || null,
           replay_data: {
             intro: `${challenger.name} challenged ${defender.name}`,
             arena: 'underground-neon-fight-pit',
@@ -5759,6 +5873,7 @@ export const Colosseum: React.FC = () => {
       if (error) throw error;
 
       const match = data as MatchRow;
+      setPendingTournamentMatchId('');
       const challenge = challengeMeta(activeChallengeType);
       const logs = [
         `Gate locks engaged for ${challenge.label}.`,
@@ -6487,7 +6602,7 @@ export const Colosseum: React.FC = () => {
                 exit={{ scale: 0.94, y: 18 }}
                 className="relative w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-[2rem] border border-red-400/35 bg-zinc-950 p-4 shadow-[0_0_70px_rgba(255,23,68,0.28)] sm:p-6"
               >
-                <button type="button" onClick={() => setChallengeModalOpen(false)} className="absolute right-4 top-4 z-10 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white">Close</button>
+                <button type="button" onClick={() => { setChallengeModalOpen(false); setPendingTournamentMatchId(''); }} className="absolute right-4 top-4 z-10 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white">Close</button>
                 <div className="pointer-events-none absolute inset-0 opacity-35" style={{ background: `radial-gradient(circle at 20% 0%, ${selectedOpponent.glow_color}66, transparent 34%), radial-gradient(circle at 100% 100%, rgba(0,229,255,0.22), transparent 35%)` }} />
                 <div className="relative">
                   <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -6981,6 +7096,7 @@ export const Colosseum: React.FC = () => {
         <TournamentPanel
           tournaments={tournaments}
           entries={tournamentEntries}
+          matches={tournamentMatches}
           gladiatorById={gladiatorById}
           myGladiators={myGladiators}
           selectedGladiator={selectedGladiator}
@@ -6990,6 +7106,7 @@ export const Colosseum: React.FC = () => {
           joiningTournamentId={joiningTournamentId}
           onCreate={createTournament}
           onJoin={joinTournament}
+          onInspect={setInspectedTournament}
         />
 
         <section className="mt-6 grid gap-6 xl:grid-cols-[0.95fr_1.1fr_0.95fr]">
@@ -7449,7 +7566,22 @@ export const Colosseum: React.FC = () => {
         {inspectedGladiator && <GladiatorInspectPopup gladiator={inspectedGladiator} onClose={() => setInspectedGladiator(null)} />}
       </AnimatePresence>
       <AnimatePresence>
-        {inspectedTournament && <TournamentDetailPopup tournament={inspectedTournament} entries={tournamentEntries.filter((e) => e.tournament_id === inspectedTournament.id)} gladiatorById={gladiatorById} onClose={() => setInspectedTournament(null)} />}
+        {inspectedTournament && (
+          <TournamentDetailPopup
+            tournament={inspectedTournament}
+            entries={tournamentEntries.filter((entry) => entry.tournament_id === inspectedTournament.id)}
+            matches={tournamentMatches.filter((match) => match.tournament_id === inspectedTournament.id)}
+            gladiatorById={gladiatorById}
+            myGladiatorIds={new Set(myGladiators.map((gladiator) => gladiator.id))}
+            onFight={openThresholdCircuitMatch}
+            onWatch={(matchId) => {
+              setInspectedTournament(null);
+              selectMatchAndSync(matchId, true);
+            }}
+            onInspect={setInspectedGladiator}
+            onClose={() => setInspectedTournament(null)}
+          />
+        )}
       </AnimatePresence>
       <AnimatePresence>
         {inspectedMatch && <BattleSynopsisPopup match={inspectedMatch} gladiatorById={gladiatorById} onClose={() => setInspectedMatch(null)} />}
