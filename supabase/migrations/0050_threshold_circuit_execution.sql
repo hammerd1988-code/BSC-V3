@@ -156,6 +156,12 @@ begin
     and position = v_next_position
   for update;
 
+  if v_next_id is null then
+    raise exception 'Threshold Circuit bracket is missing round % position %',
+      v_node.round_number + 1,
+      v_next_position;
+  end if;
+
   if mod(v_node.position, 2) = 1 then
     update public.tournament_matches
     set slot_a_gladiator_id = p_winner_gladiator_id, updated_at = now()
@@ -360,6 +366,8 @@ begin
     started_at = now(),
     updated_at = now()
   where id = new.tournament_match_id;
+
+  perform public.refresh_threshold_bracket(v_node.tournament_id);
 
   return new;
 end;

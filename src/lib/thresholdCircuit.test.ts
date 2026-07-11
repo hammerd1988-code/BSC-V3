@@ -30,5 +30,7 @@ describe('Threshold Circuit', () => {
     expect(migration).toContain("status = 'completed'");
     expect(migration).toContain('champion_gladiator_id = p_winner_gladiator_id');
     expect(migration).toContain('perform public.refresh_threshold_bracket');
+    expect(migration).toContain('Threshold Circuit bracket is missing round');
+    expect(migration).toContain('perform public.refresh_threshold_bracket(v_node.tournament_id)');
   });
 });
