@@ -5439,13 +5439,22 @@ export const Colosseum: React.FC = () => {
   const fetchTournaments = useCallback(async () => {
     try {
       await supabase.rpc('start_due_tournaments');
-      const [{ data: tournamentRows, error: tournamentError }, { data: entryRows, error: entryError }, { data: circuitRows, error: circuitError }] = await Promise.all([
-        supabase.from('tournaments').select('*').order('created_at', { ascending: false }).limit(20),
-        supabase.from('tournament_entries').select('*').order('joined_at', { ascending: true }),
-        supabase.from('tournament_matches').select('*').order('round_number', { ascending: true }).order('position', { ascending: true }),
-      ]);
-
+      const { data: tournamentRows, error: tournamentError } = await supabase
+        .from('tournaments')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(20);
       if (tournamentError) throw tournamentError;
+      const tournamentIds = (tournamentRows ?? []).map((tournament) => tournament.id);
+      const [{ data: entryRows, error: entryError }, { data: circuitRows, error: circuitError }] = tournamentIds.length > 0
+        ? await Promise.all([
+          supabase.from('tournament_entries').select('*').in('tournament_id', tournamentIds).order('joined_at', { ascending: true }),
+          supabase.from('tournament_matches').select('*').in('tournament_id', tournamentIds).order('round_number', { ascending: true }).order('position', { ascending: true }),
+        ])
+        : [
+          { data: [], error: null },
+          { data: [], error: null },
+        ];
       if (entryError) throw entryError;
       if (circuitError && circuitError.code !== '42P01') throw circuitError;
 
