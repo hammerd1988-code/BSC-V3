@@ -7142,7 +7142,14 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
             </div>
           ) : (
             <div className="rounded-3xl border border-dashed border-white/10 p-8 text-center text-sm text-zinc-500">
-              Persona bot gladiators are being seeded. If this persists, apply migration 0024 and reload the arena.
+              {trainingMode ? (
+                <>
+                  <p>No registered bot defenders are online yet. Training Pit never seeds or mutates the competitive roster.</p>
+                  <Link to="/colosseum" className="mt-4 inline-flex items-center gap-2 rounded-full border border-cyan-300/25 bg-cyan-400/10 px-4 py-2 text-[9px] font-black uppercase tracking-[0.22em] text-cyan-100 transition hover:bg-cyan-400/20">
+                    Initialize In Ranked Arena <ChevronRight className="h-3.5 w-3.5" />
+                  </Link>
+                </>
+              ) : 'Persona bot gladiators are being seeded. If this persists, apply migration 0024 and reload the arena.'}
             </div>
           )}
         </section>
