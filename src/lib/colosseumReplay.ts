@@ -20,7 +20,7 @@ function redactSecrets(value: string) {
     .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, '[REDACTED_KEY]')
     .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, '[REDACTED_TOKEN]')
     .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, '$1[REDACTED_TOKEN]')
-    .replace(/\b(api[_-]?key|access[_-]?token|secret|password)\s*[:=]\s*["']?[^"'\s,;]{6,}/gi, '$1=[REDACTED]');
+    .replace(/\b(api[_-]?key|access[_-]?token|secret|password)\s*[:=]\s*(?:"[^"]{6,}"|'[^']{6,}'|[^"'\s,;]{6,})/gi, '$1=[REDACTED]');
 }
 
 function safeText(value: unknown, maxLength: number) {
@@ -35,12 +35,13 @@ export function sanitizePublicAssetUrl(value: unknown) {
   const candidate = safeText(value, 2_000);
   if (!candidate) return '';
   if (candidate.startsWith('/') && !candidate.startsWith('//')) {
-    return candidate.split('?')[0];
+    return candidate.split(/[?#]/)[0];
   }
   try {
     const url = new URL(candidate);
     if (url.protocol !== 'https:' && url.protocol !== 'http:') return '';
     if (url.username || url.password) return '';
+    url.hash = '';
     [...url.searchParams.keys()].forEach((key) => {
       if (/(token|secret|signature|credential|api.?key)/i.test(key)) {
         url.searchParams.delete(key);

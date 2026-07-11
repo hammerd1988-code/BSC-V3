@@ -43,6 +43,7 @@ interface PublicReceipt {
   };
   combatants: PublicCombatant[];
   replay_data: {
+    intro: string;
     arena: string;
     challenge_title: string;
     challenge_difficulty: string;
@@ -61,6 +62,13 @@ interface PublicReceipt {
       solution: string;
       latency_ms: number;
       received_at: string;
+    }>;
+    rounds: number;
+    round_scores: Array<{
+      round: number;
+      challenger_score: number;
+      defender_score: number;
+      summary: string;
     }>;
     judge: BattleJudgeResult;
   };
