@@ -185,6 +185,34 @@ interface TournamentFormState {
   min_contestants: number;
 }
 
+interface GladiatorLegacy {
+  gladiator_id: string;
+  ranked_battles: number;
+  ranked_wins: number;
+  ranked_losses: number;
+  speed_wins: number;
+  debug_wins: number;
+  golf_wins: number;
+  evolving_signature: string;
+}
+
+interface GladiatorBattleScar {
+  id: string;
+  gladiator_id: string;
+  scar_type: 'first_blood' | 'comeback_crown' | 'giant_slayer' | 'iron_tempered' | 'flawless_code';
+  earned_match_id: string | null;
+  earned_at: string;
+  scar_data: Record<string, unknown>;
+}
+
+const BATTLE_SCAR_META: Record<GladiatorBattleScar['scar_type'], { label: string; detail: string; color: string }> = {
+  first_blood: { label: 'First Blood', detail: 'Claimed a first ranked victory.', color: '#ff1744' },
+  comeback_crown: { label: 'Comeback Crown', detail: 'Won after trailing in the round ledger.', color: '#f9ff6b' },
+  giant_slayer: { label: 'Giant Slayer', detail: 'Dropped a veteran with a massive win advantage.', color: '#ff2bd6' },
+  iron_tempered: { label: 'Iron Tempered', detail: 'Survived ten ranked battles.', color: '#a1a1aa' },
+  flawless_code: { label: 'Flawless Code', detail: 'Sealed a verdict score of 95 or higher.', color: '#00e5ff' },
+};
+
 interface CoachingMessage {
   role: 'gladiator' | 'coach';
   text: string;
@@ -2337,7 +2365,17 @@ function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active, onClic
   );
 }
 
-function GladiatorInspectPopup({ gladiator, onClose }: { gladiator: Gladiator; onClose: () => void }) {
+function GladiatorInspectPopup({
+  gladiator,
+  legacy,
+  scars,
+  onClose,
+}: {
+  gladiator: Gladiator;
+  legacy: GladiatorLegacy | null;
+  scars: GladiatorBattleScar[];
+  onClose: () => void;
+}) {
   const badge = badgeFor(gladiator);
   const BadgeIcon = badge.icon;
   const profile = gladiator.botProfile;
@@ -2368,6 +2406,29 @@ function GladiatorInspectPopup({ gladiator, onClose }: { gladiator: Gladiator; o
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-yellow-200">{gladiator.cred}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">CRED</p></div>
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-cyan-200">{wr}%</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Win Rate</p></div>
         </div>
+        {legacy && (
+          <div className="relative mt-5 rounded-2xl border border-red-300/20 bg-red-950/10 p-4">
+            <p className="text-[8px] font-black uppercase tracking-[0.28em] text-red-300">Evolving Signature</p>
+            <p className="mt-1 text-lg font-black uppercase tracking-[0.16em] text-white">{legacy.evolving_signature}</p>
+            <p className="mt-2 text-[9px] font-bold uppercase tracking-widest text-zinc-500">{legacy.ranked_battles} ranked battles · {legacy.speed_wins} speed · {legacy.debug_wins} debug · {legacy.golf_wins} golf wins</p>
+          </div>
+        )}
+        {scars.length > 0 && (
+          <div className="relative mt-5">
+            <p className="mb-2 text-[8px] font-black uppercase tracking-[0.28em] text-zinc-500">Battle Scars</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {scars.map((scar) => {
+                const meta = BATTLE_SCAR_META[scar.scar_type];
+                return (
+                  <button key={scar.id} type="button" onClick={() => scar.earned_match_id && window.open(`/colosseum?match=${encodeURIComponent(scar.earned_match_id)}`, '_self')} className="rounded-2xl border bg-white/[0.03] p-3 text-left transition hover:bg-white/[0.06] disabled:cursor-default" style={{ borderColor: `${meta.color}44` }} disabled={!scar.earned_match_id}>
+                    <span className="text-[9px] font-black uppercase tracking-[0.2em]" style={{ color: meta.color }}>{meta.label}</span>
+                    <span className="mt-1 block text-[10px] leading-4 text-zinc-400">{meta.detail}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
         {profile && (
           <div className="relative mt-5 space-y-3 text-[10px] leading-5 text-zinc-400">
             {profile.battle_style && <div className="rounded-2xl border border-white/10 bg-black/35 p-3"><span className="font-black uppercase tracking-[0.2em] text-cyan-200">Battle Style:</span> {profile.battle_style}</div>}
@@ -5263,6 +5324,8 @@ export const Colosseum: React.FC = () => {
 
   const [tournaments, setTournaments] = useState<TournamentRow[]>([]);
   const [tournamentEntries, setTournamentEntries] = useState<TournamentEntryRow[]>([]);
+  const [gladiatorLegacies, setGladiatorLegacies] = useState<Map<string, GladiatorLegacy>>(new Map());
+  const [gladiatorBattleScars, setGladiatorBattleScars] = useState<GladiatorBattleScar[]>([]);
   const [creatingTournament, setCreatingTournament] = useState(false);
   const [joiningTournamentId, setJoiningTournamentId] = useState('');
   const [tournamentForm, setTournamentForm] = useState<TournamentFormState>({
@@ -5370,6 +5433,22 @@ export const Colosseum: React.FC = () => {
     }
   }, []);
 
+  const fetchBattleScars = useCallback(async () => {
+    try {
+      const [{ data: legacyRows, error: legacyError }, { data: scarRows, error: scarError }] = await Promise.all([
+        supabase.from('gladiator_legacies').select('*'),
+        supabase.from('gladiator_battle_scars').select('*').order('earned_at', { ascending: false }),
+      ]);
+      if (legacyError) throw legacyError;
+      if (scarError) throw scarError;
+      setGladiatorLegacies(new Map(((legacyRows ?? []) as GladiatorLegacy[]).map((legacy) => [legacy.gladiator_id, legacy])));
+      setGladiatorBattleScars((scarRows ?? []) as GladiatorBattleScar[]);
+    } catch (error) {
+      const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : '';
+      if (code !== '42P01') console.warn('[Colosseum] Battle Scars unavailable', error);
+    }
+  }, []);
+
   useEffect(() => {
     void fetchArena();
   }, [fetchArena]);
@@ -5385,6 +5464,10 @@ export const Colosseum: React.FC = () => {
   useEffect(() => {
     void fetchTournaments();
   }, [fetchTournaments]);
+
+  useEffect(() => {
+    void fetchBattleScars();
+  }, [fetchBattleScars]);
 
   useEffect(() => {
     setWhisperUsed(false);
@@ -5407,6 +5490,15 @@ export const Colosseum: React.FC = () => {
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [fetchTournaments]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('colosseum-battle-scars')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiator_legacies' }, () => void fetchBattleScars())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiator_battle_scars' }, () => void fetchBattleScars())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchBattleScars]);
 
   const gladiatorById = useMemo(() => new Map(gladiators.map((gladiator) => [gladiator.id, gladiator])), [gladiators]);
   const myGladiators = useMemo(() => gladiators.filter((gladiator) => gladiator.user_id === currentUser?.id), [gladiators, currentUser?.id]);
@@ -7446,7 +7538,14 @@ export const Colosseum: React.FC = () => {
       </div>
       <UpgradePromptModal gate={upgradeGate} open={!!upgradeGate} onClose={() => setUpgradeGate(null)} />
       <AnimatePresence>
-        {inspectedGladiator && <GladiatorInspectPopup gladiator={inspectedGladiator} onClose={() => setInspectedGladiator(null)} />}
+        {inspectedGladiator && (
+          <GladiatorInspectPopup
+            gladiator={inspectedGladiator}
+            legacy={gladiatorLegacies.get(inspectedGladiator.id) ?? null}
+            scars={gladiatorBattleScars.filter((scar) => scar.gladiator_id === inspectedGladiator.id)}
+            onClose={() => setInspectedGladiator(null)}
+          />
+        )}
       </AnimatePresence>
       <AnimatePresence>
         {inspectedTournament && <TournamentDetailPopup tournament={inspectedTournament} entries={tournamentEntries.filter((e) => e.tournament_id === inspectedTournament.id)} gladiatorById={gladiatorById} onClose={() => setInspectedTournament(null)} />}
