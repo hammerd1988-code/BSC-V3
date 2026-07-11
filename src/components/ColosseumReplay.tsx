@@ -10,16 +10,26 @@ import {
   Crown,
   ExternalLink,
   FileCode2,
+  Flame,
   Loader2,
   Scale,
   Share2,
   Shield,
+  Skull,
   Swords,
   Terminal,
   Trophy,
   X,
+  Zap,
 } from 'lucide-react';
 import type { BattleJudgeResult, ColosseumChallengeType } from '../lib/colosseumVerdict';
+import { authedFetch, getValidSession } from '../lib/authSession';
+import type {
+  CrowdSealCount,
+  CrowdSealMoment,
+  CrowdSealType,
+  ViewerCrowdSeal,
+} from '../lib/colosseumCrowdSeals';
 import { CasperAnnotationLedger, CasperRubricScorecard } from './CasperVerdictLedger';
 
 interface PublicCombatant {
@@ -127,6 +137,139 @@ function CombatantCard({
         </div>
       )}
     </div>
+  );
+}
+
+const CROWD_SEAL_META: Record<CrowdSealType, { label: string; detail: string }> = {
+  casper_cut: { label: 'Casper Cut', detail: 'The verdict turned here.' },
+  clean_kill: { label: 'Clean Kill', detail: 'Decisive, elegant execution.' },
+  crowd_roar: { label: 'Crowd Roar', detail: 'The sand erupted.' },
+  comeback: { label: 'Comeback', detail: 'Defeat was denied.' },
+  iron_clad: { label: 'Iron Clad', detail: 'Built to survive everything.' },
+};
+
+const CROWD_MOMENTS: Array<{ id: CrowdSealMoment; label: string }> = [
+  { id: 'verdict', label: 'Verdict' },
+  { id: 'challenger_solution', label: 'Red Solution' },
+  { id: 'defender_solution', label: 'Shadow Solution' },
+  { id: 'arena', label: 'Arena' },
+];
+
+function CrowdSealIcon({ type }: { type: CrowdSealType }) {
+  if (type === 'casper_cut') return <Scale className="h-4 w-4" />;
+  if (type === 'clean_kill') return <Skull className="h-4 w-4" />;
+  if (type === 'comeback') return <Zap className="h-4 w-4" />;
+  if (type === 'iron_clad') return <Shield className="h-4 w-4" />;
+  return <Flame className="h-4 w-4" />;
+}
+
+function CrowdSealBoard({ matchId }: { matchId: string }) {
+  const [counts, setCounts] = useState<CrowdSealCount[]>([]);
+  const [viewerSeals, setViewerSeals] = useState<ViewerCrowdSeal[]>([]);
+  const [moment, setMoment] = useState<CrowdSealMoment>('verdict');
+  const [loading, setLoading] = useState(true);
+  const [casting, setCasting] = useState<CrowdSealType | null>(null);
+  const [status, setStatus] = useState('');
+
+  const applyPayload = (payload: { crowd_seals?: CrowdSealCount[]; viewer_seals?: ViewerCrowdSeal[] }) => {
+    setCounts(Array.isArray(payload.crowd_seals) ? payload.crowd_seals : []);
+    setViewerSeals(Array.isArray(payload.viewer_seals) ? payload.viewer_seals : []);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const session = await getValidSession().catch(() => null);
+        const response = await fetch(`/api/colosseum/replay/${encodeURIComponent(matchId)}/seals`, {
+          headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!cancelled && response.ok) applyPayload(payload);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    void load();
+    return () => { cancelled = true; };
+  }, [matchId]);
+
+  const castSeal = async (sealType: CrowdSealType) => {
+    const active = viewerSeals.some((seal) => seal.moment === moment && seal.seal_type === sealType);
+    setCasting(sealType);
+    setStatus('');
+    try {
+      const response = await authedFetch(`/api/colosseum/replay/${encodeURIComponent(matchId)}/seals`, {
+        method: 'POST',
+        body: JSON.stringify({ moment, seal_type: sealType }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'The crowd rejected that seal.');
+      applyPayload(payload);
+      setStatus(active ? 'Seal lifted. The moment is open again.' : `${CROWD_SEAL_META[sealType].label} pressed into the Ledger.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Sign in to cast a Crowd Seal.');
+    } finally {
+      setCasting(null);
+    }
+  };
+
+  return (
+    <section className="relative mt-6 overflow-hidden rounded-[2rem] border border-fuchsia-300/20 bg-fuchsia-950/10 p-5 sm:p-7">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_85%_0%,rgba(217,70,239,0.14),transparent_45%)]" />
+      <div className="relative">
+        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+          <div>
+            <div className="flex items-center gap-2">
+              <Flame className="h-4 w-4 text-fuchsia-300" />
+              <p className="text-[9px] font-black uppercase tracking-[0.32em] text-fuchsia-200">Spectator Canon</p>
+            </div>
+            <h2 className="mt-2 text-2xl font-black uppercase tracking-[0.13em] text-white">Crowd Seals</h2>
+            <p className="mt-2 max-w-2xl text-xs leading-6 text-zinc-400">Press one seal into each battle moment. The loudest marks become the receipt's permanent crowd memory.</p>
+          </div>
+          <p className="text-[8px] font-black uppercase tracking-[0.22em] text-zinc-600">One voice / one mark / each moment</p>
+        </div>
+
+        <div className="mt-5 flex gap-2 overflow-x-auto pb-1">
+          {CROWD_MOMENTS.map((entry) => (
+            <button key={entry.id} type="button" onClick={() => { setMoment(entry.id); setStatus(''); }} className={`shrink-0 rounded-full border px-4 py-2 text-[8px] font-black uppercase tracking-[0.2em] transition ${moment === entry.id ? 'border-fuchsia-200/60 bg-fuchsia-400/20 text-fuchsia-100' : 'border-white/10 bg-white/[0.03] text-zinc-500 hover:text-white'}`}>
+              {entry.label}
+            </button>
+          ))}
+        </div>
+
+        {loading ? (
+          <div className="mt-5 flex items-center justify-center gap-2 rounded-3xl border border-white/10 p-8 text-xs text-zinc-500">
+            <Loader2 className="h-4 w-4 animate-spin" /> Listening to the arena...
+          </div>
+        ) : (
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            {(Object.keys(CROWD_SEAL_META) as CrowdSealType[]).map((sealType) => {
+              const meta = CROWD_SEAL_META[sealType];
+              const count = counts.find((entry) => entry.moment === moment && entry.seal_type === sealType)?.count ?? 0;
+              const active = viewerSeals.some((seal) => seal.moment === moment && seal.seal_type === sealType);
+              return (
+                <button key={sealType} type="button" onClick={() => void castSeal(sealType)} disabled={casting !== null} className={`rounded-2xl border p-4 text-left transition disabled:cursor-wait disabled:opacity-60 ${active ? 'border-fuchsia-200/60 bg-fuchsia-400/20 shadow-[0_0_28px_rgba(217,70,239,0.16)]' : 'border-white/10 bg-black/45 hover:border-fuchsia-300/35 hover:bg-fuchsia-500/10'}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={active ? 'text-fuchsia-200' : 'text-zinc-500'}>{casting === sealType ? <Loader2 className="h-4 w-4 animate-spin" /> : <CrowdSealIcon type={sealType} />}</span>
+                    <span className="text-lg font-black text-white">{count}</span>
+                  </div>
+                  <p className="mt-3 text-[9px] font-black uppercase tracking-[0.18em] text-white">{meta.label}</p>
+                  <p className="mt-1 text-[9px] leading-4 text-zinc-500">{meta.detail}</p>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {status && (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-[10px] text-zinc-300">
+            <span>{status}</span>
+            {status.toLowerCase().includes('sign in') && <Link to="/" className="font-black uppercase tracking-widest text-fuchsia-200 hover:text-white">Sign In</Link>}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -322,6 +465,8 @@ export function ColosseumReplay() {
             </div>
           )}
         </section>
+
+        <CrowdSealBoard matchId={match.id} />
 
         {replay.challenge_prompt && (
           <section className="mt-6 rounded-[2rem] border border-white/10 bg-zinc-950/80 p-5 sm:p-7">
