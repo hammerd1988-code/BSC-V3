@@ -99,28 +99,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function crowdSealPayload(rows: unknown, viewerUserId: string | null) {
-  const counts = new Map<string, CrowdSealCount>();
+function crowdSealPayload(rows: unknown) {
+  const counts: CrowdSealCount[] = [];
   const viewerSeals: ViewerCrowdSeal[] = [];
   if (Array.isArray(rows)) {
     rows.forEach((value) => {
       if (!isRecord(value) || !isCrowdSealMoment(value.moment) || !isCrowdSealType(value.seal_type)) return;
       const moment = value.moment as CrowdSealMoment;
       const sealType = value.seal_type as CrowdSealType;
-      const key = `${moment}:${sealType}`;
-      const existing = counts.get(key);
-      counts.set(key, {
+      const count = Number(value.seal_count);
+      if (!Number.isFinite(count) || count < 1) return;
+      counts.push({
         moment,
         seal_type: sealType,
-        count: (existing?.count ?? 0) + 1,
+        count,
       });
-      if (viewerUserId && value.user_id === viewerUserId) {
+      if (value.viewer_selected === true) {
         viewerSeals.push({ moment, seal_type: sealType });
       }
     });
   }
   return {
-    crowd_seals: [...counts.values()].sort((left, right) => right.count - left.count),
+    crowd_seals: counts.sort((left, right) => right.count - left.count),
     viewer_seals: viewerSeals,
   };
 }
@@ -1210,15 +1210,15 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
         viewerUserId = viewer?.id ? String(viewer.id) : null;
       }
 
-      const { data: seals, error: sealError } = await supabase
-        .from('battle_crowd_seals')
-        .select('moment,seal_type,user_id')
-        .eq('match_id', matchId);
+      const { data: seals, error: sealError } = await supabase.rpc('get_battle_crowd_seals', {
+        p_match_id: matchId,
+        p_viewer_user_id: viewerUserId,
+      });
       if (sealError && sealError.code !== '42P01') throw sealError;
 
       return res.json({
         success: true,
-        ...crowdSealPayload(seals ?? [], viewerUserId),
+        ...crowdSealPayload(seals ?? []),
       });
     } catch (error: unknown) {
       console.error('[colosseum:crowd-seals:list]', error);
@@ -1294,15 +1294,15 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
         if (upsertError) throw upsertError;
       }
 
-      const { data: seals, error: sealError } = await supabase
-        .from('battle_crowd_seals')
-        .select('moment,seal_type,user_id')
-        .eq('match_id', matchId);
+      const { data: seals, error: sealError } = await supabase.rpc('get_battle_crowd_seals', {
+        p_match_id: matchId,
+        p_viewer_user_id: viewerUserId,
+      });
       if (sealError) throw sealError;
 
       return res.json({
         success: true,
-        ...crowdSealPayload(seals ?? [], viewerUserId),
+        ...crowdSealPayload(seals ?? []),
       });
     } catch (error: unknown) {
       console.error('[colosseum:crowd-seals:cast]', error);
