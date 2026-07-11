@@ -62,6 +62,12 @@ import type {
   BattleRubricItem,
   ColosseumChallengeType,
 } from '../lib/colosseumVerdict';
+import {
+  grudgeHeat,
+  grudgeStreakLabel,
+  type GladiatorRivalry,
+  type GrudgeHeat,
+} from '../lib/colosseumGrudge';
 import { ReportModal } from './ReportModal';
 import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
 import { DistrictCityBackdrop } from './DistrictCityBackdrop';
@@ -4938,6 +4944,122 @@ function TournamentPanel({
   );
 }
 
+function grudgeHeatTone(heat: GrudgeHeat) {
+  if (heat === 'Blood Feud') return 'border-red-300/45 bg-red-500/15 text-red-100';
+  if (heat === 'Bitter') return 'border-orange-300/35 bg-orange-500/10 text-orange-100';
+  if (heat === 'Simmering') return 'border-yellow-300/30 bg-yellow-500/10 text-yellow-100';
+  return 'border-zinc-300/20 bg-white/[0.04] text-zinc-300';
+}
+
+function GrudgeLedgerPanel({
+  rivalries,
+  gladiatorById,
+  onRevenge,
+  onInspect,
+}: {
+  rivalries: GladiatorRivalry[];
+  gladiatorById: Map<string, Gladiator>;
+  onRevenge: (rivalry: GladiatorRivalry) => void;
+  onInspect: (gladiator: Gladiator) => void;
+}) {
+  return (
+    <section className="relative mt-6 overflow-hidden rounded-[2rem] border border-red-300/20 bg-black/70 p-5 shadow-[0_0_70px_rgba(239,68,68,0.1)] backdrop-blur-xl sm:p-6">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_0%,rgba(239,68,68,0.13),transparent_42%)]" />
+      <div className="relative">
+        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+          <div>
+            <div className="flex items-center gap-2">
+              <Flame className="h-4 w-4 text-red-300" />
+              <p className="text-[10px] font-black uppercase tracking-[0.34em] text-red-200">Persistent Rival Memory</p>
+            </div>
+            <h2 className="mt-2 text-2xl font-black uppercase tracking-[0.16em] text-white">The Grudge Ledger</h2>
+            <p className="mt-2 max-w-3xl text-xs leading-6 text-zinc-400">Every ranked verdict cuts both ways. Your gladiators remember who beat them, who they own, and which score still demands blood.</p>
+          </div>
+          <div className="rounded-full border border-red-300/20 bg-red-500/10 px-4 py-2 text-[9px] font-black uppercase tracking-[0.24em] text-red-100">
+            {rivalries.length} active grudge{rivalries.length === 1 ? '' : 's'}
+          </div>
+        </div>
+
+        {rivalries.length ? (
+          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            {rivalries.map((rivalry) => {
+              const owner = gladiatorById.get(rivalry.owner_gladiator_id);
+              const rival = gladiatorById.get(rivalry.rival_gladiator_id);
+              const heat = grudgeHeat(rivalry.grudge_score);
+              const revengeOwed = rivalry.last_result === 'loss';
+              return (
+                <article key={`${rivalry.owner_gladiator_id}-${rivalry.rival_gladiator_id}`} className="relative overflow-hidden rounded-3xl border border-white/10 bg-zinc-950/80 p-4">
+                  <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-red-300/60 to-transparent" />
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <button type="button" disabled={!owner} onClick={() => owner && onInspect(owner)} aria-label={`Inspect ${owner?.name ?? 'your gladiator'}`} className="h-11 w-11 shrink-0 overflow-hidden rounded-2xl border border-white/15 bg-black transition hover:scale-105 disabled:cursor-default">
+                        {owner && <img src={avatarUrlForGladiator(owner)} alt="" className="h-full w-full object-cover" />}
+                      </button>
+                      <div className="min-w-0">
+                        <p className="text-[8px] font-black uppercase tracking-[0.24em] text-zinc-600">Your blade</p>
+                        <p className="truncate text-xs font-black uppercase tracking-[0.14em] text-white">{owner?.name ?? 'Unknown'}</p>
+                      </div>
+                      <Swords className="h-4 w-4 shrink-0 text-red-300" />
+                      <button type="button" disabled={!rival} onClick={() => rival && onInspect(rival)} aria-label={`Inspect ${rival?.name ?? 'rival'}`} className="h-11 w-11 shrink-0 overflow-hidden rounded-2xl border border-red-300/20 bg-black transition hover:scale-105 disabled:cursor-default">
+                        {rival && <img src={avatarUrlForGladiator(rival)} alt="" className="h-full w-full object-cover" />}
+                      </button>
+                      <div className="min-w-0">
+                        <p className="text-[8px] font-black uppercase tracking-[0.24em] text-zinc-600">Marked rival</p>
+                        <p className="truncate text-xs font-black uppercase tracking-[0.14em] text-white">{rival?.name ?? 'Unknown'}</p>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-center">
+                      <p className="text-2xl font-black text-red-200">{rivalry.grudge_score}</p>
+                      <p className="text-[7px] font-black uppercase tracking-widest text-zinc-600">Heat</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-3 gap-2">
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-center">
+                      <p className="text-lg font-black text-white">{rivalry.wins}-{rivalry.losses}</p>
+                      <p className="text-[7px] font-black uppercase tracking-widest text-zinc-600">Record</p>
+                    </div>
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-center">
+                      <p className="text-lg font-black text-white">{rivalry.encounters}</p>
+                      <p className="text-[7px] font-black uppercase tracking-widest text-zinc-600">Clashes</p>
+                    </div>
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-center">
+                      <p className={cn('truncate text-[9px] font-black uppercase tracking-wider', rivalry.current_streak < 0 ? 'text-red-200' : 'text-green-200')}>{grudgeStreakLabel(rivalry.current_streak)}</p>
+                      <p className="mt-1 text-[7px] font-black uppercase tracking-widest text-zinc-600">Momentum</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap gap-2">
+                      <span className={cn('rounded-full border px-3 py-1 text-[8px] font-black uppercase tracking-widest', grudgeHeatTone(heat))}>{heat}</span>
+                      <span className={cn('rounded-full border px-3 py-1 text-[8px] font-black uppercase tracking-widest', revengeOwed ? 'border-red-300/30 bg-red-500/10 text-red-100' : 'border-green-300/25 bg-green-500/10 text-green-100')}>
+                        {revengeOwed ? 'Revenge Owed' : 'Dominance Held'}
+                      </span>
+                    </div>
+                    <p className="text-[8px] font-black uppercase tracking-widest text-zinc-600">
+                      {rivalry.last_challenge_type ? formatChallenge(rivalry.last_challenge_type) : 'Ranked Battle'}
+                    </p>
+                  </div>
+
+                  <button type="button" onClick={() => onRevenge(rivalry)} disabled={!owner || !rival} className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl border border-red-300/30 bg-red-500/10 px-4 py-3 text-[9px] font-black uppercase tracking-[0.24em] text-red-100 transition hover:border-red-200 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40">
+                    <Skull className="h-4 w-4" />
+                    {revengeOwed ? 'Call For Revenge' : 'Defend The Claim'}
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="mt-5 rounded-3xl border border-dashed border-red-300/15 bg-red-950/5 p-8 text-center">
+            <Flame className="mx-auto h-8 w-8 text-zinc-700" />
+            <p className="mt-3 text-sm font-bold text-zinc-500">No grudges have been written yet. Complete a ranked battle and the Ledger will remember both sides.</p>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 // ─── Battle Watch Panel (Split-Screen Docked View) ──────────────────────────
 function BattleWatchPanel({
   simulation,
@@ -5226,6 +5348,7 @@ export const Colosseum: React.FC = () => {
   const requestedGladiatorId = searchParams.get('gladiator');
   const [gladiators, setGladiators] = useState<Gladiator[]>([]);
   const [matches, setMatches] = useState<MatchRow[]>([]);
+  const [rivalries, setRivalries] = useState<GladiatorRivalry[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -5370,6 +5493,24 @@ export const Colosseum: React.FC = () => {
     }
   }, []);
 
+  const fetchRivalries = useCallback(async () => {
+    if (!currentUser) {
+      setRivalries([]);
+      return;
+    }
+    const { data, error } = await supabase
+      .from('gladiator_rivalries')
+      .select('*')
+      .order('grudge_score', { ascending: false })
+      .order('last_fought_at', { ascending: false })
+      .limit(12);
+    if (error) {
+      if (error.code !== '42P01') console.warn('[Colosseum] Grudge Ledger unavailable', error);
+      return;
+    }
+    setRivalries((data ?? []) as GladiatorRivalry[]);
+  }, [currentUser]);
+
   useEffect(() => {
     void fetchArena();
   }, [fetchArena]);
@@ -5385,6 +5526,10 @@ export const Colosseum: React.FC = () => {
   useEffect(() => {
     void fetchTournaments();
   }, [fetchTournaments]);
+
+  useEffect(() => {
+    void fetchRivalries();
+  }, [fetchRivalries]);
 
   useEffect(() => {
     setWhisperUsed(false);
@@ -5407,6 +5552,15 @@ export const Colosseum: React.FC = () => {
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [fetchTournaments]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const channel = supabase
+      .channel(`colosseum-grudge-ledger-${currentUser.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiator_rivalries' }, () => void fetchRivalries())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [currentUser, fetchRivalries]);
 
   const gladiatorById = useMemo(() => new Map(gladiators.map((gladiator) => [gladiator.id, gladiator])), [gladiators]);
   const myGladiators = useMemo(() => gladiators.filter((gladiator) => gladiator.user_id === currentUser?.id), [gladiators, currentUser?.id]);
@@ -5492,20 +5646,35 @@ export const Colosseum: React.FC = () => {
     setUserSolution(challengeFor(opponent?.botProfile, challengeType, seed).starter);
   };
 
-  const openBotChallenge = (bot: Gladiator) => {
-    if (!selectedGladiatorId) {
+  const openBotChallenge = (bot: Gladiator, challengerId?: string, requestedChallengeType?: ChallengeType) => {
+    const effectiveChallengeType = requestedChallengeType ?? challengeType;
+    if (challengerId) {
+      setSelectedGladiatorId(challengerId);
+    } else if (!selectedGladiatorId) {
       const mine = gladiators.find((gladiator) => gladiator.user_id === currentUser?.id && gladiator.id !== bot.id);
       if (mine) setSelectedGladiatorId(mine.id);
     }
     const nonce = Date.now();
-    const seed = `${bot.id}-${challengeType}-${nonce}`;
+    const seed = `${bot.id}-${effectiveChallengeType}-${nonce}`;
+    setChallengeType(effectiveChallengeType);
     setSelectedOpponentId(bot.id);
     setChallengeNonce(nonce);
     setChallengeModalOpen(true);
     setCountdown(3);
     setLatestBotSolution('');
     setBattleResult(null);
-    setUserSolution(challengeFor(bot.botProfile, challengeType, seed).starter);
+    setUserSolution(challengeFor(bot.botProfile, effectiveChallengeType, seed).starter);
+  };
+
+  const openGrudgeChallenge = (rivalry: GladiatorRivalry) => {
+    const owner = gladiatorById.get(rivalry.owner_gladiator_id);
+    const rival = gladiatorById.get(rivalry.rival_gladiator_id);
+    if (!owner || !rival) {
+      setNotice('That rivalry cannot be reopened because one combatant has left the arena.');
+      return;
+    }
+    const revengeType = rivalry.last_challenge_type ?? challengeType;
+    openBotChallenge(rival, owner.id, revengeType);
   };
 
   const handleActiveMatchClick = (match: MatchRow) => {
@@ -7369,6 +7538,13 @@ export const Colosseum: React.FC = () => {
             </div>
           </div>
         </section>
+
+        <GrudgeLedgerPanel
+          rivalries={rivalries}
+          gladiatorById={gladiatorById}
+          onRevenge={openGrudgeChallenge}
+          onInspect={setInspectedGladiator}
+        />
 
         <section className="mt-6 grid gap-6 lg:grid-cols-2">
           <div className="rounded-[2rem] border border-white/10 bg-black/60 p-5 backdrop-blur-xl">
