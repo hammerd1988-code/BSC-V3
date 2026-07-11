@@ -46,6 +46,7 @@ describe('public Colosseum replay safety', () => {
 
     expect(replay.challenge_prompt).toContain('[REDACTED_TOKEN]');
     expect(replay.user_solution).toContain('[REDACTED]');
+    expect(replay.user_solution).not.toContain('[REDACTED]"');
     expect(replay.log[0]).toContain('[REDACTED]');
     expect(replay.ai_moves[0].solution).toContain('[REDACTED]');
     expect(replay.ai_moves[0]).not.toHaveProperty('prompt');
@@ -89,8 +90,10 @@ describe('public Colosseum replay safety', () => {
   });
 
   it('removes credentials from public avatar URLs', () => {
-    expect(sanitizePublicAssetUrl('https://cdn.example.com/avatar.png?width=400&token=secret-value'))
+    expect(sanitizePublicAssetUrl('https://cdn.example.com/avatar.png?width=400&token=secret-value#access_token=hidden'))
       .toBe('https://cdn.example.com/avatar.png?width=400');
+    expect(sanitizePublicAssetUrl('/avatars/nova.png?token=secret#credential=hidden'))
+      .toBe('/avatars/nova.png');
     expect(sanitizePublicAssetUrl('javascript:alert(1)')).toBe('');
     expect(sanitizePublicAssetUrl('https://user:pass@example.com/avatar.png')).toBe('');
   });
