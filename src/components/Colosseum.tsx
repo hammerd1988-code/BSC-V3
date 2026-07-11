@@ -185,6 +185,37 @@ interface TournamentFormState {
   min_contestants: number;
 }
 
+interface ColosseumBounty {
+  id: string;
+  cadence: 'daily' | 'weekly';
+  title: string;
+  temporary_title: string;
+  challenge_type: ChallengeType;
+  prompt: string;
+  expected_signals: string;
+  difficulty: BotDifficulty;
+  defender_gladiator_id: string | null;
+  opens_at: string;
+  closes_at: string;
+  status: 'open' | 'closed';
+}
+
+interface ColosseumBountyEntry {
+  id: string;
+  bounty_id: string;
+  gladiator_id: string;
+  match_id: string;
+  score: number;
+  duration_ms: number;
+  completed_at: string;
+}
+
+interface GladiatorTemporaryTitle {
+  gladiator_id: string;
+  title: string;
+  expires_at: string;
+}
+
 interface CoachingMessage {
   role: 'gladiator' | 'coach';
   text: string;
@@ -2337,7 +2368,15 @@ function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active, onClic
   );
 }
 
-function GladiatorInspectPopup({ gladiator, onClose }: { gladiator: Gladiator; onClose: () => void }) {
+function GladiatorInspectPopup({
+  gladiator,
+  temporaryTitle,
+  onClose,
+}: {
+  gladiator: Gladiator;
+  temporaryTitle: GladiatorTemporaryTitle | null;
+  onClose: () => void;
+}) {
   const badge = badgeFor(gladiator);
   const BadgeIcon = badge.icon;
   const profile = gladiator.botProfile;
@@ -2352,6 +2391,11 @@ function GladiatorInspectPopup({ gladiator, onClose }: { gladiator: Gladiator; o
           <AnimatedGladiatorAvatar gladiator={gladiator} size="xl" label={gladiator.name} active />
           <div>
             <h3 className="text-center text-xl font-black uppercase tracking-[0.18em] text-white">{gladiator.name}</h3>
+            {temporaryTitle && (
+              <p className="mt-1 text-center text-[9px] font-black uppercase tracking-[0.24em] text-yellow-200">
+                {temporaryTitle.title} · {Math.max(1, Math.ceil((new Date(temporaryTitle.expires_at).getTime() - Date.now()) / 86_400_000))}d
+              </p>
+            )}
             {profile && <p className="mt-1 text-center text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: diffColor }}>{profile.gladiator_class} · {profile.difficulty}</p>}
           </div>
           <span className="inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[9px] font-black uppercase tracking-widest" style={{ color: badge.color, borderColor: `${badge.color}55`, backgroundColor: `${badge.color}12` }}><BadgeIcon className="h-3 w-3" /> {badge.label}</span>
@@ -4771,6 +4815,77 @@ function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSele
   );
 }
 
+function BountyBoard({
+  bounties,
+  entries,
+  gladiatorById,
+  myGladiatorIds,
+  onHunt,
+  onInspect,
+}: {
+  bounties: ColosseumBounty[];
+  entries: ColosseumBountyEntry[];
+  gladiatorById: Map<string, Gladiator>;
+  myGladiatorIds: Set<string>;
+  onHunt: (bounty: ColosseumBounty) => void;
+  onInspect: (gladiator: Gladiator) => void;
+}) {
+  return (
+    <div className="rounded-[2rem] border border-yellow-300/20 bg-[radial-gradient(circle_at_top_left,rgba(250,204,21,0.13),transparent_38%),rgba(0,0,0,0.72)] p-5 shadow-[0_0_40px_rgba(250,204,21,0.08)] backdrop-blur-xl">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="text-[9px] font-black uppercase tracking-[0.34em] text-yellow-300">Rotating Contracts</p>
+          <h2 className="mt-1 text-xl font-black uppercase tracking-[0.14em] text-white">Bounty Board</h2>
+        </div>
+        <Target className="h-6 w-6 text-yellow-200" />
+      </div>
+      <div className="mt-4 space-y-4">
+        {bounties.map((bounty) => {
+          const bountyStandings = entries
+            .filter((entry) => entry.bounty_id === bounty.id)
+            .sort((left, right) => right.score - left.score || left.duration_ms - right.duration_ms);
+          const rankings = bountyStandings.slice(0, 3);
+          const alreadyEntered = bountyStandings.some((entry) => myGladiatorIds.has(entry.gladiator_id));
+          const defender = bounty.defender_gladiator_id ? gladiatorById.get(bounty.defender_gladiator_id) : null;
+          const timeLeft = Math.max(0, new Date(bounty.closes_at).getTime() - Date.now());
+          const hoursLeft = Math.max(1, Math.ceil(timeLeft / 3_600_000));
+          return (
+            <div key={bounty.id} className="rounded-2xl border border-white/10 bg-black/55 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full border border-yellow-300/25 bg-yellow-300/10 px-2 py-1 text-[8px] font-black uppercase tracking-widest text-yellow-200">{bounty.cadence}</span>
+                    <span className="text-[8px] font-black uppercase tracking-widest text-zinc-500">{hoursLeft}h remain</span>
+                  </div>
+                  <h3 className="mt-2 text-sm font-black uppercase tracking-[0.16em] text-white">{bounty.title}</h3>
+                  <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-pink-200">Title: {bounty.temporary_title}</p>
+                </div>
+                <button type="button" onClick={() => onHunt(bounty)} disabled={!defender} className="rounded-xl border border-yellow-300/30 bg-yellow-300/10 px-3 py-2 text-[9px] font-black uppercase tracking-[0.16em] text-yellow-100 transition hover:bg-yellow-300/20 disabled:cursor-not-allowed disabled:opacity-40">
+                  {alreadyEntered ? 'Raise My Score' : 'Hunt Bounty'}
+                </button>
+              </div>
+              <p className="mt-3 line-clamp-2 text-[11px] leading-5 text-zinc-400">{bounty.prompt}</p>
+              <div className="mt-3 space-y-2">
+                {rankings.length > 0 ? rankings.map((entry, index) => {
+                  const gladiator = gladiatorById.get(entry.gladiator_id);
+                  return (
+                    <button key={entry.id} type="button" onClick={() => gladiator && onInspect(gladiator)} disabled={!gladiator} className="flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-left transition hover:bg-white/[0.06] disabled:cursor-default">
+                      <span className="text-[10px] font-black text-yellow-200">#{index + 1}</span>
+                      <span className="min-w-0 flex-1 truncate text-[10px] font-black uppercase tracking-widest text-white">{gladiator?.name ?? 'Unknown Gladiator'}</span>
+                      <span className="text-[9px] font-black text-cyan-200">{Number(entry.score).toFixed(1)}</span>
+                      <span className="text-[9px] text-zinc-500">{(entry.duration_ms / 1000).toFixed(1)}s</span>
+                    </button>
+                  );
+                }) : <p className="rounded-xl border border-dashed border-white/10 px-3 py-3 text-center text-[10px] uppercase tracking-widest text-zinc-600">The contract is unclaimed.</p>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function TournamentPanel({
   tournaments,
   entries,
@@ -5263,6 +5378,10 @@ export const Colosseum: React.FC = () => {
 
   const [tournaments, setTournaments] = useState<TournamentRow[]>([]);
   const [tournamentEntries, setTournamentEntries] = useState<TournamentEntryRow[]>([]);
+  const [bounties, setBounties] = useState<ColosseumBounty[]>([]);
+  const [bountyEntries, setBountyEntries] = useState<ColosseumBountyEntry[]>([]);
+  const [temporaryTitles, setTemporaryTitles] = useState<Map<string, GladiatorTemporaryTitle>>(new Map());
+  const [pendingBounty, setPendingBounty] = useState<ColosseumBounty | null>(null);
   const [creatingTournament, setCreatingTournament] = useState(false);
   const [joiningTournamentId, setJoiningTournamentId] = useState('');
   const [tournamentForm, setTournamentForm] = useState<TournamentFormState>({
@@ -5370,6 +5489,40 @@ export const Colosseum: React.FC = () => {
     }
   }, []);
 
+  const fetchBounties = useCallback(async () => {
+    try {
+      await supabase.rpc('refresh_colosseum_bounties');
+      const { data: bountyRows, error: bountyError } = await supabase
+        .from('colosseum_bounties')
+        .select('*')
+        .eq('status', 'open')
+        .order('closes_at', { ascending: true });
+      if (bountyError) throw bountyError;
+      const bountyIds = (bountyRows ?? []).map((bounty) => bounty.id);
+      const [{ data: entryRows, error: entryError }, { data: titleRows, error: titleError }] = await Promise.all([
+        bountyIds.length > 0
+          ? supabase
+            .from('colosseum_bounty_entries')
+            .select('*')
+            .in('bounty_id', bountyIds)
+            .order('score', { ascending: false })
+            .order('duration_ms', { ascending: true })
+          : Promise.resolve({ data: [], error: null }),
+        supabase.from('gladiator_temporary_titles').select('*').gt('expires_at', new Date().toISOString()),
+      ]);
+      if (entryError) throw entryError;
+      if (titleError) throw titleError;
+      setBounties((bountyRows ?? []) as ColosseumBounty[]);
+      setBountyEntries((entryRows ?? []) as ColosseumBountyEntry[]);
+      setTemporaryTitles(new Map(((titleRows ?? []) as GladiatorTemporaryTitle[]).map((title) => [title.gladiator_id, title])));
+    } catch (error) {
+      const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : '';
+      if (code !== '42P01' && code !== '42883' && code !== 'PGRST202') {
+        console.warn('[Colosseum] Bounty Board unavailable', error);
+      }
+    }
+  }, []);
+
   useEffect(() => {
     void fetchArena();
   }, [fetchArena]);
@@ -5385,6 +5538,10 @@ export const Colosseum: React.FC = () => {
   useEffect(() => {
     void fetchTournaments();
   }, [fetchTournaments]);
+
+  useEffect(() => {
+    void fetchBounties();
+  }, [fetchBounties]);
 
   useEffect(() => {
     setWhisperUsed(false);
@@ -5407,6 +5564,16 @@ export const Colosseum: React.FC = () => {
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [fetchTournaments]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('colosseum-bounty-board')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'colosseum_bounties' }, () => void fetchBounties())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'colosseum_bounty_entries' }, () => void fetchBounties())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiator_temporary_titles' }, () => void fetchBounties())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchBounties]);
 
   const gladiatorById = useMemo(() => new Map(gladiators.map((gladiator) => [gladiator.id, gladiator])), [gladiators]);
   const myGladiators = useMemo(() => gladiators.filter((gladiator) => gladiator.user_id === currentUser?.id), [gladiators, currentUser?.id]);
@@ -5451,7 +5618,14 @@ export const Colosseum: React.FC = () => {
   const selectedGladiator = selectedGladiatorId ? gladiatorById.get(selectedGladiatorId) : null;
   const selectedOpponent = selectedOpponentId ? gladiatorById.get(selectedOpponentId) : null;
   const challengeSeed = useMemo(() => `${selectedOpponentId ?? 'none'}-${challengeType}-${challengeNonce}`, [selectedOpponentId, challengeType, challengeNonce]);
-  const selectedCodingChallenge = useMemo(() => challengeFor(selectedOpponent?.botProfile, challengeType, challengeSeed), [selectedOpponent?.botProfile, challengeType, challengeSeed]);
+  const selectedCodingChallenge = useMemo<CodingChallenge>(() => pendingBounty ? {
+    title: pendingBounty.title,
+    prompt: pendingBounty.prompt,
+    starter: '',
+    expected: pendingBounty.expected_signals,
+    difficulty: pendingBounty.difficulty,
+    tags: [pendingBounty.cadence, 'global-bounty'],
+  } : challengeFor(selectedOpponent?.botProfile, challengeType, challengeSeed), [challengeSeed, challengeType, pendingBounty, selectedOpponent?.botProfile]);
   const selectedChallengeMeta = challengeMeta(challengeType);
   const battleInProgress = simulation?.status === 'booting' || simulation?.status === 'running';
 
@@ -5479,6 +5653,7 @@ export const Colosseum: React.FC = () => {
     const nonce = Date.now();
     const seed = `${selectedOpponentId ?? 'none'}-${next}-${nonce}`;
     setChallengeType(next);
+    setPendingBounty(null);
     setChallengeNonce(nonce);
     setUserSolution(challengeFor(selectedOpponent?.botProfile, next, seed).starter);
   };
@@ -5488,6 +5663,7 @@ export const Colosseum: React.FC = () => {
     const nonce = Date.now();
     const seed = `${id}-${challengeType}-${nonce}`;
     setSelectedOpponentId(id);
+    setPendingBounty(null);
     setChallengeNonce(nonce);
     setUserSolution(challengeFor(opponent?.botProfile, challengeType, seed).starter);
   };
@@ -5500,6 +5676,7 @@ export const Colosseum: React.FC = () => {
     const nonce = Date.now();
     const seed = `${bot.id}-${challengeType}-${nonce}`;
     setSelectedOpponentId(bot.id);
+    setPendingBounty(null);
     setChallengeNonce(nonce);
     setChallengeModalOpen(true);
     setCountdown(3);
@@ -5702,6 +5879,31 @@ export const Colosseum: React.FC = () => {
     }
   };
 
+  const openBountyChallenge = (bounty: ColosseumBounty) => {
+    const defender = bounty.defender_gladiator_id ? gladiatorById.get(bounty.defender_gladiator_id) : null;
+    if (!defender) {
+      setNotice('This contract is waiting for its designated executioner bot.');
+      return;
+    }
+    const challenger = selectedGladiator && selectedGladiator.user_id === currentUser?.id
+      ? selectedGladiator
+      : myGladiators[0];
+    if (!challenger) {
+      setNotice('Forge or select one of your gladiators before hunting a bounty.');
+      return;
+    }
+    setSelectedGladiatorId(challenger.id);
+    setSelectedOpponentId(defender.id);
+    setChallengeType(bounty.challenge_type);
+    setPendingBounty(bounty);
+    setChallengeNonce(Date.now());
+    setUserSolution('');
+    setChallengeModalOpen(true);
+    setCountdown(3);
+    setLatestBotSolution('');
+    setBattleResult(null);
+  };
+
   const startChallenge = async (opponentOverride?: Gladiator, challengeTypeOverride = challengeType, solutionOverride?: string) => {
     const defender = opponentOverride ?? selectedOpponent;
     if (!defender || starting || battleInProgress) return;
@@ -5710,7 +5912,7 @@ export const Colosseum: React.FC = () => {
     if (!challengeGate.allowed) { setUpgradeGate(challengeGate); return; }
     void recordUsage('colosseum_challenge');
     const activeChallengeType = challengeTypeOverride;
-    const codingChallenge = challengeFor(defender.botProfile, activeChallengeType, challengeSeed);
+    const codingChallenge = pendingBounty ? selectedCodingChallenge : challengeFor(defender.botProfile, activeChallengeType, challengeSeed);
     const submittedSolution = (solutionOverride ?? userSolution).trim();
     const challengerHasModel = Boolean(selectedGladiator?.model || selectedGladiator?.botProfile);
     if (defender.botProfile && !submittedSolution && !challengerHasModel) {
@@ -5745,6 +5947,7 @@ export const Colosseum: React.FC = () => {
           challenger_id: challenger.id,
           defender_id: defender.id,
           challenge_type: activeChallengeType,
+          bounty_id: pendingBounty?.id ?? null,
           replay_data: {
             intro: `${challenger.name} challenged ${defender.name}`,
             arena: 'underground-neon-fight-pit',
@@ -5759,6 +5962,7 @@ export const Colosseum: React.FC = () => {
       if (error) throw error;
 
       const match = data as MatchRow;
+      setPendingBounty(null);
       const challenge = challengeMeta(activeChallengeType);
       const logs = [
         `Gate locks engaged for ${challenge.label}.`,
@@ -6487,7 +6691,7 @@ export const Colosseum: React.FC = () => {
                 exit={{ scale: 0.94, y: 18 }}
                 className="relative w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-[2rem] border border-red-400/35 bg-zinc-950 p-4 shadow-[0_0_70px_rgba(255,23,68,0.28)] sm:p-6"
               >
-                <button type="button" onClick={() => setChallengeModalOpen(false)} className="absolute right-4 top-4 z-10 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white">Close</button>
+                <button type="button" onClick={() => { setChallengeModalOpen(false); setPendingBounty(null); }} className="absolute right-4 top-4 z-10 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white">Close</button>
                 <div className="pointer-events-none absolute inset-0 opacity-35" style={{ background: `radial-gradient(circle at 20% 0%, ${selectedOpponent.glow_color}66, transparent 34%), radial-gradient(circle at 100% 100%, rgba(0,229,255,0.22), transparent 35%)` }} />
                 <div className="relative">
                   <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -6978,6 +7182,19 @@ export const Colosseum: React.FC = () => {
           )}
         </section>
 
+        {bounties.length > 0 && (
+          <div className="mt-6">
+            <BountyBoard
+              bounties={bounties}
+              entries={bountyEntries}
+              gladiatorById={gladiatorById}
+              myGladiatorIds={new Set(myGladiators.map((gladiator) => gladiator.id))}
+              onHunt={openBountyChallenge}
+              onInspect={setInspectedGladiator}
+            />
+          </div>
+        )}
+
         <TournamentPanel
           tournaments={tournaments}
           entries={tournamentEntries}
@@ -7446,7 +7663,13 @@ export const Colosseum: React.FC = () => {
       </div>
       <UpgradePromptModal gate={upgradeGate} open={!!upgradeGate} onClose={() => setUpgradeGate(null)} />
       <AnimatePresence>
-        {inspectedGladiator && <GladiatorInspectPopup gladiator={inspectedGladiator} onClose={() => setInspectedGladiator(null)} />}
+        {inspectedGladiator && (
+          <GladiatorInspectPopup
+            gladiator={inspectedGladiator}
+            temporaryTitle={temporaryTitles.get(inspectedGladiator.id) ?? null}
+            onClose={() => setInspectedGladiator(null)}
+          />
+        )}
       </AnimatePresence>
       <AnimatePresence>
         {inspectedTournament && <TournamentDetailPopup tournament={inspectedTournament} entries={tournamentEntries.filter((e) => e.tournament_id === inspectedTournament.id)} gladiatorById={gladiatorById} onClose={() => setInspectedTournament(null)} />}
