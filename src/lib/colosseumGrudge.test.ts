@@ -31,5 +31,9 @@ describe('Colosseum Grudge Ledger', () => {
     expect(migration).toContain('after update of winner_id, completed_at, status');
     expect(migration).toContain('revoke all on public.gladiator_rivalries from authenticated');
     expect(migration).toContain('grant select on public.gladiator_rivalries to authenticated');
+    expect(migration).toContain('row_number() over');
+    expect(migration).toContain('streak_length');
+    expect(migration).toContain('wins * 7');
+    expect(migration).toContain('losses * 11');
   });
 });

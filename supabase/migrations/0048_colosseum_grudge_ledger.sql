@@ -198,6 +198,33 @@ with directional_matches as (
     and m.winner_id in (m.challenger_id, m.defender_id)
     and m.challenger_id <> m.defender_id
 ),
+ordered_matches as (
+  select
+    directional_matches.*,
+    row_number() over (
+      partition by owner_gladiator_id, rival_gladiator_id
+      order by completed_at, match_id
+    ) as fight_number,
+    row_number() over (
+      partition by owner_gladiator_id, rival_gladiator_id, result
+      order by completed_at, match_id
+    ) as result_number
+  from directional_matches
+),
+streaked_matches as (
+  select
+    ordered_matches.*,
+    fight_number - result_number as streak_group
+  from ordered_matches
+),
+streak_lengths as (
+  select
+    streaked_matches.*,
+    count(*) over (
+      partition by owner_gladiator_id, rival_gladiator_id, result, streak_group
+    )::integer as streak_length
+  from streaked_matches
+),
 summaries as (
   select
     owner_gladiator_id,
@@ -205,12 +232,18 @@ summaries as (
     count(*)::integer as encounters,
     count(*) filter (where result = 'win')::integer as wins,
     count(*) filter (where result = 'loss')::integer as losses,
+    (array_agg(
+      case when result = 'win' then streak_length else -streak_length end
+      order by completed_at desc, match_id desc
+    ))[1] as current_streak,
+    coalesce(max(streak_length) filter (where result = 'win'), 0)::integer as best_win_streak,
+    coalesce(max(streak_length) filter (where result = 'loss'), 0)::integer as worst_loss_streak,
     min(completed_at) as first_fought_at,
     max(completed_at) as last_fought_at,
     (array_agg(result order by completed_at desc, match_id desc))[1] as last_result,
     (array_agg(match_id order by completed_at desc, match_id desc))[1] as last_match_id,
     (array_agg(challenge_type order by completed_at desc, match_id desc))[1] as last_challenge_type
-  from directional_matches
+  from streak_lengths
   group by owner_gladiator_id, rival_gladiator_id
 )
 insert into public.gladiator_rivalries (
@@ -236,16 +269,23 @@ select
   encounters,
   wins,
   losses,
-  case when last_result = 'win' then 1 else -1 end,
-  case when wins > 0 then 1 else 0 end,
-  case when losses > 0 then 1 else 0 end,
-  least(100, encounters * 5 + losses * 3),
+  current_streak,
+  best_win_streak,
+  worst_loss_streak,
+  least(
+    100,
+    wins * 7
+      + losses * 11
+      + case when encounters >= 3 then 5 else 0 end
+      + case when encounters >= 5 then 5 else 0 end
+      + case when encounters >= 10 then 5 else 0 end
+  ),
   last_result,
   last_match_id,
   last_challenge_type,
   first_fought_at,
   last_fought_at,
-  now()
+  last_fought_at
 from summaries
 on conflict (owner_gladiator_id, rival_gladiator_id) do nothing;
 

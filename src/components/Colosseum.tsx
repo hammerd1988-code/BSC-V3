@@ -5553,17 +5553,30 @@ export const Colosseum: React.FC = () => {
     return () => { supabase.removeChannel(channel); };
   }, [fetchTournaments]);
 
-  useEffect(() => {
-    if (!currentUser) return;
-    const channel = supabase
-      .channel(`colosseum-grudge-ledger-${currentUser.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiator_rivalries' }, () => void fetchRivalries())
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [currentUser, fetchRivalries]);
-
   const gladiatorById = useMemo(() => new Map(gladiators.map((gladiator) => [gladiator.id, gladiator])), [gladiators]);
   const myGladiators = useMemo(() => gladiators.filter((gladiator) => gladiator.user_id === currentUser?.id), [gladiators, currentUser?.id]);
+  const rivalryOwnerKey = myGladiators.map((gladiator) => gladiator.id).sort().join(',');
+
+  useEffect(() => {
+    if (!currentUser || !rivalryOwnerKey) return;
+    const channel = supabase
+      .channel(`colosseum-grudge-ledger-${currentUser.id}`);
+    rivalryOwnerKey.split(',').forEach((gladiatorId) => {
+      channel.on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'gladiator_rivalries',
+          filter: `owner_gladiator_id=eq.${gladiatorId}`,
+        },
+        () => void fetchRivalries()
+      );
+    });
+    channel.subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [currentUser, fetchRivalries, rivalryOwnerKey]);
+
   const opponents = useMemo(() => gladiators.filter((gladiator) => gladiator.id !== selectedGladiatorId), [gladiators, selectedGladiatorId]);
   const botGladiators = useMemo(() => gladiators.filter((gladiator) => Boolean(gladiator.botProfile)).sort((a, b) => (b.botProfile?.speed_rating ?? 0) - (a.botProfile?.speed_rating ?? 0)), [gladiators]);
   const featuredBotGladiators = useMemo(() => {
