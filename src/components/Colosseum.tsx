@@ -5542,10 +5542,15 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
         .limit(20);
       if (tournamentError) throw tournamentError;
       const tournamentIds = (tournamentRows ?? []).map((tournament) => tournament.id);
+      const activeTournamentIds = (tournamentRows ?? [])
+        .filter((tournament) => tournament.status !== 'completed' && tournament.status !== 'cancelled')
+        .map((tournament) => tournament.id);
       const [{ data: entryRows, error: entryError }, { data: circuitRows, error: circuitError }] = tournamentIds.length > 0
         ? await Promise.all([
           supabase.from('tournament_entries').select('*').in('tournament_id', tournamentIds).order('joined_at', { ascending: true }),
-          supabase.from('tournament_matches').select('*').in('tournament_id', tournamentIds).order('round_number', { ascending: true }).order('position', { ascending: true }),
+          activeTournamentIds.length > 0
+            ? supabase.from('tournament_matches').select('*').in('tournament_id', activeTournamentIds).order('round_number', { ascending: true }).order('position', { ascending: true })
+            : Promise.resolve({ data: [] as any[], error: null }),
         ])
         : [
           { data: [], error: null },
