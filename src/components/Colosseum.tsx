@@ -49,6 +49,9 @@ import {
   Mic,
   MicOff,
   Volume2,
+  Copy,
+  Share2,
+  Check,
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -62,9 +65,16 @@ import type {
   BattleRubricItem,
   ColosseumChallengeType,
 } from '../lib/colosseumVerdict';
+import {
+  grudgeHeat,
+  grudgeStreakLabel,
+  type GladiatorRivalry,
+  type GrudgeHeat,
+} from '../lib/colosseumGrudge';
 import { ReportModal } from './ReportModal';
 import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
 import { DistrictCityBackdrop } from './DistrictCityBackdrop';
+import { CasperAnnotationLedger, CasperRubricScorecard } from './CasperVerdictLedger';
 import { useSubscription, type FeatureGateResult } from '../lib/subscription';
 import { UpgradePromptModal } from './UpgradePrompt';
 
@@ -2524,96 +2534,6 @@ function TournamentDetailPopup({ tournament, entries, gladiatorById, onClose }: 
   );
 }
 
-function CasperRubricScorecard({
-  rubric,
-  challengerName,
-  defenderName,
-}: {
-  rubric: BattleRubricItem[];
-  challengerName: string;
-  defenderName: string;
-}) {
-  if (rubric.length === 0) return null;
-  return (
-    <div className="mt-5 space-y-2">
-      <div className="flex items-center justify-between">
-        <p className="text-[9px] font-black uppercase tracking-[0.28em] text-yellow-200">Casper's Iron Ledger</p>
-        <p className="text-[8px] font-black uppercase tracking-widest text-zinc-600">Weighted verdict v2</p>
-      </div>
-      {rubric.map((criterion) => {
-        const challengerLeads = criterion.challenger_score >= criterion.defender_score;
-        const margin = Math.abs(criterion.challenger_score - criterion.defender_score);
-        return (
-          <div key={criterion.id} className="overflow-hidden rounded-2xl border border-white/10 bg-black/50 p-3">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-white">{criterion.label}</p>
-                <p className="mt-1 text-[9px] leading-4 text-zinc-500">{criterion.commentary}</p>
-              </div>
-              <div className="shrink-0 text-right">
-                <p className="text-[8px] font-black uppercase tracking-widest text-zinc-600">{Math.round(criterion.weight * 100)}% weight</p>
-                <p className={cn('mt-1 text-[9px] font-black uppercase tracking-widest', margin === 0 ? 'text-zinc-400' : challengerLeads ? 'text-red-300' : 'text-cyan-300')}>
-                  {margin === 0 ? 'Dead even' : `${challengerLeads ? challengerName : defenderName} +${margin}`}
-                </p>
-              </div>
-            </div>
-            <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
-              <div>
-                <div className="mb-1 flex items-center justify-between text-[8px] font-black uppercase tracking-wider text-red-200">
-                  <span className="truncate">{challengerName}</span>
-                  <span>{criterion.challenger_score}</span>
-                </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-red-950/50">
-                  <div className="h-full rounded-full bg-gradient-to-r from-red-700 to-red-300" style={{ width: `${criterion.challenger_score}%` }} />
-                </div>
-              </div>
-              <Scale className="h-3.5 w-3.5 text-yellow-300/70" />
-              <div>
-                <div className="mb-1 flex items-center justify-between text-[8px] font-black uppercase tracking-wider text-cyan-200">
-                  <span>{criterion.defender_score}</span>
-                  <span className="truncate">{defenderName}</span>
-                </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-cyan-950/50">
-                  <div className="h-full rounded-full bg-gradient-to-r from-cyan-300 to-cyan-700" style={{ width: `${criterion.defender_score}%` }} />
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function CasperAnnotationLedger({ annotations }: { annotations: BattleAnnotation[] }) {
-  if (annotations.length === 0) return null;
-  return (
-    <div className="mt-4 rounded-2xl border border-purple-300/15 bg-purple-950/10 p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <FileCode className="h-3.5 w-3.5 text-purple-300" />
-        <p className="text-[9px] font-black uppercase tracking-[0.28em] text-purple-200">Decisive Code Marks</p>
-      </div>
-      <div className="space-y-2">
-        {annotations.map((annotation, index) => (
-          <div key={`${annotation.combatant}-${annotation.line_start}-${index}`} className="flex items-start gap-3 rounded-xl border border-white/5 bg-black/40 p-3">
-            <span className={cn(
-              'shrink-0 rounded-full border px-2 py-1 text-[7px] font-black uppercase tracking-widest',
-              annotation.severity === 'critical'
-                ? 'border-red-400/30 bg-red-500/10 text-red-200'
-                : annotation.severity === 'warning'
-                  ? 'border-yellow-400/30 bg-yellow-500/10 text-yellow-200'
-                  : 'border-green-400/30 bg-green-500/10 text-green-200'
-            )}>
-              {annotation.combatant} L{annotation.line_start}{annotation.line_end > annotation.line_start ? `–${annotation.line_end}` : ''}
-            </span>
-            <p className="text-[10px] leading-5 text-zinc-400">{annotation.comment}</p>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function BattleSynopsisPopup({ match, gladiatorById, onClose }: { match: MatchRow; gladiatorById: Map<string, Gladiator>; onClose: () => void }) {
   const challenger = gladiatorById.get(match.challenger_id);
   const defender = gladiatorById.get(match.defender_id);
@@ -2646,6 +2566,17 @@ function BattleSynopsisPopup({ match, gladiatorById, onClose }: { match: MatchRo
 
   const [challengerCodeOpen, setChallengerCodeOpen] = useState(false);
   const [defenderCodeOpen, setDefenderCodeOpen] = useState(false);
+  const [receiptCopied, setReceiptCopied] = useState(false);
+
+  const copyReceipt = async () => {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/colosseum/replay/${match.id}`);
+      setReceiptCopied(true);
+      window.setTimeout(() => setReceiptCopied(false), 2_000);
+    } catch {
+      setReceiptCopied(false);
+    }
+  };
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[90] flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
@@ -2656,7 +2587,10 @@ function BattleSynopsisPopup({ match, gladiatorById, onClose }: { match: MatchRo
         onClick={(e) => e.stopPropagation()}
         className="relative mx-4 max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-[2rem] border-2 border-red-500/30 bg-black/95 shadow-[0_0_80px_rgba(255,23,68,0.2)]"
       >
-        {/* Close button */}
+        <button type="button" onClick={() => void copyReceipt()} className="absolute left-4 top-4 z-10 inline-flex items-center gap-2 rounded-full border border-red-300/20 bg-red-500/10 px-3 py-2 text-[8px] font-black uppercase tracking-widest text-red-100 transition hover:bg-red-500/20">
+          {receiptCopied ? <Check className="h-3.5 w-3.5 text-green-300" /> : <Share2 className="h-3.5 w-3.5" />}
+          {receiptCopied ? 'Copied' : 'Blood Receipt'}
+        </button>
         <button type="button" onClick={onClose} className="absolute right-4 top-4 z-10 rounded-full border border-white/10 bg-white/5 p-2 text-zinc-400 hover:text-white transition"><X className="h-4 w-4" /></button>
 
         {/* Header */}
@@ -5110,6 +5044,122 @@ function TournamentPanel({
   );
 }
 
+function grudgeHeatTone(heat: GrudgeHeat) {
+  if (heat === 'Blood Feud') return 'border-red-300/45 bg-red-500/15 text-red-100';
+  if (heat === 'Bitter') return 'border-orange-300/35 bg-orange-500/10 text-orange-100';
+  if (heat === 'Simmering') return 'border-yellow-300/30 bg-yellow-500/10 text-yellow-100';
+  return 'border-zinc-300/20 bg-white/[0.04] text-zinc-300';
+}
+
+function GrudgeLedgerPanel({
+  rivalries,
+  gladiatorById,
+  onRevenge,
+  onInspect,
+}: {
+  rivalries: GladiatorRivalry[];
+  gladiatorById: Map<string, Gladiator>;
+  onRevenge: (rivalry: GladiatorRivalry) => void;
+  onInspect: (gladiator: Gladiator) => void;
+}) {
+  return (
+    <section className="relative mt-6 overflow-hidden rounded-[2rem] border border-red-300/20 bg-black/70 p-5 shadow-[0_0_70px_rgba(239,68,68,0.1)] backdrop-blur-xl sm:p-6">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_0%,rgba(239,68,68,0.13),transparent_42%)]" />
+      <div className="relative">
+        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+          <div>
+            <div className="flex items-center gap-2">
+              <Flame className="h-4 w-4 text-red-300" />
+              <p className="text-[10px] font-black uppercase tracking-[0.34em] text-red-200">Persistent Rival Memory</p>
+            </div>
+            <h2 className="mt-2 text-2xl font-black uppercase tracking-[0.16em] text-white">The Grudge Ledger</h2>
+            <p className="mt-2 max-w-3xl text-xs leading-6 text-zinc-400">Every ranked verdict cuts both ways. Your gladiators remember who beat them, who they own, and which score still demands blood.</p>
+          </div>
+          <div className="rounded-full border border-red-300/20 bg-red-500/10 px-4 py-2 text-[9px] font-black uppercase tracking-[0.24em] text-red-100">
+            {rivalries.length} active grudge{rivalries.length === 1 ? '' : 's'}
+          </div>
+        </div>
+
+        {rivalries.length ? (
+          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            {rivalries.map((rivalry) => {
+              const owner = gladiatorById.get(rivalry.owner_gladiator_id);
+              const rival = gladiatorById.get(rivalry.rival_gladiator_id);
+              const heat = grudgeHeat(rivalry.grudge_score);
+              const revengeOwed = rivalry.last_result === 'loss';
+              return (
+                <article key={`${rivalry.owner_gladiator_id}-${rivalry.rival_gladiator_id}`} className="relative overflow-hidden rounded-3xl border border-white/10 bg-zinc-950/80 p-4">
+                  <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-red-300/60 to-transparent" />
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <button type="button" disabled={!owner} onClick={() => owner && onInspect(owner)} aria-label={`Inspect ${owner?.name ?? 'your gladiator'}`} className="h-11 w-11 shrink-0 overflow-hidden rounded-2xl border border-white/15 bg-black transition hover:scale-105 disabled:cursor-default">
+                        {owner && <img src={avatarUrlForGladiator(owner)} alt="" className="h-full w-full object-cover" />}
+                      </button>
+                      <div className="min-w-0">
+                        <p className="text-[8px] font-black uppercase tracking-[0.24em] text-zinc-600">Your blade</p>
+                        <p className="truncate text-xs font-black uppercase tracking-[0.14em] text-white">{owner?.name ?? 'Unknown'}</p>
+                      </div>
+                      <Swords className="h-4 w-4 shrink-0 text-red-300" />
+                      <button type="button" disabled={!rival} onClick={() => rival && onInspect(rival)} aria-label={`Inspect ${rival?.name ?? 'rival'}`} className="h-11 w-11 shrink-0 overflow-hidden rounded-2xl border border-red-300/20 bg-black transition hover:scale-105 disabled:cursor-default">
+                        {rival && <img src={avatarUrlForGladiator(rival)} alt="" className="h-full w-full object-cover" />}
+                      </button>
+                      <div className="min-w-0">
+                        <p className="text-[8px] font-black uppercase tracking-[0.24em] text-zinc-600">Marked rival</p>
+                        <p className="truncate text-xs font-black uppercase tracking-[0.14em] text-white">{rival?.name ?? 'Unknown'}</p>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-center">
+                      <p className="text-2xl font-black text-red-200">{rivalry.grudge_score}</p>
+                      <p className="text-[7px] font-black uppercase tracking-widest text-zinc-600">Heat</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-3 gap-2">
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-center">
+                      <p className="text-lg font-black text-white">{rivalry.wins}-{rivalry.losses}</p>
+                      <p className="text-[7px] font-black uppercase tracking-widest text-zinc-600">Record</p>
+                    </div>
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-center">
+                      <p className="text-lg font-black text-white">{rivalry.encounters}</p>
+                      <p className="text-[7px] font-black uppercase tracking-widest text-zinc-600">Clashes</p>
+                    </div>
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-center">
+                      <p className={cn('truncate text-[9px] font-black uppercase tracking-wider', rivalry.current_streak < 0 ? 'text-red-200' : 'text-green-200')}>{grudgeStreakLabel(rivalry.current_streak)}</p>
+                      <p className="mt-1 text-[7px] font-black uppercase tracking-widest text-zinc-600">Momentum</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap gap-2">
+                      <span className={cn('rounded-full border px-3 py-1 text-[8px] font-black uppercase tracking-widest', grudgeHeatTone(heat))}>{heat}</span>
+                      <span className={cn('rounded-full border px-3 py-1 text-[8px] font-black uppercase tracking-widest', revengeOwed ? 'border-red-300/30 bg-red-500/10 text-red-100' : 'border-green-300/25 bg-green-500/10 text-green-100')}>
+                        {revengeOwed ? 'Revenge Owed' : 'Dominance Held'}
+                      </span>
+                    </div>
+                    <p className="text-[8px] font-black uppercase tracking-widest text-zinc-600">
+                      {rivalry.last_challenge_type ? formatChallenge(rivalry.last_challenge_type) : 'Ranked Battle'}
+                    </p>
+                  </div>
+
+                  <button type="button" onClick={() => onRevenge(rivalry)} disabled={!owner || !rival} className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl border border-red-300/30 bg-red-500/10 px-4 py-3 text-[9px] font-black uppercase tracking-[0.24em] text-red-100 transition hover:border-red-200 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40">
+                    <Skull className="h-4 w-4" />
+                    {revengeOwed ? 'Call For Revenge' : 'Defend The Claim'}
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="mt-5 rounded-3xl border border-dashed border-red-300/15 bg-red-950/5 p-8 text-center">
+            <Flame className="mx-auto h-8 w-8 text-zinc-700" />
+            <p className="mt-3 text-sm font-bold text-zinc-500">No grudges have been written yet. Complete a ranked battle and the Ledger will remember both sides.</p>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 // ─── Battle Watch Panel (Split-Screen Docked View) ──────────────────────────
 function BattleWatchPanel({
   simulation,
@@ -5399,6 +5449,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
   const requestedGladiatorId = searchParams.get('gladiator');
   const [gladiators, setGladiators] = useState<Gladiator[]>([]);
   const [matches, setMatches] = useState<MatchRow[]>([]);
+  const [rivalries, setRivalries] = useState<GladiatorRivalry[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -5563,6 +5614,24 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
     }
   }, []);
 
+  const fetchRivalries = useCallback(async () => {
+    if (!currentUser) {
+      setRivalries([]);
+      return;
+    }
+    const { data, error } = await supabase
+      .from('gladiator_rivalries')
+      .select('*')
+      .order('grudge_score', { ascending: false })
+      .order('last_fought_at', { ascending: false })
+      .limit(12);
+    if (error) {
+      if (error.code !== '42P01') console.warn('[Colosseum] Grudge Ledger unavailable', error);
+      return;
+    }
+    setRivalries((data ?? []) as GladiatorRivalry[]);
+  }, [currentUser]);
+
   useEffect(() => {
     void fetchArena();
   }, [fetchArena]);
@@ -5589,6 +5658,10 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       setTemporaryTitles(new Map());
     }
   }, [currentUser, fetchBounties]);
+
+  useEffect(() => {
+    void fetchRivalries();
+  }, [fetchRivalries]);
 
   useEffect(() => {
     setWhisperUsed(false);
@@ -5626,6 +5699,28 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
 
   const gladiatorById = useMemo(() => new Map(gladiators.map((gladiator) => [gladiator.id, gladiator])), [gladiators]);
   const myGladiators = useMemo(() => gladiators.filter((gladiator) => gladiator.user_id === currentUser?.id), [gladiators, currentUser?.id]);
+  const rivalryOwnerKey = myGladiators.map((gladiator) => gladiator.id).sort().join(',');
+
+  useEffect(() => {
+    if (!currentUser || !rivalryOwnerKey) return;
+    const channel = supabase
+      .channel(`colosseum-grudge-ledger-${currentUser.id}`);
+    rivalryOwnerKey.split(',').forEach((gladiatorId) => {
+      channel.on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'gladiator_rivalries',
+          filter: `owner_gladiator_id=eq.${gladiatorId}`,
+        },
+        () => void fetchRivalries()
+      );
+    });
+    channel.subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [currentUser, fetchRivalries, rivalryOwnerKey]);
+
   const opponents = useMemo(() => gladiators.filter((gladiator) => gladiator.id !== selectedGladiatorId), [gladiators, selectedGladiatorId]);
   const botGladiators = useMemo(() => gladiators.filter((gladiator) => Boolean(gladiator.botProfile)).sort((a, b) => (b.botProfile?.speed_rating ?? 0) - (a.botProfile?.speed_rating ?? 0)), [gladiators]);
   const featuredBotGladiators = useMemo(() => {
@@ -5717,13 +5812,17 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
     setUserSolution(challengeFor(opponent?.botProfile, challengeType, seed).starter);
   };
 
-  const openBotChallenge = (bot: Gladiator) => {
-    if (!selectedGladiatorId) {
+  const openBotChallenge = (bot: Gladiator, challengerId?: string, requestedChallengeType?: ChallengeType) => {
+    const effectiveChallengeType = requestedChallengeType ?? challengeType;
+    if (challengerId) {
+      setSelectedGladiatorId(challengerId);
+    } else if (!selectedGladiatorId) {
       const mine = gladiators.find((gladiator) => gladiator.user_id === currentUser?.id && gladiator.id !== bot.id);
       if (mine) setSelectedGladiatorId(mine.id);
     }
     const nonce = Date.now();
-    const seed = `${bot.id}-${challengeType}-${nonce}`;
+    const seed = `${bot.id}-${effectiveChallengeType}-${nonce}`;
+    setChallengeType(effectiveChallengeType);
     setSelectedOpponentId(bot.id);
     setPendingBounty(null);
     setChallengeNonce(nonce);
@@ -5731,7 +5830,18 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
     setCountdown(3);
     setLatestBotSolution('');
     setBattleResult(null);
-    setUserSolution(challengeFor(bot.botProfile, challengeType, seed).starter);
+    setUserSolution(challengeFor(bot.botProfile, effectiveChallengeType, seed).starter);
+  };
+
+  const openGrudgeChallenge = (rivalry: GladiatorRivalry) => {
+    const owner = gladiatorById.get(rivalry.owner_gladiator_id);
+    const rival = gladiatorById.get(rivalry.rival_gladiator_id);
+    if (!owner || !rival) {
+      setNotice('That rivalry cannot be reopened because one combatant has left the arena.');
+      return;
+    }
+    const revengeType = rivalry.last_challenge_type ?? challengeType;
+    openBotChallenge(rival, owner.id, revengeType);
   };
 
   const handleActiveMatchClick = (match: MatchRow) => {
@@ -7776,6 +7886,13 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
           </div>
         </section>
 
+        <GrudgeLedgerPanel
+          rivalries={rivalries}
+          gladiatorById={gladiatorById}
+          onRevenge={openGrudgeChallenge}
+          onInspect={setInspectedGladiator}
+        />
+
         <section className="mt-6 grid gap-6 lg:grid-cols-2">
           <div className="rounded-[2rem] border border-white/10 bg-black/60 p-5 backdrop-blur-xl">
             <div className="mb-4 flex items-center justify-between">
@@ -7840,6 +7957,21 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
                           <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Winner</p>
                           <p className="text-xs font-black uppercase tracking-widest text-yellow-200">{winner?.name ?? 'Pending'}</p>
                         </div>
+                        <button
+                          type="button"
+                          aria-label={`Copy Blood Receipt for ${gladiatorById.get(match.challenger_id)?.name ?? 'challenger'} versus ${gladiatorById.get(match.defender_id)?.name ?? 'defender'}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void navigator.clipboard.writeText(`${window.location.origin}/colosseum/replay/${match.id}`).then(() => {
+                              setNotice('Blood Receipt copied. The sand is ready to travel.');
+                            }).catch(() => {
+                              setNotice('The Blood Receipt could not be copied from this browser.');
+                            });
+                          }}
+                          className="rounded-full border border-white/10 bg-white/5 p-2 text-zinc-500 transition hover:border-red-300/30 hover:text-red-200"
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                        </button>
                         <ChevronRight className="h-4 w-4 text-zinc-600" />
                       </div>
                     </div>
