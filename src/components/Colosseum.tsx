@@ -4830,6 +4830,21 @@ function BountyBoard({
   onHunt: (bounty: ColosseumBounty) => void;
   onInspect: (gladiator: Gladiator) => void;
 }) {
+  const standingsByBounty = useMemo(() => {
+    const grouped = new Map<string, ColosseumBountyEntry[]>();
+    entries.forEach((entry) => {
+      const standings = grouped.get(entry.bounty_id) ?? [];
+      standings.push(entry);
+      grouped.set(entry.bounty_id, standings);
+    });
+    grouped.forEach((standings) => standings.sort((left, right) =>
+      right.score - left.score
+      || left.duration_ms - right.duration_ms
+      || new Date(left.completed_at).getTime() - new Date(right.completed_at).getTime()
+    ));
+    return grouped;
+  }, [entries]);
+
   return (
     <div className="rounded-[2rem] border border-yellow-300/20 bg-[radial-gradient(circle_at_top_left,rgba(250,204,21,0.13),transparent_38%),rgba(0,0,0,0.72)] p-5 shadow-[0_0_40px_rgba(250,204,21,0.08)] backdrop-blur-xl">
       <div className="flex items-center justify-between gap-4">
@@ -4841,9 +4856,7 @@ function BountyBoard({
       </div>
       <div className="mt-4 space-y-4">
         {bounties.map((bounty) => {
-          const bountyStandings = entries
-            .filter((entry) => entry.bounty_id === bounty.id)
-            .sort((left, right) => right.score - left.score || left.duration_ms - right.duration_ms);
+          const bountyStandings = standingsByBounty.get(bounty.id) ?? [];
           const rankings = bountyStandings.slice(0, 3);
           const alreadyEntered = bountyStandings.some((entry) => myGladiatorIds.has(entry.gladiator_id));
           const defender = bounty.defender_gladiator_id ? gladiatorById.get(bounty.defender_gladiator_id) : null;
@@ -5491,35 +5504,17 @@ export const Colosseum: React.FC = () => {
 
   const fetchBounties = useCallback(async () => {
     try {
-      await supabase.rpc('refresh_colosseum_bounties');
-      const { data: bountyRows, error: bountyError } = await supabase
-        .from('colosseum_bounties')
-        .select('*')
-        .eq('status', 'open')
-        .order('closes_at', { ascending: true });
-      if (bountyError) throw bountyError;
-      const bountyIds = (bountyRows ?? []).map((bounty) => bounty.id);
-      const [{ data: entryRows, error: entryError }, { data: titleRows, error: titleError }] = await Promise.all([
-        bountyIds.length > 0
-          ? supabase
-            .from('colosseum_bounty_entries')
-            .select('*')
-            .in('bounty_id', bountyIds)
-            .order('score', { ascending: false })
-            .order('duration_ms', { ascending: true })
-          : Promise.resolve({ data: [], error: null }),
-        supabase.from('gladiator_temporary_titles').select('*').gt('expires_at', new Date().toISOString()),
-      ]);
-      if (entryError) throw entryError;
-      if (titleError) throw titleError;
-      setBounties((bountyRows ?? []) as ColosseumBounty[]);
-      setBountyEntries((entryRows ?? []) as ColosseumBountyEntry[]);
-      setTemporaryTitles(new Map(((titleRows ?? []) as GladiatorTemporaryTitle[]).map((title) => [title.gladiator_id, title])));
+      const session = await getValidSession();
+      const response = await fetch('/api/colosseum/bounties', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Bounty Board unavailable.');
+      setBounties((payload.bounties ?? []) as ColosseumBounty[]);
+      setBountyEntries((payload.entries ?? []) as ColosseumBountyEntry[]);
+      setTemporaryTitles(new Map(((payload.titles ?? []) as GladiatorTemporaryTitle[]).map((title) => [title.gladiator_id, title])));
     } catch (error) {
-      const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : '';
-      if (code !== '42P01' && code !== '42883' && code !== 'PGRST202') {
-        console.warn('[Colosseum] Bounty Board unavailable', error);
-      }
+      console.warn('[Colosseum] Bounty Board unavailable', error);
     }
   }, []);
 
@@ -5540,14 +5535,20 @@ export const Colosseum: React.FC = () => {
   }, [fetchTournaments]);
 
   useEffect(() => {
-    void fetchBounties();
-  }, [fetchBounties]);
+    if (currentUser) void fetchBounties();
+    else {
+      setBounties([]);
+      setBountyEntries([]);
+      setTemporaryTitles(new Map());
+    }
+  }, [currentUser, fetchBounties]);
 
   useEffect(() => {
     setWhisperUsed(false);
   }, [selectedMatchId]);
 
   useEffect(() => {
+    if (!currentUser) return undefined;
     const channel = supabase
       .channel('colosseum-arena')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiators' }, () => void fetchArena())
@@ -5573,7 +5574,7 @@ export const Colosseum: React.FC = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiator_temporary_titles' }, () => void fetchBounties())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [fetchBounties]);
+  }, [currentUser, fetchBounties]);
 
   const gladiatorById = useMemo(() => new Map(gladiators.map((gladiator) => [gladiator.id, gladiator])), [gladiators]);
   const myGladiators = useMemo(() => gladiators.filter((gladiator) => gladiator.user_id === currentUser?.id), [gladiators, currentUser?.id]);

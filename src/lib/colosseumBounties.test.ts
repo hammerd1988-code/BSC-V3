@@ -7,6 +7,7 @@ describe('Colosseum Bounty Board', () => {
     resolve(process.cwd(), 'supabase/migrations/0052_colosseum_bounty_board.sql'),
     'utf8'
   );
+  const routes = readFileSync(resolve(process.cwd(), 'colosseumRoutes.ts'), 'utf8');
 
   it('rotates daily and weekly server-authored contracts', () => {
     expect(migration).toContain("unique (cadence, opens_at)");
@@ -28,5 +29,8 @@ describe('Colosseum Bounty Board', () => {
     expect(migration).toContain('complete_colosseum_bounty_match_after_update');
     expect(migration).toContain('entry.score desc, entry.duration_ms, entry.completed_at');
     expect(migration).toContain("latest.closes_at + interval '7 days'");
+    expect(migration).toContain('grant execute on function public.refresh_colosseum_bounties() to service_role');
+    expect(routes).toContain("app.get('/api/colosseum/bounties'");
+    expect(routes).toContain('now - lastBountyRefreshAt >= 60_000');
   });
 });

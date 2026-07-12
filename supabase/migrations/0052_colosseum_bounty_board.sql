@@ -170,7 +170,9 @@ begin
     v_daily_open + interval '1 day'
   )
   on conflict (cadence, opens_at) do update set
-    defender_gladiator_id = coalesce(public.colosseum_bounties.defender_gladiator_id, excluded.defender_gladiator_id);
+    defender_gladiator_id = excluded.defender_gladiator_id
+  where public.colosseum_bounties.defender_gladiator_id is null
+    and excluded.defender_gladiator_id is not null;
 
   insert into public.colosseum_bounties (
     cadence,
@@ -197,12 +199,14 @@ begin
     v_weekly_open + interval '7 days'
   )
   on conflict (cadence, opens_at) do update set
-    defender_gladiator_id = coalesce(public.colosseum_bounties.defender_gladiator_id, excluded.defender_gladiator_id);
+    defender_gladiator_id = excluded.defender_gladiator_id
+  where public.colosseum_bounties.defender_gladiator_id is null
+    and excluded.defender_gladiator_id is not null;
 end;
 $$;
 
-revoke all on function public.refresh_colosseum_bounties() from public, anon;
-grant execute on function public.refresh_colosseum_bounties() to authenticated;
+revoke all on function public.refresh_colosseum_bounties() from public, anon, authenticated;
+grant execute on function public.refresh_colosseum_bounties() to service_role;
 
 create or replace function public.claim_colosseum_bounty_match()
 returns trigger
