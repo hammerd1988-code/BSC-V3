@@ -17,6 +17,14 @@ import {
   sanitizePublicText,
 } from './src/lib/colosseumReplay.js';
 import {
+  isCrowdSealMoment,
+  isCrowdSealType,
+  type CrowdSealCount,
+  type CrowdSealMoment,
+  type CrowdSealType,
+  type ViewerCrowdSeal,
+} from './src/lib/colosseumCrowdSeals.js';
+import {
   parseTrainingBattleRequest,
   validateTrainingCombatants,
 } from './src/lib/colosseumTraining.js';
@@ -93,6 +101,32 @@ async function userOwnsOpenMatch(supabase: SupabaseClient, matchId: string, auth
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function crowdSealPayload(rows: unknown) {
+  const counts: CrowdSealCount[] = [];
+  const viewerSeals: ViewerCrowdSeal[] = [];
+  if (Array.isArray(rows)) {
+    rows.forEach((value) => {
+      if (!isRecord(value) || !isCrowdSealMoment(value.moment) || !isCrowdSealType(value.seal_type)) return;
+      const moment = value.moment as CrowdSealMoment;
+      const sealType = value.seal_type as CrowdSealType;
+      const count = Number(value.seal_count);
+      if (!Number.isFinite(count) || count < 1) return;
+      counts.push({
+        moment,
+        seal_type: sealType,
+        count,
+      });
+      if (value.viewer_selected === true) {
+        viewerSeals.push({ moment, seal_type: sealType });
+      }
+    });
+  }
+  return {
+    crowd_seals: counts.sort((left, right) => right.count - left.count),
+    viewer_seals: viewerSeals,
+  };
 }
 
 function errorMessage(error: unknown): string {
@@ -1157,6 +1191,130 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
     } catch (error: unknown) {
       console.error('[colosseum:public-replay]', error);
       return res.status(502).json({ success: false, error: 'Battle receipt is temporarily unavailable.' });
+    }
+  });
+
+  app.get('/api/colosseum/replay/:matchId/seals', async (req, res) => {
+    try {
+      const matchId = sanitizePublicText(req.params.matchId, 128);
+      const { data: match, error: matchError } = await supabase
+        .from('matches')
+        .select('completed_at,status,public_replay_enabled,challenge_type')
+        .eq('id', matchId)
+        .maybeSingle();
+      if (matchError) throw matchError;
+      if (!match || !publicReplayAllowed(match) || !isPublicReplayChallengeType(match.challenge_type)) {
+        return res.status(404).json({ success: false, error: 'Battle receipt not found.' });
+      }
+
+      const authUser = await authenticatedRequestUser(req, supabase);
+      let viewerUserId: string | null = null;
+      if (authUser) {
+        const { data: viewer } = await supabase
+          .from('users')
+          .select('id')
+          .eq('auth_uid', authUser.id)
+          .maybeSingle();
+        viewerUserId = viewer?.id ? String(viewer.id) : null;
+      }
+
+      const { data: seals, error: sealError } = await supabase.rpc('get_battle_crowd_seals', {
+        p_match_id: matchId,
+        p_viewer_user_id: viewerUserId,
+      });
+      if (sealError && sealError.code !== '42P01') throw sealError;
+
+      return res.json({
+        success: true,
+        ...crowdSealPayload(seals ?? []),
+      });
+    } catch (error: unknown) {
+      console.error('[colosseum:crowd-seals:list]', error);
+      return res.status(502).json({ success: false, error: 'Crowd Seals are temporarily unavailable.' });
+    }
+  });
+
+  app.post('/api/colosseum/replay/:matchId/seals', async (req, res) => {
+    try {
+      const authUser = await authenticatedRequestUser(req, supabase);
+      if (!authUser) {
+        return res.status(401).json({ success: false, error: 'Sign in to cast a Crowd Seal.' });
+      }
+      const matchId = sanitizePublicText(req.params.matchId, 128);
+      const moment = req.body?.moment;
+      const sealType = req.body?.seal_type;
+      if (!isCrowdSealMoment(moment) || !isCrowdSealType(sealType)) {
+        return res.status(400).json({ success: false, error: 'Choose a valid Crowd Seal and battle moment.' });
+      }
+
+      const [{ data: match, error: matchError }, { data: viewer, error: viewerError }] = await Promise.all([
+        supabase
+          .from('matches')
+          .select('completed_at,status,public_replay_enabled,challenge_type')
+          .eq('id', matchId)
+          .maybeSingle(),
+        supabase
+          .from('users')
+          .select('id')
+          .eq('auth_uid', authUser.id)
+          .maybeSingle(),
+      ]);
+      if (matchError) throw matchError;
+      if (viewerError) throw viewerError;
+      if (!match || !publicReplayAllowed(match) || !isPublicReplayChallengeType(match.challenge_type)) {
+        return res.status(404).json({ success: false, error: 'Battle receipt not found.' });
+      }
+      if (!viewer?.id) {
+        return res.status(403).json({ success: false, error: 'A platform profile is required to cast a Crowd Seal.' });
+      }
+
+      const viewerUserId = String(viewer.id);
+      const { data: existing, error: existingError } = await supabase
+        .from('battle_crowd_seals')
+        .select('seal_type')
+        .eq('match_id', matchId)
+        .eq('user_id', viewerUserId)
+        .eq('moment', moment)
+        .maybeSingle();
+      if (existingError && existingError.code !== '42P01') throw existingError;
+      if (existingError?.code === '42P01') {
+        return res.status(503).json({ success: false, error: 'Crowd Seals are not online yet.' });
+      }
+
+      if (existing?.seal_type === sealType) {
+        const { error: deleteError } = await supabase
+          .from('battle_crowd_seals')
+          .delete()
+          .eq('match_id', matchId)
+          .eq('user_id', viewerUserId)
+          .eq('moment', moment);
+        if (deleteError) throw deleteError;
+      } else {
+        const { error: upsertError } = await supabase
+          .from('battle_crowd_seals')
+          .upsert({
+            match_id: matchId,
+            user_id: viewerUserId,
+            moment,
+            seal_type: sealType,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'match_id,user_id,moment' });
+        if (upsertError) throw upsertError;
+      }
+
+      const { data: seals, error: sealError } = await supabase.rpc('get_battle_crowd_seals', {
+        p_match_id: matchId,
+        p_viewer_user_id: viewerUserId,
+      });
+      if (sealError) throw sealError;
+
+      return res.json({
+        success: true,
+        ...crowdSealPayload(seals ?? []),
+      });
+    } catch (error: unknown) {
+      console.error('[colosseum:crowd-seals:cast]', error);
+      return res.status(502).json({ success: false, error: 'The crowd could not seal that moment.' });
     }
   });
 
