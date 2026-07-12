@@ -22,6 +22,7 @@ describe('Colosseum arena condition cards', () => {
     expect(migration).toContain('new.arena_modifier is distinct from v_expected_code');
     expect(migration).toContain("new.mode is distinct from 'ranked'");
     expect(migration).toContain('seal_colosseum_arena_modifier_before_update');
+    expect(migration).toContain('new.arena_modifier is distinct from old.arena_modifier');
     expect(migration).toContain("old.replay_data->>'arena_base_prompt'");
   });
 
