@@ -9,6 +9,14 @@ import {
   type ColosseumChallengeType,
 } from './src/lib/colosseumVerdict.js';
 import {
+  isPublicReplayChallengeType,
+  publicReplayAllowed,
+  sanitizePublicAssetUrl,
+  sanitizePublicJudge,
+  sanitizePublicReplayData,
+  sanitizePublicText,
+} from './src/lib/colosseumReplay.js';
+import {
   parseTrainingBattleRequest,
   validateTrainingCombatants,
 } from './src/lib/colosseumTraining.js';
@@ -1053,6 +1061,102 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
     } catch (error: any) {
       console.error('[colosseum:sapphire:move]', error);
       return res.status(502).json({ success: false, error: error.message || 'Sapphire combat move failed' });
+    }
+  });
+
+  app.get('/api/colosseum/replay/:matchId', async (req, res) => {
+    try {
+      const matchId = sanitizePublicText(req.params.matchId, 128);
+      if (!matchId) {
+        return res.status(404).json({ success: false, error: 'Battle receipt not found.' });
+      }
+
+      const { data: match, error: matchError } = await supabase
+        .from('matches')
+        .select('id,challenger_id,defender_id,challenge_type,winner_id,started_at,completed_at,replay_data,status,public_replay_enabled')
+        .eq('id', matchId)
+        .maybeSingle();
+      if (matchError) throw matchError;
+      if (!match || !publicReplayAllowed(match) || !isPublicReplayChallengeType(match.challenge_type)) {
+        return res.status(404).json({ success: false, error: 'Battle receipt not found.' });
+      }
+
+      const [judgementResult, recordResult, combatantResult] = await Promise.all([
+        supabase
+          .from('battle_judgements')
+          .select('schema_version,judge_provider,judge_model,used_ai,challenger_score,defender_score,winner_id,summary,reasoning,rubric,annotations')
+          .eq('match_id', match.id)
+          .maybeSingle(),
+        supabase
+          .from('battle_records')
+          .select('challenge_title,challenge_difficulty,scores,replay_snapshot')
+          .eq('match_id', match.id)
+          .maybeSingle(),
+        supabase
+          .from('gladiators')
+          .select('id,name,avatar_url,glow_color,wins,losses')
+          .in('id', [match.challenger_id, match.defender_id]),
+      ]);
+      if (judgementResult.error) throw judgementResult.error;
+      if (recordResult.error) throw recordResult.error;
+      if (combatantResult.error) throw combatantResult.error;
+
+      const matchReplay = isRecord(match.replay_data) ? match.replay_data : {};
+      const recordReplay = isRecord(recordResult.data?.replay_snapshot) ? recordResult.data.replay_snapshot : {};
+      const scores = isRecord(recordResult.data?.scores) ? recordResult.data.scores : {};
+      const replayData = sanitizePublicReplayData({
+        ...recordReplay,
+        ...matchReplay,
+        challenge_title: matchReplay.challenge_title ?? recordResult.data?.challenge_title,
+        challenge_difficulty: matchReplay.challenge_difficulty ?? recordResult.data?.challenge_difficulty,
+        challenger_score: matchReplay.challenger_score ?? scores.challenger,
+        defender_score: matchReplay.defender_score ?? scores.defender,
+      });
+      const replayJudge = isRecord(matchReplay.judge) ? matchReplay.judge : {};
+      const judge = sanitizePublicJudge(
+        judgementResult.data ?? {
+          ...replayJudge,
+          winner_id: replayJudge.winner_id ?? match.winner_id,
+          challenger_score: replayJudge.challenger_score ?? replayData.challenger_score,
+          defender_score: replayJudge.defender_score ?? replayData.defender_score,
+          summary: replayJudge.summary ?? 'This legacy verdict was sealed before Casper began recording the full Iron Ledger.',
+        },
+        String(match.winner_id ?? '')
+      );
+
+      const combatants = (combatantResult.data ?? []).map((gladiator) => ({
+        id: sanitizePublicText(gladiator.id, 128),
+        name: sanitizePublicText(gladiator.name, 120),
+        avatar_url: sanitizePublicAssetUrl(gladiator.avatar_url),
+        glow_color: sanitizePublicText(gladiator.glow_color, 32) || '#71717a',
+        wins: Number.isFinite(Number(gladiator.wins)) ? Math.max(0, Number(gladiator.wins)) : 0,
+        losses: Number.isFinite(Number(gladiator.losses)) ? Math.max(0, Number(gladiator.losses)) : 0,
+      }));
+
+      return res.json({
+        success: true,
+        receipt: {
+          match: {
+            id: String(match.id),
+            challenger_id: String(match.challenger_id),
+            defender_id: String(match.defender_id),
+            challenge_type: match.challenge_type,
+            winner_id: match.winner_id ? String(match.winner_id) : judge.winner_id,
+            started_at: match.started_at,
+            completed_at: match.completed_at,
+          },
+          combatants,
+          replay_data: {
+            ...replayData,
+            challenger_score: judge.challenger_score,
+            defender_score: judge.defender_score,
+            judge,
+          },
+        },
+      });
+    } catch (error: unknown) {
+      console.error('[colosseum:public-replay]', error);
+      return res.status(502).json({ success: false, error: 'Battle receipt is temporarily unavailable.' });
     }
   });
 

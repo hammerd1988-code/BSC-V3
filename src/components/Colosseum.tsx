@@ -49,6 +49,9 @@ import {
   Mic,
   MicOff,
   Volume2,
+  Copy,
+  Share2,
+  Check,
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -65,6 +68,7 @@ import type {
 import { ReportModal } from './ReportModal';
 import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
 import { DistrictCityBackdrop } from './DistrictCityBackdrop';
+import { CasperAnnotationLedger, CasperRubricScorecard } from './CasperVerdictLedger';
 import { useSubscription, type FeatureGateResult } from '../lib/subscription';
 import { UpgradePromptModal } from './UpgradePrompt';
 
@@ -2480,96 +2484,6 @@ function TournamentDetailPopup({ tournament, entries, gladiatorById, onClose }: 
   );
 }
 
-function CasperRubricScorecard({
-  rubric,
-  challengerName,
-  defenderName,
-}: {
-  rubric: BattleRubricItem[];
-  challengerName: string;
-  defenderName: string;
-}) {
-  if (rubric.length === 0) return null;
-  return (
-    <div className="mt-5 space-y-2">
-      <div className="flex items-center justify-between">
-        <p className="text-[9px] font-black uppercase tracking-[0.28em] text-yellow-200">Casper's Iron Ledger</p>
-        <p className="text-[8px] font-black uppercase tracking-widest text-zinc-600">Weighted verdict v2</p>
-      </div>
-      {rubric.map((criterion) => {
-        const challengerLeads = criterion.challenger_score >= criterion.defender_score;
-        const margin = Math.abs(criterion.challenger_score - criterion.defender_score);
-        return (
-          <div key={criterion.id} className="overflow-hidden rounded-2xl border border-white/10 bg-black/50 p-3">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-white">{criterion.label}</p>
-                <p className="mt-1 text-[9px] leading-4 text-zinc-500">{criterion.commentary}</p>
-              </div>
-              <div className="shrink-0 text-right">
-                <p className="text-[8px] font-black uppercase tracking-widest text-zinc-600">{Math.round(criterion.weight * 100)}% weight</p>
-                <p className={cn('mt-1 text-[9px] font-black uppercase tracking-widest', margin === 0 ? 'text-zinc-400' : challengerLeads ? 'text-red-300' : 'text-cyan-300')}>
-                  {margin === 0 ? 'Dead even' : `${challengerLeads ? challengerName : defenderName} +${margin}`}
-                </p>
-              </div>
-            </div>
-            <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
-              <div>
-                <div className="mb-1 flex items-center justify-between text-[8px] font-black uppercase tracking-wider text-red-200">
-                  <span className="truncate">{challengerName}</span>
-                  <span>{criterion.challenger_score}</span>
-                </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-red-950/50">
-                  <div className="h-full rounded-full bg-gradient-to-r from-red-700 to-red-300" style={{ width: `${criterion.challenger_score}%` }} />
-                </div>
-              </div>
-              <Scale className="h-3.5 w-3.5 text-yellow-300/70" />
-              <div>
-                <div className="mb-1 flex items-center justify-between text-[8px] font-black uppercase tracking-wider text-cyan-200">
-                  <span>{criterion.defender_score}</span>
-                  <span className="truncate">{defenderName}</span>
-                </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-cyan-950/50">
-                  <div className="h-full rounded-full bg-gradient-to-r from-cyan-300 to-cyan-700" style={{ width: `${criterion.defender_score}%` }} />
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function CasperAnnotationLedger({ annotations }: { annotations: BattleAnnotation[] }) {
-  if (annotations.length === 0) return null;
-  return (
-    <div className="mt-4 rounded-2xl border border-purple-300/15 bg-purple-950/10 p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <FileCode className="h-3.5 w-3.5 text-purple-300" />
-        <p className="text-[9px] font-black uppercase tracking-[0.28em] text-purple-200">Decisive Code Marks</p>
-      </div>
-      <div className="space-y-2">
-        {annotations.map((annotation, index) => (
-          <div key={`${annotation.combatant}-${annotation.line_start}-${index}`} className="flex items-start gap-3 rounded-xl border border-white/5 bg-black/40 p-3">
-            <span className={cn(
-              'shrink-0 rounded-full border px-2 py-1 text-[7px] font-black uppercase tracking-widest',
-              annotation.severity === 'critical'
-                ? 'border-red-400/30 bg-red-500/10 text-red-200'
-                : annotation.severity === 'warning'
-                  ? 'border-yellow-400/30 bg-yellow-500/10 text-yellow-200'
-                  : 'border-green-400/30 bg-green-500/10 text-green-200'
-            )}>
-              {annotation.combatant} L{annotation.line_start}{annotation.line_end > annotation.line_start ? `–${annotation.line_end}` : ''}
-            </span>
-            <p className="text-[10px] leading-5 text-zinc-400">{annotation.comment}</p>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function BattleSynopsisPopup({ match, gladiatorById, onClose }: { match: MatchRow; gladiatorById: Map<string, Gladiator>; onClose: () => void }) {
   const challenger = gladiatorById.get(match.challenger_id);
   const defender = gladiatorById.get(match.defender_id);
@@ -2602,6 +2516,17 @@ function BattleSynopsisPopup({ match, gladiatorById, onClose }: { match: MatchRo
 
   const [challengerCodeOpen, setChallengerCodeOpen] = useState(false);
   const [defenderCodeOpen, setDefenderCodeOpen] = useState(false);
+  const [receiptCopied, setReceiptCopied] = useState(false);
+
+  const copyReceipt = async () => {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/colosseum/replay/${match.id}`);
+      setReceiptCopied(true);
+      window.setTimeout(() => setReceiptCopied(false), 2_000);
+    } catch {
+      setReceiptCopied(false);
+    }
+  };
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[90] flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
@@ -2612,7 +2537,10 @@ function BattleSynopsisPopup({ match, gladiatorById, onClose }: { match: MatchRo
         onClick={(e) => e.stopPropagation()}
         className="relative mx-4 max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-[2rem] border-2 border-red-500/30 bg-black/95 shadow-[0_0_80px_rgba(255,23,68,0.2)]"
       >
-        {/* Close button */}
+        <button type="button" onClick={() => void copyReceipt()} className="absolute left-4 top-4 z-10 inline-flex items-center gap-2 rounded-full border border-red-300/20 bg-red-500/10 px-3 py-2 text-[8px] font-black uppercase tracking-widest text-red-100 transition hover:bg-red-500/20">
+          {receiptCopied ? <Check className="h-3.5 w-3.5 text-green-300" /> : <Share2 className="h-3.5 w-3.5" />}
+          {receiptCopied ? 'Copied' : 'Blood Receipt'}
+        </button>
         <button type="button" onClick={onClose} className="absolute right-4 top-4 z-10 rounded-full border border-white/10 bg-white/5 p-2 text-zinc-400 hover:text-white transition"><X className="h-4 w-4" /></button>
 
         {/* Header */}
@@ -7619,6 +7547,21 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
                           <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Winner</p>
                           <p className="text-xs font-black uppercase tracking-widest text-yellow-200">{winner?.name ?? 'Pending'}</p>
                         </div>
+                        <button
+                          type="button"
+                          aria-label={`Copy Blood Receipt for ${gladiatorById.get(match.challenger_id)?.name ?? 'challenger'} versus ${gladiatorById.get(match.defender_id)?.name ?? 'defender'}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void navigator.clipboard.writeText(`${window.location.origin}/colosseum/replay/${match.id}`).then(() => {
+                              setNotice('Blood Receipt copied. The sand is ready to travel.');
+                            }).catch(() => {
+                              setNotice('The Blood Receipt could not be copied from this browser.');
+                            });
+                          }}
+                          className="rounded-full border border-white/10 bg-white/5 p-2 text-zinc-500 transition hover:border-red-300/30 hover:text-red-200"
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                        </button>
                         <ChevronRight className="h-4 w-4 text-zinc-600" />
                       </div>
                     </div>
