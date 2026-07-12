@@ -25,8 +25,9 @@ begin
   if v_source.mode is distinct from 'ranked'
     or v_source.status is distinct from 'complete'
     or v_source.completed_at is null
+    or v_source.winner_id is distinct from v_source.challenger_id
   then
-    raise exception 'Revenge challenges require a completed ranked battle';
+    raise exception 'Revenge challenges require a completed ranked loss by the original defender';
   end if;
 
   if new.mode is distinct from 'ranked' then
