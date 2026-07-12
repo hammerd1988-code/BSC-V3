@@ -137,8 +137,8 @@ interface MatchRow {
   challenger_id: string;
   defender_id: string;
   challenge_type: ChallengeType;
-  mode?: 'ranked' | 'training';
-  status?: 'running' | 'complete' | 'failed';
+  mode?: 'ranked' | 'training' | 'bounty' | 'tournament' | 'team';
+  status?: 'pending' | 'running' | 'judging' | 'complete' | 'failed' | 'cancelled';
   rematch_of_id?: string | null;
   winner_id: string | null;
   started_at: string;
@@ -7634,6 +7634,8 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
                 const winner = match.winner_id ? gladiatorById.get(match.winner_id) : null;
                 const canClaimRevenge = !trainingMode
                   && match.mode === 'ranked'
+                  && match.status === 'complete'
+                  && match.winner_id === match.challenger_id
                   && gladiatorById.get(match.defender_id)?.user_id === currentUser?.id;
                 return (
                   <div

@@ -17,11 +17,14 @@ describe('Colosseum revenge challenges', () => {
     expect(migration).toContain('new.defender_id is distinct from v_source.challenger_id');
     expect(migration).toContain('new.challenge_type is distinct from v_source.challenge_type');
     expect(migration).toContain("v_source.status is distinct from 'complete'");
+    expect(migration).toContain('v_source.winner_id is distinct from v_source.challenger_id');
   });
 
   it('links a revenge battle to its source match', () => {
     expect(colosseum).toContain('rematch_of_id: revengeSourceId');
     expect(colosseum).toContain('openRevengeChallenge');
     expect(colosseum).toContain('Claim Revenge');
+    expect(colosseum).toContain("match.status === 'complete'");
+    expect(colosseum).toContain('match.winner_id === match.challenger_id');
   });
 });
