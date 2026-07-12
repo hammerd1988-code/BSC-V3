@@ -49,6 +49,9 @@ import {
   Mic,
   MicOff,
   Volume2,
+  Copy,
+  Share2,
+  Check,
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -62,9 +65,16 @@ import type {
   BattleRubricItem,
   ColosseumChallengeType,
 } from '../lib/colosseumVerdict';
+import {
+  grudgeHeat,
+  grudgeStreakLabel,
+  type GladiatorRivalry,
+  type GrudgeHeat,
+} from '../lib/colosseumGrudge';
 import { ReportModal } from './ReportModal';
 import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
 import { DistrictCityBackdrop } from './DistrictCityBackdrop';
+import { CasperAnnotationLedger, CasperRubricScorecard } from './CasperVerdictLedger';
 import { useSubscription, type FeatureGateResult } from '../lib/subscription';
 import { UpgradePromptModal } from './UpgradePrompt';
 
@@ -143,6 +153,12 @@ interface MatchRow {
   replay_data: Record<string, any> | null;
 }
 
+interface TrainingBattleResponse {
+  sessionId: string;
+  moves: GladiatorAiMove[];
+  judge: BattleJudgeResult;
+}
+
 interface SapphireMove {
   source: string;
   prompt: string;
@@ -165,6 +181,7 @@ interface TournamentRow {
   started_at: string | null;
   completed_at: string | null;
   bracket: any;
+  champion_gladiator_id: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -179,11 +196,83 @@ interface TournamentEntryRow {
   joined_at: string;
 }
 
+interface TournamentMatchRow {
+  id: string;
+  tournament_id: string;
+  round_number: number;
+  position: number;
+  slot_a_gladiator_id: string | null;
+  slot_b_gladiator_id: string | null;
+  winner_gladiator_id: string | null;
+  match_id: string | null;
+  status: 'waiting' | 'ready' | 'running' | 'complete';
+  resolution: 'battle' | 'bye' | null;
+}
+
 interface TournamentFormState {
   name: string;
   challenge_type: ChallengeType;
   min_contestants: number;
 }
+
+interface ColosseumBounty {
+  id: string;
+  cadence: 'daily' | 'weekly';
+  title: string;
+  temporary_title: string;
+  challenge_type: ChallengeType;
+  prompt: string;
+  expected_signals: string;
+  difficulty: BotDifficulty;
+  defender_gladiator_id: string | null;
+  opens_at: string;
+  closes_at: string;
+  status: 'open' | 'closed';
+}
+
+interface ColosseumBountyEntry {
+  id: string;
+  bounty_id: string;
+  gladiator_id: string;
+  match_id: string;
+  score: number;
+  duration_ms: number;
+  completed_at: string;
+}
+
+interface GladiatorTemporaryTitle {
+  gladiator_id: string;
+  title: string;
+  expires_at: string;
+}
+
+interface GladiatorLegacy {
+  gladiator_id: string;
+  ranked_battles: number;
+  ranked_wins: number;
+  ranked_losses: number;
+  speed_wins: number;
+  debug_wins: number;
+  golf_wins: number;
+  evolving_signature: string;
+}
+
+interface GladiatorBattleScar {
+  id: string;
+  gladiator_id: string;
+  scar_type: 'first_blood' | 'comeback_crown' | 'giant_slayer' | 'iron_tempered' | 'flawless_code';
+  earned_match_id: string | null;
+  earned_at: string;
+  scar_data: Record<string, unknown>;
+}
+
+const BATTLE_SCAR_META: Record<GladiatorBattleScar['scar_type'], { label: string; detail: string; color: string }> = {
+  first_blood: { label: 'First Blood', detail: 'Claimed a first ranked victory.', color: '#ff1744' },
+  comeback_crown: { label: 'Comeback Crown', detail: 'Won after trailing in the round ledger.', color: '#f9ff6b' },
+  giant_slayer: { label: 'Giant Slayer', detail: 'Dropped a veteran with a massive win advantage.', color: '#ff2bd6' },
+  iron_tempered: { label: 'Iron Tempered', detail: 'Survived ten ranked battles.', color: '#a1a1aa' },
+  flawless_code: { label: 'Flawless Code', detail: 'Sealed a verdict score of 95 or higher.', color: '#00e5ff' },
+};
 
 interface CoachingMessage {
   role: 'gladiator' | 'coach';
@@ -235,6 +324,7 @@ interface BattleResultState {
   judgeUsedAi: boolean;
   judgeRubric: BattleRubricItem[];
   judgeAnnotations: BattleAnnotation[];
+  training: boolean;
 }
 
 interface CodingChallenge {
@@ -2139,6 +2229,43 @@ async function requestGladiatorAiMoves(match: MatchRow, type: ChallengeType, cha
   return (payload?.moves ?? []) as GladiatorAiMove[];
 }
 
+async function requestTrainingBattle(input: {
+  type: ChallengeType;
+  challenge: CodingChallenge;
+  challenger: Gladiator;
+  defender: Gladiator;
+  userSolution: string;
+}): Promise<TrainingBattleResponse> {
+  const session = await getValidSession();
+  const response = await fetch('/api/colosseum/training-battle', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({
+      mode: 'training',
+      challengerId: input.challenger.id,
+      defenderId: input.defender.id,
+      challengeType: input.type,
+      challengePrompt: `${input.challenge.title}\n${input.challenge.prompt}`,
+      expectedSignals: input.challenge.expected,
+      userSolution: input.userSolution,
+    }),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(payload?.error || 'Training Pit session failed');
+  }
+
+  return {
+    sessionId: String(payload.sessionId),
+    moves: (payload.moves ?? []) as GladiatorAiMove[],
+    judge: payload.judge as BattleJudgeResult,
+  };
+}
+
 async function requestBattleResolution(input: {
   match: MatchRow;
   type: ChallengeType;
@@ -2346,7 +2473,19 @@ function AnimatedGladiatorAvatar({ gladiator, size = 'md', label, active, onClic
   );
 }
 
-function GladiatorInspectPopup({ gladiator, onClose }: { gladiator: Gladiator; onClose: () => void }) {
+function GladiatorInspectPopup({
+  gladiator,
+  temporaryTitle,
+  legacy,
+  scars,
+  onClose,
+}: {
+  gladiator: Gladiator;
+  temporaryTitle: GladiatorTemporaryTitle | null;
+  legacy: GladiatorLegacy | null;
+  scars: GladiatorBattleScar[];
+  onClose: () => void;
+}) {
   const badge = badgeFor(gladiator);
   const BadgeIcon = badge.icon;
   const profile = gladiator.botProfile;
@@ -2361,6 +2500,11 @@ function GladiatorInspectPopup({ gladiator, onClose }: { gladiator: Gladiator; o
           <AnimatedGladiatorAvatar gladiator={gladiator} size="xl" label={gladiator.name} active />
           <div>
             <h3 className="text-center text-xl font-black uppercase tracking-[0.18em] text-white">{gladiator.name}</h3>
+            {temporaryTitle && (
+              <p className="mt-1 text-center text-[9px] font-black uppercase tracking-[0.24em] text-yellow-200">
+                {temporaryTitle.title} · {Math.max(1, Math.ceil((new Date(temporaryTitle.expires_at).getTime() - Date.now()) / 86_400_000))}d
+              </p>
+            )}
             {profile && <p className="mt-1 text-center text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: diffColor }}>{profile.gladiator_class} · {profile.difficulty}</p>}
           </div>
           <span className="inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[9px] font-black uppercase tracking-widest" style={{ color: badge.color, borderColor: `${badge.color}55`, backgroundColor: `${badge.color}12` }}><BadgeIcon className="h-3 w-3" /> {badge.label}</span>
@@ -2377,6 +2521,29 @@ function GladiatorInspectPopup({ gladiator, onClose }: { gladiator: Gladiator; o
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-yellow-200">{gladiator.cred}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">CRED</p></div>
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-cyan-200">{wr}%</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Win Rate</p></div>
         </div>
+        {legacy && (
+          <div className="relative mt-5 rounded-2xl border border-red-300/20 bg-red-950/10 p-4">
+            <p className="text-[8px] font-black uppercase tracking-[0.28em] text-red-300">Evolving Signature</p>
+            <p className="mt-1 text-lg font-black uppercase tracking-[0.16em] text-white">{legacy.evolving_signature}</p>
+            <p className="mt-2 text-[9px] font-bold uppercase tracking-widest text-zinc-500">{legacy.ranked_battles} ranked battles · {legacy.speed_wins} speed · {legacy.debug_wins} debug · {legacy.golf_wins} golf wins</p>
+          </div>
+        )}
+        {scars.length > 0 && (
+          <div className="relative mt-5">
+            <p className="mb-2 text-[8px] font-black uppercase tracking-[0.28em] text-zinc-500">Battle Scars</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {scars.map((scar) => {
+                const meta = BATTLE_SCAR_META[scar.scar_type];
+                return (
+                  <button key={scar.id} type="button" onClick={() => scar.earned_match_id && window.open(`/colosseum?match=${encodeURIComponent(scar.earned_match_id)}`, '_self')} className="rounded-2xl border bg-white/[0.03] p-3 text-left transition hover:bg-white/[0.06] disabled:cursor-default" style={{ borderColor: `${meta.color}44` }} disabled={!scar.earned_match_id}>
+                    <span className="text-[9px] font-black uppercase tracking-[0.2em]" style={{ color: meta.color }}>{meta.label}</span>
+                    <span className="mt-1 block text-[10px] leading-4 text-zinc-400">{meta.detail}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
         {profile && (
           <div className="relative mt-5 space-y-3 text-[10px] leading-5 text-zinc-400">
             {profile.battle_style && <div className="rounded-2xl border border-white/10 bg-black/35 p-3"><span className="font-black uppercase tracking-[0.2em] text-cyan-200">Battle Style:</span> {profile.battle_style}</div>}
@@ -2393,14 +2560,34 @@ function GladiatorInspectPopup({ gladiator, onClose }: { gladiator: Gladiator; o
   );
 }
 
-function TournamentDetailPopup({ tournament, entries, gladiatorById, onClose }: { tournament: TournamentRow; entries: TournamentEntryRow[]; gladiatorById: Map<string, Gladiator>; onClose: () => void }) {
+function TournamentDetailPopup({
+  tournament,
+  entries,
+  matches,
+  gladiatorById,
+  myGladiatorIds,
+  onFight,
+  onWatch,
+  onInspect,
+  onClose,
+}: {
+  tournament: TournamentRow;
+  entries: TournamentEntryRow[];
+  matches: TournamentMatchRow[];
+  gladiatorById: Map<string, Gladiator>;
+  myGladiatorIds: Set<string>;
+  onFight: (match: TournamentMatchRow, tournament: TournamentRow) => void;
+  onWatch: (matchId: string) => void;
+  onInspect: (gladiator: Gladiator) => void;
+  onClose: () => void;
+}) {
   const meta = challengeMeta(tournament.challenge_type);
   const Icon = meta.icon;
   const statusColor = tournament.status === 'open' ? '#22c55e' : tournament.status === 'scheduled' ? '#facc15' : tournament.status === 'running' ? '#ef4444' : '#71717a';
   const bracket = Array.isArray(tournament.bracket) ? tournament.bracket : [];
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
-      <motion.div initial={{ scale: 0.92, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.92, y: 20 }} onClick={(e) => e.stopPropagation()} className="relative mx-4 max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-[2rem] border-2 border-cyan-400/40 bg-black/95 p-6 shadow-[0_0_60px_rgba(0,229,255,0.15)]">
+      <motion.div initial={{ scale: 0.92, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.92, y: 20 }} onClick={(e) => e.stopPropagation()} className="relative mx-4 max-h-[88vh] w-full max-w-6xl overflow-y-auto rounded-[2rem] border-2 border-cyan-400/40 bg-black/95 p-6 shadow-[0_0_60px_rgba(0,229,255,0.15)]">
         <div className="pointer-events-none absolute inset-0 rounded-[2rem] opacity-25 bg-[radial-gradient(circle_at_20%_0%,rgba(0,229,255,0.4),transparent_34%)]" />
         <button type="button" onClick={onClose} className="absolute right-4 top-4 rounded-full border border-white/10 bg-white/5 p-2 text-zinc-400 hover:text-white"><ArrowLeft className="h-4 w-4" /></button>
         <div className="relative">
@@ -2434,7 +2621,47 @@ function TournamentDetailPopup({ tournament, entries, gladiatorById, onClose }: 
               ); })}</div>
             </div>
           )}
-          {bracket.length > 0 && (
+          {matches.length > 0 ? (
+            <div className="mt-6">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <p className="text-[9px] font-black uppercase tracking-[0.3em] text-cyan-200">Live Elimination Grid</p>
+                {tournament.champion_gladiator_id && <p className="text-[9px] font-black uppercase tracking-[0.22em] text-yellow-200">Champion: {gladiatorById.get(tournament.champion_gladiator_id)?.name ?? 'Unknown'}</p>}
+              </div>
+              <div className="flex gap-4 overflow-x-auto pb-3">
+                {Array.from(new Set(matches.map((match) => match.round_number))).sort((a, b) => a - b).map((round) => (
+                  <div key={round} className="w-64 shrink-0">
+                    <p className="mb-2 text-center text-[9px] font-black uppercase tracking-[0.24em] text-zinc-500">Round {round}</p>
+                    <div className="space-y-3">
+                      {matches.filter((match) => match.round_number === round).sort((a, b) => a.position - b.position).map((match) => {
+                        const slotA = match.slot_a_gladiator_id ? gladiatorById.get(match.slot_a_gladiator_id) : null;
+                        const slotB = match.slot_b_gladiator_id ? gladiatorById.get(match.slot_b_gladiator_id) : null;
+                        const canFight = match.status === 'ready' && [match.slot_a_gladiator_id, match.slot_b_gladiator_id].some((id) => id && myGladiatorIds.has(id));
+                        return (
+                          <div key={match.id} className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+                            <div className="mb-2 flex items-center justify-between">
+                              <span className="font-mono text-[9px] text-red-300">R{round}M{match.position}</span>
+                              <span className="text-[8px] font-black uppercase tracking-widest text-zinc-500">{match.resolution === 'bye' ? 'Bye Advanced' : match.status}</span>
+                            </div>
+                            {[slotA, slotB].map((gladiator, index) => (
+                              <button key={`${match.id}-${index}`} type="button" disabled={!gladiator} onClick={() => gladiator && onInspect(gladiator)} className={`mb-1 flex w-full items-center gap-2 rounded-xl border px-2 py-2 text-left transition last:mb-0 ${gladiator?.id === match.winner_gladiator_id ? 'border-yellow-300/35 bg-yellow-400/10' : 'border-white/5 bg-black/45'} ${gladiator ? 'hover:border-cyan-300/30' : 'cursor-default opacity-40'}`}>
+                                <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-full border border-white/10 bg-zinc-900">
+                                  {gladiator?.avatar_url ? <img src={gladiator.avatar_url} alt="" className="h-full w-full object-cover" /> : <span className="text-[9px] text-zinc-600">?</span>}
+                                </span>
+                                <span className="truncate text-[9px] font-black uppercase tracking-widest text-white">{gladiator?.name ?? 'Awaiting victor'}</span>
+                                {gladiator?.id === match.winner_gladiator_id && <Crown className="ml-auto h-3.5 w-3.5 text-yellow-300" />}
+                              </button>
+                            ))}
+                            {canFight && <button type="button" onClick={() => onFight(match, tournament)} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-red-300/35 bg-red-500/15 px-3 py-2 text-[8px] font-black uppercase tracking-[0.2em] text-red-100 transition hover:bg-red-500/25"><Swords className="h-3.5 w-3.5" /> Fight This Node</button>}
+                            {match.match_id && <button type="button" onClick={() => onWatch(match.match_id!)} className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-cyan-300/25 bg-cyan-500/10 px-3 py-2 text-[8px] font-black uppercase tracking-[0.2em] text-cyan-100 transition hover:bg-cyan-500/20"><Eye className="h-3.5 w-3.5" /> {match.status === 'running' ? 'Watch Live' : 'View Battle'}</button>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : bracket.length > 0 && (
             <div className="mt-4 max-h-40 overflow-y-auto rounded-2xl border border-white/10 bg-black/60 p-3 font-mono text-[10px] leading-5 text-cyan-100">
               {bracket.slice(0, 16).map((slot: any, idx: number) => <p key={`${slot.entry_id ?? slot.gladiator_id}-${idx}`}><span className="text-red-300">R{slot.round}M{slot.match}</span> Seed {slot.seed}: {gladiatorById.get(String(slot.gladiator_id))?.name ?? slot.gladiator_id}</p>)}
             </div>
@@ -2442,96 +2669,6 @@ function TournamentDetailPopup({ tournament, entries, gladiatorById, onClose }: 
         </div>
       </motion.div>
     </motion.div>
-  );
-}
-
-function CasperRubricScorecard({
-  rubric,
-  challengerName,
-  defenderName,
-}: {
-  rubric: BattleRubricItem[];
-  challengerName: string;
-  defenderName: string;
-}) {
-  if (rubric.length === 0) return null;
-  return (
-    <div className="mt-5 space-y-2">
-      <div className="flex items-center justify-between">
-        <p className="text-[9px] font-black uppercase tracking-[0.28em] text-yellow-200">Casper's Iron Ledger</p>
-        <p className="text-[8px] font-black uppercase tracking-widest text-zinc-600">Weighted verdict v2</p>
-      </div>
-      {rubric.map((criterion) => {
-        const challengerLeads = criterion.challenger_score >= criterion.defender_score;
-        const margin = Math.abs(criterion.challenger_score - criterion.defender_score);
-        return (
-          <div key={criterion.id} className="overflow-hidden rounded-2xl border border-white/10 bg-black/50 p-3">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-white">{criterion.label}</p>
-                <p className="mt-1 text-[9px] leading-4 text-zinc-500">{criterion.commentary}</p>
-              </div>
-              <div className="shrink-0 text-right">
-                <p className="text-[8px] font-black uppercase tracking-widest text-zinc-600">{Math.round(criterion.weight * 100)}% weight</p>
-                <p className={cn('mt-1 text-[9px] font-black uppercase tracking-widest', margin === 0 ? 'text-zinc-400' : challengerLeads ? 'text-red-300' : 'text-cyan-300')}>
-                  {margin === 0 ? 'Dead even' : `${challengerLeads ? challengerName : defenderName} +${margin}`}
-                </p>
-              </div>
-            </div>
-            <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
-              <div>
-                <div className="mb-1 flex items-center justify-between text-[8px] font-black uppercase tracking-wider text-red-200">
-                  <span className="truncate">{challengerName}</span>
-                  <span>{criterion.challenger_score}</span>
-                </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-red-950/50">
-                  <div className="h-full rounded-full bg-gradient-to-r from-red-700 to-red-300" style={{ width: `${criterion.challenger_score}%` }} />
-                </div>
-              </div>
-              <Scale className="h-3.5 w-3.5 text-yellow-300/70" />
-              <div>
-                <div className="mb-1 flex items-center justify-between text-[8px] font-black uppercase tracking-wider text-cyan-200">
-                  <span>{criterion.defender_score}</span>
-                  <span className="truncate">{defenderName}</span>
-                </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-cyan-950/50">
-                  <div className="h-full rounded-full bg-gradient-to-r from-cyan-300 to-cyan-700" style={{ width: `${criterion.defender_score}%` }} />
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function CasperAnnotationLedger({ annotations }: { annotations: BattleAnnotation[] }) {
-  if (annotations.length === 0) return null;
-  return (
-    <div className="mt-4 rounded-2xl border border-purple-300/15 bg-purple-950/10 p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <FileCode className="h-3.5 w-3.5 text-purple-300" />
-        <p className="text-[9px] font-black uppercase tracking-[0.28em] text-purple-200">Decisive Code Marks</p>
-      </div>
-      <div className="space-y-2">
-        {annotations.map((annotation, index) => (
-          <div key={`${annotation.combatant}-${annotation.line_start}-${index}`} className="flex items-start gap-3 rounded-xl border border-white/5 bg-black/40 p-3">
-            <span className={cn(
-              'shrink-0 rounded-full border px-2 py-1 text-[7px] font-black uppercase tracking-widest',
-              annotation.severity === 'critical'
-                ? 'border-red-400/30 bg-red-500/10 text-red-200'
-                : annotation.severity === 'warning'
-                  ? 'border-yellow-400/30 bg-yellow-500/10 text-yellow-200'
-                  : 'border-green-400/30 bg-green-500/10 text-green-200'
-            )}>
-              {annotation.combatant} L{annotation.line_start}{annotation.line_end > annotation.line_start ? `–${annotation.line_end}` : ''}
-            </span>
-            <p className="text-[10px] leading-5 text-zinc-400">{annotation.comment}</p>
-          </div>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -2569,6 +2706,17 @@ function BattleSynopsisPopup({ match, gladiatorById, onClose }: { match: MatchRo
 
   const [challengerCodeOpen, setChallengerCodeOpen] = useState(false);
   const [defenderCodeOpen, setDefenderCodeOpen] = useState(false);
+  const [receiptCopied, setReceiptCopied] = useState(false);
+
+  const copyReceipt = async () => {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/colosseum/replay/${match.id}`);
+      setReceiptCopied(true);
+      window.setTimeout(() => setReceiptCopied(false), 2_000);
+    } catch {
+      setReceiptCopied(false);
+    }
+  };
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[90] flex items-center justify-center bg-black/80 backdrop-blur-md" onClick={onClose}>
@@ -2579,7 +2727,10 @@ function BattleSynopsisPopup({ match, gladiatorById, onClose }: { match: MatchRo
         onClick={(e) => e.stopPropagation()}
         className="relative mx-4 max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-[2rem] border-2 border-red-500/30 bg-black/95 shadow-[0_0_80px_rgba(255,23,68,0.2)]"
       >
-        {/* Close button */}
+        <button type="button" onClick={() => void copyReceipt()} className="absolute left-4 top-4 z-10 inline-flex items-center gap-2 rounded-full border border-red-300/20 bg-red-500/10 px-3 py-2 text-[8px] font-black uppercase tracking-widest text-red-100 transition hover:bg-red-500/20">
+          {receiptCopied ? <Check className="h-3.5 w-3.5 text-green-300" /> : <Share2 className="h-3.5 w-3.5" />}
+          {receiptCopied ? 'Copied' : 'Blood Receipt'}
+        </button>
         <button type="button" onClick={onClose} className="absolute right-4 top-4 z-10 rounded-full border border-white/10 bg-white/5 p-2 text-zinc-400 hover:text-white transition"><X className="h-4 w-4" /></button>
 
         {/* Header */}
@@ -4797,9 +4948,94 @@ function LiveArena({ matches, gladiatorById, simulation, selectedMatchId, onSele
   );
 }
 
+function BountyBoard({
+  bounties,
+  entries,
+  gladiatorById,
+  myGladiatorIds,
+  onHunt,
+  onInspect,
+}: {
+  bounties: ColosseumBounty[];
+  entries: ColosseumBountyEntry[];
+  gladiatorById: Map<string, Gladiator>;
+  myGladiatorIds: Set<string>;
+  onHunt: (bounty: ColosseumBounty) => void;
+  onInspect: (gladiator: Gladiator) => void;
+}) {
+  const standingsByBounty = useMemo(() => {
+    const grouped = new Map<string, ColosseumBountyEntry[]>();
+    entries.forEach((entry) => {
+      const standings = grouped.get(entry.bounty_id) ?? [];
+      standings.push(entry);
+      grouped.set(entry.bounty_id, standings);
+    });
+    grouped.forEach((standings) => standings.sort((left, right) =>
+      right.score - left.score
+      || left.duration_ms - right.duration_ms
+      || new Date(left.completed_at).getTime() - new Date(right.completed_at).getTime()
+    ));
+    return grouped;
+  }, [entries]);
+
+  return (
+    <div className="rounded-[2rem] border border-yellow-300/20 bg-[radial-gradient(circle_at_top_left,rgba(250,204,21,0.13),transparent_38%),rgba(0,0,0,0.72)] p-5 shadow-[0_0_40px_rgba(250,204,21,0.08)] backdrop-blur-xl">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="text-[9px] font-black uppercase tracking-[0.34em] text-yellow-300">Rotating Contracts</p>
+          <h2 className="mt-1 text-xl font-black uppercase tracking-[0.14em] text-white">Bounty Board</h2>
+        </div>
+        <Target className="h-6 w-6 text-yellow-200" />
+      </div>
+      <div className="mt-4 space-y-4">
+        {bounties.map((bounty) => {
+          const bountyStandings = standingsByBounty.get(bounty.id) ?? [];
+          const rankings = bountyStandings.slice(0, 3);
+          const alreadyEntered = bountyStandings.some((entry) => myGladiatorIds.has(entry.gladiator_id));
+          const defender = bounty.defender_gladiator_id ? gladiatorById.get(bounty.defender_gladiator_id) : null;
+          const timeLeft = Math.max(0, new Date(bounty.closes_at).getTime() - Date.now());
+          const hoursLeft = Math.max(1, Math.ceil(timeLeft / 3_600_000));
+          return (
+            <div key={bounty.id} className="rounded-2xl border border-white/10 bg-black/55 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full border border-yellow-300/25 bg-yellow-300/10 px-2 py-1 text-[8px] font-black uppercase tracking-widest text-yellow-200">{bounty.cadence}</span>
+                    <span className="text-[8px] font-black uppercase tracking-widest text-zinc-500">{hoursLeft}h remain</span>
+                  </div>
+                  <h3 className="mt-2 text-sm font-black uppercase tracking-[0.16em] text-white">{bounty.title}</h3>
+                  <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-pink-200">Title: {bounty.temporary_title}</p>
+                </div>
+                <button type="button" onClick={() => onHunt(bounty)} disabled={!defender} className="rounded-xl border border-yellow-300/30 bg-yellow-300/10 px-3 py-2 text-[9px] font-black uppercase tracking-[0.16em] text-yellow-100 transition hover:bg-yellow-300/20 disabled:cursor-not-allowed disabled:opacity-40">
+                  {alreadyEntered ? 'Raise My Score' : 'Hunt Bounty'}
+                </button>
+              </div>
+              <p className="mt-3 line-clamp-2 text-[11px] leading-5 text-zinc-400">{bounty.prompt}</p>
+              <div className="mt-3 space-y-2">
+                {rankings.length > 0 ? rankings.map((entry, index) => {
+                  const gladiator = gladiatorById.get(entry.gladiator_id);
+                  return (
+                    <button key={entry.id} type="button" onClick={() => gladiator && onInspect(gladiator)} disabled={!gladiator} className="flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-left transition hover:bg-white/[0.06] disabled:cursor-default">
+                      <span className="text-[10px] font-black text-yellow-200">#{index + 1}</span>
+                      <span className="min-w-0 flex-1 truncate text-[10px] font-black uppercase tracking-widest text-white">{gladiator?.name ?? 'Unknown Gladiator'}</span>
+                      <span className="text-[9px] font-black text-cyan-200">{Number(entry.score).toFixed(1)}</span>
+                      <span className="text-[9px] text-zinc-500">{(entry.duration_ms / 1000).toFixed(1)}s</span>
+                    </button>
+                  );
+                }) : <p className="rounded-xl border border-dashed border-white/10 px-3 py-3 text-center text-[10px] uppercase tracking-widest text-zinc-600">The contract is unclaimed.</p>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function TournamentPanel({
   tournaments,
   entries,
+  matches,
   gladiatorById,
   myGladiators,
   selectedGladiator,
@@ -4809,9 +5045,11 @@ function TournamentPanel({
   joiningTournamentId,
   onCreate,
   onJoin,
+  onInspect,
 }: {
   tournaments: TournamentRow[];
   entries: TournamentEntryRow[];
+  matches: TournamentMatchRow[];
   gladiatorById: Map<string, Gladiator>;
   myGladiators: Gladiator[];
   selectedGladiator: Gladiator | null;
@@ -4821,6 +5059,7 @@ function TournamentPanel({
   joiningTournamentId: string;
   onCreate: (event: React.FormEvent) => void;
   onJoin: (tournament: TournamentRow) => void;
+  onInspect: (tournament: TournamentRow) => void;
 }) {
   const myGladiatorIds = useMemo(() => new Set(myGladiators.map((gladiator) => gladiator.id)), [myGladiators]);
   const entriesByTournament = useMemo(() => {
@@ -4878,6 +5117,7 @@ function TournamentPanel({
       <div className="grid gap-4 lg:grid-cols-2">
         {tournaments.length ? tournaments.map((tournament) => {
           const tournamentEntries = entriesByTournament.get(tournament.id) ?? [];
+          const circuitMatches = matches.filter((match) => match.tournament_id === tournament.id);
           const entered = tournamentEntries.some((entry) => myGladiatorIds.has(String(entry.gladiator_id)));
           const locked = tournament.status !== 'open';
           const bracket = Array.isArray(tournament.bracket) ? tournament.bracket : [];
@@ -4908,8 +5148,8 @@ function TournamentPanel({
                     <p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Threshold</p>
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                    <p className="text-lg font-black text-white">{bracket.length}</p>
-                    <p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Bracket</p>
+                    <p className="text-lg font-black text-white">{circuitMatches.length || bracket.length}</p>
+                    <p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Nodes</p>
                   </div>
                 </div>
 
@@ -4950,6 +5190,9 @@ function TournamentPanel({
                   {joiningTournamentId === tournament.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Users className="h-4 w-4" />}
                   {entered ? 'Gladiator Entered' : locked ? 'Signups Locked' : selectedGladiator ? `Enter ${selectedGladiator.name}` : 'Select Gladiator To Enter'}
                 </button>
+                <button type="button" onClick={() => onInspect(tournament)} className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-cyan-300/20 bg-cyan-500/10 px-4 py-3 text-[10px] font-black uppercase tracking-[0.22em] text-cyan-100 transition hover:border-cyan-300/40 hover:bg-cyan-400/15">
+                  <CircuitBoard className="h-4 w-4" /> Open Circuit
+                </button>
               </div>
             </motion.div>
           );
@@ -4957,6 +5200,122 @@ function TournamentPanel({
           <div className="rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] p-8 text-center lg:col-span-2">
             <Trophy className="mx-auto mb-3 h-9 w-9 text-zinc-700" />
             <p className="text-sm text-zinc-500">No tournaments are open yet. Name the next underground bracket and set the threshold.</p>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function grudgeHeatTone(heat: GrudgeHeat) {
+  if (heat === 'Blood Feud') return 'border-red-300/45 bg-red-500/15 text-red-100';
+  if (heat === 'Bitter') return 'border-orange-300/35 bg-orange-500/10 text-orange-100';
+  if (heat === 'Simmering') return 'border-yellow-300/30 bg-yellow-500/10 text-yellow-100';
+  return 'border-zinc-300/20 bg-white/[0.04] text-zinc-300';
+}
+
+function GrudgeLedgerPanel({
+  rivalries,
+  gladiatorById,
+  onRevenge,
+  onInspect,
+}: {
+  rivalries: GladiatorRivalry[];
+  gladiatorById: Map<string, Gladiator>;
+  onRevenge: (rivalry: GladiatorRivalry) => void;
+  onInspect: (gladiator: Gladiator) => void;
+}) {
+  return (
+    <section className="relative mt-6 overflow-hidden rounded-[2rem] border border-red-300/20 bg-black/70 p-5 shadow-[0_0_70px_rgba(239,68,68,0.1)] backdrop-blur-xl sm:p-6">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_0%,rgba(239,68,68,0.13),transparent_42%)]" />
+      <div className="relative">
+        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+          <div>
+            <div className="flex items-center gap-2">
+              <Flame className="h-4 w-4 text-red-300" />
+              <p className="text-[10px] font-black uppercase tracking-[0.34em] text-red-200">Persistent Rival Memory</p>
+            </div>
+            <h2 className="mt-2 text-2xl font-black uppercase tracking-[0.16em] text-white">The Grudge Ledger</h2>
+            <p className="mt-2 max-w-3xl text-xs leading-6 text-zinc-400">Every ranked verdict cuts both ways. Your gladiators remember who beat them, who they own, and which score still demands blood.</p>
+          </div>
+          <div className="rounded-full border border-red-300/20 bg-red-500/10 px-4 py-2 text-[9px] font-black uppercase tracking-[0.24em] text-red-100">
+            {rivalries.length} active grudge{rivalries.length === 1 ? '' : 's'}
+          </div>
+        </div>
+
+        {rivalries.length ? (
+          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            {rivalries.map((rivalry) => {
+              const owner = gladiatorById.get(rivalry.owner_gladiator_id);
+              const rival = gladiatorById.get(rivalry.rival_gladiator_id);
+              const heat = grudgeHeat(rivalry.grudge_score);
+              const revengeOwed = rivalry.last_result === 'loss';
+              return (
+                <article key={`${rivalry.owner_gladiator_id}-${rivalry.rival_gladiator_id}`} className="relative overflow-hidden rounded-3xl border border-white/10 bg-zinc-950/80 p-4">
+                  <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-red-300/60 to-transparent" />
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <button type="button" disabled={!owner} onClick={() => owner && onInspect(owner)} aria-label={`Inspect ${owner?.name ?? 'your gladiator'}`} className="h-11 w-11 shrink-0 overflow-hidden rounded-2xl border border-white/15 bg-black transition hover:scale-105 disabled:cursor-default">
+                        {owner && <img src={avatarUrlForGladiator(owner)} alt="" className="h-full w-full object-cover" />}
+                      </button>
+                      <div className="min-w-0">
+                        <p className="text-[8px] font-black uppercase tracking-[0.24em] text-zinc-600">Your blade</p>
+                        <p className="truncate text-xs font-black uppercase tracking-[0.14em] text-white">{owner?.name ?? 'Unknown'}</p>
+                      </div>
+                      <Swords className="h-4 w-4 shrink-0 text-red-300" />
+                      <button type="button" disabled={!rival} onClick={() => rival && onInspect(rival)} aria-label={`Inspect ${rival?.name ?? 'rival'}`} className="h-11 w-11 shrink-0 overflow-hidden rounded-2xl border border-red-300/20 bg-black transition hover:scale-105 disabled:cursor-default">
+                        {rival && <img src={avatarUrlForGladiator(rival)} alt="" className="h-full w-full object-cover" />}
+                      </button>
+                      <div className="min-w-0">
+                        <p className="text-[8px] font-black uppercase tracking-[0.24em] text-zinc-600">Marked rival</p>
+                        <p className="truncate text-xs font-black uppercase tracking-[0.14em] text-white">{rival?.name ?? 'Unknown'}</p>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-center">
+                      <p className="text-2xl font-black text-red-200">{rivalry.grudge_score}</p>
+                      <p className="text-[7px] font-black uppercase tracking-widest text-zinc-600">Heat</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-3 gap-2">
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-center">
+                      <p className="text-lg font-black text-white">{rivalry.wins}-{rivalry.losses}</p>
+                      <p className="text-[7px] font-black uppercase tracking-widest text-zinc-600">Record</p>
+                    </div>
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-center">
+                      <p className="text-lg font-black text-white">{rivalry.encounters}</p>
+                      <p className="text-[7px] font-black uppercase tracking-widest text-zinc-600">Clashes</p>
+                    </div>
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-center">
+                      <p className={cn('truncate text-[9px] font-black uppercase tracking-wider', rivalry.current_streak < 0 ? 'text-red-200' : 'text-green-200')}>{grudgeStreakLabel(rivalry.current_streak)}</p>
+                      <p className="mt-1 text-[7px] font-black uppercase tracking-widest text-zinc-600">Momentum</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap gap-2">
+                      <span className={cn('rounded-full border px-3 py-1 text-[8px] font-black uppercase tracking-widest', grudgeHeatTone(heat))}>{heat}</span>
+                      <span className={cn('rounded-full border px-3 py-1 text-[8px] font-black uppercase tracking-widest', revengeOwed ? 'border-red-300/30 bg-red-500/10 text-red-100' : 'border-green-300/25 bg-green-500/10 text-green-100')}>
+                        {revengeOwed ? 'Revenge Owed' : 'Dominance Held'}
+                      </span>
+                    </div>
+                    <p className="text-[8px] font-black uppercase tracking-widest text-zinc-600">
+                      {rivalry.last_challenge_type ? formatChallenge(rivalry.last_challenge_type) : 'Ranked Battle'}
+                    </p>
+                  </div>
+
+                  <button type="button" onClick={() => onRevenge(rivalry)} disabled={!owner || !rival} className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl border border-red-300/30 bg-red-500/10 px-4 py-3 text-[9px] font-black uppercase tracking-[0.24em] text-red-100 transition hover:border-red-200 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40">
+                    <Skull className="h-4 w-4" />
+                    {revengeOwed ? 'Call For Revenge' : 'Defend The Claim'}
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="mt-5 rounded-3xl border border-dashed border-red-300/15 bg-red-950/5 p-8 text-center">
+            <Flame className="mx-auto h-8 w-8 text-zinc-700" />
+            <p className="mt-3 text-sm font-bold text-zinc-500">No grudges have been written yet. Complete a ranked battle and the Ledger will remember both sides.</p>
           </div>
         )}
       </div>
@@ -5244,7 +5603,8 @@ function BattleWatchPanel({
   );
 }
 
-export const Colosseum: React.FC = () => {
+export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = 'ranked' }) => {
+  const trainingMode = mode === 'training';
   const { currentUser } = useAuth();
   const { canAccess, recordUsage } = useSubscription();
   const [upgradeGate, setUpgradeGate] = useState<FeatureGateResult | null>(null);
@@ -5252,6 +5612,7 @@ export const Colosseum: React.FC = () => {
   const requestedGladiatorId = searchParams.get('gladiator');
   const [gladiators, setGladiators] = useState<Gladiator[]>([]);
   const [matches, setMatches] = useState<MatchRow[]>([]);
+  const [rivalries, setRivalries] = useState<GladiatorRivalry[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -5292,6 +5653,13 @@ export const Colosseum: React.FC = () => {
 
   const [tournaments, setTournaments] = useState<TournamentRow[]>([]);
   const [tournamentEntries, setTournamentEntries] = useState<TournamentEntryRow[]>([]);
+  const [bounties, setBounties] = useState<ColosseumBounty[]>([]);
+  const [bountyEntries, setBountyEntries] = useState<ColosseumBountyEntry[]>([]);
+  const [temporaryTitles, setTemporaryTitles] = useState<Map<string, GladiatorTemporaryTitle>>(new Map());
+  const [pendingBounty, setPendingBounty] = useState<ColosseumBounty | null>(null);
+  const [gladiatorLegacies, setGladiatorLegacies] = useState<Map<string, GladiatorLegacy>>(new Map());
+  const [gladiatorBattleScars, setGladiatorBattleScars] = useState<GladiatorBattleScar[]>([]);
+  const [tournamentMatches, setTournamentMatches] = useState<TournamentMatchRow[]>([]);
   const [creatingTournament, setCreatingTournament] = useState(false);
   const [joiningTournamentId, setJoiningTournamentId] = useState('');
   const [tournamentForm, setTournamentForm] = useState<TournamentFormState>({
@@ -5304,6 +5672,7 @@ export const Colosseum: React.FC = () => {
   const [battleDocked, setBattleDocked] = useState(false);
   const [inspectedGladiator, setInspectedGladiator] = useState<Gladiator | null>(null);
   const [inspectedTournament, setInspectedTournament] = useState<TournamentRow | null>(null);
+  const [pendingTournamentMatchId, setPendingTournamentMatchId] = useState('');
   const [inspectedMatch, setInspectedMatch] = useState<MatchRow | null>(null);
   const [roundTransition, setRoundTransition] = useState<{ round: number; totalRounds: number; label: string; phase: 'intro' | 'fight' } | null>(null);
   const [showWinnerReveal, setShowWinnerReveal] = useState<{ winner: Gladiator; loser: Gladiator; summary: string } | null>(null);
@@ -5384,42 +5753,129 @@ export const Colosseum: React.FC = () => {
   const fetchTournaments = useCallback(async () => {
     try {
       await supabase.rpc('start_due_tournaments');
-      const [{ data: tournamentRows, error: tournamentError }, { data: entryRows, error: entryError }] = await Promise.all([
-        supabase.from('tournaments').select('*').order('created_at', { ascending: false }).limit(20),
-        supabase.from('tournament_entries').select('*').order('joined_at', { ascending: true }),
-      ]);
-
+      const { data: tournamentRows, error: tournamentError } = await supabase
+        .from('tournaments')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(20);
       if (tournamentError) throw tournamentError;
+      const tournamentIds = (tournamentRows ?? []).map((tournament) => tournament.id);
+      const activeTournamentIds = (tournamentRows ?? [])
+        .filter((tournament) => tournament.status !== 'completed' && tournament.status !== 'cancelled')
+        .map((tournament) => tournament.id);
+      const [{ data: entryRows, error: entryError }, { data: circuitRows, error: circuitError }] = tournamentIds.length > 0
+        ? await Promise.all([
+          supabase.from('tournament_entries').select('*').in('tournament_id', tournamentIds).order('joined_at', { ascending: true }),
+          activeTournamentIds.length > 0
+            ? supabase.from('tournament_matches').select('*').in('tournament_id', activeTournamentIds).order('round_number', { ascending: true }).order('position', { ascending: true })
+            : Promise.resolve({ data: [] as any[], error: null }),
+        ])
+        : [
+          { data: [], error: null },
+          { data: [], error: null },
+        ];
       if (entryError) throw entryError;
+      if (circuitError && circuitError.code !== '42P01') throw circuitError;
 
       setTournaments((tournamentRows ?? []) as TournamentRow[]);
       setTournamentEntries((entryRows ?? []) as TournamentEntryRow[]);
+      setTournamentMatches((circuitRows ?? []) as TournamentMatchRow[]);
     } catch (err) {
       console.warn('[Colosseum] Tournament tables unavailable or migration pending', err);
     }
   }, []);
+
+  const fetchBounties = useCallback(async () => {
+    try {
+      const session = await getValidSession();
+      const response = await fetch('/api/colosseum/bounties', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Bounty Board unavailable.');
+      setBounties((payload.bounties ?? []) as ColosseumBounty[]);
+      setBountyEntries((payload.entries ?? []) as ColosseumBountyEntry[]);
+      setTemporaryTitles(new Map(((payload.titles ?? []) as GladiatorTemporaryTitle[]).map((title) => [title.gladiator_id, title])));
+    } catch (error) {
+      console.warn('[Colosseum] Bounty Board unavailable', error);
+    }
+  }, []);
+
+  const fetchBattleScars = useCallback(async () => {
+    try {
+      const [{ data: legacyRows, error: legacyError }, { data: scarRows, error: scarError }] = await Promise.all([
+        supabase.from('gladiator_legacies').select('*'),
+        supabase.from('gladiator_battle_scars').select('*').order('earned_at', { ascending: false }),
+      ]);
+      if (legacyError) throw legacyError;
+      if (scarError) throw scarError;
+      setGladiatorLegacies(new Map(((legacyRows ?? []) as GladiatorLegacy[]).map((legacy) => [legacy.gladiator_id, legacy])));
+      setGladiatorBattleScars((scarRows ?? []) as GladiatorBattleScar[]);
+    } catch (error) {
+      const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : '';
+      if (code !== '42P01') console.warn('[Colosseum] Battle Scars unavailable', error);
+    }
+  }, []);
+
+  const fetchRivalries = useCallback(async () => {
+    if (!currentUser) {
+      setRivalries([]);
+      return;
+    }
+    const { data, error } = await supabase
+      .from('gladiator_rivalries')
+      .select('*')
+      .order('grudge_score', { ascending: false })
+      .order('last_fought_at', { ascending: false })
+      .limit(12);
+    if (error) {
+      if (error.code !== '42P01') console.warn('[Colosseum] Grudge Ledger unavailable', error);
+      return;
+    }
+    setRivalries((data ?? []) as GladiatorRivalry[]);
+  }, [currentUser]);
 
   useEffect(() => {
     void fetchArena();
   }, [fetchArena]);
 
   useEffect(() => {
+    if (trainingMode) return;
     let cancelled = false;
     void Promise.allSettled([ensureSapphireHouseBot(), ensurePersonaBotGladiators()]).finally(() => {
       if (!cancelled) void fetchArena();
     });
     return () => { cancelled = true; };
-  }, [fetchArena]);
+  }, [fetchArena, trainingMode]);
 
   useEffect(() => {
+    if (trainingMode) return;
     void fetchTournaments();
-  }, [fetchTournaments]);
+  }, [fetchTournaments, trainingMode]);
+
+  useEffect(() => {
+    if (currentUser) void fetchBounties();
+    else {
+      setBounties([]);
+      setBountyEntries([]);
+      setTemporaryTitles(new Map());
+    }
+  }, [currentUser, fetchBounties]);
+
+  useEffect(() => {
+    void fetchRivalries();
+  }, [fetchRivalries]);
+
+  useEffect(() => {
+    void fetchBattleScars();
+  }, [fetchBattleScars]);
 
   useEffect(() => {
     setWhisperUsed(false);
   }, [selectedMatchId]);
 
   useEffect(() => {
+    if (!currentUser) return undefined;
     const channel = supabase
       .channel('colosseum-arena')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiators' }, () => void fetchArena())
@@ -5429,16 +5885,59 @@ export const Colosseum: React.FC = () => {
   }, [fetchArena]);
 
   useEffect(() => {
+    if (trainingMode) return;
     const channel = supabase
       .channel('colosseum-tournaments')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tournaments' }, () => void fetchTournaments())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tournament_entries' }, () => void fetchTournaments())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tournament_matches' }, () => void fetchTournaments())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [fetchTournaments]);
+  }, [fetchTournaments, trainingMode]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('colosseum-bounty-board')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'colosseum_bounties' }, () => void fetchBounties())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'colosseum_bounty_entries' }, () => void fetchBounties())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiator_temporary_titles' }, () => void fetchBounties())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [currentUser, fetchBounties]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('colosseum-battle-scars')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiator_legacies' }, () => void fetchBattleScars())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiator_battle_scars' }, () => void fetchBattleScars())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchBattleScars]);
 
   const gladiatorById = useMemo(() => new Map(gladiators.map((gladiator) => [gladiator.id, gladiator])), [gladiators]);
   const myGladiators = useMemo(() => gladiators.filter((gladiator) => gladiator.user_id === currentUser?.id), [gladiators, currentUser?.id]);
+  const rivalryOwnerKey = myGladiators.map((gladiator) => gladiator.id).sort().join(',');
+
+  useEffect(() => {
+    if (!currentUser || !rivalryOwnerKey) return;
+    const channel = supabase
+      .channel(`colosseum-grudge-ledger-${currentUser.id}`);
+    rivalryOwnerKey.split(',').forEach((gladiatorId) => {
+      channel.on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'gladiator_rivalries',
+          filter: `owner_gladiator_id=eq.${gladiatorId}`,
+        },
+        () => void fetchRivalries()
+      );
+    });
+    channel.subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [currentUser, fetchRivalries, rivalryOwnerKey]);
+
   const opponents = useMemo(() => gladiators.filter((gladiator) => gladiator.id !== selectedGladiatorId), [gladiators, selectedGladiatorId]);
   const botGladiators = useMemo(() => gladiators.filter((gladiator) => Boolean(gladiator.botProfile)).sort((a, b) => (b.botProfile?.speed_rating ?? 0) - (a.botProfile?.speed_rating ?? 0)), [gladiators]);
   const featuredBotGladiators = useMemo(() => {
@@ -5480,7 +5979,14 @@ export const Colosseum: React.FC = () => {
   const selectedGladiator = selectedGladiatorId ? gladiatorById.get(selectedGladiatorId) : null;
   const selectedOpponent = selectedOpponentId ? gladiatorById.get(selectedOpponentId) : null;
   const challengeSeed = useMemo(() => `${selectedOpponentId ?? 'none'}-${challengeType}-${challengeNonce}`, [selectedOpponentId, challengeType, challengeNonce]);
-  const selectedCodingChallenge = useMemo(() => challengeFor(selectedOpponent?.botProfile, challengeType, challengeSeed), [selectedOpponent?.botProfile, challengeType, challengeSeed]);
+  const selectedCodingChallenge = useMemo<CodingChallenge>(() => pendingBounty ? {
+    title: pendingBounty.title,
+    prompt: pendingBounty.prompt,
+    starter: '',
+    expected: pendingBounty.expected_signals,
+    difficulty: pendingBounty.difficulty,
+    tags: [pendingBounty.cadence, 'global-bounty'],
+  } : challengeFor(selectedOpponent?.botProfile, challengeType, challengeSeed), [challengeSeed, challengeType, pendingBounty, selectedOpponent?.botProfile]);
   const selectedChallengeMeta = challengeMeta(challengeType);
   const battleInProgress = simulation?.status === 'booting' || simulation?.status === 'running';
 
@@ -5510,6 +6016,7 @@ export const Colosseum: React.FC = () => {
     setChallengeType(next);
     setDrawnArenaModifier(null);
     setAcceptedArenaModifier(null);
+    setPendingBounty(null);
     setChallengeNonce(nonce);
     setUserSolution(challengeFor(selectedOpponent?.botProfile, next, seed).starter);
   };
@@ -5521,26 +6028,68 @@ export const Colosseum: React.FC = () => {
     setSelectedOpponentId(id);
     setDrawnArenaModifier(null);
     setAcceptedArenaModifier(null);
+    setPendingBounty(null);
     setChallengeNonce(nonce);
     setUserSolution(challengeFor(opponent?.botProfile, challengeType, seed).starter);
   };
 
-  const openBotChallenge = (bot: Gladiator) => {
-    if (!selectedGladiatorId) {
+  const openBotChallenge = (bot: Gladiator, challengerId?: string, requestedChallengeType?: ChallengeType) => {
+    const effectiveChallengeType = requestedChallengeType ?? challengeType;
+    setPendingTournamentMatchId('');
+    if (challengerId) {
+      setSelectedGladiatorId(challengerId);
+    } else if (!selectedGladiatorId) {
       const mine = gladiators.find((gladiator) => gladiator.user_id === currentUser?.id && gladiator.id !== bot.id);
       if (mine) setSelectedGladiatorId(mine.id);
     }
     const nonce = Date.now();
-    const seed = `${bot.id}-${challengeType}-${nonce}`;
+    const seed = `${bot.id}-${effectiveChallengeType}-${nonce}`;
+    setChallengeType(effectiveChallengeType);
     setSelectedOpponentId(bot.id);
     setDrawnArenaModifier(null);
     setAcceptedArenaModifier(null);
+    setPendingBounty(null);
     setChallengeNonce(nonce);
     setChallengeModalOpen(true);
     setCountdown(3);
     setLatestBotSolution('');
     setBattleResult(null);
-    setUserSolution(challengeFor(bot.botProfile, challengeType, seed).starter);
+    setUserSolution(challengeFor(bot.botProfile, effectiveChallengeType, seed).starter);
+  };
+
+  const openGrudgeChallenge = (rivalry: GladiatorRivalry) => {
+    const owner = gladiatorById.get(rivalry.owner_gladiator_id);
+    const rival = gladiatorById.get(rivalry.rival_gladiator_id);
+    if (!owner || !rival) {
+      setNotice('That rivalry cannot be reopened because one combatant has left the arena.');
+      return;
+    }
+    const revengeType = rivalry.last_challenge_type ?? challengeType;
+    openBotChallenge(rival, owner.id, revengeType);
+  };
+
+  const openThresholdCircuitMatch = (match: TournamentMatchRow, tournament: TournamentRow) => {
+    const first = match.slot_a_gladiator_id ? gladiatorById.get(match.slot_a_gladiator_id) : null;
+    const second = match.slot_b_gladiator_id ? gladiatorById.get(match.slot_b_gladiator_id) : null;
+    const mine = [first, second].find((gladiator) => gladiator?.user_id === currentUser?.id);
+    const opponent = [first, second].find((gladiator) => gladiator && gladiator.id !== mine?.id);
+    if (!mine || !opponent || match.status !== 'ready') {
+      setNotice('Only a combatant in a ready Threshold Circuit node can open this gate.');
+      return;
+    }
+    const nonce = Date.now();
+    const seed = `${match.id}-${tournament.challenge_type}-${nonce}`;
+    setSelectedGladiatorId(mine.id);
+    setSelectedOpponentId(opponent.id);
+    setChallengeType(tournament.challenge_type);
+    setPendingTournamentMatchId(match.id);
+    setChallengeNonce(nonce);
+    setChallengeModalOpen(true);
+    setCountdown(3);
+    setLatestBotSolution('');
+    setBattleResult(null);
+    setUserSolution(challengeFor(opponent.botProfile, tournament.challenge_type, seed).starter);
+    setInspectedTournament(null);
   };
 
   const drawArenaModifier = async () => {
@@ -5760,15 +6309,37 @@ export const Colosseum: React.FC = () => {
     }
   };
 
+  const openBountyChallenge = (bounty: ColosseumBounty) => {
+    const defender = bounty.defender_gladiator_id ? gladiatorById.get(bounty.defender_gladiator_id) : null;
+    if (!defender) {
+      setNotice('This contract is waiting for its designated executioner bot.');
+      return;
+    }
+    const challenger = selectedGladiator && selectedGladiator.user_id === currentUser?.id
+      ? selectedGladiator
+      : myGladiators[0];
+    if (!challenger) {
+      setNotice('Forge or select one of your gladiators before hunting a bounty.');
+      return;
+    }
+    setSelectedGladiatorId(challenger.id);
+    setSelectedOpponentId(defender.id);
+    setChallengeType(bounty.challenge_type);
+    setPendingBounty(bounty);
+    setChallengeNonce(Date.now());
+    setUserSolution('');
+    setChallengeModalOpen(true);
+    setCountdown(3);
+    setLatestBotSolution('');
+    setBattleResult(null);
+  };
+
   const startChallenge = async (opponentOverride?: Gladiator, challengeTypeOverride = challengeType, solutionOverride?: string) => {
     const defender = opponentOverride ?? selectedOpponent;
     if (!defender || starting || battleInProgress) return;
 
-    const challengeGate = canAccess('colosseum_challenge');
-    if (!challengeGate.allowed) { setUpgradeGate(challengeGate); return; }
-    void recordUsage('colosseum_challenge');
     const activeChallengeType = challengeTypeOverride;
-    const codingChallenge = challengeFor(defender.botProfile, activeChallengeType, challengeSeed);
+    const codingChallenge = pendingBounty ? selectedCodingChallenge : challengeFor(defender.botProfile, activeChallengeType, challengeSeed);
     const submittedSolution = (solutionOverride ?? userSolution).trim();
     const challengerHasModel = Boolean(selectedGladiator?.model || selectedGladiator?.botProfile);
     if (defender.botProfile && !submittedSolution && !challengerHasModel) {
@@ -5777,6 +6348,101 @@ export const Colosseum: React.FC = () => {
         return startChallenge(defender, activeChallengeType, fallback);
       }
     }
+
+    if (trainingMode) {
+      if (!currentUser || !selectedGladiator || selectedGladiator.user_id !== currentUser.id) {
+        setNotice('Training Pit requires an existing gladiator that you own.');
+        return;
+      }
+      if (!defender.botProfile) {
+        setNotice('Training Pit opponents must be registered bot gladiators.');
+        return;
+      }
+
+      const challenger = selectedGladiator;
+      const battlePrompt = buildChallengePrompt(activeChallengeType, challenger, defender, codingChallenge);
+      const challenge = challengeMeta(activeChallengeType);
+      const bootLogs = [
+        `Training seal engaged for ${challenge.label}.`,
+        `${challenger.name} enters with rewards, rankings, and records disabled.`,
+        `${defender.name} boots inside the zero-stakes shadow cage.`,
+        'Casper is judging the spar, but the ledger will remain untouched.',
+      ];
+
+      setSelectedOpponentId(defender.id);
+      setStarting(true);
+      setNotice(null);
+      setBattleResult(null);
+      setLatestBotSolution('');
+      setChallengeModalOpen(false);
+      setShowBattleIntro({ challenger, defender, title: `${codingChallenge.title} · Training Pit` });
+      playDialUpSound();
+      setTimeout(() => {
+        casperAnnounce(`Training Pit engaged. ${challenger.name} versus ${defender.name}. No stakes. No records. Pure improvement.`);
+      }, 1200);
+
+      try {
+        const training = await requestTrainingBattle({
+          type: activeChallengeType,
+          challenge: codingChallenge,
+          challenger,
+          defender,
+          userSolution: submittedSolution,
+        });
+        const match: MatchRow = {
+          id: training.sessionId,
+          challenger_id: challenger.id,
+          defender_id: defender.id,
+          challenge_type: activeChallengeType,
+          winner_id: null,
+          started_at: new Date().toISOString(),
+          completed_at: null,
+          replay_data: null,
+        };
+        const moves = ensureCombatantTerminalMoves(training.moves, activeChallengeType, challenger, defender, battlePrompt);
+        const defenderMove = moves.find((move) => move.gladiator_id === defender.id);
+        if (defenderMove?.solution) setLatestBotSolution(defenderMove.solution);
+        setSimulation({
+          matchId: training.sessionId,
+          challengerId: challenger.id,
+          defenderId: defender.id,
+          challengeType: activeChallengeType,
+          challengerProgress: 4,
+          defenderProgress: 3,
+          log: [
+            ...bootLogs,
+            ...moves.map((move) => `${move.gladiator_name} returned a ${move.source} training solution using ${move.model}.`),
+          ],
+          winnerId: null,
+          status: 'booting',
+          aiMoves: moves,
+          terminalStartedAt: new Date().toISOString(),
+        });
+        runSimulation(
+          match,
+          challenger,
+          defender,
+          activeChallengeType,
+          bootLogs,
+          null,
+          moves,
+          codingChallenge,
+          submittedSolution,
+          training.judge
+        );
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Training Pit could not start.';
+        setNotice(message);
+        setSimulation(null);
+      } finally {
+        setStarting(false);
+      }
+      return;
+    }
+
+    const challengeGate = canAccess('colosseum_challenge');
+    if (!challengeGate.allowed) { setUpgradeGate(challengeGate); return; }
+    void recordUsage('colosseum_challenge');
     setSelectedOpponentId(defender.id);
     setStarting(true);
     setNotice(null);
@@ -5805,6 +6471,8 @@ export const Colosseum: React.FC = () => {
           challenge_type: activeChallengeType,
           arena_modifier: acceptedArenaModifier?.code ?? null,
           arena_modifier_draw: acceptedArenaModifier?.draw_window ?? null,
+          bounty_id: pendingBounty?.id ?? null,
+          tournament_match_id: pendingTournamentMatchId || null,
           replay_data: {
             intro: `${challenger.name} challenged ${defender.name}`,
             arena: 'underground-neon-fight-pit',
@@ -5821,6 +6489,8 @@ export const Colosseum: React.FC = () => {
       const match = data as MatchRow;
       setDrawnArenaModifier(null);
       setAcceptedArenaModifier(null);
+      setPendingBounty(null);
+      setPendingTournamentMatchId('');
       const challenge = challengeMeta(activeChallengeType);
       const logs = [
         `Gate locks engaged for ${challenge.label}.`,
@@ -5939,33 +6609,49 @@ export const Colosseum: React.FC = () => {
     });
   };
 
-  const finalizeBattle = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, codingChallenge: CodingChallenge, effectiveChallengerSolution: string, sanitizedAiMoves: GladiatorAiMove[], replayBase: Record<string, any>, finalLogs: string[], extraReplay?: Record<string, any>) => {
+  const finalizeBattle = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, codingChallenge: CodingChallenge, effectiveChallengerSolution: string, sanitizedAiMoves: GladiatorAiMove[], replayBase: Record<string, any>, finalLogs: string[], extraReplay?: Record<string, any>, trainingJudge?: BattleJudgeResult) => {
     void (async () => {
       let resolution: { judge: BattleJudgeResult; replayData: Record<string, unknown> };
-      try {
-        resolution = await requestBattleResolution({
-          match,
-          type,
-          challenge: codingChallenge,
-          userSolution: effectiveChallengerSolution,
+      if (trainingJudge) {
+        resolution = {
+          judge: trainingJudge,
           replayData: {
             ...replayBase,
             ...extraReplay,
-            status: 'judging',
+            mode: 'training',
+            status: 'complete',
             challenger_progress: 100,
             defender_progress: 100,
             log: finalLogs,
+            judge: trainingJudge,
           },
-        });
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : 'unknown resolution error';
-        setNotice(`Casper could not seal this result: ${message}`);
-        setSimulation((prev) => prev ? {
-          ...prev,
-          status: 'complete',
-          log: [...finalLogs, 'The arena result remains unsettled. No rewards or records were written.'],
-        } : prev);
-        return;
+        };
+      } else {
+        try {
+          resolution = await requestBattleResolution({
+            match,
+            type,
+            challenge: codingChallenge,
+            userSolution: effectiveChallengerSolution,
+            replayData: {
+              ...replayBase,
+              ...extraReplay,
+              status: 'judging',
+              challenger_progress: 100,
+              defender_progress: 100,
+              log: finalLogs,
+            },
+          });
+        } catch (error: unknown) {
+          const message = error instanceof Error ? error.message : 'unknown resolution error';
+          setNotice(`Casper could not seal this result: ${message}`);
+          setSimulation((prev) => prev ? {
+            ...prev,
+            status: 'complete',
+            log: [...finalLogs, 'The arena result remains unsettled. No rewards or records were written.'],
+          } : prev);
+          return;
+        }
       }
 
       const judge = resolution.judge;
@@ -5973,8 +6659,8 @@ export const Colosseum: React.FC = () => {
       const userWon = winner.id === challenger.id;
       const challengerScore = clampBattleScore(judge.challenger_score);
       const defenderScore = clampBattleScore(judge.defender_score);
-      const xpAwarded = (codingChallenge.difficulty === 'Diamond' ? 180 : codingChallenge.difficulty === 'Gold' ? 130 : codingChallenge.difficulty === 'Silver' ? 85 : 50) + (userWon ? 40 : 15);
-      const rankingPoints = (codingChallenge.difficulty === 'Diamond' ? 55 : codingChallenge.difficulty === 'Gold' ? 38 : codingChallenge.difficulty === 'Silver' ? 24 : 14) * (userWon ? 1 : -1);
+      const xpAwarded = trainingJudge ? 0 : (codingChallenge.difficulty === 'Diamond' ? 180 : codingChallenge.difficulty === 'Gold' ? 130 : codingChallenge.difficulty === 'Silver' ? 85 : 50) + (userWon ? 40 : 15);
+      const rankingPoints = trainingJudge ? 0 : (codingChallenge.difficulty === 'Diamond' ? 55 : codingChallenge.difficulty === 'Gold' ? 38 : codingChallenge.difficulty === 'Silver' ? 24 : 14) * (userWon ? 1 : -1);
       const reaction = userWon ? pickDialogue(defender.botProfile?.defeat_lines) : pickDialogue(defender.botProfile?.victory_lines);
       const resolvedLogs = Array.isArray(resolution.replayData.log)
         ? resolution.replayData.log.map((line) => String(line))
@@ -5995,10 +6681,12 @@ export const Colosseum: React.FC = () => {
         log: resolvedLogs,
         aiMoves: sanitizedAiMoves,
       } : prev);
-      void recordBattleSideEffects(match, winner.id, {
-        ...resolution.replayData,
-        log: resolvedLogs,
-      });
+      if (!trainingJudge) {
+        void recordBattleSideEffects(match, winner.id, {
+          ...resolution.replayData,
+          log: resolvedLogs,
+        });
+      }
       setBattleResult({
         matchId: match.id,
         winnerName: winner.name,
@@ -6017,11 +6705,12 @@ export const Colosseum: React.FC = () => {
         judgeUsedAi: judge.used_ai,
         judgeRubric: judge.rubric,
         judgeAnnotations: judge.annotations,
+        training: Boolean(trainingJudge),
       });
     })();
   };
 
-  const runSimulation = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, openingLogs: string[], sapphireMove?: SapphireMove | null, aiMoves: GladiatorAiMove[] = [], codingChallenge = challengeFor(defender.botProfile, type), submittedSolution = '') => {
+  const runSimulation = (match: MatchRow, challenger: Gladiator, defender: Gladiator, type: ChallengeType, openingLogs: string[], sapphireMove?: SapphireMove | null, aiMoves: GladiatorAiMove[] = [], codingChallenge = challengeFor(defender.botProfile, type), submittedSolution = '', trainingJudge?: BattleJudgeResult) => {
     const sanitizedAiMoves = ensureCombatantTerminalMoves(aiMoves, type, challenger, defender, buildCombatChallengePrompt(type, challenger, defender));
     const challengerMove = sanitizedAiMoves.find((move) => move.gladiator_id === challenger.id);
     const defenderMove = sanitizedAiMoves.find((move) => move.gladiator_id === defender.id);
@@ -6116,19 +6805,21 @@ export const Colosseum: React.FC = () => {
               },
             } : prev);
 
-            void publishMatchReplay(match.id, {
-              ...replayBase,
-              status: 'running',
-              current_round: round + 1,
-              total_rounds: SANDBOX_ROUND_COUNT,
-              round_label: directive.label,
-              overall_progress: overallProgress,
-              round_progress: roundProgress,
-              challenger_progress: challengerProgress,
-              defender_progress: defenderProgress,
-              log: [...finalLogs],
-              updated_client_at: new Date().toISOString(),
-            });
+            if (!trainingJudge) {
+              void publishMatchReplay(match.id, {
+                ...replayBase,
+                status: 'running',
+                current_round: round + 1,
+                total_rounds: SANDBOX_ROUND_COUNT,
+                round_label: directive.label,
+                overall_progress: overallProgress,
+                round_progress: roundProgress,
+                challenger_progress: challengerProgress,
+                defender_progress: defenderProgress,
+                log: [...finalLogs],
+                updated_client_at: new Date().toISOString(),
+              });
+            }
 
             if (tick >= totalTicks) {
               window.clearInterval(interval);
@@ -6179,7 +6870,7 @@ export const Colosseum: React.FC = () => {
                   rounds: SANDBOX_ROUND_COUNT,
                   round_scores: roundScores,
                   coaching_history: allCoachingHistory,
-                });
+                }, trainingJudge);
               }
             }
           }, tickInterval);
@@ -6208,18 +6899,20 @@ export const Colosseum: React.FC = () => {
           log: [...finalLogs],
           aiMoves: sanitizedAiMoves,
         } : prev);
-        void publishMatchReplay(match.id, {
-          ...replayBase,
-          status: 'running',
-          challenger_progress: challengerProgress,
-          defender_progress: defenderProgress,
-          log: [...finalLogs],
-          updated_client_at: new Date().toISOString(),
-        });
+        if (!trainingJudge) {
+          void publishMatchReplay(match.id, {
+            ...replayBase,
+            status: 'running',
+            challenger_progress: challengerProgress,
+            defender_progress: defenderProgress,
+            log: [...finalLogs],
+            updated_client_at: new Date().toISOString(),
+          });
+        }
 
         if (tick >= totalTicks) {
           window.clearInterval(interval);
-          finalizeBattle(match, challenger, defender, type, codingChallenge, effectiveChallengerSolution, sanitizedAiMoves, replayBase, finalLogs);
+          finalizeBattle(match, challenger, defender, type, codingChallenge, effectiveChallengerSolution, sanitizedAiMoves, replayBase, finalLogs, undefined, trainingJudge);
         }
       }, tickInterval);
     }
@@ -6476,10 +7169,16 @@ export const Colosseum: React.FC = () => {
         >
           <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.42em] text-red-400">Bloodsport Protocol Online</p>
-              <h1 className="mt-1 text-2xl font-black uppercase tracking-[0.16em] text-white sm:text-4xl">Colosseum</h1>
+              <p className="text-[10px] font-black uppercase tracking-[0.42em] text-red-400">{trainingMode ? 'Zero-Stakes Protocol Online' : 'Bloodsport Protocol Online'}</p>
+              <h1 className="mt-1 text-2xl font-black uppercase tracking-[0.16em] text-white sm:text-4xl">{trainingMode ? 'Training Pit' : 'Colosseum'}</h1>
             </div>
             <div className="flex items-center gap-3">
+              <Link
+                to={trainingMode ? '/colosseum' : '/colosseum/training'}
+                className="flex items-center gap-2 rounded-full border border-yellow-300/30 bg-yellow-950/20 px-4 py-2 text-[10px] font-black uppercase tracking-[0.22em] text-yellow-100 transition hover:border-yellow-200/60 hover:bg-yellow-300/10"
+              >
+                <Target className="h-4 w-4" /> {trainingMode ? 'Ranked Arena' : 'Training Pit'}
+              </Link>
               <Link
                 to="/colosseum/forge"
                 className="flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-950/30 px-4 py-2 text-[10px] font-black uppercase tracking-[0.22em] text-cyan-200 shadow-[0_0_20px_rgba(0,229,255,0.15)] transition hover:border-cyan-400/50 hover:bg-cyan-400/10"
@@ -6495,8 +7194,8 @@ export const Colosseum: React.FC = () => {
 
         <DistrictCityBackdrop
           variant="colosseum"
-          title="Colosseum District"
-          subtitle="Arena towers // code pits // Casper judgment rail"
+          title={trainingMode ? 'Training Pit District' : 'Colosseum District'}
+          subtitle={trainingMode ? 'No records // no rewards // pure combat telemetry' : 'Arena towers // code pits // Casper judgment rail'}
           className="mb-6"
         />
 
@@ -6549,7 +7248,7 @@ export const Colosseum: React.FC = () => {
                 exit={{ scale: 0.94, y: 18 }}
                 className="relative w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-[2rem] border border-red-400/35 bg-zinc-950 p-4 shadow-[0_0_70px_rgba(255,23,68,0.28)] sm:p-6"
               >
-                <button type="button" onClick={() => { setChallengeModalOpen(false); setDrawnArenaModifier(null); setAcceptedArenaModifier(null); }} className="absolute right-4 top-4 z-10 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white">Close</button>
+                <button type="button" onClick={() => { setChallengeModalOpen(false); setDrawnArenaModifier(null); setAcceptedArenaModifier(null); setPendingBounty(null); setPendingTournamentMatchId(''); }} className="absolute right-4 top-4 z-10 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white">Close</button>
                 <div className="pointer-events-none absolute inset-0 opacity-35" style={{ background: `radial-gradient(circle at 20% 0%, ${selectedOpponent.glow_color}66, transparent 34%), radial-gradient(circle at 100% 100%, rgba(0,229,255,0.22), transparent 35%)` }} />
                 <div className="relative">
                   <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -6651,11 +7350,11 @@ export const Colosseum: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => void startChallenge()}
-                    disabled={!currentUser || countdown > 0 || starting || battleInProgress}
+                    disabled={!currentUser || countdown > 0 || starting || battleInProgress || (trainingMode && !selectedGladiator)}
                     className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-red-600 px-4 py-4 text-xs font-black uppercase tracking-[0.24em] text-white shadow-[0_0_28px_rgba(255,23,68,0.35)] transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-45"
                   >
                     {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Swords className="h-4 w-4" />}
-                    {!currentUser ? 'Sign In To Enter' : countdown > 0 ? 'Gate Charging' : starting ? 'Forging...' : selectedGladiator ? 'Enter Code Battle' : 'Auto-Forge & Fight'}
+                    {!currentUser ? 'Sign In To Enter' : countdown > 0 ? 'Gate Charging' : starting ? 'Forging...' : trainingMode ? (selectedGladiator ? 'Begin Zero-Stakes Spar' : 'Forge A Gladiator First') : selectedGladiator ? 'Enter Code Battle' : 'Auto-Forge & Fight'}
                   </button>
                 </div>
               </motion.div>
@@ -6663,7 +7362,7 @@ export const Colosseum: React.FC = () => {
           )}
         </AnimatePresence>
 
-        <section className="grid gap-6 lg:grid-cols-[1.25fr_0.75fr]">
+        <section className={cn('grid gap-6', !trainingMode && 'lg:grid-cols-[1.25fr_0.75fr]')}>
           <motion.div
             initial={{ opacity: 0, y: 18 }}
             animate={{ opacity: 1, y: 0 }}
@@ -6729,7 +7428,7 @@ export const Colosseum: React.FC = () => {
             </div>
           </motion.div>
 
-          <form onSubmit={createGladiator} className="rounded-[2rem] border border-white/10 bg-black/60 p-5 shadow-2xl backdrop-blur-xl">
+          {!trainingMode && <form onSubmit={createGladiator} className="rounded-[2rem] border border-white/10 bg-black/60 p-5 shadow-2xl backdrop-blur-xl">
             <div className="mb-5 flex items-center justify-between">
               <div>
                 <p className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-500">Forge Bay</p>
@@ -6911,10 +7610,10 @@ export const Colosseum: React.FC = () => {
                 </div>
               )}
             </div>
-          </form>
+          </form>}
         </section>
 
-        <div ref={liveArenaRef}>
+        {!trainingMode && <div ref={liveArenaRef}>
           <LiveArena
             matches={matches}
             gladiatorById={gladiatorById}
@@ -6928,9 +7627,9 @@ export const Colosseum: React.FC = () => {
             onSkipCoaching={handleSkipCoaching}
             onInspectGladiator={(g) => setInspectedGladiator(g)}
           />
-        </div>
+        </div>}
 
-        {sapphireWaitingBattles.length > 0 && (
+        {!trainingMode && sapphireWaitingBattles.length > 0 && (
           <section className="mt-6 overflow-hidden rounded-[2rem] border border-sky-300/25 bg-sky-950/10 p-5 shadow-[0_0_54px_rgba(56,189,248,0.12)] backdrop-blur-xl">
             <div className="mb-4 flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
               <div>
@@ -6968,7 +7667,7 @@ export const Colosseum: React.FC = () => {
             <div>
               <p className="text-[10px] font-black uppercase tracking-[0.34em] text-cyan-200">Platform Gladiator Bot Roster</p>
               <h2 className="mt-1 text-lg font-black uppercase tracking-[0.16em] text-white sm:text-2xl">Pick Your Persona Opponent</h2>
-              <p className="mt-2 max-w-3xl text-xs leading-6 text-zinc-400">Browse cinematic 3D-style bot avatars, stats, ability profiles, code style, and signature moves. Challenge starts a real coding match: your submitted solution is judged against the bot’s generated answer and the result is archived.</p>
+              <p className="mt-2 max-w-3xl text-xs leading-6 text-zinc-400">{trainingMode ? 'Browse cinematic bot avatars, inspect their combat doctrine, and spar without creating a match, changing rankings, paying rewards, or writing rivalry memory.' : 'Browse cinematic 3D-style bot avatars, stats, ability profiles, code style, and signature moves. Challenge starts a real coding match: your submitted solution is judged against the bot’s generated answer and the result is archived.'}</p>
             </div>
             <div className="flex flex-wrap gap-2">
               <div className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-[0.24em] text-zinc-300">
@@ -7068,24 +7767,49 @@ export const Colosseum: React.FC = () => {
             </div>
           ) : (
             <div className="rounded-3xl border border-dashed border-white/10 p-8 text-center text-sm text-zinc-500">
-              Persona bot gladiators are being seeded. If this persists, apply migration 0024 and reload the arena.
+              {trainingMode ? (
+                <>
+                  <p>No registered bot defenders are online yet. Training Pit never seeds or mutates the competitive roster.</p>
+                  <Link to="/colosseum" className="mt-4 inline-flex items-center gap-2 rounded-full border border-cyan-300/25 bg-cyan-400/10 px-4 py-2 text-[9px] font-black uppercase tracking-[0.22em] text-cyan-100 transition hover:bg-cyan-400/20">
+                    Initialize In Ranked Arena <ChevronRight className="h-3.5 w-3.5" />
+                  </Link>
+                </>
+              ) : 'Persona bot gladiators are being seeded. If this persists, apply migration 0024 and reload the arena.'}
             </div>
           )}
         </section>
 
-        <TournamentPanel
-          tournaments={tournaments}
-          entries={tournamentEntries}
-          gladiatorById={gladiatorById}
-          myGladiators={myGladiators}
-          selectedGladiator={selectedGladiator}
-          form={tournamentForm}
-          setForm={setTournamentForm}
-          creating={creatingTournament}
-          joiningTournamentId={joiningTournamentId}
-          onCreate={createTournament}
-          onJoin={joinTournament}
-        />
+        {!trainingMode && (
+          <>
+            {bounties.length > 0 && (
+              <div className="mt-6">
+                <BountyBoard
+                  bounties={bounties}
+                  entries={bountyEntries}
+                  gladiatorById={gladiatorById}
+                  myGladiatorIds={new Set(myGladiators.map((gladiator) => gladiator.id))}
+                  onHunt={openBountyChallenge}
+                  onInspect={setInspectedGladiator}
+                />
+              </div>
+            )}
+            <TournamentPanel
+              tournaments={tournaments}
+              entries={tournamentEntries}
+              matches={tournamentMatches}
+              gladiatorById={gladiatorById}
+              myGladiators={myGladiators}
+              selectedGladiator={selectedGladiator}
+              form={tournamentForm}
+              setForm={setTournamentForm}
+              creating={creatingTournament}
+              joiningTournamentId={joiningTournamentId}
+              onCreate={createTournament}
+              onJoin={joinTournament}
+              onInspect={setInspectedTournament}
+            />
+          </>
+        )}
 
         <section className="mt-6 grid gap-6 xl:grid-cols-[0.95fr_1.1fr_0.95fr]">
           <div className="rounded-[2rem] border border-white/10 bg-black/60 p-5 backdrop-blur-xl">
@@ -7126,8 +7850,8 @@ export const Colosseum: React.FC = () => {
           <div className="rounded-[2rem] border border-red-500/20 bg-black/65 p-5 shadow-[0_0_44px_rgba(255,23,68,0.12)] backdrop-blur-xl">
             <div className="mb-5 flex items-center justify-between">
               <div>
-                <p className="text-[10px] font-black uppercase tracking-[0.3em] text-red-300">Combat Console</p>
-                <h2 className="text-xl font-black uppercase tracking-[0.14em]">Challenge System</h2>
+                <p className="text-[10px] font-black uppercase tracking-[0.3em] text-red-300">{trainingMode ? 'Zero-Stakes Combat Console' : 'Combat Console'}</p>
+                <h2 className="text-xl font-black uppercase tracking-[0.14em]">{trainingMode ? 'Training Pit Session' : 'Challenge System'}</h2>
               </div>
               <Swords className="h-6 w-6 text-red-300" />
             </div>
@@ -7267,13 +7991,22 @@ export const Colosseum: React.FC = () => {
 
                 {battleResult && (
                   <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mt-4 rounded-3xl border border-yellow-300/25 bg-yellow-950/10 p-4">
-                    <p className="text-[10px] font-black uppercase tracking-[0.28em] text-yellow-200">Casper's Verdict Screen</p>
+                    <p className="text-[10px] font-black uppercase tracking-[0.28em] text-yellow-200">{battleResult.training ? 'Casper Training Verdict' : "Casper's Verdict Screen"}</p>
                     <h3 className="mt-2 text-lg font-black uppercase tracking-[0.14em] text-white sm:text-2xl">{battleResult.winnerName} Wins</h3>
                     <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
                       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-white">{battleResult.userScore}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Your Score</p></div>
                       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-white">{battleResult.botScore}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Bot Score</p></div>
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-yellow-200">+{battleResult.xpAwarded}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">XP</p></div>
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className={cn('text-lg font-black', battleResult.rankingPoints >= 0 ? 'text-green-200' : 'text-red-200')}>{battleResult.rankingPoints >= 0 ? '+' : ''}{battleResult.rankingPoints}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Rank</p></div>
+                      {battleResult.training ? (
+                        <>
+                          <div className="rounded-2xl border border-green-300/20 bg-green-400/[0.04] p-3"><p className="text-sm font-black uppercase text-green-200">No Stakes</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">CRED / XP</p></div>
+                          <div className="rounded-2xl border border-cyan-300/20 bg-cyan-400/[0.04] p-3"><p className="text-sm font-black uppercase text-cyan-200">No Record</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Rank / Memory</p></div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className="text-lg font-black text-yellow-200">+{battleResult.xpAwarded}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">XP</p></div>
+                          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"><p className={cn('text-lg font-black', battleResult.rankingPoints >= 0 ? 'text-green-200' : 'text-red-200')}>{battleResult.rankingPoints >= 0 ? '+' : ''}{battleResult.rankingPoints}</p><p className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Rank</p></div>
+                        </>
+                      )}
                     </div>
                     <div className="mt-3 rounded-2xl border border-cyan-300/20 bg-cyan-950/10 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -7299,7 +8032,7 @@ export const Colosseum: React.FC = () => {
                       <CasperAnnotationLedger annotations={battleResult.judgeAnnotations} />
                     </div>
                     <p className="mt-3 rounded-2xl border border-white/10 bg-black/50 p-3 text-xs font-bold leading-6 text-zinc-300">{selectedOpponent.name}: “{battleResult.reaction}”</p>
-                    <p className="mt-3 text-[10px] font-black uppercase tracking-widest text-yellow-100/70">If the winner is a bot persona, it now posts a Colosseum brag to the social feed automatically.</p>
+                    <p className="mt-3 text-[10px] font-black uppercase tracking-widest text-yellow-100/70">{battleResult.training ? 'Training telemetry is transient. No match, reward, rivalry, or social brag was written.' : 'If the winner is a bot persona, it now posts a Colosseum brag to the social feed automatically.'}</p>
                   </motion.div>
                 )}
               </div>
@@ -7308,11 +8041,11 @@ export const Colosseum: React.FC = () => {
             <button
               type="button"
               onClick={selectedOpponent?.botProfile ? () => selectedOpponent && openBotChallenge(selectedOpponent) : () => void startChallenge()}
-              disabled={!currentUser || !selectedOpponent || starting || battleInProgress}
+              disabled={!currentUser || !selectedOpponent || starting || battleInProgress || (trainingMode && !selectedGladiator)}
               className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl border border-red-400/50 bg-red-600/80 px-4 py-4 text-xs font-black uppercase tracking-[0.24em] text-white shadow-[0_0_28px_rgba(255,23,68,0.28)] transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Swords className="h-4 w-4" />}
-              {selectedGladiator ? 'Open The Gates' : 'Auto-Forge And Open The Gates'}
+              {trainingMode ? (selectedGladiator ? 'Enter The Training Pit' : 'Forge A Gladiator In Ranked Arena First') : selectedGladiator ? 'Open The Gates' : 'Auto-Forge And Open The Gates'}
             </button>
 
             <div className="mt-5 overflow-hidden rounded-3xl border border-white/10 bg-zinc-950/80 p-4">
@@ -7465,6 +8198,13 @@ export const Colosseum: React.FC = () => {
           </div>
         </section>
 
+        <GrudgeLedgerPanel
+          rivalries={rivalries}
+          gladiatorById={gladiatorById}
+          onRevenge={openGrudgeChallenge}
+          onInspect={setInspectedGladiator}
+        />
+
         <section className="mt-6 grid gap-6 lg:grid-cols-2">
           <div className="rounded-[2rem] border border-white/10 bg-black/60 p-5 backdrop-blur-xl">
             <div className="mb-4 flex items-center justify-between">
@@ -7529,6 +8269,21 @@ export const Colosseum: React.FC = () => {
                           <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Winner</p>
                           <p className="text-xs font-black uppercase tracking-widest text-yellow-200">{winner?.name ?? 'Pending'}</p>
                         </div>
+                        <button
+                          type="button"
+                          aria-label={`Copy Blood Receipt for ${gladiatorById.get(match.challenger_id)?.name ?? 'challenger'} versus ${gladiatorById.get(match.defender_id)?.name ?? 'defender'}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void navigator.clipboard.writeText(`${window.location.origin}/colosseum/replay/${match.id}`).then(() => {
+                              setNotice('Blood Receipt copied. The sand is ready to travel.');
+                            }).catch(() => {
+                              setNotice('The Blood Receipt could not be copied from this browser.');
+                            });
+                          }}
+                          className="rounded-full border border-white/10 bg-white/5 p-2 text-zinc-500 transition hover:border-red-300/30 hover:text-red-200"
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                        </button>
                         <ChevronRight className="h-4 w-4 text-zinc-600" />
                       </div>
                     </div>
@@ -7541,10 +8296,33 @@ export const Colosseum: React.FC = () => {
       </div>
       <UpgradePromptModal gate={upgradeGate} open={!!upgradeGate} onClose={() => setUpgradeGate(null)} />
       <AnimatePresence>
-        {inspectedGladiator && <GladiatorInspectPopup gladiator={inspectedGladiator} onClose={() => setInspectedGladiator(null)} />}
+        {inspectedGladiator && (
+          <GladiatorInspectPopup
+            gladiator={inspectedGladiator}
+            temporaryTitle={temporaryTitles.get(inspectedGladiator.id) ?? null}
+            legacy={gladiatorLegacies.get(inspectedGladiator.id) ?? null}
+            scars={gladiatorBattleScars.filter((scar) => scar.gladiator_id === inspectedGladiator.id)}
+            onClose={() => setInspectedGladiator(null)}
+          />
+        )}
       </AnimatePresence>
       <AnimatePresence>
-        {inspectedTournament && <TournamentDetailPopup tournament={inspectedTournament} entries={tournamentEntries.filter((e) => e.tournament_id === inspectedTournament.id)} gladiatorById={gladiatorById} onClose={() => setInspectedTournament(null)} />}
+        {inspectedTournament && (
+          <TournamentDetailPopup
+            tournament={inspectedTournament}
+            entries={tournamentEntries.filter((entry) => entry.tournament_id === inspectedTournament.id)}
+            matches={tournamentMatches.filter((match) => match.tournament_id === inspectedTournament.id)}
+            gladiatorById={gladiatorById}
+            myGladiatorIds={new Set(myGladiators.map((gladiator) => gladiator.id))}
+            onFight={openThresholdCircuitMatch}
+            onWatch={(matchId) => {
+              setInspectedTournament(null);
+              selectMatchAndSync(matchId, true);
+            }}
+            onInspect={setInspectedGladiator}
+            onClose={() => setInspectedTournament(null)}
+          />
+        )}
       </AnimatePresence>
       <AnimatePresence>
         {inspectedMatch && <BattleSynopsisPopup match={inspectedMatch} gladiatorById={gladiatorById} onClose={() => setInspectedMatch(null)} />}
