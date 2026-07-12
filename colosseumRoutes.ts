@@ -8,6 +8,10 @@ import {
   rubricTemplateForChallenge,
   type ColosseumChallengeType,
 } from './src/lib/colosseumVerdict.js';
+import {
+  parseTrainingBattleRequest,
+  validateTrainingCombatants,
+} from './src/lib/colosseumTraining.js';
 import { generateServerText, isServerAiConfigured } from './serverAi.js';
 import { generateImage as comfyGenerateImage, generateGladiatorAvatar as comfyGenerateAvatar, isComfyUIConfigured } from './comfyuiProvider.js';
 
@@ -96,6 +100,10 @@ function serializedJsonBytes(value: unknown): number | null {
   } catch {
     return null;
   }
+}
+
+function hasBotProfile(value: unknown) {
+  return Array.isArray(value) ? value.length > 0 : isRecord(value);
 }
 
 async function findBotAuthUserIdByEmail(supabase: SupabaseClient, email: string) {
@@ -1086,6 +1094,131 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
     } catch (error: any) {
       console.error('[colosseum:sapphire:move]', error);
       return res.status(502).json({ success: false, error: error.message || 'Sapphire combat move failed' });
+    }
+  });
+
+  app.post('/api/colosseum/training-battle', async (req, res) => {
+    try {
+      const authUser = await authenticatedRequestUser(req, supabase);
+      if (!authUser) {
+        return res.status(401).json({ success: false, error: 'Authentication required.' });
+      }
+
+      const parsed = parseTrainingBattleRequest(req.body);
+      if (parsed.error) {
+        return res.status(400).json({ success: false, error: parsed.error });
+      }
+      const training = parsed.value;
+
+      const { data: combatants, error: combatantError } = await supabase
+        .from('gladiators')
+        .select(`${SAFE_GLADIATOR_SELECT},api_key,bot_profile:bot_gladiator_profiles(*)`)
+        .in('id', [training.challengerId, training.defenderId]);
+      if (combatantError) throw combatantError;
+
+      const challenger = (combatants ?? []).find((gladiator) => String(gladiator.id) === training.challengerId);
+      const defender = (combatants ?? []).find((gladiator) => String(gladiator.id) === training.defenderId);
+      if (!challenger || !defender) {
+        return res.status(404).json({ success: false, error: 'Training Pit combatants not found.' });
+      }
+
+      const { data: challengerOwner, error: ownerError } = await supabase
+        .from('users')
+        .select('auth_uid')
+        .eq('id', challenger.user_id)
+        .maybeSingle();
+      if (ownerError) throw ownerError;
+
+      const validationError = validateTrainingCombatants({
+        challengerId: String(challenger.id),
+        defenderId: String(defender.id),
+        challengerOwnerAuthUid: String(challengerOwner?.auth_uid ?? ''),
+        authenticatedUserId: authUser.id,
+        defenderHasBotProfile: hasBotProfile(defender.bot_profile),
+      });
+      if (validationError) {
+        return res.status(403).json({ success: false, error: validationError });
+      }
+
+      const generatedResults = await Promise.allSettled([
+        training.userSolution
+          ? Promise.resolve({
+            gladiator_id: String(challenger.id),
+            gladiator_name: String(challenger.name),
+            source: 'training-submission',
+            model: 'manual-code',
+            uses_custom_key: false,
+            prompt: training.challengePrompt,
+            solution: training.userSolution,
+            latency_ms: 0,
+            received_at: new Date().toISOString(),
+          })
+          : generateGladiatorMove({
+            challengeType: training.challengeType,
+            gladiator: challenger,
+            opponent: defender,
+            prompt: training.challengePrompt,
+          }),
+        generateGladiatorMove({
+          challengeType: training.challengeType,
+          gladiator: defender,
+          opponent: challenger,
+          prompt: training.challengePrompt,
+        }),
+      ]);
+
+      const trainingCombatants = [challenger, defender];
+      const trainingOpponents = [defender, challenger];
+      const moves = generatedResults.map((result, index) => {
+        if (result.status === 'fulfilled') return result.value;
+        const gladiator = trainingCombatants[index];
+        const opponent = trainingOpponents[index];
+        return {
+          gladiator_id: String(gladiator.id),
+          gladiator_name: String(gladiator.name),
+          source: 'training-deterministic-fallback',
+          model: 'deterministic-colosseum-gladiator',
+          uses_custom_key: false,
+          prompt: training.challengePrompt,
+          solution: localFallbackSolution({
+            challengeType: training.challengeType,
+            gladiator,
+            opponent,
+            prompt: training.challengePrompt,
+          }),
+          provider_error: errorMessage(result.reason),
+          latency_ms: 0,
+          received_at: new Date().toISOString(),
+        };
+      });
+
+      const challengerMove = moves.find((move) => String(move.gladiator_id) === training.challengerId);
+      const defenderMove = moves.find((move) => String(move.gladiator_id) === training.defenderId);
+      const judge = await judgeColosseumBattle({
+        challengeType: training.challengeType,
+        challengePrompt: training.challengePrompt,
+        expectedSignals: training.expectedSignals,
+        challenger,
+        defender,
+        userSolution: challengerMove?.solution ?? '',
+        botSolution: defenderMove?.solution ?? '',
+      });
+
+      return res.json({
+        success: true,
+        mode: 'training',
+        sessionId: `training:${crypto.randomUUID()}`,
+        moves,
+        judge,
+        persistence: {
+          matchWritten: false,
+          rewardsWritten: false,
+          memoryWritten: false,
+        },
+      });
+    } catch (error: unknown) {
+      console.error('[colosseum:training-battle]', error);
+      return res.status(502).json({ success: false, error: errorMessage(error) });
     }
   });
 
