@@ -247,6 +247,7 @@ export default function App() {
             <Route path="/bots" element={<BotMarketplace />} />
             <Route path="/bots/mayhem" element={<BotMayhemConsole />} />
             <Route path="/colosseum/replay/:matchId" element={<ColosseumReplay />} />
+            <Route path="/colosseum/training" element={<Colosseum mode="training" />} />
             <Route path="/colosseum" element={<Colosseum />} />
             <Route path="/colosseum/forge" element={<BotForge />} />
             <Route path="/bot/chat" element={<BotChat />} />
