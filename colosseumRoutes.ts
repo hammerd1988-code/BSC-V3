@@ -1358,7 +1358,16 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
       });
       const winner = judge.winner_id === challenger.id ? challenger : defender;
       const submittedReplay = isRecord(replayData) ? replayData : {};
-      const baseReplay = { ...storedReplay, ...submittedReplay };
+      const baseReplay = {
+        ...storedReplay,
+        ...submittedReplay,
+        ...(storedReplay.arena_modifier
+          ? {
+              arena_modifier: storedReplay.arena_modifier,
+              challenge_prompt: storedReplay.challenge_prompt,
+            }
+          : {}),
+      };
       const replayLog = Array.isArray(baseReplay.log)
         ? baseReplay.log.map((line) => String(line)).slice(-250)
         : [];
