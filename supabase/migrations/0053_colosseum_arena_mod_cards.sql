@@ -137,17 +137,21 @@ declare
   v_card record;
   v_base_prompt text;
 begin
+  if tg_op = 'UPDATE'
+    and (
+      new.arena_modifier is distinct from old.arena_modifier
+      or new.arena_modifier_draw is distinct from old.arena_modifier_draw
+    )
+  then
+    raise exception 'Arena condition seal is immutable';
+  end if;
+
   if new.arena_modifier is null then
     new.arena_modifier_draw := null;
     return new;
   end if;
 
   if tg_op = 'UPDATE' then
-    if new.arena_modifier is distinct from old.arena_modifier
-      or new.arena_modifier_draw is distinct from old.arena_modifier_draw
-    then
-      raise exception 'Arena condition seal is immutable';
-    end if;
     v_base_prompt := coalesce(
       old.replay_data->>'arena_base_prompt',
       old.replay_data->>'challenge_prompt',
@@ -239,7 +243,7 @@ drop trigger if exists seal_colosseum_arena_modifier_before_update on public.mat
 create trigger seal_colosseum_arena_modifier_before_update
   before update of replay_data, arena_modifier, arena_modifier_draw on public.matches
   for each row
-  when (old.arena_modifier is not null)
+  when (old.arena_modifier is not null or new.arena_modifier is not null)
   execute function public.seal_colosseum_arena_modifier();
 
 create or replace function public.reward_colosseum_arena_modifier()
