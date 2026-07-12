@@ -6601,7 +6601,8 @@ export const Colosseum: React.FC = () => {
                     </div>
                   )}
 
-                  <div className="mt-5 rounded-3xl border border-pink-300/20 bg-pink-950/10 p-4">
+                  {(['speed_round', 'debug_battle', 'code_golf'] as ChallengeType[]).includes(challengeType) && (
+                    <div className="mt-5 rounded-3xl border border-pink-300/20 bg-pink-950/10 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
                         <p className="text-[9px] font-black uppercase tracking-[0.3em] text-pink-200">Arena Condition Deck</p>
@@ -6630,7 +6631,8 @@ export const Colosseum: React.FC = () => {
                         </div>
                       </div>
                     )}
-                  </div>
+                    </div>
+                  )}
 
                   <div className="mt-5 rounded-3xl border border-cyan-300/20 bg-black/60 p-4">
                     <div className="mb-2 flex items-center justify-between">

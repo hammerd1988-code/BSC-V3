@@ -11,7 +11,7 @@ describe('Colosseum arena condition cards', () => {
 
   it('draws a deterministic sealed card for the gladiator owner', () => {
     expect(migration).toContain('draw_colosseum_arena_modifier');
-    expect(migration).toContain("arena_user.auth_uid = auth.uid()::text");
+    expect(migration).toContain('arena_user.auth_uid = auth.uid()');
     expect(migration).toContain("floor(extract(epoch from now()) / 900)");
     expect(migration).toContain("array['no_regex', 'linear_time', 'pure_function', 'memory_lock', 'token_tax']");
   });
@@ -21,6 +21,8 @@ describe('Colosseum arena condition cards', () => {
     expect(migration).toContain('new.arena_modifier_draw not in (v_current_window, v_current_window - 1)');
     expect(migration).toContain('new.arena_modifier is distinct from v_expected_code');
     expect(migration).toContain("new.mode is distinct from 'ranked'");
+    expect(migration).toContain('seal_colosseum_arena_modifier_before_update');
+    expect(migration).toContain("old.replay_data->>'arena_base_prompt'");
   });
 
   it('preserves the server-sealed prompt through verdict resolution', () => {
