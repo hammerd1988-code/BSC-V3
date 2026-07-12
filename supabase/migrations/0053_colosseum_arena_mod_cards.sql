@@ -97,7 +97,7 @@ begin
     from public.gladiators gladiator
     join public.users arena_user on arena_user.id = gladiator.user_id
     where gladiator.id = p_challenger_id
-      and arena_user.auth_uid = auth.uid()::text
+      and arena_user.auth_uid = auth.uid()
   ) then
     raise exception 'Only the gladiator owner can draw an arena condition';
   end if;
@@ -135,16 +135,36 @@ declare
   v_current_window bigint := floor(extract(epoch from now()) / 900)::bigint;
   v_expected_code text;
   v_card record;
+  v_base_prompt text;
 begin
   if new.arena_modifier is null then
     new.arena_modifier_draw := null;
     return new;
   end if;
-  if new.mode is distinct from 'ranked'
-    or new.arena_modifier_draw is null
-    or new.arena_modifier_draw not in (v_current_window, v_current_window - 1)
-  then
-    raise exception 'Arena condition draw has expired';
+
+  if tg_op = 'UPDATE' then
+    if new.arena_modifier is distinct from old.arena_modifier
+      or new.arena_modifier_draw is distinct from old.arena_modifier_draw
+    then
+      raise exception 'Arena condition seal is immutable';
+    end if;
+    v_base_prompt := coalesce(
+      old.replay_data->>'arena_base_prompt',
+      old.replay_data->>'challenge_prompt',
+      new.replay_data->>'challenge_prompt',
+      ''
+    );
+  else
+    if new.mode is distinct from 'ranked' then
+      raise exception 'Arena conditions require a ranked match';
+    end if;
+    if new.arena_modifier_draw is null then
+      raise exception 'Arena condition draw window is required';
+    end if;
+    if new.arena_modifier_draw not in (v_current_window, v_current_window - 1) then
+      raise exception 'Arena condition draw has expired';
+    end if;
+    v_base_prompt := coalesce(new.replay_data->>'challenge_prompt', '');
   end if;
 
   v_expected_code := (array['no_regex', 'linear_time', 'pure_function', 'memory_lock', 'token_tax'])[
@@ -174,6 +194,12 @@ begin
 
   new.replay_data := jsonb_set(
     coalesce(new.replay_data, '{}'::jsonb),
+    '{arena_base_prompt}',
+    to_jsonb(v_base_prompt),
+    true
+  );
+  new.replay_data := jsonb_set(
+    new.replay_data,
     '{arena_modifier}',
     jsonb_build_object(
       'code', v_card.code,
@@ -188,7 +214,7 @@ begin
     new.replay_data,
     '{challenge_prompt}',
     to_jsonb(
-      coalesce(new.replay_data->>'challenge_prompt', '')
+      v_base_prompt
       || E'\n\nARENA CONDITION — '
       || v_card.label
       || ': '
@@ -207,6 +233,13 @@ drop trigger if exists seal_colosseum_arena_modifier_before_insert on public.mat
 create trigger seal_colosseum_arena_modifier_before_insert
   before insert on public.matches
   for each row
+  execute function public.seal_colosseum_arena_modifier();
+
+drop trigger if exists seal_colosseum_arena_modifier_before_update on public.matches;
+create trigger seal_colosseum_arena_modifier_before_update
+  before update of replay_data, arena_modifier, arena_modifier_draw on public.matches
+  for each row
+  when (old.arena_modifier is not null)
   execute function public.seal_colosseum_arena_modifier();
 
 create or replace function public.reward_colosseum_arena_modifier()
