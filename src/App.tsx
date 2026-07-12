@@ -244,6 +244,7 @@ export default function App() {
             <Route path="/casper/commands" element={currentUser ? <CasperCommandIndex /> : <Navigate to="/" replace />} />
             <Route path="/bots" element={<BotMarketplace />} />
             <Route path="/bots/mayhem" element={<BotMayhemConsole />} />
+            <Route path="/colosseum/training" element={<Colosseum mode="training" />} />
             <Route path="/colosseum" element={<Colosseum />} />
             <Route path="/colosseum/forge" element={<BotForge />} />
             <Route path="/bot/chat" element={<BotChat />} />
