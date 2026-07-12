@@ -246,6 +246,15 @@ interface CodingChallenge {
   tags: string[];
 }
 
+interface ArenaModifierCard {
+  code: 'no_regex' | 'linear_time' | 'pure_function' | 'memory_lock' | 'token_tax';
+  label: string;
+  description: string;
+  rule_text: string;
+  risk_multiplier: number;
+  draw_window: number;
+}
+
 const CHALLENGES: Array<{
   id: ChallengeType;
   label: string;
@@ -2538,6 +2547,8 @@ function BattleSynopsisPopup({ match, gladiatorById, onClose }: { match: MatchRo
   const challengeTitle: string = replay.challenge_title ?? formatChallenge(match.challenge_type);
   const challengePrompt: string = replay.challenge_prompt ?? '';
   const challengeDifficulty: string = replay.challenge_difficulty ?? '';
+  const arenaModifier = replay.arena_modifier as Omit<ArenaModifierCard, 'draw_window'> | undefined;
+  const arenaModifierBonus = Number(replay.arena_modifier_bonus_cred ?? 0);
   const userSolution: string = replay.user_solution ?? replay.bot_solution_challenger ?? '';
   const botSolution: string = replay.bot_solution ?? '';
   const aiMoves: GladiatorAiMove[] = Array.isArray(replay.ai_moves) ? replay.ai_moves : [];
@@ -2627,6 +2638,21 @@ function BattleSynopsisPopup({ match, gladiatorById, onClose }: { match: MatchRo
               );
             })}
           </div>
+
+          {arenaModifier && (
+            <div className="rounded-2xl border border-pink-300/25 bg-pink-950/10 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Flame className="h-3.5 w-3.5 text-pink-300" />
+                  <p className="text-[9px] font-black uppercase tracking-[0.28em] text-pink-200">Arena Condition · {arenaModifier.label}</p>
+                </div>
+                <span className="text-[9px] font-black uppercase tracking-widest text-yellow-200">
+                  {arenaModifierBonus > 0 ? `Victor Bonus +${arenaModifierBonus} CRED` : `Risk x${Number(arenaModifier.risk_multiplier).toFixed(2)}`}
+                </span>
+              </div>
+              <p className="mt-2 text-[11px] leading-5 text-zinc-300">{arenaModifier.rule_text}</p>
+            </div>
+          )}
 
           {/* Battle Directive / Prompt */}
           {challengePrompt && (
@@ -5241,6 +5267,9 @@ export const Colosseum: React.FC = () => {
   const [challengeModalOpen, setChallengeModalOpen] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [challengeNonce, setChallengeNonce] = useState(Date.now());
+  const [drawnArenaModifier, setDrawnArenaModifier] = useState<ArenaModifierCard | null>(null);
+  const [acceptedArenaModifier, setAcceptedArenaModifier] = useState<ArenaModifierCard | null>(null);
+  const [drawingArenaModifier, setDrawingArenaModifier] = useState(false);
   const [userSolution, setUserSolution] = useState('');
   const [latestBotSolution, setLatestBotSolution] = useState('');
   const [battleResult, setBattleResult] = useState<BattleResultState | null>(null);
@@ -5479,6 +5508,8 @@ export const Colosseum: React.FC = () => {
     const nonce = Date.now();
     const seed = `${selectedOpponentId ?? 'none'}-${next}-${nonce}`;
     setChallengeType(next);
+    setDrawnArenaModifier(null);
+    setAcceptedArenaModifier(null);
     setChallengeNonce(nonce);
     setUserSolution(challengeFor(selectedOpponent?.botProfile, next, seed).starter);
   };
@@ -5488,6 +5519,8 @@ export const Colosseum: React.FC = () => {
     const nonce = Date.now();
     const seed = `${id}-${challengeType}-${nonce}`;
     setSelectedOpponentId(id);
+    setDrawnArenaModifier(null);
+    setAcceptedArenaModifier(null);
     setChallengeNonce(nonce);
     setUserSolution(challengeFor(opponent?.botProfile, challengeType, seed).starter);
   };
@@ -5500,12 +5533,37 @@ export const Colosseum: React.FC = () => {
     const nonce = Date.now();
     const seed = `${bot.id}-${challengeType}-${nonce}`;
     setSelectedOpponentId(bot.id);
+    setDrawnArenaModifier(null);
+    setAcceptedArenaModifier(null);
     setChallengeNonce(nonce);
     setChallengeModalOpen(true);
     setCountdown(3);
     setLatestBotSolution('');
     setBattleResult(null);
     setUserSolution(challengeFor(bot.botProfile, challengeType, seed).starter);
+  };
+
+  const drawArenaModifier = async () => {
+    if (!selectedGladiator || !selectedOpponent || drawingArenaModifier) return;
+    setDrawingArenaModifier(true);
+    setNotice(null);
+    try {
+      const { data, error } = await supabase.rpc('draw_colosseum_arena_modifier', {
+        p_challenger_id: selectedGladiator.id,
+        p_defender_id: selectedOpponent.id,
+        p_challenge_type: challengeType,
+      });
+      if (error) throw error;
+      const card = Array.isArray(data) ? data[0] : data;
+      if (!card) throw new Error('The arena returned no condition card.');
+      setDrawnArenaModifier(card as ArenaModifierCard);
+      setAcceptedArenaModifier(null);
+    } catch (error) {
+      handleDbError(error, 'READ', 'arena modifier');
+      setNotice('The modifier deck jammed. Confirm your gladiator is selected and try the draw again.');
+    } finally {
+      setDrawingArenaModifier(false);
+    }
   };
 
   const handleActiveMatchClick = (match: MatchRow) => {
@@ -5745,6 +5803,8 @@ export const Colosseum: React.FC = () => {
           challenger_id: challenger.id,
           defender_id: defender.id,
           challenge_type: activeChallengeType,
+          arena_modifier: acceptedArenaModifier?.code ?? null,
+          arena_modifier_draw: acceptedArenaModifier?.draw_window ?? null,
           replay_data: {
             intro: `${challenger.name} challenged ${defender.name}`,
             arena: 'underground-neon-fight-pit',
@@ -5759,6 +5819,8 @@ export const Colosseum: React.FC = () => {
       if (error) throw error;
 
       const match = data as MatchRow;
+      setDrawnArenaModifier(null);
+      setAcceptedArenaModifier(null);
       const challenge = challengeMeta(activeChallengeType);
       const logs = [
         `Gate locks engaged for ${challenge.label}.`,
@@ -6487,7 +6549,7 @@ export const Colosseum: React.FC = () => {
                 exit={{ scale: 0.94, y: 18 }}
                 className="relative w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-[2rem] border border-red-400/35 bg-zinc-950 p-4 shadow-[0_0_70px_rgba(255,23,68,0.28)] sm:p-6"
               >
-                <button type="button" onClick={() => setChallengeModalOpen(false)} className="absolute right-4 top-4 z-10 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white">Close</button>
+                <button type="button" onClick={() => { setChallengeModalOpen(false); setDrawnArenaModifier(null); setAcceptedArenaModifier(null); }} className="absolute right-4 top-4 z-10 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white">Close</button>
                 <div className="pointer-events-none absolute inset-0 opacity-35" style={{ background: `radial-gradient(circle at 20% 0%, ${selectedOpponent.glow_color}66, transparent 34%), radial-gradient(circle at 100% 100%, rgba(0,229,255,0.22), transparent 35%)` }} />
                 <div className="relative">
                   <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -6538,6 +6600,37 @@ export const Colosseum: React.FC = () => {
                       </div>
                     </div>
                   )}
+
+                  <div className="mt-5 rounded-3xl border border-pink-300/20 bg-pink-950/10 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[9px] font-black uppercase tracking-[0.3em] text-pink-200">Arena Condition Deck</p>
+                        <p className="mt-1 text-[11px] text-zinc-400">Accept the sealed risk or burn the card.</p>
+                      </div>
+                      <button type="button" onClick={() => void drawArenaModifier()} disabled={!selectedGladiator || drawingArenaModifier || Boolean(acceptedArenaModifier)} className="rounded-xl border border-pink-300/30 bg-pink-300/10 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-pink-100 transition hover:bg-pink-300/20 disabled:cursor-not-allowed disabled:opacity-40">
+                        {drawingArenaModifier ? 'Drawing...' : drawnArenaModifier ? 'Reveal Again' : 'Draw Condition'}
+                      </button>
+                    </div>
+                    {drawnArenaModifier && (
+                      <div className="mt-3 rounded-2xl border border-white/10 bg-black/55 p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <h3 className="text-sm font-black uppercase tracking-[0.16em] text-white">{drawnArenaModifier.label}</h3>
+                            <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-yellow-200">Risk x{Number(drawnArenaModifier.risk_multiplier).toFixed(2)}</p>
+                          </div>
+                          <span className={`rounded-full border px-2 py-1 text-[8px] font-black uppercase tracking-widest ${acceptedArenaModifier ? 'border-emerald-300/30 bg-emerald-300/10 text-emerald-200' : 'border-pink-300/30 bg-pink-300/10 text-pink-200'}`}>
+                            {acceptedArenaModifier ? 'Locked In' : 'Awaiting Blood Oath'}
+                          </span>
+                        </div>
+                        <p className="mt-3 text-xs leading-5 text-zinc-300">{drawnArenaModifier.description}</p>
+                        <p className="mt-2 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-[10px] leading-5 text-zinc-400">{drawnArenaModifier.rule_text}</p>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <button type="button" onClick={() => setAcceptedArenaModifier(drawnArenaModifier)} disabled={Boolean(acceptedArenaModifier)} className="rounded-xl border border-red-300/30 bg-red-500/15 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-red-100 transition hover:bg-red-500/25 disabled:opacity-50">Accept Risk</button>
+                          <button type="button" onClick={() => { setDrawnArenaModifier(null); setAcceptedArenaModifier(null); }} className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[9px] font-black uppercase tracking-widest text-zinc-300 transition hover:bg-white/[0.08]">Burn Card</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
 
                   <div className="mt-5 rounded-3xl border border-cyan-300/20 bg-black/60 p-4">
                     <div className="mb-2 flex items-center justify-between">
