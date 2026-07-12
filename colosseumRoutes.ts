@@ -43,6 +43,7 @@ function openaiCompatibleBaseUrl() {
   return (process.env.VITE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
 }
 const SAPPHIRE_API_URL = (process.env.SAPPHIRE_API_URL || 'https://sapphire.bloodsweatcode.site').replace(/\/$/, '');
+let lastBountyRefreshAt = 0;
 const CHALLENGE_BRIEFS: Record<ColosseumChallengeType, string> = {
   speed_round: 'Solve the task as quickly as possible while keeping the implementation correct and readable.',
   debug_battle: 'Find and fix the defect. Explain the root cause and provide corrected code or a precise patch.',
@@ -930,6 +931,46 @@ async function ensureSapphireHouseBot(supabase: SupabaseClient) {
 }
 
 export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) {
+  app.get('/api/colosseum/bounties', async (req, res) => {
+    try {
+      const authUser = await authenticatedRequestUser(req, supabase);
+      if (!authUser) return res.status(401).json({ error: 'Authentication required.' });
+
+      const now = Date.now();
+      if (now - lastBountyRefreshAt >= 60_000) {
+        const { error: refreshError } = await supabase.rpc('refresh_colosseum_bounties');
+        if (refreshError) throw refreshError;
+        lastBountyRefreshAt = now;
+      }
+
+      const { data: bounties, error: bountyError } = await supabase
+        .from('colosseum_bounties')
+        .select('*')
+        .eq('status', 'open')
+        .order('closes_at', { ascending: true });
+      if (bountyError) throw bountyError;
+      const bountyIds = (bounties ?? []).map((bounty) => bounty.id);
+      const [{ data: entries, error: entryError }, { data: titles, error: titleError }] = await Promise.all([
+        bountyIds.length > 0
+          ? supabase
+            .from('colosseum_bounty_entries')
+            .select('*')
+            .in('bounty_id', bountyIds)
+            .order('score', { ascending: false })
+            .order('duration_ms', { ascending: true })
+          : Promise.resolve({ data: [], error: null }),
+        supabase.from('gladiator_temporary_titles').select('*').gt('expires_at', new Date().toISOString()),
+      ]);
+      if (entryError) throw entryError;
+      if (titleError) throw titleError;
+
+      return res.json({ bounties: bounties ?? [], entries: entries ?? [], titles: titles ?? [] });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Bounty Board unavailable.';
+      return res.status(500).json({ error: message });
+    }
+  });
+
   app.post('/api/colosseum/persona-bots/ensure', async (req, res) => {
     try {
       if (!(await authenticatedRequestUser(req, supabase))) {
