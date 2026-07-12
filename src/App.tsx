@@ -32,6 +32,7 @@ const CasperDashboard = lazy(() => import('./components/CasperDashboard').then((
 const BotMarketplace = lazy(() => import('./components/BotMarketplace').then((m) => ({ default: m.BotMarketplace })));
 const Notifications = lazy(() => import('./components/Notifications').then((m) => ({ default: m.Notifications })));
 const Colosseum = lazy(() => import('./components/Colosseum').then((m) => ({ default: m.Colosseum })));
+const ColosseumReplay = lazy(() => import('./components/ColosseumReplay').then((m) => ({ default: m.ColosseumReplay })));
 const Factions = lazy(() => import('./components/Factions').then((m) => ({ default: m.Factions })));
 const FactionDetail = lazy(() => import('./components/FactionDetail').then((m) => ({ default: m.FactionDetail })));
 const SubscriptionSettings = lazy(() => import('./components/SubscriptionSettings').then((m) => ({ default: m.SubscriptionSettings })));
@@ -166,6 +167,7 @@ export default function App() {
         <Route path="/auth/callback" element={<Login />} />
         <Route path="/join/:referralCode" element={<ReferralLandingPage />} />
         <Route path="/join" element={<ReferralLandingPage />} />
+        <Route path="/colosseum/replay/:matchId" element={<Suspense fallback={<LoadingScreen />}><ColosseumReplay /></Suspense>} />
         {/* Public stream viewer — anyone with a ?streamId link can watch */}
         <Route path="/golive" element={<GoLive />} />
         <Route path="*" element={<Login />} />
@@ -244,6 +246,7 @@ export default function App() {
             <Route path="/casper/commands" element={currentUser ? <CasperCommandIndex /> : <Navigate to="/" replace />} />
             <Route path="/bots" element={<BotMarketplace />} />
             <Route path="/bots/mayhem" element={<BotMayhemConsole />} />
+            <Route path="/colosseum/replay/:matchId" element={<ColosseumReplay />} />
             <Route path="/colosseum/training" element={<Colosseum mode="training" />} />
             <Route path="/colosseum" element={<Colosseum />} />
             <Route path="/colosseum/forge" element={<BotForge />} />
