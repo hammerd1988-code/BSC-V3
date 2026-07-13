@@ -9,6 +9,22 @@ import {
   type ColosseumChallengeType,
 } from './src/lib/colosseumVerdict.js';
 import {
+  isPublicReplayChallengeType,
+  publicReplayAllowed,
+  sanitizePublicAssetUrl,
+  sanitizePublicJudge,
+  sanitizePublicReplayData,
+  sanitizePublicText,
+} from './src/lib/colosseumReplay.js';
+import {
+  isCrowdSealMoment,
+  isCrowdSealType,
+  type CrowdSealCount,
+  type CrowdSealMoment,
+  type CrowdSealType,
+  type ViewerCrowdSeal,
+} from './src/lib/colosseumCrowdSeals.js';
+import {
   parseTrainingBattleRequest,
   validateTrainingCombatants,
 } from './src/lib/colosseumTraining.js';
@@ -27,6 +43,7 @@ function openaiCompatibleBaseUrl() {
   return (process.env.VITE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
 }
 const SAPPHIRE_API_URL = (process.env.SAPPHIRE_API_URL || 'https://sapphire.bloodsweatcode.site').replace(/\/$/, '');
+let lastBountyRefreshAt = 0;
 const CHALLENGE_BRIEFS: Record<ColosseumChallengeType, string> = {
   speed_round: 'Solve the task as quickly as possible while keeping the implementation correct and readable.',
   debug_battle: 'Find and fix the defect. Explain the root cause and provide corrected code or a precise patch.',
@@ -85,6 +102,32 @@ async function userOwnsOpenMatch(supabase: SupabaseClient, matchId: string, auth
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function crowdSealPayload(rows: unknown) {
+  const counts: CrowdSealCount[] = [];
+  const viewerSeals: ViewerCrowdSeal[] = [];
+  if (Array.isArray(rows)) {
+    rows.forEach((value) => {
+      if (!isRecord(value) || !isCrowdSealMoment(value.moment) || !isCrowdSealType(value.seal_type)) return;
+      const moment = value.moment as CrowdSealMoment;
+      const sealType = value.seal_type as CrowdSealType;
+      const count = Number(value.seal_count);
+      if (!Number.isFinite(count) || count < 1) return;
+      counts.push({
+        moment,
+        seal_type: sealType,
+        count,
+      });
+      if (value.viewer_selected === true) {
+        viewerSeals.push({ moment, seal_type: sealType });
+      }
+    });
+  }
+  return {
+    crowd_seals: counts.sort((left, right) => right.count - left.count),
+    viewer_seals: viewerSeals,
+  };
 }
 
 function errorMessage(error: unknown): string {
@@ -888,6 +931,46 @@ async function ensureSapphireHouseBot(supabase: SupabaseClient) {
 }
 
 export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) {
+  app.get('/api/colosseum/bounties', async (req, res) => {
+    try {
+      const authUser = await authenticatedRequestUser(req, supabase);
+      if (!authUser) return res.status(401).json({ error: 'Authentication required.' });
+
+      const now = Date.now();
+      if (now - lastBountyRefreshAt >= 60_000) {
+        const { error: refreshError } = await supabase.rpc('refresh_colosseum_bounties');
+        if (refreshError) throw refreshError;
+        lastBountyRefreshAt = now;
+      }
+
+      const { data: bounties, error: bountyError } = await supabase
+        .from('colosseum_bounties')
+        .select('*')
+        .eq('status', 'open')
+        .order('closes_at', { ascending: true });
+      if (bountyError) throw bountyError;
+      const bountyIds = (bounties ?? []).map((bounty) => bounty.id);
+      const [{ data: entries, error: entryError }, { data: titles, error: titleError }] = await Promise.all([
+        bountyIds.length > 0
+          ? supabase
+            .from('colosseum_bounty_entries')
+            .select('*')
+            .in('bounty_id', bountyIds)
+            .order('score', { ascending: false })
+            .order('duration_ms', { ascending: true })
+          : Promise.resolve({ data: [], error: null }),
+        supabase.from('gladiator_temporary_titles').select('*').gt('expires_at', new Date().toISOString()),
+      ]);
+      if (entryError) throw entryError;
+      if (titleError) throw titleError;
+
+      return res.json({ bounties: bounties ?? [], entries: entries ?? [], titles: titles ?? [] });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Bounty Board unavailable.';
+      return res.status(500).json({ error: message });
+    }
+  });
+
   app.post('/api/colosseum/persona-bots/ensure', async (req, res) => {
     try {
       if (!(await authenticatedRequestUser(req, supabase))) {
@@ -1053,6 +1136,226 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
     } catch (error: any) {
       console.error('[colosseum:sapphire:move]', error);
       return res.status(502).json({ success: false, error: error.message || 'Sapphire combat move failed' });
+    }
+  });
+
+  app.get('/api/colosseum/replay/:matchId', async (req, res) => {
+    try {
+      const matchId = sanitizePublicText(req.params.matchId, 128);
+      if (!matchId) {
+        return res.status(404).json({ success: false, error: 'Battle receipt not found.' });
+      }
+
+      const { data: match, error: matchError } = await supabase
+        .from('matches')
+        .select('id,challenger_id,defender_id,challenge_type,winner_id,started_at,completed_at,replay_data,status,public_replay_enabled')
+        .eq('id', matchId)
+        .maybeSingle();
+      if (matchError) throw matchError;
+      if (!match || !publicReplayAllowed(match) || !isPublicReplayChallengeType(match.challenge_type)) {
+        return res.status(404).json({ success: false, error: 'Battle receipt not found.' });
+      }
+
+      const [judgementResult, recordResult, combatantResult] = await Promise.all([
+        supabase
+          .from('battle_judgements')
+          .select('schema_version,judge_provider,judge_model,used_ai,challenger_score,defender_score,winner_id,summary,reasoning,rubric,annotations')
+          .eq('match_id', match.id)
+          .maybeSingle(),
+        supabase
+          .from('battle_records')
+          .select('challenge_title,challenge_difficulty,scores,replay_snapshot')
+          .eq('match_id', match.id)
+          .maybeSingle(),
+        supabase
+          .from('gladiators')
+          .select('id,name,avatar_url,glow_color,wins,losses')
+          .in('id', [match.challenger_id, match.defender_id]),
+      ]);
+      if (judgementResult.error) throw judgementResult.error;
+      if (recordResult.error) throw recordResult.error;
+      if (combatantResult.error) throw combatantResult.error;
+
+      const matchReplay = isRecord(match.replay_data) ? match.replay_data : {};
+      const recordReplay = isRecord(recordResult.data?.replay_snapshot) ? recordResult.data.replay_snapshot : {};
+      const scores = isRecord(recordResult.data?.scores) ? recordResult.data.scores : {};
+      const replayData = sanitizePublicReplayData({
+        ...recordReplay,
+        ...matchReplay,
+        challenge_title: matchReplay.challenge_title ?? recordResult.data?.challenge_title,
+        challenge_difficulty: matchReplay.challenge_difficulty ?? recordResult.data?.challenge_difficulty,
+        challenger_score: matchReplay.challenger_score ?? scores.challenger,
+        defender_score: matchReplay.defender_score ?? scores.defender,
+      });
+      const replayJudge = isRecord(matchReplay.judge) ? matchReplay.judge : {};
+      const judge = sanitizePublicJudge(
+        judgementResult.data ?? {
+          ...replayJudge,
+          winner_id: replayJudge.winner_id ?? match.winner_id,
+          challenger_score: replayJudge.challenger_score ?? replayData.challenger_score,
+          defender_score: replayJudge.defender_score ?? replayData.defender_score,
+          summary: replayJudge.summary ?? 'This legacy verdict was sealed before Casper began recording the full Iron Ledger.',
+        },
+        String(match.winner_id ?? '')
+      );
+
+      const combatants = (combatantResult.data ?? []).map((gladiator) => ({
+        id: sanitizePublicText(gladiator.id, 128),
+        name: sanitizePublicText(gladiator.name, 120),
+        avatar_url: sanitizePublicAssetUrl(gladiator.avatar_url),
+        glow_color: sanitizePublicText(gladiator.glow_color, 32) || '#71717a',
+        wins: Number.isFinite(Number(gladiator.wins)) ? Math.max(0, Number(gladiator.wins)) : 0,
+        losses: Number.isFinite(Number(gladiator.losses)) ? Math.max(0, Number(gladiator.losses)) : 0,
+      }));
+
+      return res.json({
+        success: true,
+        receipt: {
+          match: {
+            id: String(match.id),
+            challenger_id: String(match.challenger_id),
+            defender_id: String(match.defender_id),
+            challenge_type: match.challenge_type,
+            winner_id: match.winner_id ? String(match.winner_id) : judge.winner_id,
+            started_at: match.started_at,
+            completed_at: match.completed_at,
+          },
+          combatants,
+          replay_data: {
+            ...replayData,
+            challenger_score: judge.challenger_score,
+            defender_score: judge.defender_score,
+            judge,
+          },
+        },
+      });
+    } catch (error: unknown) {
+      console.error('[colosseum:public-replay]', error);
+      return res.status(502).json({ success: false, error: 'Battle receipt is temporarily unavailable.' });
+    }
+  });
+
+  app.get('/api/colosseum/replay/:matchId/seals', async (req, res) => {
+    try {
+      const matchId = sanitizePublicText(req.params.matchId, 128);
+      const { data: match, error: matchError } = await supabase
+        .from('matches')
+        .select('completed_at,status,public_replay_enabled,challenge_type')
+        .eq('id', matchId)
+        .maybeSingle();
+      if (matchError) throw matchError;
+      if (!match || !publicReplayAllowed(match) || !isPublicReplayChallengeType(match.challenge_type)) {
+        return res.status(404).json({ success: false, error: 'Battle receipt not found.' });
+      }
+
+      const authUser = await authenticatedRequestUser(req, supabase);
+      let viewerUserId: string | null = null;
+      if (authUser) {
+        const { data: viewer } = await supabase
+          .from('users')
+          .select('id')
+          .eq('auth_uid', authUser.id)
+          .maybeSingle();
+        viewerUserId = viewer?.id ? String(viewer.id) : null;
+      }
+
+      const { data: seals, error: sealError } = await supabase.rpc('get_battle_crowd_seals', {
+        p_match_id: matchId,
+        p_viewer_user_id: viewerUserId,
+      });
+      if (sealError && sealError.code !== '42P01') throw sealError;
+
+      return res.json({
+        success: true,
+        ...crowdSealPayload(seals ?? []),
+      });
+    } catch (error: unknown) {
+      console.error('[colosseum:crowd-seals:list]', error);
+      return res.status(502).json({ success: false, error: 'Crowd Seals are temporarily unavailable.' });
+    }
+  });
+
+  app.post('/api/colosseum/replay/:matchId/seals', async (req, res) => {
+    try {
+      const authUser = await authenticatedRequestUser(req, supabase);
+      if (!authUser) {
+        return res.status(401).json({ success: false, error: 'Sign in to cast a Crowd Seal.' });
+      }
+      const matchId = sanitizePublicText(req.params.matchId, 128);
+      const moment = req.body?.moment;
+      const sealType = req.body?.seal_type;
+      if (!isCrowdSealMoment(moment) || !isCrowdSealType(sealType)) {
+        return res.status(400).json({ success: false, error: 'Choose a valid Crowd Seal and battle moment.' });
+      }
+
+      const [{ data: match, error: matchError }, { data: viewer, error: viewerError }] = await Promise.all([
+        supabase
+          .from('matches')
+          .select('completed_at,status,public_replay_enabled,challenge_type')
+          .eq('id', matchId)
+          .maybeSingle(),
+        supabase
+          .from('users')
+          .select('id')
+          .eq('auth_uid', authUser.id)
+          .maybeSingle(),
+      ]);
+      if (matchError) throw matchError;
+      if (viewerError) throw viewerError;
+      if (!match || !publicReplayAllowed(match) || !isPublicReplayChallengeType(match.challenge_type)) {
+        return res.status(404).json({ success: false, error: 'Battle receipt not found.' });
+      }
+      if (!viewer?.id) {
+        return res.status(403).json({ success: false, error: 'A platform profile is required to cast a Crowd Seal.' });
+      }
+
+      const viewerUserId = String(viewer.id);
+      const { data: existing, error: existingError } = await supabase
+        .from('battle_crowd_seals')
+        .select('seal_type')
+        .eq('match_id', matchId)
+        .eq('user_id', viewerUserId)
+        .eq('moment', moment)
+        .maybeSingle();
+      if (existingError && existingError.code !== '42P01') throw existingError;
+      if (existingError?.code === '42P01') {
+        return res.status(503).json({ success: false, error: 'Crowd Seals are not online yet.' });
+      }
+
+      if (existing?.seal_type === sealType) {
+        const { error: deleteError } = await supabase
+          .from('battle_crowd_seals')
+          .delete()
+          .eq('match_id', matchId)
+          .eq('user_id', viewerUserId)
+          .eq('moment', moment);
+        if (deleteError) throw deleteError;
+      } else {
+        const { error: upsertError } = await supabase
+          .from('battle_crowd_seals')
+          .upsert({
+            match_id: matchId,
+            user_id: viewerUserId,
+            moment,
+            seal_type: sealType,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'match_id,user_id,moment' });
+        if (upsertError) throw upsertError;
+      }
+
+      const { data: seals, error: sealError } = await supabase.rpc('get_battle_crowd_seals', {
+        p_match_id: matchId,
+        p_viewer_user_id: viewerUserId,
+      });
+      if (sealError) throw sealError;
+
+      return res.json({
+        success: true,
+        ...crowdSealPayload(seals ?? []),
+      });
+    } catch (error: unknown) {
+      console.error('[colosseum:crowd-seals:cast]', error);
+      return res.status(502).json({ success: false, error: 'The crowd could not seal that moment.' });
     }
   });
 
@@ -1491,7 +1794,16 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
       });
       const winner = judge.winner_id === challenger.id ? challenger : defender;
       const submittedReplay = isRecord(replayData) ? replayData : {};
-      const baseReplay = { ...storedReplay, ...submittedReplay };
+      const baseReplay = {
+        ...storedReplay,
+        ...submittedReplay,
+        ...(storedReplay.arena_modifier
+          ? {
+              arena_modifier: storedReplay.arena_modifier,
+              challenge_prompt: storedReplay.challenge_prompt,
+            }
+          : {}),
+      };
       const replayLog = Array.isArray(baseReplay.log)
         ? baseReplay.log.map((line) => String(line)).slice(-250)
         : [];
