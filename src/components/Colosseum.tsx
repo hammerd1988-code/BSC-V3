@@ -147,6 +147,9 @@ interface MatchRow {
   challenger_id: string;
   defender_id: string;
   challenge_type: ChallengeType;
+  mode?: 'ranked' | 'training' | 'bounty' | 'tournament' | 'team';
+  status?: 'pending' | 'running' | 'judging' | 'complete' | 'failed' | 'cancelled';
+  rematch_of_id?: string | null;
   winner_id: string | null;
   started_at: string;
   completed_at: string | null;
@@ -5626,6 +5629,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
   const [simulation, setSimulation] = useState<SimulationState | null>(null);
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(searchParams.get('match'));
   const [challengeModalOpen, setChallengeModalOpen] = useState(false);
+  const [revengeSourceId, setRevengeSourceId] = useState<string | null>(null);
   const [countdown, setCountdown] = useState(0);
   const [challengeNonce, setChallengeNonce] = useState(Date.now());
   const [drawnArenaModifier, setDrawnArenaModifier] = useState<ArenaModifierCard | null>(null);
@@ -6017,6 +6021,8 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
     setDrawnArenaModifier(null);
     setAcceptedArenaModifier(null);
     setPendingBounty(null);
+    setPendingTournamentMatchId('');
+    setRevengeSourceId(null);
     setChallengeNonce(nonce);
     setUserSolution(challengeFor(selectedOpponent?.botProfile, next, seed).starter);
   };
@@ -6026,9 +6032,11 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
     const nonce = Date.now();
     const seed = `${id}-${challengeType}-${nonce}`;
     setSelectedOpponentId(id);
+    setRevengeSourceId(null);
     setDrawnArenaModifier(null);
     setAcceptedArenaModifier(null);
     setPendingBounty(null);
+    setPendingTournamentMatchId('');
     setChallengeNonce(nonce);
     setUserSolution(challengeFor(opponent?.botProfile, challengeType, seed).starter);
   };
@@ -6046,6 +6054,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
     const seed = `${bot.id}-${effectiveChallengeType}-${nonce}`;
     setChallengeType(effectiveChallengeType);
     setSelectedOpponentId(bot.id);
+    setRevengeSourceId(null);
     setDrawnArenaModifier(null);
     setAcceptedArenaModifier(null);
     setPendingBounty(null);
@@ -6083,6 +6092,10 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
     setSelectedOpponentId(opponent.id);
     setChallengeType(tournament.challenge_type);
     setPendingTournamentMatchId(match.id);
+    setDrawnArenaModifier(null);
+    setAcceptedArenaModifier(null);
+    setPendingBounty(null);
+    setRevengeSourceId(null);
     setChallengeNonce(nonce);
     setChallengeModalOpen(true);
     setCountdown(3);
@@ -6113,6 +6126,32 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
     } finally {
       setDrawingArenaModifier(false);
     }
+  };
+
+  const openRevengeChallenge = (match: MatchRow) => {
+    const challenger = gladiatorById.get(match.defender_id);
+    const defender = gladiatorById.get(match.challenger_id);
+    if (!challenger || !defender || challenger.user_id !== currentUser?.id) {
+      setNotice('Only the original defender can claim this revenge challenge.');
+      return;
+    }
+
+    const nonce = Date.now();
+    const seed = `${defender.id}-${match.challenge_type}-${nonce}`;
+    setSelectedGladiatorId(challenger.id);
+    setSelectedOpponentId(defender.id);
+    setChallengeType(match.challenge_type);
+    setDrawnArenaModifier(null);
+    setAcceptedArenaModifier(null);
+    setPendingBounty(null);
+    setPendingTournamentMatchId('');
+    setChallengeNonce(nonce);
+    setRevengeSourceId(match.id);
+    setChallengeModalOpen(true);
+    setCountdown(3);
+    setLatestBotSolution('');
+    setBattleResult(null);
+    setUserSolution(challengeFor(defender.botProfile, match.challenge_type, seed).starter);
   };
 
   const handleActiveMatchClick = (match: MatchRow) => {
@@ -6326,6 +6365,10 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
     setSelectedOpponentId(defender.id);
     setChallengeType(bounty.challenge_type);
     setPendingBounty(bounty);
+    setDrawnArenaModifier(null);
+    setAcceptedArenaModifier(null);
+    setPendingTournamentMatchId('');
+    setRevengeSourceId(null);
     setChallengeNonce(Date.now());
     setUserSolution('');
     setChallengeModalOpen(true);
@@ -6469,6 +6512,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
           challenger_id: challenger.id,
           defender_id: defender.id,
           challenge_type: activeChallengeType,
+          ...(revengeSourceId ? { rematch_of_id: revengeSourceId } : {}),
           arena_modifier: acceptedArenaModifier?.code ?? null,
           arena_modifier_draw: acceptedArenaModifier?.draw_window ?? null,
           bounty_id: pendingBounty?.id ?? null,
@@ -6487,6 +6531,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       if (error) throw error;
 
       const match = data as MatchRow;
+      setRevengeSourceId(null);
       setDrawnArenaModifier(null);
       setAcceptedArenaModifier(null);
       setPendingBounty(null);
@@ -7248,7 +7293,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
                 exit={{ scale: 0.94, y: 18 }}
                 className="relative w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-[2rem] border border-red-400/35 bg-zinc-950 p-4 shadow-[0_0_70px_rgba(255,23,68,0.28)] sm:p-6"
               >
-                <button type="button" onClick={() => { setChallengeModalOpen(false); setDrawnArenaModifier(null); setAcceptedArenaModifier(null); setPendingBounty(null); setPendingTournamentMatchId(''); }} className="absolute right-4 top-4 z-10 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white">Close</button>
+                <button type="button" onClick={() => { setChallengeModalOpen(false); setRevengeSourceId(null); setDrawnArenaModifier(null); setAcceptedArenaModifier(null); setPendingBounty(null); setPendingTournamentMatchId(''); }} className="absolute right-4 top-4 z-10 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white">Close</button>
                 <div className="pointer-events-none absolute inset-0 opacity-35" style={{ background: `radial-gradient(circle at 20% 0%, ${selectedOpponent.glow_color}66, transparent 34%), radial-gradient(circle at 100% 100%, rgba(0,229,255,0.22), transparent 35%)` }} />
                 <div className="relative">
                   <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -7262,6 +7307,16 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
                     </div>
 
                   </div>
+
+                  {revengeSourceId && (
+                    <div className="mb-4 flex items-center gap-3 rounded-2xl border border-red-400/30 bg-red-950/30 px-4 py-3 text-red-100">
+                      <Flame className="h-5 w-5 shrink-0 text-red-300" />
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-[0.24em] text-red-300">Revenge Contract Sealed</p>
+                        <p className="mt-1 text-xs font-bold uppercase tracking-wider">Combatants flipped. Discipline locked. The score settles here.</p>
+                      </div>
+                    </div>
+                  )}
 
                   <blockquote className="rounded-3xl border border-white/10 bg-black/50 p-4 text-sm font-black uppercase leading-7 tracking-[0.12em] text-white sm:p-5 sm:text-lg sm:leading-8">
                     “{pickDialogue(selectedOpponent.botProfile?.pre_battle_lines)}”
@@ -7300,7 +7355,10 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
                     </div>
                   )}
 
-                  {(['speed_round', 'debug_battle', 'code_golf'] as ChallengeType[]).includes(challengeType) && (
+                  {(['speed_round', 'debug_battle', 'code_golf'] as ChallengeType[]).includes(challengeType)
+                    && !pendingBounty
+                    && !pendingTournamentMatchId
+                    && !revengeSourceId && (
                     <div className="mt-5 rounded-3xl border border-pink-300/20 bg-pink-950/10 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
@@ -8242,6 +8300,11 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
             <div className="space-y-3">
               {recentMatches.length ? recentMatches.map((match) => {
                 const winner = match.winner_id ? gladiatorById.get(match.winner_id) : null;
+                const canClaimRevenge = !trainingMode
+                  && match.mode === 'ranked'
+                  && match.status === 'complete'
+                  && match.winner_id === match.challenger_id
+                  && gladiatorById.get(match.defender_id)?.user_id === currentUser?.id;
                 return (
                   <div
                     key={match.id}
@@ -8265,6 +8328,19 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
+                        {canClaimRevenge && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openRevengeChallenge(match);
+                            }}
+                            className="inline-flex items-center gap-2 rounded-full border border-red-400/35 bg-red-950/40 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-red-100 transition hover:border-red-300 hover:bg-red-900/50"
+                          >
+                            <Swords className="h-3.5 w-3.5" />
+                            Claim Revenge
+                          </button>
+                        )}
                         <div className="text-right">
                           <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Winner</p>
                           <p className="text-xs font-black uppercase tracking-widest text-yellow-200">{winner?.name ?? 'Pending'}</p>
