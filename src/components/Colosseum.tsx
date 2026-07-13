@@ -71,6 +71,15 @@ import {
   type GladiatorRivalry,
   type GrudgeHeat,
 } from '../lib/colosseumGrudge';
+import {
+  MUTATION_FORGE_MODES,
+  MUTATION_FORGE_STATS,
+  mutationDelta,
+  type GladiatorMutation,
+  type MutationMode,
+  type MutationResult,
+  type MutationStatKey,
+} from '../lib/colosseumMutationForge';
 import { ReportModal } from './ReportModal';
 import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
 import { DistrictCityBackdrop } from './DistrictCityBackdrop';
@@ -2481,12 +2490,14 @@ function GladiatorInspectPopup({
   temporaryTitle,
   legacy,
   scars,
+  mutations,
   onClose,
 }: {
   gladiator: Gladiator;
   temporaryTitle: GladiatorTemporaryTitle | null;
   legacy: GladiatorLegacy | null;
   scars: GladiatorBattleScar[];
+  mutations: GladiatorMutation[];
   onClose: () => void;
 }) {
   const badge = badgeFor(gladiator);
@@ -2542,6 +2553,29 @@ function GladiatorInspectPopup({
                     <span className="text-[9px] font-black uppercase tracking-[0.2em]" style={{ color: meta.color }}>{meta.label}</span>
                     <span className="mt-1 block text-[10px] leading-4 text-zinc-400">{meta.detail}</span>
                   </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {mutations.length > 0 && (
+          <div className="relative mt-5">
+            <p className="mb-2 text-[8px] font-black uppercase tracking-[0.28em] text-fuchsia-300">Mutation Scars</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {mutations.slice(0, 4).map((mutation) => {
+                const stat = MUTATION_FORGE_STATS.find((candidate) => candidate.key === mutation.stat_key);
+                return (
+                  <div key={mutation.id} className="rounded-2xl border border-fuchsia-300/15 bg-fuchsia-950/10 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[9px] font-black uppercase tracking-[0.2em]" style={{ color: stat?.color }}>{stat?.shortLabel ?? mutation.stat_key}</span>
+                      <span className={cn('text-xs font-black', mutation.new_value >= mutation.old_value ? 'text-green-200' : 'text-red-200')}>
+                        {mutation.old_value} → {mutation.new_value}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[9px] uppercase tracking-wider text-zinc-500">
+                      {MUTATION_FORGE_MODES[mutation.mutation_mode].label} · {mutationDelta(mutation.old_value, mutation.new_value)}
+                    </p>
+                  </div>
                 );
               })}
             </div>
@@ -5035,6 +5069,245 @@ function BountyBoard({
   );
 }
 
+function MutationForgePanel({
+  gladiators,
+  selectedGladiatorId,
+  statKey,
+  mode,
+  mutations,
+  activeGladiatorIds,
+  mutating,
+  onSelectGladiator,
+  onSelectStat,
+  onSelectMode,
+  onMutate,
+  onInspect,
+}: {
+  gladiators: Gladiator[];
+  selectedGladiatorId: string;
+  statKey: MutationStatKey;
+  mode: MutationMode;
+  mutations: GladiatorMutation[];
+  activeGladiatorIds: Set<string>;
+  mutating: boolean;
+  onSelectGladiator: (gladiatorId: string) => void;
+  onSelectStat: (stat: MutationStatKey) => void;
+  onSelectMode: (mode: MutationMode) => void;
+  onMutate: () => void;
+  onInspect: (gladiator: Gladiator) => void;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const gladiator = gladiators.find((candidate) => candidate.id === selectedGladiatorId) ?? gladiators[0] ?? null;
+  const forgeMode = MUTATION_FORGE_MODES[mode];
+  const selectedStat = MUTATION_FORGE_STATS.find((stat) => stat.key === statKey) ?? MUTATION_FORGE_STATS[0];
+  const history = mutations.filter((mutation) => mutation.gladiator_id === gladiator?.id).slice(0, 4);
+  const latestMutation = history[0] ?? null;
+  const nextMutationAt = latestMutation
+    ? new Date(new Date(latestMutation.created_at).getTime() + 6 * 60 * 60 * 1000)
+    : null;
+  const onCooldown = Boolean(nextMutationAt && nextMutationAt.getTime() > now);
+  const hasActiveMatch = Boolean(gladiator && activeGladiatorIds.has(gladiator.id));
+  const currentValue = gladiator?.stats[statKey] ?? 0;
+  const perfected = mode === 'graft' && currentValue >= 100;
+  const insufficientCred = Boolean(gladiator && gladiator.cred < forgeMode.cost);
+  const disabledReason = !gladiator
+    ? 'Forge a gladiator first'
+    : hasActiveMatch
+      ? 'Active match lock'
+      : onCooldown
+        ? `Strain clears ${nextMutationAt?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+        : perfected
+          ? 'Stat already perfected'
+          : insufficientCred
+            ? `Needs ${forgeMode.cost} CRED`
+            : null;
+
+  return (
+    <section className="relative mt-6 overflow-hidden rounded-[2rem] border border-fuchsia-300/25 bg-black/70 p-5 shadow-[0_0_70px_rgba(255,43,214,0.12)] backdrop-blur-xl sm:p-6">
+      <div className="pointer-events-none absolute inset-0 opacity-35" style={{ background: 'radial-gradient(circle at 0% 0%, rgba(255,43,214,0.3), transparent 34%), radial-gradient(circle at 100% 100%, rgba(0,229,255,0.2), transparent 38%)' }} />
+      <div className="relative">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-[0.34em] text-fuchsia-200">Restricted Stable Surgery</p>
+            <h2 className="mt-2 text-2xl font-black uppercase tracking-[0.16em] text-white">Gladiator Mutation Forge</h2>
+            <p className="mt-3 max-w-3xl text-sm leading-6 text-zinc-400">
+              Burn battle-earned CRED into one permanent combat trait. Every mutation is server-sealed, public, and leaves six hours of visible strain.
+            </p>
+          </div>
+          <label className="min-w-64">
+            <span className="mb-2 block text-[9px] font-black uppercase tracking-[0.25em] text-zinc-500">Subject</span>
+            <select
+              value={gladiator?.id ?? ''}
+              onChange={(event) => {
+                onSelectGladiator(event.target.value);
+                setArmed(false);
+              }}
+              className="w-full rounded-2xl border border-fuchsia-300/20 bg-zinc-950/95 px-4 py-3 text-sm font-black uppercase tracking-wider text-white outline-none focus:border-fuchsia-300/60"
+            >
+              {gladiators.length ? gladiators.map((candidate) => (
+                <option key={candidate.id} value={candidate.id}>{candidate.name} · {candidate.cred} CRED</option>
+              )) : <option value="">No eligible gladiators</option>}
+            </select>
+          </label>
+        </div>
+
+        {gladiator ? (
+          <div className="mt-5 grid gap-5 xl:grid-cols-[0.78fr_1.22fr]">
+            <div className="rounded-3xl border border-white/10 bg-black/45 p-4">
+              <button type="button" onClick={() => onInspect(gladiator)} className="flex w-full items-center gap-4 rounded-2xl text-left transition hover:bg-white/[0.04]">
+                <AnimatedGladiatorAvatar gladiator={gladiator} size="sm" active />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-base font-black uppercase tracking-[0.16em] text-white">{gladiator.name}</p>
+                  <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-yellow-200">{gladiator.cred} CRED available</p>
+                </div>
+                <ChevronRight className="h-4 w-4 text-zinc-500" />
+              </button>
+
+              <div className="mt-4 space-y-2">
+                {MUTATION_FORGE_STATS.map((stat) => (
+                  <button
+                    type="button"
+                    key={stat.key}
+                    onClick={() => {
+                      onSelectStat(stat.key);
+                      setArmed(false);
+                    }}
+                    className={cn(
+                      'w-full rounded-2xl border p-3 text-left transition',
+                      statKey === stat.key ? 'border-white/25 bg-white/[0.08]' : 'border-white/8 bg-white/[0.025] hover:border-white/20'
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[9px] font-black uppercase tracking-[0.22em]" style={{ color: stat.color }}>{stat.shortLabel} · {stat.label}</p>
+                        <p className="mt-1 text-[10px] leading-4 text-zinc-500">{stat.detail}</p>
+                      </div>
+                      <span className="text-xl font-black text-white">{gladiator.stats[stat.key]}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                {(Object.keys(MUTATION_FORGE_MODES) as MutationMode[]).map((mutationMode) => {
+                  const option = MUTATION_FORGE_MODES[mutationMode];
+                  return (
+                    <button
+                      type="button"
+                      key={mutationMode}
+                      onClick={() => {
+                        onSelectMode(mutationMode);
+                        setArmed(false);
+                      }}
+                      className={cn(
+                        'rounded-3xl border p-4 text-left transition',
+                        mode === mutationMode
+                          ? 'border-fuchsia-300/55 bg-fuchsia-400/10 shadow-[0_0_30px_rgba(255,43,214,0.1)]'
+                          : 'border-white/10 bg-white/[0.035] hover:border-fuchsia-300/30'
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-black uppercase tracking-[0.18em] text-white">{option.label}</p>
+                          <p className="mt-2 text-[11px] leading-5 text-zinc-400">{option.detail}</p>
+                        </div>
+                        {mutationMode === 'graft' ? <Target className="h-5 w-5 text-cyan-300" /> : <Sparkles className="h-5 w-5 text-fuchsia-300" />}
+                      </div>
+                      <div className="mt-4 flex items-center justify-between text-[9px] font-black uppercase tracking-widest">
+                        <span className="text-yellow-200">{option.cost} CRED</span>
+                        <span className="text-zinc-300">{option.outcome}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className={cn('rounded-3xl border p-4 transition', armed ? 'border-red-300/45 bg-red-950/25' : 'border-fuchsia-300/20 bg-fuchsia-950/15')}>
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-[9px] font-black uppercase tracking-[0.28em] text-fuchsia-200">Mutation Contract</p>
+                    <p className="mt-2 text-sm font-black uppercase tracking-wider text-white">
+                      {selectedStat.shortLabel} {currentValue} · {forgeMode.label}
+                    </p>
+                    <p className="mt-1 text-[10px] uppercase tracking-wider text-zinc-500">
+                      {forgeMode.outcome} · {forgeMode.cost} CRED · six-hour strain
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-2 sm:items-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!armed) {
+                          setArmed(true);
+                          return;
+                        }
+                        setArmed(false);
+                        onMutate();
+                      }}
+                      disabled={mutating || Boolean(disabledReason)}
+                      className={cn(
+                        'inline-flex min-w-48 items-center justify-center gap-2 rounded-full border px-5 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition disabled:cursor-not-allowed disabled:opacity-45',
+                        armed
+                          ? 'border-red-300/55 bg-red-500/20 text-red-100 hover:bg-red-500/30'
+                          : 'border-fuchsia-300/40 bg-fuchsia-400/15 text-fuchsia-100 hover:bg-fuchsia-400/25'
+                      )}
+                    >
+                      {mutating ? <Loader2 className="h-4 w-4 animate-spin" /> : armed ? <ShieldAlert className="h-4 w-4" /> : <Hammer className="h-4 w-4" />}
+                      {mutating ? 'Splicing...' : disabledReason ?? (armed ? `Confirm · Burn ${forgeMode.cost}` : 'Seal Mutation')}
+                    </button>
+                    {armed && (
+                      <button type="button" onClick={() => setArmed(false)} className="text-[8px] font-black uppercase tracking-[0.24em] text-zinc-500 transition hover:text-white">
+                        Cancel ritual
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-white/10 bg-white/[0.025] p-4">
+                <p className="text-[9px] font-black uppercase tracking-[0.28em] text-zinc-500">Mutation Scars</p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {history.length ? history.map((mutation) => {
+                    const stat = MUTATION_FORGE_STATS.find((candidate) => candidate.key === mutation.stat_key);
+                    return (
+                      <div key={mutation.id} className="rounded-2xl border border-white/8 bg-black/35 px-3 py-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[9px] font-black uppercase tracking-widest" style={{ color: stat?.color }}>{stat?.shortLabel ?? mutation.stat_key}</span>
+                          <span className={cn('text-xs font-black', mutation.new_value >= mutation.old_value ? 'text-green-200' : 'text-red-200')}>
+                            {mutation.old_value} → {mutation.new_value} ({mutationDelta(mutation.old_value, mutation.new_value)})
+                          </span>
+                        </div>
+                        <p className="mt-1 text-[8px] font-black uppercase tracking-widest text-zinc-600">
+                          {MUTATION_FORGE_MODES[mutation.mutation_mode].label} · {mutation.cred_cost} CRED
+                        </p>
+                      </div>
+                    );
+                  }) : (
+                    <p className="sm:col-span-2 rounded-2xl border border-dashed border-white/10 px-4 py-4 text-center text-[9px] font-black uppercase tracking-widest text-zinc-600">
+                      No mutation scars yet.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-5 rounded-3xl border border-dashed border-white/10 p-8 text-center text-sm text-zinc-500">
+            Forge a player-owned gladiator before entering the Mutation Forge.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function TournamentPanel({
   tournaments,
   entries,
@@ -5663,6 +5936,11 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
   const [pendingBounty, setPendingBounty] = useState<ColosseumBounty | null>(null);
   const [gladiatorLegacies, setGladiatorLegacies] = useState<Map<string, GladiatorLegacy>>(new Map());
   const [gladiatorBattleScars, setGladiatorBattleScars] = useState<GladiatorBattleScar[]>([]);
+  const [gladiatorMutations, setGladiatorMutations] = useState<GladiatorMutation[]>([]);
+  const [mutationGladiatorId, setMutationGladiatorId] = useState('');
+  const [mutationStatKey, setMutationStatKey] = useState<MutationStatKey>('speed');
+  const [mutationMode, setMutationMode] = useState<MutationMode>('graft');
+  const [mutatingGladiator, setMutatingGladiator] = useState(false);
   const [tournamentMatches, setTournamentMatches] = useState<TournamentMatchRow[]>([]);
   const [creatingTournament, setCreatingTournament] = useState(false);
   const [joiningTournamentId, setJoiningTournamentId] = useState('');
@@ -5821,6 +6099,23 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
     }
   }, []);
 
+  const fetchGladiatorMutations = useCallback(async () => {
+    if (!currentUser) {
+      setGladiatorMutations([]);
+      return;
+    }
+    const { data, error } = await supabase
+      .from('gladiator_mutations')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(120);
+    if (error) {
+      if (error.code !== '42P01') console.warn('[Colosseum] Mutation Forge unavailable', error);
+      return;
+    }
+    setGladiatorMutations((data ?? []) as GladiatorMutation[]);
+  }, [currentUser]);
+
   const fetchRivalries = useCallback(async () => {
     if (!currentUser) {
       setRivalries([]);
@@ -5875,6 +6170,10 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
   }, [fetchBattleScars]);
 
   useEffect(() => {
+    void fetchGladiatorMutations();
+  }, [fetchGladiatorMutations]);
+
+  useEffect(() => {
     setWhisperUsed(false);
   }, [selectedMatchId]);
 
@@ -5918,9 +6217,38 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
     return () => { supabase.removeChannel(channel); };
   }, [fetchBattleScars]);
 
+  useEffect(() => {
+    if (!currentUser || trainingMode) return;
+    const channel = supabase
+      .channel(`colosseum-mutation-forge-${currentUser.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'gladiator_mutations',
+        },
+        () => void fetchGladiatorMutations()
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [currentUser, fetchGladiatorMutations, trainingMode]);
+
   const gladiatorById = useMemo(() => new Map(gladiators.map((gladiator) => [gladiator.id, gladiator])), [gladiators]);
   const myGladiators = useMemo(() => gladiators.filter((gladiator) => gladiator.user_id === currentUser?.id), [gladiators, currentUser?.id]);
   const rivalryOwnerKey = myGladiators.map((gladiator) => gladiator.id).sort().join(',');
+
+  useEffect(() => {
+    if (!myGladiators.length) {
+      setMutationGladiatorId('');
+      return;
+    }
+    if (!myGladiators.some((gladiator) => gladiator.id === mutationGladiatorId)) {
+      setMutationGladiatorId(selectedGladiatorId && myGladiators.some((gladiator) => gladiator.id === selectedGladiatorId)
+        ? selectedGladiatorId
+        : myGladiators[0].id);
+    }
+  }, [mutationGladiatorId, myGladiators, selectedGladiatorId]);
 
   useEffect(() => {
     if (!currentUser || !rivalryOwnerKey) return;
@@ -5970,6 +6298,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
   }, [botGladiators, botRosterDifficulty, botRosterSearch]);
   const leaderboard = useMemo(() => [...gladiators].sort((a, b) => b.wins - a.wins || b.cred - a.cred || winRate(b) - winRate(a)).slice(0, 10), [gladiators]);
   const activeMatches = useMemo(() => matches.filter((match) => !match.completed_at), [matches]);
+  const activeGladiatorIds = useMemo(() => new Set(activeMatches.flatMap((match) => [match.challenger_id, match.defender_id])), [activeMatches]);
   const recentMatches = useMemo(() => matches.filter((match) => match.completed_at).slice(0, 6), [matches]);
   const sapphireWaitingBattles = useMemo(() => {
     const sapphire = findCanonicalSapphire(gladiators);
@@ -6345,6 +6674,57 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       setNotice('Tournament signup failed. Select one of your gladiators and confirm signups are still open.');
     } finally {
       setJoiningTournamentId('');
+    }
+  };
+
+  const mutateGladiator = async () => {
+    const target = myGladiators.find((gladiator) => gladiator.id === mutationGladiatorId);
+    if (!currentUser || !target || mutatingGladiator) return;
+    setMutatingGladiator(true);
+    setNotice(null);
+    try {
+      const { data, error } = await supabase.rpc('mutate_colosseum_gladiator', {
+        p_gladiator_id: target.id,
+        p_stat_key: mutationStatKey,
+        p_mutation_mode: mutationMode,
+      });
+      if (error) throw error;
+      if (!data) throw new Error('Mutation Forge returned no result.');
+
+      const result = data as MutationResult;
+      const nextStats = toStats(result.stats);
+      setGladiators((current) => current.map((gladiator) => gladiator.id === target.id
+        ? { ...gladiator, stats: nextStats, cred: result.cred_remaining }
+        : gladiator));
+      setInspectedGladiator((current) => current?.id === target.id
+        ? { ...current, stats: nextStats, cred: result.cred_remaining }
+        : current);
+      setGladiatorMutations((current) => [{
+        id: result.mutation_id,
+        gladiator_id: result.gladiator_id,
+        user_id: currentUser.id,
+        stat_key: result.stat_key,
+        mutation_mode: result.mutation_mode,
+        old_value: result.old_value,
+        new_value: result.new_value,
+        cred_cost: result.cred_spent,
+        created_at: new Date(new Date(result.next_mutation_at).getTime() - 6 * 60 * 60 * 1000).toISOString(),
+      }, ...current.filter((mutation) => mutation.id !== result.mutation_id)].slice(0, 120));
+      setNotice(`${target.name}'s ${mutationStatKey.toUpperCase()} mutated ${result.old_value} → ${result.new_value}. ${result.cred_remaining} CRED remains.`);
+    } catch (error) {
+      handleDbError(error, 'UPDATE', 'Mutation Forge');
+      const message = typeof error === 'object' && error && 'message' in error ? String(error.message) : '';
+      if (message.includes('strain')) {
+        setNotice('Mutation strain is still active. Let the subject stabilize before another splice.');
+      } else if (message.includes('active match')) {
+        setNotice('The Forge is locked while this gladiator has an active match.');
+      } else if (message.includes('Insufficient')) {
+        setNotice('This gladiator has not earned enough CRED for that mutation.');
+      } else {
+        setNotice('The mutation chamber rejected the ritual. Confirm migration 0055 is live and try again.');
+      }
+    } finally {
+      setMutatingGladiator(false);
     }
   };
 
@@ -7866,6 +8246,20 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
               onJoin={joinTournament}
               onInspect={setInspectedTournament}
             />
+            <MutationForgePanel
+              gladiators={myGladiators}
+              selectedGladiatorId={mutationGladiatorId}
+              statKey={mutationStatKey}
+              mode={mutationMode}
+              mutations={gladiatorMutations}
+              activeGladiatorIds={activeGladiatorIds}
+              mutating={mutatingGladiator}
+              onSelectGladiator={setMutationGladiatorId}
+              onSelectStat={setMutationStatKey}
+              onSelectMode={setMutationMode}
+              onMutate={mutateGladiator}
+              onInspect={setInspectedGladiator}
+            />
           </>
         )}
 
@@ -8378,6 +8772,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
             temporaryTitle={temporaryTitles.get(inspectedGladiator.id) ?? null}
             legacy={gladiatorLegacies.get(inspectedGladiator.id) ?? null}
             scars={gladiatorBattleScars.filter((scar) => scar.gladiator_id === inspectedGladiator.id)}
+            mutations={gladiatorMutations.filter((mutation) => mutation.gladiator_id === inspectedGladiator.id)}
             onClose={() => setInspectedGladiator(null)}
           />
         )}
