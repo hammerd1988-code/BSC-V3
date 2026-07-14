@@ -1860,6 +1860,13 @@ async function runtimeStatus(supabase: SupabaseClient) {
   };
 }
 
+// Escape Postgres LIKE/ILIKE wildcards so a user-supplied search term cannot
+// change query semantics. Backslashes are removed because they are not
+// interpreted as escape characters unless an explicit ESCAPE clause is set.
+function sanitizeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, '');
+}
+
 export function registerCasperControlRoutes(app: Express, supabase: SupabaseClient, casperMemory: any) {
   // Public diagnostic endpoint. Reports whether the server's Supabase
   // configuration matches the project that issued the bearer token (if one
@@ -2770,7 +2777,7 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
 
       if (VALID_MEMORY_TYPES.includes(type)) query = query.eq('memory_type', type);
       if (pinnedOnly) query = query.eq('pinned', true);
-      if (q) query = query.ilike('content', `%${q}%`);
+      if (q) query = query.ilike('content', `%${sanitizeLikePattern(q)}%`);
 
       const { data, error, count } = await query;
       if (error) throw error;
@@ -2891,7 +2898,9 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       if (!profile) return;
       const { ids } = req.body ?? {};
       if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ success: false, error: 'ids array is required.' });
-      const validIds = ids.filter((id: unknown) => typeof id === 'string' && isUuid(id));
+      const validIds = ids
+        .filter((id: unknown) => typeof id === 'string' && isUuid(id))
+        .slice(0, 100);
       if (validIds.length === 0) return res.status(400).json({ success: false, error: 'No valid ids.' });
       const { data, error } = await supabase.from('casper_memories').select('id, user_id').in('id', validIds);
       if (error) throw error;
