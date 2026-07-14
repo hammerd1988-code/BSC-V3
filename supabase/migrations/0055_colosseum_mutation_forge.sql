@@ -181,7 +181,15 @@ begin
   ) then
     create publication supabase_realtime;
   end if;
+
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'gladiator_mutations'
+  ) then
+    alter publication supabase_realtime add table public.gladiator_mutations;
+  end if;
 end
 $$;
-
-alter publication supabase_realtime add table public.gladiator_mutations;
