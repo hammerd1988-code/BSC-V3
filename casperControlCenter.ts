@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getServerSupabaseHost } from './serverSupabase.js';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import {
   generateServerText,
   generateServerToolTurn,
@@ -365,6 +365,29 @@ export async function resolveCasperAuth(req: Request, supabase: SupabaseClient):
  * of an Express request. Used by non-HTTP entrypoints (e.g. the Socket.IO
  * relay) that need to verify a session and resolve the operator profile.
  */
+async function resolveProfileFromCliToken(supabase: SupabaseClient, token: string): Promise<CasperProfile | null> {
+  try {
+    const hash = createHash('sha256').update(token).digest('hex');
+    const { data: device, error: deviceError } = await supabase
+      .from('casper_cli_devices')
+      .select('user_id, revoked')
+      .eq('token_hash', hash)
+      .maybeSingle();
+    if (deviceError || !device || device.revoked) return null;
+
+    const { data: profile, error: profileError } = await supabase
+      .from('users')
+      .select('id, auth_uid, username, display_name, role')
+      .eq('id', device.user_id)
+      .maybeSingle();
+    if (profileError || !profile) return null;
+    return profile as CasperProfile;
+  } catch (e) {
+    console.warn('[casper-control:auth] CLI token resolution failed:', e);
+    return null;
+  }
+}
+
 export async function resolveCasperAuthFromToken(
   token: string | null | undefined,
   supabase: SupabaseClient,
@@ -375,6 +398,12 @@ export async function resolveCasperAuthFromToken(
 
   const { data: authData, error: authError } = await supabase.auth.getUser(token);
   if (authError || !authData.user) {
+    // Fall back to a Casper CLI relay token so linked machines can call
+    // REST endpoints (memory, context) without a Supabase JWT.
+    const cliProfile = await resolveProfileFromCliToken(supabase, token);
+    if (cliProfile) {
+      return { ok: true, profile: cliProfile };
+    }
     const serverHost = getServerSupabaseHost();
     const { issuerHost, projectRef } = decodeJwtIssuer(token);
     const underlying = authError?.message || 'no_user_returned';
@@ -577,6 +606,22 @@ async function fetchNetworkSnapshot(supabase: SupabaseClient): Promise<string> {
   }
 }
 
+async function getUserContextNote(supabase: SupabaseClient, userId?: string | null): Promise<string | null> {
+  if (!isUuid(userId)) return null;
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('context_note')
+      .eq('id', userId)
+      .maybeSingle();
+    if (error || !data?.context_note) return null;
+    return String(data.context_note).trim();
+  } catch (e) {
+    console.warn('[casper-control] context note unavailable:', e);
+    return null;
+  }
+}
+
 // Surface-specific persona modules. These are appended to the base Casper
 // system prompt so the same model+endpoint can speak with the appropriate
 // expertise depending on which UI the operator is invoking him from.
@@ -736,6 +781,7 @@ async function buildCasperSystemPrompt(supabase: SupabaseClient, casperMemory: a
   let relevantMemories = '';
   let conversationHistory = '';
   let workspaceHistory = '';
+  const contextNote = await getUserContextNote(supabase, userId);
 
   try {
     if (casperMemory) {
@@ -781,6 +827,9 @@ ${personalityModule()}
 
 Cognitive core configuration:
 ${formatJsonBlock(core)}
+
+Permanent user context note:
+${contextNote ? `--- USER CONTEXT NOTE ---\n${contextNote}\n---\n` : 'No user context note set.'}
 
 Live state:
 ${stateModifier || 'No live state modifier available.'}
@@ -1566,13 +1615,10 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
       casperMemory.storeConversationExchange?.(userId, command, executionText)?.catch?.((err: any) => {
         console.warn('[casper-control] exchange storage failed (non-blocking):', err?.message ?? err);
       });
-      // Extract key facts into long-term memory
+      // Extract key facts (preferences, project/release details, workspace
+      // context, etc.) into long-term memory.
       casperMemory.extractConversationMemory(userId, command, executionText).catch((err: any) => {
         console.warn('[casper-control] memory extraction failed (non-blocking):', err?.message ?? err);
-      });
-      // Extract user preferences for persistent recall
-      casperMemory.extractPreferences?.(userId, command, executionText)?.catch?.((err: any) => {
-        console.warn('[casper-control] preference extraction failed (non-blocking):', err?.message ?? err);
       });
     }
 
@@ -2656,6 +2702,207 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
     } catch (error: any) {
       console.error('[casper-control:task-queue-run]', error);
       res.status(500).json({ success: false, error: error.message || 'Unable to run Casper task queue.' });
+    }
+  });
+
+  // ── Per-user memory management + context note ─────────────────────────────────
+  const VALID_MEMORY_TYPES = ['conversation', 'network', 'mood', 'world', 'workspace', 'preference', 'skill', 'tool_usage', 'exchange', 'context', 'project'];
+
+  app.get('/api/casper/memory-context', async (req, res) => {
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+      const requestedUserId = (req.query.userId as string | undefined) || null;
+      const targetUserId = profile.role === 'admin' && requestedUserId ? requestedUserId : profile.id;
+      const [contextNote, stateModifier, relevantMemories] = await Promise.all([
+        getUserContextNote(supabase, targetUserId),
+        casperMemory ? casperMemory.getStatePromptModifier() : Promise.resolve(''),
+        casperMemory ? casperMemory.getRelevantMemories?.(targetUserId, 15, typeof req.query.q === 'string' ? req.query.q : undefined) : Promise.resolve(''),
+      ]);
+      res.json({ success: true, contextNote: contextNote || '', stateModifier, relevantMemories });
+    } catch (error: any) {
+      console.error('[casper-control:memory-context]', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to fetch memory context.' });
+    }
+  });
+
+  app.put('/api/casper/user/context-note', async (req, res) => {
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+      const { content, userId } = req.body ?? {};
+      const targetUserId = profile.role === 'admin' && userId ? String(userId) : profile.id;
+      if (!isUuid(targetUserId)) {
+        return res.status(400).json({ success: false, error: 'Invalid user id.' });
+      }
+      const note = typeof content === 'string' ? content.trim() || null : null;
+      const { error } = await supabase
+        .from('users')
+        .update({ context_note: note, context_note_updated_at: note ? new Date().toISOString() : null })
+        .eq('id', targetUserId);
+      if (error) throw error;
+      res.json({ success: true, contextNote: note || '' });
+    } catch (error: any) {
+      console.error('[casper-control:context-note]', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to update context note.' });
+    }
+  });
+
+  app.get('/api/casper/memories', async (req, res) => {
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+      const requestedUserId = (req.query.userId as string | undefined) || null;
+      const targetUserId = profile.role === 'admin' && requestedUserId ? requestedUserId : profile.id;
+      const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+      const offset = Math.max(0, Number(req.query.offset) || 0);
+      const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+      const type = typeof req.query.type === 'string' ? req.query.type.trim() : '';
+      const pinnedOnly = req.query.pinned === 'true';
+
+      let query = supabase
+        .from('casper_memories')
+        .select('id, user_id, memory_type, content, importance, tags, context, session_id, pinned, created_at, last_accessed, access_count', { count: 'exact' })
+        .eq('user_id', targetUserId)
+        .order('pinned', { ascending: false })
+        .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1);
+
+      if (VALID_MEMORY_TYPES.includes(type)) query = query.eq('memory_type', type);
+      if (pinnedOnly) query = query.eq('pinned', true);
+      if (q) query = query.ilike('content', `%${q}%`);
+
+      const { data, error, count } = await query;
+      if (error) throw error;
+      res.json({ success: true, memories: data ?? [], total: count ?? 0, offset, limit });
+    } catch (error: any) {
+      console.error('[casper-control:memories:list]', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to list memories.' });
+    }
+  });
+
+  app.post('/api/casper/memories', async (req, res) => {
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+      const { userId, memory_type, content, importance, tags, pinned, context, session_id } = req.body ?? {};
+      const targetUserId = profile.role === 'admin' && userId ? String(userId) : profile.id;
+      const type = (typeof memory_type === 'string' ? memory_type.trim() : 'conversation') as string;
+      if (!VALID_MEMORY_TYPES.includes(type)) {
+        return res.status(400).json({ success: false, error: 'Invalid memory_type.' });
+      }
+      const text = typeof content === 'string' ? content.trim() : '';
+      if (!text) return res.status(400).json({ success: false, error: 'content is required.' });
+      const importanceNum = Math.max(1, Math.min(10, Number(importance) || 5));
+      const tagList = Array.isArray(tags) ? tags.filter((t: unknown) => typeof t === 'string') : [];
+      const { data, error } = await supabase
+        .from('casper_memories')
+        .insert({
+          user_id: targetUserId,
+          memory_type: type,
+          content: text,
+          importance: importanceNum,
+          tags: tagList,
+          pinned: pinned === true,
+          context: context ?? null,
+          session_id: session_id ?? null,
+        })
+        .select('*')
+        .single();
+      if (error) throw error;
+      res.json({ success: true, memory: data });
+    } catch (error: any) {
+      console.error('[casper-control:memories:create]', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to create memory.' });
+    }
+  });
+
+  app.get('/api/casper/memories/:id', async (req, res) => {
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+      const { id } = req.params;
+      if (!isUuid(id)) return res.status(400).json({ success: false, error: 'Invalid id.' });
+      const { data, error } = await supabase.from('casper_memories').select('*').eq('id', id).maybeSingle();
+      if (error) throw error;
+      if (!data) return res.status(404).json({ success: false, error: 'Memory not found.' });
+      if (data.user_id !== profile.id && profile.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'Forbidden.' });
+      }
+      res.json({ success: true, memory: data });
+    } catch (error: any) {
+      console.error('[casper-control:memories:get]', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to fetch memory.' });
+    }
+  });
+
+  app.patch('/api/casper/memories/:id', async (req, res) => {
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+      const { id } = req.params;
+      if (!isUuid(id)) return res.status(400).json({ success: false, error: 'Invalid id.' });
+      const existing = await supabase.from('casper_memories').select('id, user_id').eq('id', id).maybeSingle();
+      if (existing.error) throw existing.error;
+      if (!existing.data) return res.status(404).json({ success: false, error: 'Memory not found.' });
+      if (existing.data.user_id !== profile.id && profile.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'Forbidden.' });
+      }
+      const { content, importance, tags, pinned } = req.body ?? {};
+      const updates: Record<string, any> = {};
+      if (typeof content === 'string') updates.content = content.trim();
+      if (typeof importance === 'number') updates.importance = Math.max(1, Math.min(10, importance));
+      if (Array.isArray(tags)) updates.tags = tags.filter((t: unknown) => typeof t === 'string');
+      if (typeof pinned === 'boolean') updates.pinned = pinned;
+      if (Object.keys(updates).length === 0) return res.status(400).json({ success: false, error: 'No fields to update.' });
+      const { data, error } = await supabase.from('casper_memories').update(updates).eq('id', id).select('*').single();
+      if (error) throw error;
+      res.json({ success: true, memory: data });
+    } catch (error: any) {
+      console.error('[casper-control:memories:patch]', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to update memory.' });
+    }
+  });
+
+  app.delete('/api/casper/memories/:id', async (req, res) => {
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+      const { id } = req.params;
+      if (!isUuid(id)) return res.status(400).json({ success: false, error: 'Invalid id.' });
+      const existing = await supabase.from('casper_memories').select('id, user_id').eq('id', id).maybeSingle();
+      if (existing.error) throw existing.error;
+      if (!existing.data) return res.status(404).json({ success: false, error: 'Memory not found.' });
+      if (existing.data.user_id !== profile.id && profile.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'Forbidden.' });
+      }
+      const { error } = await supabase.from('casper_memories').delete().eq('id', id);
+      if (error) throw error;
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('[casper-control:memories:delete]', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to delete memory.' });
+    }
+  });
+
+  app.post('/api/casper/memories/bulk-delete', async (req, res) => {
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+      const { ids } = req.body ?? {};
+      if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ success: false, error: 'ids array is required.' });
+      const validIds = ids.filter((id: unknown) => typeof id === 'string' && isUuid(id));
+      if (validIds.length === 0) return res.status(400).json({ success: false, error: 'No valid ids.' });
+      const { data, error } = await supabase.from('casper_memories').select('id, user_id').in('id', validIds);
+      if (error) throw error;
+      const allowedIds = (data ?? []).filter((m: any) => m.user_id === profile.id || profile.role === 'admin').map((m: any) => m.id);
+      if (allowedIds.length === 0) return res.status(403).json({ success: false, error: 'Forbidden.' });
+      const { error: delError } = await supabase.from('casper_memories').delete().in('id', allowedIds);
+      if (delError) throw delError;
+      res.json({ success: true, deleted: allowedIds.length });
+    } catch (error: any) {
+      console.error('[casper-control:memories:bulk-delete]', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to delete memories.' });
     }
   });
 

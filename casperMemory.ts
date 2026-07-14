@@ -10,7 +10,7 @@ function stripCodeFences(text: string): string {
 export type CasperMemoryType =
   | 'conversation' | 'network' | 'mood' | 'world'
   | 'workspace' | 'preference' | 'skill' | 'tool_usage'
-  | 'exchange';
+  | 'exchange' | 'context' | 'project';
 
 // Define the shape of Casper's memory and state
 export interface CasperMemory {
@@ -88,18 +88,43 @@ export class CasperMemorySystem {
    */
   async extractConversationMemory(userId: string, userMessage: string, casperReply: string): Promise<void> {
     try {
-      const prompt = `Analyze this exchange between a user and CASPER. Extract any important facts, preferences, or topics discussed that CASPER should remember for future interactions with this specific user. Be concise. If nothing is worth remembering, reply with "NONE".\n\nUser: "${userMessage}"\nCASPER: "${casperReply}"`;
-      
-      const extraction = await this.generateAIText(prompt, 'You are an analytical engine summarizing key facts for a memory system. Return ONLY the facts, or "NONE".');
-      
-      if (extraction && extraction.trim() !== 'NONE' && extraction.trim() !== '') {
-        // Determine importance (1-10)
-        const importancePrompt = `Rate the importance of remembering this fact about a user on a scale of 1 to 10 (1 = trivial, 10 = critical personal detail or core belief). Return ONLY the number.\n\nFact: "${extraction}"`;
-        const importanceStr = await this.generateAIText(importancePrompt, 'You are an analytical engine. Return only a number between 1 and 10.');
-        const importance = parseInt(importanceStr.trim()) || 5;
+      const prompt = `Analyze this exchange between a user and CASPER. Extract any important facts, preferences, project/release details, or topics discussed that CASPER should remember for future interactions with this specific user.
 
-        await this.storeMemory('conversation', extraction, importance, userId);
-        console.log(`[Casper Memory] Stored conversation memory for user ${userId} (Importance: ${importance})`);
+Return ONLY a JSON object in this exact shape (no markdown fences, no extra text):
+{
+  "facts": [
+    { "type": "conversation|preference|project|workspace", "content": "concise fact", "importance": 1-10, "tags": ["tag1", "tag2"] }
+  ]
+}
+
+If nothing is worth remembering, return: { "facts": [] }
+
+Classify as:
+- "preference" for user likes, style, goals, communication preferences
+- "project" for repos, releases, versions, builds, or active work
+- "workspace" for directories, tools, environments, or workflows
+- "conversation" for general facts about what was discussed
+
+User: "${userMessage}"
+CASPER: "${casperReply}"`;
+
+      const extraction = await this.generateAIText(prompt, 'You are an analytical engine extracting structured facts for a memory system. Return only valid JSON.');
+
+      if (!extraction || extraction.trim() === '' || extraction.trim() === 'NONE') return;
+
+      const parsed = JSON.parse(stripCodeFences(extraction));
+      if (!Array.isArray(parsed.facts)) return;
+
+      for (const fact of parsed.facts.slice(0, 5)) {
+        const type = (fact.type || 'conversation') as CasperMemoryType;
+        const content = String(fact.content || '').trim();
+        const importance = Math.max(1, Math.min(10, Number(fact.importance) || 5));
+        const tags = Array.isArray(fact.tags) ? fact.tags.filter((t: unknown) => typeof t === 'string') : [];
+        if (!content || content.length < 5) continue;
+        if (!['conversation','preference','project','workspace','skill','tool_usage'].includes(type)) continue;
+
+        await this.storeMemory(type, content, importance, userId, tags);
+        console.log(`[Casper Memory] Stored ${type} memory for user ${userId} (Importance: ${importance})`);
       }
     } catch (e) {
       console.error('[Casper Memory] Error extracting conversation memory:', e);

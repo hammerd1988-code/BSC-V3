@@ -193,7 +193,7 @@ function resolveCasperModel(model: string, customModelId: string) {
   return model;
 }
 
-function initialCasperCore(settings: any) {
+function initialCasperCore(settings: any, contextNote?: string | null) {
   const modelValue = casperModelSelectValue(settings?.model);
   // Temperature lives in users.ai_settings.temperature. Don't coerce
   // null/undefined to 0 — Number(null) === 0 would silently move the
@@ -222,6 +222,7 @@ function initialCasperCore(settings: any) {
     customModelId: modelValue === 'custom_model' ? settings?.model || '' : '',
     temperature,
     systemPromptOverride: settings?.systemPromptOverride || settings?.system_prompt_override || settings?.systemPrompt || '',
+    contextNote: contextNote || settings?.contextNote || settings?.context_note || '',
     maxToolRounds,
   };
 }
@@ -428,7 +429,7 @@ export const Casper: React.FC = () => {
   const [showAiCore, setShowAiCore] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [savingAiCore, setSavingAiCore] = useState(false);
-  const [aiCoreForm, setAiCoreForm] = useState(() => initialCasperCore(currentUser?.ai_settings));
+  const [aiCoreForm, setAiCoreForm] = useState(() => initialCasperCore(currentUser?.ai_settings, currentUser?.context_note));
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -578,8 +579,8 @@ export const Casper: React.FC = () => {
   useEffect(() => {
     const nextSettings = currentUser?.ai_settings || {};
     setAiSettings(nextSettings);
-    setAiCoreForm(initialCasperCore(nextSettings));
-  }, [currentUser?.id, currentUser?.ai_settings]);
+    setAiCoreForm(initialCasperCore(nextSettings, currentUser?.context_note));
+  }, [currentUser?.id, currentUser?.ai_settings, currentUser?.context_note]);
 
   const authFetch = useCallback((url: string, options: RequestInit = {}) => casperAuthFetch(url, options), []);
 
@@ -781,7 +782,10 @@ export const Casper: React.FC = () => {
         delete nextSettings.max_tool_rounds;
       }
 
-      const { error } = await supabase.from('users').update({ ai_settings: nextSettings }).eq('id', currentUser.id);
+      const { error } = await supabase
+        .from('users')
+        .update({ ai_settings: nextSettings, context_note: aiCoreForm.contextNote.trim() || null })
+        .eq('id', currentUser.id);
       if (error) throw error;
       setAiSettings(nextSettings);
       setShowAiCore(false);
@@ -2026,6 +2030,26 @@ export const Casper: React.FC = () => {
                   <span>0.7 · balanced</span>
                   <span>2 · wild</span>
                 </div>
+              </div>
+
+              {/* Per-user context note — always prepended at the start of
+                  every Casper conversation, before surface persona and
+                  memory retrieval. Use it for ongoing projects, releases,
+                  goals, or anything Casper should never lose track of. */}
+              <div className="mt-5">
+                <label className="block text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500 mb-2 ml-1">Context Note (Conversation Opener)</label>
+                <textarea
+                  value={aiCoreForm.contextNote}
+                  onChange={(e) => setAiCoreForm((prev) => ({ ...prev, contextNote: e.target.value }))}
+                  placeholder="e.g. I just shipped casper-cli v0.1.1. Always remember I am building the BSC V3 platform and prefer terse, command-style responses."
+                  rows={3}
+                  className="w-full resize-y bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-cyan-500/50 transition-all"
+                />
+                <p className="mt-1 text-[10px] leading-relaxed text-zinc-500">
+                  Prepended at the start of every Casper conversation before
+                  the surface persona and memory retrieval. Use it for
+                  active projects, releases, and long-term goals.
+                </p>
               </div>
 
               {/* System prompt override — appended to the surface persona
