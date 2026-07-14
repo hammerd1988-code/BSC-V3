@@ -118,6 +118,10 @@ begin
 
   v_old_value := greatest(1, least(100, coalesce(nullif(v_gladiator.stats->>p_stat_key, '')::integer, 50)));
 
+  if p_mutation_mode = 'graft' and v_old_value >= 100 then
+    raise exception 'Selected stat is already perfected';
+  end if;
+
   if p_mutation_mode = 'graft' then
     v_new_value := least(100, v_old_value + 3);
   else
