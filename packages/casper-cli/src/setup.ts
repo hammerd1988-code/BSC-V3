@@ -87,8 +87,11 @@ async function choose<T extends { label: string }>(
   }
   console.log(`    q) Skip / cancel`);
   const answer = await ask(queue, chalk.dim('  Select: '));
-  if (answer.toLowerCase() === 'q' || answer === '') {
+  if (answer.toLowerCase() === 'q') {
     return null;
+  }
+  if (answer === '') {
+    return items[defaultIndex];
   }
   const n = parseInt(answer, 10);
   if (Number.isNaN(n) || n < 1 || n > items.length) {
@@ -134,6 +137,7 @@ async function detectLocalProviders(): Promise<LocalProvider[]> {
 function hasLlmConfig(): boolean {
   if (getConfig('preferLocalLlm') && getConfig('localLlmUrl')) return true;
   if (getConfig('openaiApiKey')) return true;
+  if (process.env.OPENAI_API_KEY) return true;
   return false;
 }
 
