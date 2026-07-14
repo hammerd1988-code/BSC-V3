@@ -36,7 +36,10 @@ describe('Colosseum Mutation Forge', () => {
     expect(migration).toContain('mutate_colosseum_gladiator');
     expect(migration).toContain('arena_user.auth_uid = auth.uid()');
     expect(migration).toContain("v_last_mutation_at > now() - interval '6 hours'");
-    expect(migration).toContain("coalesce(arena_match.status, 'pending') not in ('complete', 'failed', 'cancelled')");
+    expect(migration).toContain("p_gladiator_id text");
+    expect(migration).toContain('gladiator_id text not null references public.gladiators(id)');
+    expect(migration).toContain('user_id text not null references public.users(id)');
+    expect(migration).toContain("arena_match.completed_at is null");
     expect(migration).toContain('v_gladiator.cred < v_cost');
     expect(migration).toContain('revoke update on public.gladiators from authenticated');
   });
