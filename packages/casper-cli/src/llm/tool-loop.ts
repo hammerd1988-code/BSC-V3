@@ -7,6 +7,7 @@ import { isDestructive, confirmAction } from '../utils/security.js';
 import { detectProjectContext } from '../context.js';
 import { loadProjectInstructions } from '../init.js';
 import { getPluginToolSpecs, isPluginTool, extractPluginName, loadPlugin } from '../plugins/index.js';
+import { fetchMemoryContext, formatMemoryContext } from '../memory.js';
 import chalk from 'chalk';
 
 const MAX_TOOL_ROUNDS = 10;
@@ -71,6 +72,8 @@ export interface ToolLoopOptions {
   confirm?: (detail: string, context?: { type: 'shell' | 'plugin'; toolName: string }) => Promise<boolean>;
   /** Inject project context into the system prompt. Defaults to true. */
   projectContext?: boolean;
+  /** Fetch BSC memory context (permanent note + relevant memories). Defaults to true. */
+  bscMemory?: boolean;
 }
 
 interface AccumulatedToolCall {
@@ -147,6 +150,15 @@ export async function runToolLoop(
 
   // Build system prompt, optionally enriched with project context and instructions.
   let systemPrompt = `${CASPER_SYSTEM_PROMPT}\n\n${buildEnvironmentPrompt()}`;
+  if (opts.bscMemory !== false) {
+    const bscMemory = await fetchMemoryContext().catch(() => null);
+    if (bscMemory) {
+      const formatted = formatMemoryContext(bscMemory);
+      if (formatted.trim()) {
+        systemPrompt += `\n\n--- BSC MEMORY CONTEXT ---\n${formatted}`;
+      }
+    }
+  }
   if (opts.projectContext !== false) {
     const ctx = detectProjectContext();
     if (ctx) {
