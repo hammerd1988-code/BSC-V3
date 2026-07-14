@@ -153,6 +153,7 @@ export interface User {
   friends?: string[];
   friend_requests?: any[] | null;
   ai_settings?: AiSettings | null;
+  context_note?: string | null;
   status_message?: string;
   // Engagement + profile customization
   current_streak?: number;

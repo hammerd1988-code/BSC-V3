@@ -142,9 +142,9 @@ async function startServer() {
     try {
       const { userId, userMessage, casperReply } = req.body;
       if (casperMemory && userId && userMessage && casperReply) {
+        // Store the full exchange and extract facts (preferences, project/release, workspace context).
         casperMemory.storeConversationExchange?.(userId, userMessage, casperReply)?.catch?.(() => {});
         await casperMemory.extractConversationMemory(userId, userMessage, casperReply);
-        casperMemory.extractPreferences?.(userId, userMessage, casperReply)?.catch?.(() => {});
       }
       res.json({ success: true });
     } catch (error) {

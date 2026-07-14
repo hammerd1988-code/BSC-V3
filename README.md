@@ -160,6 +160,16 @@ source ./scripts/mimo-env.sh          # load MIMO_* into current shell
 
 The Anthropic-compatible endpoint `token-plan-sgp.xiaomimimo.com/anthropic` returns 401 for the current key — it needs a separate token-plan subscription. Until that is provisioned, Mimo cannot be used as a Claude-Code backend; it stays as an OpenAI-compatible provider.
 
+## Deployment
+
+This project is deployed on **Railway**.
+
+- Build command: `npm install && npm run build`
+- Start command: `npm run start:unified`
+- Healthcheck: `GET /api/health`
+
+Vercel is only used as the domain registrar and is not the production deployment platform for BSC-V3.
+
 ## Architecture notes
 
 The app now uses native Supabase APIs across auth, database, storage, and realtime flows.
