@@ -10,6 +10,7 @@ import { listSessions, deleteSession } from './sessions.js';
 import { orchestrate } from './swarm/index.js';
 import { pluginList, pluginInfo, pluginInit, pluginRemove } from './plugins/index.js';
 import { runSettings, printAllSettings } from './settings.js';
+import { fetchMemoryContext, listMemories, addMemory, getMemory, updateMemory, deleteMemory, bulkDeleteMemories, setContextNote, formatMemory, formatMemoryContext } from './memory.js';
 import chalk from 'chalk';
 
 const VERSION = '0.1.1';
@@ -182,6 +183,166 @@ session
       console.log(chalk.green(`  Deleted session: ${id}`));
     } else {
       console.log(chalk.yellow(`  Session not found: ${id}`));
+    }
+  });
+
+// Memory management bridge (syncs with the web Casper memory store)
+const memory = program.command('memory').description('Manage Casper memories stored in your BSC account');
+
+memory
+  .command('list')
+  .description('List your Casper memories')
+  .option('--type <type>', 'Filter by memory type')
+  .option('--pinned', 'Only pinned memories')
+  .option('--search <query>', 'Search memory content')
+  .option('--limit <n>', 'Max results', '50')
+  .option('--offset <n>', 'Pagination offset', '0')
+  .action(async (opts) => {
+    try {
+      const res = await listMemories({
+        q: opts.search,
+        type: opts.type,
+        pinned: opts.pinned,
+        limit: parseInt(opts.limit, 10),
+        offset: parseInt(opts.offset, 10),
+      });
+      if (res.memories.length === 0) {
+        console.log(chalk.dim('  No memories found.'));
+        return;
+      }
+      for (const memory of res.memories) {
+        console.log(formatMemory(memory));
+        console.log();
+      }
+      console.log(chalk.dim(`  ${res.total} total · showing ${res.offset + 1}-${res.offset + res.memories.length}`));
+    } catch (e: any) {
+      console.error(chalk.red(`  ✗ ${e.message}`));
+      process.exit(1);
+    }
+  });
+
+memory
+  .command('add <content...>')
+  .description('Add a memory to your Casper account')
+  .option('--type <type>', 'Memory type', 'preference')
+  .option('--importance <n>', 'Importance 1-10', '7')
+  .option('--tags <tags>', 'Comma-separated tags')
+  .option('--pinned', 'Pin the memory', false)
+  .action(async (contentArr, opts) => {
+    try {
+      const content = contentArr.join(' ');
+      const tags = opts.tags ? String(opts.tags).split(',').map((t: string) => t.trim()).filter(Boolean) : [];
+      const res = await addMemory({
+        content,
+        memory_type: opts.type,
+        importance: parseInt(opts.importance, 10),
+        tags,
+        pinned: opts.pinned,
+      });
+      console.log(chalk.green(`  ✓ Memory added: ${res.memory.id}`));
+    } catch (e: any) {
+      console.error(chalk.red(`  ✗ ${e.message}`));
+      process.exit(1);
+    }
+  });
+
+memory
+  .command('show <id>')
+  .description('Show a single memory')
+  .action(async (id) => {
+    try {
+      const res = await getMemory(id);
+      console.log(formatMemory(res.memory));
+    } catch (e: any) {
+      console.error(chalk.red(`  ✗ ${e.message}`));
+      process.exit(1);
+    }
+  });
+
+memory
+  .command('rm <id>')
+  .description('Delete a memory by id')
+  .action(async (id) => {
+    try {
+      await deleteMemory(id);
+      console.log(chalk.green(`  ✓ Deleted memory ${id}`));
+    } catch (e: any) {
+      console.error(chalk.red(`  ✗ ${e.message}`));
+      process.exit(1);
+    }
+  });
+
+memory
+  .command('rm-batch <ids...>')
+  .description('Delete multiple memories by id')
+  .action(async (ids) => {
+    try {
+      const res = await bulkDeleteMemories(ids);
+      console.log(chalk.green(`  ✓ Deleted ${res.deleted} memories`));
+    } catch (e: any) {
+      console.error(chalk.red(`  ✗ ${e.message}`));
+      process.exit(1);
+    }
+  });
+
+memory
+  .command('pin <id>')
+  .description('Toggle pin on a memory')
+  .action(async (id) => {
+    try {
+      const existing = await getMemory(id);
+      const next = !existing.memory.pinned;
+      await updateMemory(id, { pinned: next });
+      console.log(chalk.green(`  ✓ Memory ${next ? 'pinned' : 'unpinned'}`));
+    } catch (e: any) {
+      console.error(chalk.red(`  ✗ ${e.message}`));
+      process.exit(1);
+    }
+  });
+
+memory
+  .command('context')
+  .description('Show the BSC memory context that gets prepended to every Casper conversation')
+  .action(async () => {
+    try {
+      const ctx = await fetchMemoryContext();
+      if (!ctx) {
+        console.log(chalk.dim('  No memory context available (not linked or unreachable).'));
+        return;
+      }
+      console.log(formatMemoryContext(ctx));
+    } catch (e: any) {
+      console.error(chalk.red(`  ✗ ${e.message}`));
+      process.exit(1);
+    }
+  });
+
+memory
+  .command('set-context <note...>')
+  .description('Set your permanent Casper context note')
+  .action(async (noteArr) => {
+    try {
+      const note = noteArr.join(' ');
+      const res = await setContextNote(note);
+      console.log(chalk.green(`  ✓ Context note saved (${res.contextNote.length} chars)`));
+    } catch (e: any) {
+      console.error(chalk.red(`  ✗ ${e.message}`));
+      process.exit(1);
+    }
+  });
+
+// Quick context-note shorthand
+program
+  .command('context <note...>')
+  .description('Set your permanent Casper context note (shorthand for `casper memory set-context`)')
+  .action(async (noteArr) => {
+    try {
+      const note = noteArr.join(' ');
+      const res = await setContextNote(note);
+      console.log(chalk.green(`  ✓ Context note saved (${res.contextNote.length} chars)`));
+    } catch (e: any) {
+      console.error(chalk.red(`  ✗ ${e.message}`));
+      process.exit(1);
     }
   });
 
