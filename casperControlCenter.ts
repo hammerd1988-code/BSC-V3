@@ -2857,7 +2857,11 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       }
       const { content, importance, tags, pinned } = req.body ?? {};
       const updates: Record<string, any> = {};
-      if (typeof content === 'string') updates.content = content.trim();
+      if (typeof content === 'string') {
+        const trimmed = content.trim();
+        if (!trimmed) return res.status(400).json({ success: false, error: 'content cannot be empty.' });
+        updates.content = trimmed;
+      }
       if (typeof importance === 'number') updates.importance = Math.max(1, Math.min(10, importance));
       if (Array.isArray(tags)) updates.tags = tags.filter((t: unknown) => typeof t === 'string');
       if (typeof pinned === 'boolean') updates.pinned = pinned;
