@@ -11,7 +11,8 @@ import { discoverPlugins } from './plugins/index.js';
 
 export interface ReplOptions {
   model: string;
-  preferLocal: boolean;
+  preferLocal?: boolean;
+  localLlmUrl?: string;
   resume?: string;
 }
 
@@ -156,6 +157,8 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     try {
       const response = await runToolLoop(conversationHistory, {
         model: opts.model,
+        preferLocal: opts.preferLocal,
+        localLlmUrl: opts.localLlmUrl,
         tools: LOCAL_TOOL_SPECS,
         onToken: (token) => {
           if (firstToken) {

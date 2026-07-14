@@ -64,6 +64,10 @@ function buildEnvironmentPrompt(): string {
 
 export interface ToolLoopOptions {
   model?: string;
+  /** Prefer a local LLM for this run. */
+  preferLocal?: boolean;
+  /** Override the configured local LLM base URL for this run. */
+  localLlmUrl?: string;
   tools: ToolSpec[];
   onToken?: (text: string) => void;
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
@@ -146,7 +150,10 @@ export async function runToolLoop(
   messages: ChatMessage[],
   opts: ToolLoopOptions,
 ): Promise<string> {
-  const client = createLlmClient();
+  const client = createLlmClient({
+    preferLocal: opts.preferLocal,
+    localLlmUrl: opts.localLlmUrl,
+  });
 
   // Build system prompt, optionally enriched with project context and instructions.
   let systemPrompt = `${CASPER_SYSTEM_PROMPT}\n\n${buildEnvironmentPrompt()}`;
