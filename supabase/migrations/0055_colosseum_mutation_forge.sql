@@ -195,5 +195,5 @@ begin
   ) then
     alter publication supabase_realtime add table public.gladiator_mutations;
   end if;
-end
+end;
 $$;
