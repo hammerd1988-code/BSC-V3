@@ -138,9 +138,12 @@ add_to_path() {
       added=1
     fi
   done
-  if [[ -d "$HOME/.config/fish" ]] && [[ ! -e "$HOME/.config/fish/config.fish" || ! $(grep -F "fish_add_path $dir" "$HOME/.config/fish/config.fish" 2>/dev/null) ]]; then
-    echo "fish_add_path $dir" >> "$HOME/.config/fish/config.fish"
-    added=1
+  if [[ -d "$HOME/.config/fish" ]]; then
+    local fish_config="$HOME/.config/fish/config.fish"
+    if [[ ! -e "$fish_config" ]] || ! grep -qF "fish_add_path $dir" "$fish_config" 2>/dev/null; then
+      echo "fish_add_path $dir" >> "$fish_config"
+      added=1
+    fi
   fi
   return $added
 }
