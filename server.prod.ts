@@ -78,7 +78,7 @@ async function startServer() {
     const origin = req.headers.origin;
     if (origin && allowedOrigins.includes(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key');
       res.setHeader('Access-Control-Allow-Credentials', 'true');
     }
