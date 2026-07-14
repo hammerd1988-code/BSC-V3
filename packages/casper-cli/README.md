@@ -4,17 +4,31 @@
 
 ## Installation
 
+### One-liner (standalone binary, no Node.js required)
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/hammerd1988-code/BSC-V3/main/packages/casper-cli/scripts/install.ps1 | iex
+```
+
+**macOS / Linux:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hammerd1988-code/BSC-V3/main/packages/casper-cli/scripts/install.sh | bash
+```
+
+The script detects your platform, downloads the latest release from
+[GitHub releases](https://github.com/hammerd1988-code/BSC-V3/releases), and
+installs `casper` to a directory on your `PATH`.
+
 ### From npm
 
 ```bash
 npm install -g @bsc/casper-cli
 ```
 
-### Standalone Binary (no Node.js required)
-
-Download the prebuilt binary for your platform from the
-[releases page](https://github.com/hammerd1988-code/BSC-V3/releases), or build
-from source:
+### Build from source
 
 ```bash
 cd packages/casper-cli
@@ -28,14 +42,17 @@ Binaries are written to `bin/dist/`:
 - `casper-macos-arm64` — macOS Apple Silicon
 - `casper-win-x64.exe` — Windows x64
 
-Move the appropriate binary to a directory on your `PATH` and rename it to
-`casper` (or `casper.exe` on Windows).
-
 ## Quick Start
 
+The first time you run Casper it will walk you through choosing an LLM provider
+and entering your API key or connecting to a local model.
+
 ```bash
-# Interactive chat
+# Interactive chat (starts guided setup if not configured)
 casper
+
+# Guided setup at any time
+casper setup
 
 # One-shot command
 casper exec "run the tests and fix any failures"
@@ -47,16 +64,21 @@ casper ask "what's in my git stash?"
 ## Configuration
 
 ```bash
-# Set your OpenAI API key
+# Interactive wizard — recommended for first-time setup
+casper setup
+
+# Manual config
 casper config set openaiApiKey sk-...
+casper config set model gpt-4.1-mini
 
 # Or use a local LLM (LM Studio / Ollama)
 casper config set localLlmUrl http://localhost:1234/v1
 casper config set preferLocalLlm true
-
-# Set preferred model
-casper config set model gpt-4.1-mini
+casper config set model <model-id>
 ```
+
+`casper setup` will auto-detect LM Studio or Ollama at `http://localhost:1234/v1`
+and `http://localhost:11434/v1` and let you pick from the available models.
 
 ## Daemon Mode (Phase 1B)
 

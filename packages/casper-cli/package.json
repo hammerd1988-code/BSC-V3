@@ -4,12 +4,12 @@
   "description": "Casper AI agent CLI — local shell access, daemon mode, and remote orchestration for Blood Sweat Code",
   "type": "module",
   "bin": {
-    "casper": "./dist/bin/casper.js"
+    "casper": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "start": "node dist/bin/casper.js",
+    "start": "node dist/index.js",
     "lint": "tsc --noEmit",
     "bundle": "node scripts/bundle.mjs",
     "package": "node scripts/package.mjs",
