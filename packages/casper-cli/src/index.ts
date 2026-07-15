@@ -10,6 +10,7 @@ import { listSessions, deleteSession } from './sessions.js';
 import { orchestrate } from './swarm/index.js';
 import { pluginList, pluginInfo, pluginInit, pluginRemove } from './plugins/index.js';
 import { runSettings, printAllSettings } from './settings.js';
+import { runSetup, ensureConfigured } from './setup.js';
 import { fetchMemoryContext, listMemories, addMemory, getMemory, updateMemory, deleteMemory, bulkDeleteMemories, setContextNote, formatMemory, formatMemoryContext } from './memory.js';
 import chalk from 'chalk';
 
@@ -26,13 +27,15 @@ program
 program
   .command('chat', { isDefault: true })
   .description('Start interactive chat with Casper')
-  .option('--model <model>', 'LLM model to use', 'gpt-4.1-mini')
+  .option('--model <model>', 'LLM model to use')
   .option('--local', 'Prefer local LLM (LM Studio / Ollama)')
   .option('--resume [id]', 'Resume a previous session (use "last" or a session ID)')
   .action(async (opts) => {
+    await ensureConfigured();
     await startRepl({
-      model: opts.model,
-      preferLocal: opts.local ?? false,
+      model: opts.model || getConfig('model') || 'gpt-4.1-mini',
+      preferLocal: opts.local ?? getConfig('preferLocalLlm') ?? false,
+      localLlmUrl: opts.local ? getConfig('localLlmUrl') : undefined,
       resume: opts.resume,
     });
   });
@@ -41,18 +44,30 @@ program
 program
   .command('exec <command>')
   .description('Run a command through Casper (one-shot)')
-  .option('--model <model>', 'LLM model to use', 'gpt-4.1-mini')
+  .option('--model <model>', 'LLM model to use')
+  .option('--local', 'Prefer local LLM (LM Studio / Ollama)')
   .action(async (command, opts) => {
-    await runOnce(command, { model: opts.model });
+    await ensureConfigured();
+    await runOnce(command, {
+      model: opts.model || getConfig('model') || 'gpt-4.1-mini',
+      preferLocal: opts.local ?? getConfig('preferLocalLlm') ?? false,
+      localLlmUrl: opts.local ? getConfig('localLlmUrl') : undefined,
+    });
   });
 
 // Quick question
 program
   .command('ask <question...>')
   .description('Ask Casper a quick question with local context')
-  .option('--model <model>', 'LLM model to use', 'gpt-4.1-mini')
+  .option('--model <model>', 'LLM model to use')
+  .option('--local', 'Prefer local LLM (LM Studio / Ollama)')
   .action(async (question, opts) => {
-    await runOnce(question.join(' '), { model: opts.model });
+    await ensureConfigured();
+    await runOnce(question.join(' '), {
+      model: opts.model || getConfig('model') || 'gpt-4.1-mini',
+      preferLocal: opts.local ?? getConfig('preferLocalLlm') ?? false,
+      localLlmUrl: opts.local ? getConfig('localLlmUrl') : undefined,
+    });
   });
 
 // Daemon management
@@ -142,6 +157,14 @@ program
   .description('Open the interactive settings menu (model, local LLM, API keys, approvals)')
   .action(async () => {
     await runSettings();
+  });
+
+// Guided first-run setup for new users.
+program
+  .command('setup')
+  .description('Guided first-run setup: model, API keys, local LLM (LM Studio / Ollama)')
+  .action(async () => {
+    await runSetup();
   });
 
 // Project initialization
@@ -350,13 +373,14 @@ program
 program
   .command('orchestrate <objective...>')
   .description('Decompose a complex task and run sub-agents in parallel')
-  .option('--model <model>', 'LLM model for agents', 'gpt-4.1-mini')
+  .option('--model <model>', 'LLM model for agents')
   .option('--parallel <n>', 'Max parallel agents (default: 4)', '4')
   .option('--max-tasks <n>', 'Max subtasks to decompose into (default: 10)', '10')
   .option('--dry-run', 'Show the plan without executing')
   .action(async (objective, opts) => {
+    await ensureConfigured();
     await orchestrate(objective.join(' '), {
-      model: opts.model,
+      model: opts.model || getConfig('model') || 'gpt-4.1-mini',
       maxParallel: parseInt(opts.parallel, 10) || 4,
       maxTasks: parseInt(opts.maxTasks, 10) || 10,
       dryRun: opts.dryRun,
@@ -397,4 +421,11 @@ plugin
     pluginRemove(name, { global: opts.global });
   });
 
-program.parse();
+(async () => {
+  try {
+    await program.parseAsync();
+  } catch (err: any) {
+    console.error(chalk.red(`\nError: ${err.message}\n`));
+    process.exit(1);
+  }
+})();

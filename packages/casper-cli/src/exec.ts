@@ -6,6 +6,8 @@ import type { ChatMessage } from './llm/client.js';
 
 export interface ExecOptions {
   model: string;
+  preferLocal?: boolean;
+  localLlmUrl?: string;
 }
 
 /**
@@ -22,6 +24,8 @@ export async function runOnce(command: string, opts: ExecOptions): Promise<void>
   try {
     const response = await runToolLoop(messages, {
       model: opts.model,
+      preferLocal: opts.preferLocal,
+      localLlmUrl: opts.localLlmUrl,
       tools: LOCAL_TOOL_SPECS,
       onToken: (token) => {
         if (firstToken) {
