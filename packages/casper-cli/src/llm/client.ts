@@ -25,6 +25,10 @@ export interface LlmClientOptions {
   model?: string;
   apiKey?: string;
   baseUrl?: string;
+  /** Override the configured local-LLM preference. */
+  preferLocal?: boolean;
+  /** Override the configured local-LLM base URL. */
+  localLlmUrl?: string;
 }
 
 /**
@@ -34,8 +38,8 @@ export interface LlmClientOptions {
  * - Ollama (localhost:11434/v1)
  */
 export function createLlmClient(opts?: LlmClientOptions): OpenAI {
-  const preferLocal = getConfig('preferLocalLlm');
-  const localUrl = getConfig('localLlmUrl');
+  const preferLocal = opts?.preferLocal ?? getConfig('preferLocalLlm');
+  const localUrl = opts?.localLlmUrl ?? getConfig('localLlmUrl');
 
   if (preferLocal && localUrl) {
     return new OpenAI({
@@ -48,7 +52,7 @@ export function createLlmClient(opts?: LlmClientOptions): OpenAI {
   if (!apiKey) {
     throw new Error(
       'No LLM API key configured. Run:\n' +
-      '  casper config set openaiApiKey <your-key>\n' +
+      '  casper setup\n' +
       'Or set OPENAI_API_KEY env var.'
     );
   }
