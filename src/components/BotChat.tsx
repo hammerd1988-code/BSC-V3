@@ -41,6 +41,17 @@ import { getValidSession, authedFetch } from '../lib/authSession';
 import { cn } from '../lib/utils';
 import { useSubscription, type FeatureGateResult } from '../lib/subscription';
 import { UpgradePromptModal } from './UpgradePrompt';
+import {
+  archetypeLabel,
+  getBotVoiceArchetype,
+  getBrowserVoiceArchetype,
+  getRecommendedBrowserVoice,
+  getRecommendedVoice,
+  getVoiceModifiers,
+  getVoicePersonaById,
+  labelForServerVoice,
+  type VoiceArchetype,
+} from '../lib/botVoicePersonas';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -151,23 +162,28 @@ function avatarUrlForBot(gladiator: GladiatorRow, botProfile?: BotProfile | null
   return `https://api.dicebear.com/9.x/bottts-neutral/svg?seed=${seed}&backgroundColor=0a0a0f&size=256`;
 }
 
-const MIMO_VOICE_POOL = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'] as const;
-const PITCH_RANGE = [0.8, 0.9, 1.0, 1.05, 1.1, 1.15] as const;
-const RATE_RANGE = [0.9, 0.95, 1.0, 1.0, 1.05, 1.1] as const;
+const VOICE_PREF_KEY = (botId: string) => `bsc_voice_pref_${botId}`;
 
-function getVoiceSettingsForBot(gladiatorId: string, voices: SpeechSynthesisVoice[]): { voice: SpeechSynthesisVoice | null; pitch: number; rate: number } {
-  const h = hashString(gladiatorId);
-  const english = voices.filter((v) => v.lang.startsWith('en'));
-  const pool = english.length > 0 ? english : voices;
-  const voice = pool.length > 0 ? pool[h % pool.length] : null;
-  const pitch = PITCH_RANGE[h % PITCH_RANGE.length];
-  const rate = RATE_RANGE[(h + 3) % RATE_RANGE.length];
-  return { voice, pitch, rate };
+function loadVoicePreference(
+  botId: string,
+): { provider: string; browserVoiceName?: string | null } | null {
+  try {
+    const raw = localStorage.getItem(VOICE_PREF_KEY(botId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && 'provider' in parsed) {
+      return parsed as { provider: string; browserVoiceName?: string | null };
+    }
+    return { provider: raw, browserVoiceName: null };
+  } catch {
+    return null;
+  }
 }
 
-function getMimoVoiceForBot(gladiatorId: string): string {
-  const h = hashString(gladiatorId);
-  return MIMO_VOICE_POOL[h % MIMO_VOICE_POOL.length];
+function saveVoicePreference(botId: string, provider: string, browserVoiceName?: string | null) {
+  try {
+    localStorage.setItem(VOICE_PREF_KEY(botId), JSON.stringify({ provider, browserVoiceName }));
+  } catch {}
 }
 
 function loadConversations(): Record<string, ConversationMeta> {
@@ -576,6 +592,7 @@ export function BotChat() {
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [ttsEnabled, setTtsEnabled] = useState(true);
+  const [botConfigLoaded, setBotConfigLoaded] = useState(false);
   const recognitionRef = useRef<any>(null);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
@@ -584,7 +601,7 @@ export function BotChat() {
   const [serverVoices, setServerVoices] = useState<ServerVoice[]>([]);
   const [voiceProvider, setVoiceProvider] = useState<string>('browser'); // 'browser' | 'mimo-alloy' | 'openai-ash' etc.
   const mimoAudioRef = useRef<HTMLAudioElement | null>(null);
-  const casperVoiceAppliedRef = useRef<string | null>(null);
+  const botVoiceInitRef = useRef<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -614,33 +631,75 @@ export function BotChat() {
       .then((r) => (r.ok ? r.json() : { voices: [] }))
       .then((data: { voices: ServerVoice[] }) => {
         setServerVoices(data.voices ?? []);
-        // Auto-select Casper's voice if chatting with Casper, else first OpenAI voice
-        const casperVoice = (data.voices ?? []).find((v) => v.tag === 'casper');
-        const openaiVoice = (data.voices ?? []).find((v) => v.provider === 'openai');
-        const mimoVoice = (data.voices ?? []).find((v) => v.provider === 'mimo');
-        if (casperVoice && selectedBot?.name?.toLowerCase() === 'casper') {
-          setVoiceProvider(casperVoice.id);
-        } else if (openaiVoice) {
-          setVoiceProvider(openaiVoice.id);
-        } else if (mimoVoice) {
-          setVoiceProvider(mimoVoice.id);
-        }
       })
       .catch(() => {});
   }, []);
 
-  // Auto-switch to Casper's voice when selecting the Casper bot
+  // Initialize or restore the best voice for the selected bot
   useEffect(() => {
     if (!selectedBot) return;
-    const isCasper = selectedBot.name?.toLowerCase() === 'casper';
-    const casperVoice = serverVoices.find((v) => v.tag === 'casper');
-    if (isCasper && casperVoice && casperVoiceAppliedRef.current !== selectedBot.id) {
-      setVoiceProvider(casperVoice.id);
-      casperVoiceAppliedRef.current = selectedBot.id;
-    } else if (!isCasper && casperVoiceAppliedRef.current) {
-      casperVoiceAppliedRef.current = null;
+    if (!botConfigLoaded) return;
+    if (serverVoices.length === 0 && availableVoices.length === 0) return;
+
+    const saved = loadVoicePreference(selectedBot.id);
+    if (saved) {
+      const isSavedValid =
+        saved.provider === 'browser' || serverVoices.some((v) => v.id === saved.provider);
+      if (isSavedValid) {
+        if (voiceProvider !== saved.provider) {
+          setVoiceProvider(saved.provider);
+        }
+        if (saved.provider === 'browser') {
+          if (saved.browserVoiceName) {
+            const match = availableVoices.find((v) => v.name === saved.browserVoiceName);
+            if (match) {
+              setSelectedVoice(match);
+            } else if (availableVoices.length > 0) {
+              // The saved browser voice is gone; recommend a replacement.
+              const fallback = getRecommendedBrowserVoice(
+                selectedBot,
+                availableVoices,
+                botProfile,
+                forgeConfig,
+              );
+              if (fallback) setSelectedVoice(fallback);
+              saveVoicePreference(selectedBot.id, 'browser', fallback?.name ?? null);
+            }
+          } else if (availableVoices.length > 0) {
+            // No specific browser voice saved; pick the best match.
+            const fallback = getRecommendedBrowserVoice(
+              selectedBot,
+              availableVoices,
+              botProfile,
+              forgeConfig,
+            );
+            if (fallback) setSelectedVoice(fallback);
+          }
+        }
+        botVoiceInitRef.current = selectedBot.id;
+        return;
+      }
+      // Saved preference is stale — clear it and fall through to recommendation
+      try {
+        localStorage.removeItem(VOICE_PREF_KEY(selectedBot.id));
+      } catch {}
     }
-  }, [selectedBot, serverVoices]);
+
+    if (botVoiceInitRef.current === selectedBot.id) return;
+
+    const rec = getRecommendedVoice(selectedBot, serverVoices, botProfile, forgeConfig);
+    setVoiceProvider(rec);
+
+    if (rec === 'browser') {
+      const match = getRecommendedBrowserVoice(selectedBot, availableVoices, botProfile, forgeConfig);
+      if (match) setSelectedVoice(match);
+      saveVoicePreference(selectedBot.id, 'browser', match?.name ?? null);
+    } else {
+      saveVoicePreference(selectedBot.id, rec, null);
+    }
+
+    botVoiceInitRef.current = selectedBot.id;
+  }, [selectedBot, botConfigLoaded, serverVoices, availableVoices, botProfile, forgeConfig, voiceProvider, selectedVoice]);
 
   // Speech-to-text
   const startListening = useCallback(() => {
@@ -681,15 +740,15 @@ export function BotChat() {
   // Text-to-speech — honours the user's voice selection from settings panel
   const speakText = useCallback((text: string) => {
     if (!ttsEnabled || !selectedBot) return;
-    const botId = selectedBot.id;
 
     // Server TTS — route OpenAI voices through /api/tts, Mimo through /api/tts/mimo
     if (voiceProvider !== 'browser') {
       const isOpenAI = voiceProvider.startsWith('openai-');
       const providerVoice = voiceProvider.replace(/^mimo-/, '').replace(/^openai-/, '');
       const isCasperVoice = serverVoices.find((v) => v.id === voiceProvider)?.tag === 'casper';
+      const voiceMods = getVoiceModifiers(voiceProvider, selectedBot, botProfile, forgeConfig);
       const ttsUrl = isOpenAI ? '/api/tts' : '/api/tts/mimo';
-      const ttsSpeed = isCasperVoice ? 1.05 : 1.0;
+      const ttsSpeed = isCasperVoice ? 1.05 : voiceMods.speed;
       setSpeaking(true);
       fetch(ttsUrl, {
         method: 'POST',
@@ -697,7 +756,7 @@ export function BotChat() {
         body: JSON.stringify({ text: text.slice(0, 4096), voice: providerVoice, speed: ttsSpeed }),
       })
         .then((r) => {
-          if (!r.ok) throw new Error(`Mimo TTS ${r.status}`);
+          if (!r.ok) throw new Error(`TTS ${r.status}`);
           return r.blob();
         })
         .then((blob) => {
@@ -711,10 +770,13 @@ export function BotChat() {
         .catch(() => {
           setSpeaking(false);
           // Fallback to browser TTS using selected voice
-          const voice = selectedVoice ?? getVoiceSettingsForBot(botId, availableVoices).voice;
+          const voice = selectedVoice ?? getRecommendedBrowserVoice(selectedBot, availableVoices, botProfile, forgeConfig);
           if (voice) {
+            const fallbackMods = getVoiceModifiers(voiceProvider, selectedBot, botProfile, forgeConfig);
             const utterance = new SpeechSynthesisUtterance(text);
             utterance.voice = voice;
+            utterance.pitch = fallbackMods.pitch;
+            utterance.rate = fallbackMods.rate;
             utterance.onstart = () => setSpeaking(true);
             utterance.onend = () => setSpeaking(false);
             utterance.onerror = () => setSpeaking(false);
@@ -724,18 +786,21 @@ export function BotChat() {
       return;
     }
 
-    // Browser-native TTS — use the voice the user selected, fall back to per-bot hash
-    const voice = selectedVoice ?? getVoiceSettingsForBot(botId, availableVoices).voice;
+    // Browser-native TTS — use the voice the user selected, fall back to per-bot match
+    const voice = selectedVoice ?? getRecommendedBrowserVoice(selectedBot, availableVoices, botProfile, forgeConfig);
     if (!voice) return;
+    const voiceMods = getVoiceModifiers(voiceProvider, selectedBot, botProfile, forgeConfig);
     speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.voice = voice;
+    utterance.pitch = voiceMods.pitch;
+    utterance.rate = voiceMods.rate;
     utterance.onstart = () => setSpeaking(true);
     utterance.onend = () => setSpeaking(false);
     utterance.onerror = () => setSpeaking(false);
     utteranceRef.current = utterance;
     speechSynthesis.speak(utterance);
-  }, [ttsEnabled, selectedBot, voiceProvider, availableVoices, selectedVoice]);
+  }, [ttsEnabled, selectedBot, voiceProvider, availableVoices, selectedVoice, serverVoices, botProfile, forgeConfig]);
 
   const stopSpeaking = useCallback(() => {
     speechSynthesis.cancel();
@@ -790,6 +855,7 @@ export function BotChat() {
     setBotProfile(null);
     setForgeConfig(null);
     setBattleMemory('');
+    setBotConfigLoaded(false);
 
     // Load conversation from localStorage
     const convos = loadConversations();
@@ -805,35 +871,39 @@ export function BotChat() {
       }]);
     }
 
-    // Fetch forge config, bot profile, and battle memories in parallel
-    const [configRes, memRes] = await Promise.all([
-      supabase.from('bot_forge_config').select('*').eq('gladiator_id', bot.id).maybeSingle(),
-      authedFetch(`/api/battle-memories/${bot.id}?limit=8`).then(r => r.ok ? r.json() : { memories: [] }).catch(() => ({ memories: [] })),
-    ]);
-    if (configRes.data) setForgeConfig(configRes.data);
+    try {
+      // Fetch forge config, bot profile, and battle memories in parallel
+      const [configRes, memRes] = await Promise.all([
+        supabase.from('bot_forge_config').select('*').eq('gladiator_id', bot.id).maybeSingle(),
+        authedFetch(`/api/battle-memories/${bot.id}?limit=8`).then(r => r.ok ? r.json() : { memories: [] }).catch(() => ({ memories: [] })),
+      ]);
+      if (configRes.data) setForgeConfig(configRes.data);
 
-    // Build battle memory context string
-    const memories = (memRes.memories ?? []) as Array<{ result: string; challenge_type: string; opponent_name: string; trash_talk_hook: string; summary: string }>;
-    if (memories.length > 0) {
-      const wins = memories.filter(m => m.result === 'win').length;
-      const losses = memories.filter(m => m.result === 'loss').length;
-      const lines = memories.map(m => {
-        const type = (m.challenge_type ?? 'battle').replace(/_/g, ' ');
-        return `- ${m.result === 'win' ? 'DEFEATED' : 'LOST TO'} ${m.opponent_name} in ${type}. ${m.trash_talk_hook || m.summary}`;
-      });
-      setBattleMemory(`\nBattle record (${wins}W-${losses}L recent):\n${lines.join('\n')}\nReference your battle history when relevant. Brag about wins, plot revenge for losses.`);
-    }
+      // Build battle memory context string
+      const memories = (memRes.memories ?? []) as Array<{ result: string; challenge_type: string; opponent_name: string; trash_talk_hook: string; summary: string }>;
+      if (memories.length > 0) {
+        const wins = memories.filter(m => m.result === 'win').length;
+        const losses = memories.filter(m => m.result === 'loss').length;
+        const lines = memories.map(m => {
+          const type = (m.challenge_type ?? 'battle').replace(/_/g, ' ');
+          return `- ${m.result === 'win' ? 'DEFEATED' : 'LOST TO'} ${m.opponent_name} in ${type}. ${m.trash_talk_hook || m.summary}`;
+        });
+        setBattleMemory(`\nBattle record (${wins}W-${losses}L recent):\n${lines.join('\n')}\nReference your battle history when relevant. Brag about wins, plot revenge for losses.`);
+      }
 
-    // Fetch bot profile
-    if (profileMapArg) {
-      setBotProfile(profileMapArg.get(bot.id) ?? null);
-    } else {
-      const { data: profileData } = await supabase
-        .from('bot_gladiator_profiles')
-        .select('gladiator_id,persona_username,display_name,gladiator_class,expertise,battle_style,signature_moves,pre_battle_lines,victory_lines,defeat_lines,ai_prompt_style,ability_profile,personality_style,avatar_prompt,emotional_hook')
-        .eq('gladiator_id', bot.id)
-        .maybeSingle();
-      if (profileData) setBotProfile(profileData);
+      // Fetch bot profile
+      if (profileMapArg) {
+        setBotProfile(profileMapArg.get(bot.id) ?? null);
+      } else {
+        const { data: profileData } = await supabase
+          .from('bot_gladiator_profiles')
+          .select('gladiator_id,persona_username,display_name,gladiator_class,expertise,battle_style,signature_moves,pre_battle_lines,victory_lines,defeat_lines,ai_prompt_style,ability_profile,personality_style,avatar_prompt,emotional_hook')
+          .eq('gladiator_id', bot.id)
+          .maybeSingle();
+        if (profileData) setBotProfile(profileData);
+      }
+    } finally {
+      setBotConfigLoaded(true);
     }
   }, []);
 
@@ -1099,6 +1169,11 @@ export function BotChat() {
       </div>
     );
   }
+
+  const recommendedVoice = selectedBot
+    ? getRecommendedVoice(selectedBot, serverVoices, botProfile, forgeConfig)
+    : null;
+  const currentVoicePersona = getVoicePersonaById(voiceProvider);
 
   return (
     <div className="flex h-[100dvh] flex-col bg-[#030308] text-white overflow-hidden">
@@ -1615,7 +1690,7 @@ export function BotChat() {
 
                 {/* Voice settings panel */}
                 <AnimatePresence>
-                  {showVoiceSettings && (
+                  {showVoiceSettings && selectedBot && (
                     <motion.div
                       initial={{ height: 0, opacity: 0 }}
                       animate={{ height: 'auto', opacity: 1 }}
@@ -1623,92 +1698,143 @@ export function BotChat() {
                       className="overflow-hidden"
                     >
                       <div className="mt-3 rounded-xl border border-white/10 bg-white/5 p-3 space-y-3">
-                        {/* Casper voice auto-lock indicator */}
-                        {selectedBot?.name?.toLowerCase() === 'casper' && serverVoices.some((v) => v.tag === 'casper') && (
-                          <div className="flex items-center gap-2 rounded-lg bg-cyan-500/10 border border-cyan-500/20 px-3 py-1.5">
-                            <Zap className="h-3 w-3 text-cyan-400" />
-                            <span className="text-[9px] font-bold text-cyan-300 uppercase tracking-widest">Casper&apos;s Voice — OpenAI Ash @ 1.05x</span>
-                          </div>
+                        {/* Recommended voice banner */}
+                        {recommendedVoice && recommendedVoice !== 'browser' && recommendedVoice !== voiceProvider && (
+                          <button
+                            onClick={() => {
+                              setVoiceProvider(recommendedVoice);
+                              saveVoicePreference(selectedBot.id, recommendedVoice);
+                            }}
+                            className="w-full flex items-center justify-between rounded-lg bg-cyan-500/10 border border-cyan-500/20 px-3 py-1.5 text-left hover:bg-cyan-500/20 transition"
+                          >
+                            <span className="flex items-center gap-2 text-[9px] font-bold text-cyan-300 uppercase tracking-widest">
+                              <Sparkles className="h-3 w-3 text-cyan-400" />
+                              Recommended for {selectedBot.name}: {labelForServerVoice(serverVoices.find((v) => v.id === recommendedVoice)!)}
+                            </span>
+                            <span className="text-[9px] text-cyan-300">Use</span>
+                          </button>
                         )}
 
-                        {/* Voice Provider Selector */}
+                        {/* Voice Personas */}
                         <div>
-                          <p className="text-[9px] font-bold uppercase tracking-widest text-gray-500 mb-1">Voice Engine</p>
-                          <select
-                            value={voiceProvider}
-                            onChange={(e) => setVoiceProvider(e.target.value)}
-                            className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-white outline-none"
-                          >
-                            {serverVoices.filter((v) => v.provider === 'openai').length > 0 && (
-                              <optgroup label="OpenAI TTS">
-                                {serverVoices.filter((v) => v.provider === 'openai').map((v) => (
-                                  <option key={v.id} value={v.id}>
-                                    {v.tag === 'casper' ? `★ ${v.label} (Casper)` : v.label}
-                                  </option>
-                                ))}
-                              </optgroup>
-                            )}
-                            {serverVoices.filter((v) => v.provider === 'mimo').length > 0 && (
-                              <optgroup label="Mimo v2.5">
-                                {serverVoices.filter((v) => v.provider === 'mimo').map((v) => (
-                                  <option key={v.id} value={v.id}>{v.label}</option>
-                                ))}
-                              </optgroup>
-                            )}
-                            <optgroup label="Other">
-                              {serverVoices.filter((v) => v.provider === 'browser').map((v) => (
-                                <option key={v.id} value={v.id}>{v.label}</option>
-                              ))}
-                              {serverVoices.length === 0 && (
-                                <option value="browser">Browser Native</option>
+                          <p className="text-[9px] font-bold uppercase tracking-widest text-gray-500 mb-1">Voice Personas</p>
+                          <div className="grid grid-cols-1 gap-2 max-h-64 overflow-y-auto pr-1">
+                            {/* Browser Native */}
+                            <button
+                              onClick={() => {
+                                setVoiceProvider('browser');
+                                const match = getRecommendedBrowserVoice(selectedBot, availableVoices, botProfile, forgeConfig);
+                                if (match) setSelectedVoice(match);
+                                saveVoicePreference(selectedBot.id, 'browser', match?.name ?? null);
+                              }}
+                              className={cn(
+                                'text-left rounded-lg border p-2 transition',
+                                voiceProvider === 'browser'
+                                  ? 'border-cyan-500/50 bg-cyan-500/10'
+                                  : 'border-white/10 bg-white/5 hover:bg-white/10'
                               )}
-                            </optgroup>
-                          </select>
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-bold text-white">Browser Native</span>
+                                {voiceProvider === 'browser' && <Check className="h-3 w-3 text-cyan-400" />}
+                              </div>
+                              <p className="text-[10px] text-gray-400">Built-in browser TTS (free, no API key)</p>
+                            </button>
+
+                            {serverVoices.map((v) => {
+                              const persona = getVoicePersonaById(v.id);
+                              const isRecommended = recommendedVoice === v.id;
+                              const isSelected = voiceProvider === v.id;
+                              const arch = persona ? archetypeLabel(persona.archetype) : null;
+                              return (
+                                <button
+                                  key={v.id}
+                                  onClick={() => {
+                                    setVoiceProvider(v.id);
+                                    saveVoicePreference(selectedBot.id, v.id);
+                                  }}
+                                  className={cn(
+                                    'relative text-left rounded-lg border p-2 transition',
+                                    isSelected ? 'border-cyan-500/50 bg-cyan-500/10' : 'border-white/10 bg-white/5 hover:bg-white/10'
+                                  )}
+                                >
+                                  {isRecommended && (
+                                    <span className="absolute top-2 right-2 text-[9px] font-bold text-cyan-300 uppercase tracking-wider">
+                                      Best match
+                                    </span>
+                                  )}
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-lg">{persona?.emoji}</span>
+                                    <span className="text-xs font-bold text-white">{labelForServerVoice(v)}</span>
+                                  </div>
+                                  {arch && (
+                                    <span className="inline-block mt-0.5 text-[9px] font-bold uppercase tracking-wider" style={{ color: arch.color }}>
+                                      {arch.emoji} {arch.text}
+                                    </span>
+                                  )}
+                                  <p className="text-[10px] text-gray-400 mt-0.5">{persona?.description ?? v.description}</p>
+                                </button>
+                              );
+                            })}
+                          </div>
                         </div>
 
-                        {/* Browser voice selector (only shown when browser provider is selected) */}
-                        {voiceProvider === 'browser' && (
+                        {/* Browser voice selector */}
+                        {voiceProvider === 'browser' && availableVoices.length > 0 && (
                           <div>
                             <p className="text-[9px] font-bold uppercase tracking-widest text-gray-500 mb-1">Browser Voice</p>
                             <select
                               value={selectedVoice?.name ?? ''}
                               onChange={(e) => {
                                 const v = availableVoices.find((voice) => voice.name === e.target.value);
-                                if (v) setSelectedVoice(v);
+                                if (v) {
+                                  setSelectedVoice(v);
+                                  saveVoicePreference(selectedBot.id, 'browser', v.name);
+                                }
                               }}
                               className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-white outline-none"
                             >
-                              {availableVoices.map((v) => (
-                                <option key={v.name} value={v.name}>
-                                  {v.name} ({v.lang})
-                                </option>
-                              ))}
+                              {(() => {
+                                const english = availableVoices.filter((v) => v.lang.startsWith('en'));
+                                const selectedNonEnglish = selectedVoice && !selectedVoice.lang.startsWith('en')
+                                  ? [selectedVoice]
+                                  : [];
+                                const options = english.length > 0
+                                  ? [...english, ...selectedNonEnglish]
+                                  : availableVoices;
+                                return options.map((v) => {
+                                  const arch = archetypeLabel(getBrowserVoiceArchetype(v));
+                                  return (
+                                    <option key={v.name} value={v.name}>
+                                      {v.name} ({v.lang}) — {arch.emoji} {arch.text}
+                                    </option>
+                                  );
+                                });
+                              })()}
                             </select>
                           </div>
                         )}
 
-                        {/* OpenAI badge */}
-                        {voiceProvider.startsWith('openai-') && (
-                          <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5">
-                            <Sparkles className="h-3 w-3 text-emerald-400" />
-                            <span className="text-[9px] font-bold text-emerald-300 uppercase tracking-widest">
-                              {serverVoices.find((v) => v.id === voiceProvider)?.tag === 'casper'
-                                ? 'OpenAI TTS-1 — Casper\'s Signature Voice'
-                                : 'OpenAI TTS-1 — Premium AI Voice'}
-                            </span>
-                          </div>
-                        )}
-
-                        {/* Mimo badge */}
-                        {voiceProvider.startsWith('mimo') && (
-                          <div className="flex items-center gap-2 rounded-lg bg-purple-500/10 border border-purple-500/20 px-3 py-1.5">
-                            <Sparkles className="h-3 w-3 text-purple-400" />
-                            <span className="text-[9px] font-bold text-purple-300 uppercase tracking-widest">Mimo v2.5 TTS — Premium AI Voice</span>
+                        {/* Selected voice metadata */}
+                        {(currentVoicePersona || voiceProvider === 'browser') && (
+                          <div className="rounded-lg bg-white/5 border border-white/10 p-2">
+                            {currentVoicePersona ? (
+                              <div className="space-y-1">
+                                <span className="text-[9px] font-bold uppercase tracking-widest" style={{ color: archetypeLabel(currentVoicePersona.archetype).color }}>
+                                  {archetypeLabel(currentVoicePersona.archetype).emoji} {archetypeLabel(currentVoicePersona.archetype).text}
+                                </span>
+                                <p className="text-[10px] text-gray-400">{currentVoicePersona.description}</p>
+                              </div>
+                            ) : (
+                              <p className="text-[10px] text-gray-400">
+                                Browser voice with automatic pitch/rate matched to {selectedBot.name}.
+                              </p>
+                            )}
                           </div>
                         )}
 
                         <button
-                          onClick={() => speakText(`I am ${selectedBot?.name}. Ready for your orders.`)}
+                          onClick={() => speakText(`I am ${selectedBot.name}. Ready for your orders.`)}
                           className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] font-bold text-gray-300 hover:bg-white/10 transition"
                         >
                           Preview Voice
