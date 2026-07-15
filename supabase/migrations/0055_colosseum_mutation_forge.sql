@@ -69,8 +69,8 @@ declare
   v_mutation_id uuid;
   v_mutated_at timestamptz;
 begin
-  select arena_gladiator.*, arena_user.id
-  into v_gladiator, v_user_id
+  select arena_gladiator.*
+  into v_gladiator
   from public.gladiators arena_gladiator
   join public.users arena_user on arena_user.id = arena_gladiator.user_id
   where arena_gladiator.id = p_gladiator_id
@@ -80,6 +80,8 @@ begin
   if not found then
     raise exception 'Gladiator not found or you do not own it';
   end if;
+
+  v_user_id := v_gladiator.user_id;
 
   -- Active match lock: use the same source of truth as the frontend (completed_at).
   if exists (
