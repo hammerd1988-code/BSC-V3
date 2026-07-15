@@ -645,15 +645,21 @@ export function BotChat() {
     if (saved) {
       const isSavedValid =
         saved.provider === 'browser' || serverVoices.some((v) => v.id === saved.provider);
-      if (isSavedValid && voiceProvider !== saved.provider) {
-        setVoiceProvider(saved.provider);
+      if (isSavedValid) {
+        if (voiceProvider !== saved.provider) {
+          setVoiceProvider(saved.provider);
+        }
+        if (saved.provider === 'browser' && saved.browserVoiceName && !selectedVoice) {
+          const match = availableVoices.find((v) => v.name === saved.browserVoiceName);
+          if (match) setSelectedVoice(match);
+        }
+        botVoiceInitRef.current = selectedBot.id;
+        return;
       }
-      if (saved.provider === 'browser' && saved.browserVoiceName && !selectedVoice) {
-        const match = availableVoices.find((v) => v.name === saved.browserVoiceName);
-        if (match) setSelectedVoice(match);
-      }
-      botVoiceInitRef.current = selectedBot.id;
-      return;
+      // Saved preference is stale — clear it and fall through to recommendation
+      try {
+        localStorage.removeItem(VOICE_PREF_KEY(selectedBot.id));
+      } catch {}
     }
 
     if (botVoiceInitRef.current === selectedBot.id) return;
