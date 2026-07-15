@@ -41,6 +41,7 @@ describe('Colosseum Mutation Forge', () => {
     expect(migration).toContain('gladiator_id text not null references public.gladiators(id)');
     expect(migration).toContain('user_id text not null references public.users(id)');
     expect(migration).toContain("arena_match.completed_at is null");
+    expect(migration).toContain("coalesce(arena_match.status, 'pending') not in ('failed', 'cancelled')");
     expect(migration).toContain('v_gladiator.cred < v_cost');
     expect(migration).toContain('revoke update on public.gladiators from authenticated');
   });

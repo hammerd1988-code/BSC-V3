@@ -84,11 +84,13 @@ begin
   v_user_id := v_gladiator.user_id;
 
   -- Active match lock: use the same source of truth as the frontend (completed_at).
+  -- Also exclude matches that were explicitly abandoned without setting completed_at.
   if exists (
     select 1
     from public.matches arena_match
     where p_gladiator_id in (arena_match.challenger_id, arena_match.defender_id)
       and arena_match.completed_at is null
+      and coalesce(arena_match.status, 'pending') not in ('failed', 'cancelled')
   ) then
     raise exception 'Mutation Forge is locked while this gladiator has an active match';
   end if;
