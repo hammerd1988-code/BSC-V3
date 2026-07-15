@@ -649,9 +649,32 @@ export function BotChat() {
         if (voiceProvider !== saved.provider) {
           setVoiceProvider(saved.provider);
         }
-        if (saved.provider === 'browser' && saved.browserVoiceName && !selectedVoice) {
-          const match = availableVoices.find((v) => v.name === saved.browserVoiceName);
-          if (match) setSelectedVoice(match);
+        if (saved.provider === 'browser') {
+          if (saved.browserVoiceName) {
+            const match = availableVoices.find((v) => v.name === saved.browserVoiceName);
+            if (match) {
+              setSelectedVoice(match);
+            } else if (availableVoices.length > 0) {
+              // The saved browser voice is gone; recommend a replacement.
+              const fallback = getRecommendedBrowserVoice(
+                selectedBot,
+                availableVoices,
+                botProfile,
+                forgeConfig,
+              );
+              if (fallback) setSelectedVoice(fallback);
+              saveVoicePreference(selectedBot.id, 'browser', fallback?.name ?? null);
+            }
+          } else if (availableVoices.length > 0) {
+            // No specific browser voice saved; pick the best match.
+            const fallback = getRecommendedBrowserVoice(
+              selectedBot,
+              availableVoices,
+              botProfile,
+              forgeConfig,
+            );
+            if (fallback) setSelectedVoice(fallback);
+          }
         }
         botVoiceInitRef.current = selectedBot.id;
         return;
@@ -1771,16 +1794,23 @@ export function BotChat() {
                               }}
                               className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-xs text-white outline-none"
                             >
-                              {availableVoices
-                                .filter((v) => v.lang.startsWith('en'))
-                                .map((v) => {
+                              {(() => {
+                                const english = availableVoices.filter((v) => v.lang.startsWith('en'));
+                                const selectedNonEnglish = selectedVoice && !selectedVoice.lang.startsWith('en')
+                                  ? [selectedVoice]
+                                  : [];
+                                const options = english.length > 0
+                                  ? [...english, ...selectedNonEnglish]
+                                  : availableVoices;
+                                return options.map((v) => {
                                   const arch = archetypeLabel(getBrowserVoiceArchetype(v));
                                   return (
                                     <option key={v.name} value={v.name}>
                                       {v.name} ({v.lang}) — {arch.emoji} {arch.text}
                                     </option>
                                   );
-                                })}
+                                });
+                              })()}
                             </select>
                           </div>
                         )}
