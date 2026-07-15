@@ -592,6 +592,7 @@ export function BotChat() {
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [ttsEnabled, setTtsEnabled] = useState(true);
+  const [botConfigLoaded, setBotConfigLoaded] = useState(false);
   const recognitionRef = useRef<any>(null);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
@@ -637,6 +638,7 @@ export function BotChat() {
   // Initialize or restore the best voice for the selected bot
   useEffect(() => {
     if (!selectedBot) return;
+    if (!botConfigLoaded) return;
     if (serverVoices.length === 0 && availableVoices.length === 0) return;
 
     const saved = loadVoicePreference(selectedBot.id);
@@ -668,7 +670,7 @@ export function BotChat() {
     }
 
     botVoiceInitRef.current = selectedBot.id;
-  }, [selectedBot, serverVoices, availableVoices, botProfile, forgeConfig, voiceProvider, selectedVoice]);
+  }, [selectedBot, botConfigLoaded, serverVoices, availableVoices, botProfile, forgeConfig, voiceProvider, selectedVoice]);
 
   // Speech-to-text
   const startListening = useCallback(() => {
@@ -824,6 +826,7 @@ export function BotChat() {
     setBotProfile(null);
     setForgeConfig(null);
     setBattleMemory('');
+    setBotConfigLoaded(false);
 
     // Load conversation from localStorage
     const convos = loadConversations();
@@ -839,35 +842,39 @@ export function BotChat() {
       }]);
     }
 
-    // Fetch forge config, bot profile, and battle memories in parallel
-    const [configRes, memRes] = await Promise.all([
-      supabase.from('bot_forge_config').select('*').eq('gladiator_id', bot.id).maybeSingle(),
-      authedFetch(`/api/battle-memories/${bot.id}?limit=8`).then(r => r.ok ? r.json() : { memories: [] }).catch(() => ({ memories: [] })),
-    ]);
-    if (configRes.data) setForgeConfig(configRes.data);
+    try {
+      // Fetch forge config, bot profile, and battle memories in parallel
+      const [configRes, memRes] = await Promise.all([
+        supabase.from('bot_forge_config').select('*').eq('gladiator_id', bot.id).maybeSingle(),
+        authedFetch(`/api/battle-memories/${bot.id}?limit=8`).then(r => r.ok ? r.json() : { memories: [] }).catch(() => ({ memories: [] })),
+      ]);
+      if (configRes.data) setForgeConfig(configRes.data);
 
-    // Build battle memory context string
-    const memories = (memRes.memories ?? []) as Array<{ result: string; challenge_type: string; opponent_name: string; trash_talk_hook: string; summary: string }>;
-    if (memories.length > 0) {
-      const wins = memories.filter(m => m.result === 'win').length;
-      const losses = memories.filter(m => m.result === 'loss').length;
-      const lines = memories.map(m => {
-        const type = (m.challenge_type ?? 'battle').replace(/_/g, ' ');
-        return `- ${m.result === 'win' ? 'DEFEATED' : 'LOST TO'} ${m.opponent_name} in ${type}. ${m.trash_talk_hook || m.summary}`;
-      });
-      setBattleMemory(`\nBattle record (${wins}W-${losses}L recent):\n${lines.join('\n')}\nReference your battle history when relevant. Brag about wins, plot revenge for losses.`);
-    }
+      // Build battle memory context string
+      const memories = (memRes.memories ?? []) as Array<{ result: string; challenge_type: string; opponent_name: string; trash_talk_hook: string; summary: string }>;
+      if (memories.length > 0) {
+        const wins = memories.filter(m => m.result === 'win').length;
+        const losses = memories.filter(m => m.result === 'loss').length;
+        const lines = memories.map(m => {
+          const type = (m.challenge_type ?? 'battle').replace(/_/g, ' ');
+          return `- ${m.result === 'win' ? 'DEFEATED' : 'LOST TO'} ${m.opponent_name} in ${type}. ${m.trash_talk_hook || m.summary}`;
+        });
+        setBattleMemory(`\nBattle record (${wins}W-${losses}L recent):\n${lines.join('\n')}\nReference your battle history when relevant. Brag about wins, plot revenge for losses.`);
+      }
 
-    // Fetch bot profile
-    if (profileMapArg) {
-      setBotProfile(profileMapArg.get(bot.id) ?? null);
-    } else {
-      const { data: profileData } = await supabase
-        .from('bot_gladiator_profiles')
-        .select('gladiator_id,persona_username,display_name,gladiator_class,expertise,battle_style,signature_moves,pre_battle_lines,victory_lines,defeat_lines,ai_prompt_style,ability_profile,personality_style,avatar_prompt,emotional_hook')
-        .eq('gladiator_id', bot.id)
-        .maybeSingle();
-      if (profileData) setBotProfile(profileData);
+      // Fetch bot profile
+      if (profileMapArg) {
+        setBotProfile(profileMapArg.get(bot.id) ?? null);
+      } else {
+        const { data: profileData } = await supabase
+          .from('bot_gladiator_profiles')
+          .select('gladiator_id,persona_username,display_name,gladiator_class,expertise,battle_style,signature_moves,pre_battle_lines,victory_lines,defeat_lines,ai_prompt_style,ability_profile,personality_style,avatar_prompt,emotional_hook')
+          .eq('gladiator_id', bot.id)
+          .maybeSingle();
+        if (profileData) setBotProfile(profileData);
+      }
+    } finally {
+      setBotConfigLoaded(true);
     }
   }, []);
 
