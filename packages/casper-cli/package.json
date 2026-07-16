@@ -1,6 +1,6 @@
 {
   "name": "@bsc/casper-cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Casper AI agent CLI — local shell access, daemon mode, and remote orchestration for Blood Sweat Code",
   "type": "module",
   "bin": {
