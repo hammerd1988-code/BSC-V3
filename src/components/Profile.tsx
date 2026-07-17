@@ -1942,7 +1942,7 @@ export const Profile: React.FC = () => {
                               {currentUser?.id === user.id && (
                                 <button
                                   onClick={() => void handleRepostReplay(replay)}
-                                  disabled={replayActionId === replay.id}
+                                  disabled={!!replayActionId}
                                   title="Repost to feed"
                                   className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-300/30 bg-cyan-300/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-cyan-100 transition hover:bg-cyan-300/20 disabled:opacity-40"
                                 >
