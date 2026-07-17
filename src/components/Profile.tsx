@@ -1929,7 +1929,7 @@ export const Profile: React.FC = () => {
                       <div className="grid gap-4 sm:grid-cols-2">
                         {replays.map((replay) => (
                           <div key={replay.id} className="space-y-2">
-                            <StreamCard stream={replay} onOpen={(id) => navigate(`/golive?streamId=${id}`)} />
+                            <StreamCard stream={replay} onOpen={(id) => { if (replay.replay_url) navigate(`/golive?streamId=${id}`); }} />
                             <div className="flex items-center gap-2">
                               <button
                                 onClick={() => navigate(`/golive?streamId=${replay.id}`)}
