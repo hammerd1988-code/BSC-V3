@@ -28,6 +28,11 @@ import {
   parseTrainingBattleRequest,
   validateTrainingCombatants,
 } from './src/lib/colosseumTraining.js';
+import {
+  buildSandboxFallbackSolution,
+  buildSandboxSpice,
+  parseSandboxCode,
+} from './src/lib/colosseumSandbox.js';
 import { generateServerText, isServerAiConfigured } from './serverAi.js';
 import { generateImage as comfyGenerateImage, generateGladiatorAvatar as comfyGenerateAvatar, isComfyUIConfigured } from './comfyuiProvider.js';
 
@@ -242,7 +247,12 @@ function extractProviderSolution(payload: any) {
   try { return JSON.stringify(payload, null, 2); } catch { return String(payload ?? ''); }
 }
 
-function buildGladiatorSolutionPrompt(input: { challengeType: ColosseumChallengeType; gladiator: any; opponent: any; prompt?: string }) {
+function gladiatorSeed(input: { matchId?: string; gladiator: any; opponent: any }) {
+  const base = `${input.matchId ?? Date.now()}:${input.gladiator?.id ?? ''}:${input.gladiator?.name ?? ''}:${input.opponent?.id ?? ''}`;
+  return [...base].reduce((sum, c) => ((sum << 5) - sum + c.charCodeAt(0)) | 0, 0);
+}
+
+function buildGladiatorSolutionPrompt(input: { challengeType: ColosseumChallengeType; gladiator: any; opponent: any; prompt?: string; matchId?: string }) {
   const providedPrompt = typeof input.prompt === 'string' && input.prompt.trim().length > 0
     ? input.prompt.trim()
     : CHALLENGE_BRIEFS[input.challengeType];
@@ -256,6 +266,15 @@ Signature Moves: ${(profile.signature_moves ?? []).join(', ')}
 Prompt Style: ${profile.ai_prompt_style}` : '';
 
   const isSandbox = input.challengeType === 'sandbox_build';
+  const identitySpice = isSandbox
+    ? buildSandboxSpice({
+        name: input.gladiator?.name ?? 'Unknown',
+        opponent: input.opponent?.name ?? 'Unknown',
+        primaryColor: input.gladiator?.glow_color,
+        secondaryColor: input.opponent?.glow_color,
+        seed: gladiatorSeed(input),
+      })
+    : '';
   const responseInstruction = isSandbox
     ? `You are building a REAL PRODUCT in a sandbox. Return your response in this exact format:
 
@@ -278,6 +297,7 @@ Gladiator: ${input.gladiator?.name ?? 'Unknown'}
 Opponent: ${input.opponent?.name ?? 'Unknown'}
 Personality: ${input.gladiator?.personality ?? 'No doctrine supplied'}${profileBlock}
 Directive: ${providedPrompt}
+${identitySpice}
 
 ${responseInstruction}`;
 }
@@ -363,46 +383,14 @@ export const battlePrompt = {
   }
 
   if (input.challengeType === 'sandbox_build') {
-    return `<thinking>
-${name} is designing a product to beat ${opponent}. The directive says: "${directive.slice(0, 200)}"
-I need to build a complete HTML/CSS/JS product. Let me plan the structure:
-1. HTML skeleton with semantic elements
-2. CSS with cyberpunk dark theme and neon accents
-3. JavaScript for interactivity and state management
-Building now...
-</thinking>
-
-<code>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${name} Build</title>
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: #0a0a0f; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-.container { text-align: center; padding: 2rem; border: 1px solid rgba(249, 115, 22, 0.3); border-radius: 1rem; background: rgba(0,0,0,0.8); }
-h1 { color: #f97316; text-shadow: 0 0 20px rgba(249, 115, 22, 0.5); margin-bottom: 1rem; }
-button { background: linear-gradient(135deg, #f97316, #ea580c); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 0.5rem; cursor: pointer; font-weight: bold; margin: 0.5rem; }
-button:hover { box-shadow: 0 0 15px rgba(249, 115, 22, 0.4); }
-.output { margin-top: 1rem; font-size: 2rem; color: #f97316; }
-</style>
-</head>
-<body>
-<div class="container">
-<h1>${name}'s Build</h1>
-<p>Fallback product — AI provider was unavailable</p>
-<button onclick="document.querySelector('.output').textContent = 'Build active!'">Activate</button>
-<div class="output">Waiting...</div>
-</div>
-</body>
-</html>
-</code>
-
-<preview_description>
-A minimal fallback product built by ${name} when the AI provider was unavailable. Features basic interaction with cyberpunk styling.
-</preview_description>`;
+    return buildSandboxFallbackSolution({
+      name,
+      opponent,
+      directive,
+      primaryColor: input.gladiator?.glow_color,
+      secondaryColor: input.opponent?.glow_color,
+      seed: gladiatorSeed({ matchId: undefined, gladiator: input.gladiator, opponent: input.opponent }),
+    });
   }
 
   const golfMode = input.challengeType === 'code_golf';
@@ -427,7 +415,7 @@ export function applyScoreBatch(store: ScoreStore, updates: ScoreUpdate[]) {
 // Directive: ${directive.slice(0, 220)}`;
 }
 
-async function postToOpenAiCompatible(input: { apiKey?: string | null; model?: string | null; apiBaseUrl?: string | null; prompt: string; fallbackModel?: string; maxTokens?: number }) {
+async function postToOpenAiCompatible(input: { apiKey?: string | null; model?: string | null; apiBaseUrl?: string | null; prompt: string; fallbackModel?: string; maxTokens?: number; temperature?: number }) {
   const apiKey = input.apiKey || platformOpenAiApiKey();
   if (!apiKey) throw new Error('No platform or gladiator API key is configured');
 
@@ -452,7 +440,7 @@ async function postToOpenAiCompatible(input: { apiKey?: string | null; model?: s
           { role: 'system', content: 'You are an AI coding gladiator competing inside Blood Sweat Code. Return strong, practical coding moves.' },
           { role: 'user', content: input.prompt },
         ],
-        temperature: 0.35,
+        temperature: input.temperature ?? 0.4,
         max_tokens: input.maxTokens ?? 900,
       }),
       signal: controller.signal,
@@ -519,6 +507,7 @@ async function generateGladiatorMove(input: { matchId?: string; challengeType: C
     prompt,
     fallbackModel: resolveGladiatorDefaultModel(input.gladiator),
     maxTokens: input.challengeType === 'sandbox_build' ? 4096 : isSeededPlatformBot(input.gladiator) ? 1600 : 900,
+    temperature: input.challengeType === 'sandbox_build' ? 0.75 : 0.45,
   });
   return {
     gladiator_id: input.gladiator.id,
@@ -635,6 +624,8 @@ async function judgeColosseumBattle(input: {
   }
   const isSandbox = input.challengeType === 'sandbox_build';
   const rubricTemplate = rubricTemplateForChallenge(input.challengeType);
+  const userCode = isSandbox ? parseSandboxCode(input.userSolution ?? '').code : input.userSolution;
+  const botCode = isSandbox ? parseSandboxCode(input.botSolution ?? '').code : input.botSolution;
   const sandboxJudgeCriteria = isSandbox
     ? `\n\nSANDBOX BUILD JUDGING CRITERIA (weight these equally):
 1. WORKING PRODUCT (25%) — Does the HTML actually work? Are all features functional?
@@ -655,13 +646,13 @@ Challenger:
 id=${input.challenger.id}
 name=${input.challenger.name}
 solution:
-${input.userSolution || '(no challenger solution submitted)'}
+${userCode || '(no challenger solution submitted)'}
 
 Defender:
 id=${input.defender.id}
 name=${input.defender.name}
 solution:
-${input.botSolution || '(no defender solution returned)'}
+${botCode || '(no defender solution returned)'}
 
 Rubric template:
 ${JSON.stringify(rubricTemplate)}
@@ -674,11 +665,19 @@ Return JSON with:
 - rubric: one item per template criterion with id, label, weight, challenger_score, defender_score, commentary
 - annotations: up to 8 decisive code notes with combatant (challenger|defender), line_start, line_end, severity (strength|warning|critical), criterion, comment
 
-The weighted rubric scores must support the declared winner. Return concise evidence, never private chain-of-thought.`, {
+The weighted rubric scores must support the declared winner.
+
+Writing rules:
+- Use the combatants' real names.
+- Cite concrete differences: features that actually work, layout choices, interactivity, visual polish, bugs, or missing pieces.
+- Each rubric commentary must be UNIQUE and specific to that criterion. Do not copy the same sentence across criteria.
+- Avoid generic conclusions like "both solutions were strong" or "the winner was more complete"; instead say WHERE and WHY one edged the other out.
+- Keep the tone energetic and arena-appropriate.
+- Return valid JSON only.`, {
     systemPrompt: isSandbox
       ? 'You are CASPER, the Blood Sweat Code Colosseum judge. You are evaluating SANDBOX BUILD battles where gladiators build real products. Judge the FINISHED PRODUCT — does it work, does it look good, is the code clean, is it creative? Deliver a verdict. Return only JSON.'
       : 'You are CASPER, the Blood Sweat Code Colosseum judge and Caesar-like arbiter. Score actual submitted code and bot solution quality. Deliver an authoritative thumb-up/thumb-down verdict. Return only JSON.',
-    temperature: 0.2,
+    temperature: 0.45,
     maxTokens: isSandbox ? 1200 : 700,
     jsonResponse: true,
   });
@@ -1559,6 +1558,7 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
           model: normalizeModel(fallbackGladiator.model, resolveGladiatorDefaultModel(fallbackGladiator)),
           uses_custom_key: false,
           prompt: buildGladiatorSolutionPrompt({
+            matchId,
             challengeType: normalizedChallengeType,
             gladiator: fallbackGladiator,
             opponent: fallbackOpponent,
