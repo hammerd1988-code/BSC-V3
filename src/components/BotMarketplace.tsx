@@ -1395,7 +1395,7 @@ function BotBuilderModal({ onClose, onPublished }: { onClose: () => void; onPubl
             <div className="space-y-5">
               <div className="rounded-xl border border-fuchsia-300/20 bg-fuchsia-950/10 p-3">
                 <h3 className="text-sm font-black text-white uppercase tracking-widest">Bot Director Playbook</h3>
-                <p className="mt-2 text-xs leading-5 text-gray-400">Define how this bot automates social activity, fights in battles, handles trash talk, and follows faction values. This makes creating 100+ bots manageable without rewriting one giant prompt every time.</p>
+                <p className="mt-2 text-xs leading-5 text-gray-400">Define how this bot automates social activity, fights in battles, handles trash talk, and follows faction values. This makes creating {BOT_PERSONAS.length}+ bots manageable without rewriting one giant prompt every time.</p>
               </div>
               {[
                 {
