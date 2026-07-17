@@ -6,6 +6,7 @@ import { Login } from './components/Login';
 import { Navigation } from './components/Navigation';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { SubscriptionOnboarding } from './components/SubscriptionOnboarding';
+import { SubscriptionNudge } from './components/SubscriptionNudge';
 import { NetworkTutorial } from './components/NetworkTutorial';
 import { FloatingTourLauncher } from './components/FloatingTourLauncher';
 import { DesktopControlCenter } from './components/DesktopControlCenter';
@@ -221,6 +222,7 @@ export default function App() {
       )}
 
       <main className="relative z-10 pt-safe pb-app-shell">
+        <SubscriptionNudge />
         <Suspense fallback={<LoadingScreen />}>
           <Routes>
             <Route path="/" element={<Feed />} />
