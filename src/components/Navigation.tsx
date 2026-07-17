@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X, Swords, BrainCircuit, Radio, Video, CloudFog, Loader2, HelpCircle, ShieldAlert, UsersRound, Wand2, MessagesSquare } from 'lucide-react';
+import { Home, Search as SearchIcon, Plus, MessageCircle, User as UserIcon, Flame, Bot, Ghost, Terminal, Shield, LogOut, Settings, Bell, HeartHandshake, CheckCircle2, X, Swords, BrainCircuit, Radio, Video, CloudFog, Loader2, HelpCircle, ShieldAlert, UsersRound, Wand2, MessagesSquare, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
@@ -420,6 +420,7 @@ export const Navigation: React.FC = () => {
     { path: '/videos', label: 'Videos', icon: Video, active: isActive('/videos'), color: '#4488FF' },
     { path: '/casper', label: 'Casper', icon: Ghost, active: location.pathname.startsWith('/casper'), color: '#AA66FF' },
     { path: '/void', label: 'Void Feed', icon: CloudFog, active: isActive('/void'), color: '#FF00FF' },
+    { path: '/subscribe', label: 'Upgrade', icon: Sparkles, active: isActive('/subscribe'), color: '#00FFFF' },
     currentUser
       ? { path: '/terminal', label: 'Terminal', icon: Terminal, active: isActive('/terminal'), color: '#39FF14' }
       : null,
@@ -602,6 +603,15 @@ export const Navigation: React.FC = () => {
                   >
                     <BrainCircuit className="w-4 h-4" />
                     Visual Forge
+                  </Link>
+
+                  <Link
+                    to="/subscribe"
+                    onClick={() => setShowUserMenu(false)}
+                    className="w-full flex items-center gap-3 px-3 py-2 text-fuchsia-300 hover:text-white hover:bg-fuchsia-500/10 rounded-xl transition-all uppercase tracking-widest text-[10px]"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    Upgrade
                   </Link>
 
                   <button
