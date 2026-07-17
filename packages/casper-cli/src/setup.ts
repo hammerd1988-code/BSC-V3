@@ -1,6 +1,6 @@
 import readline from 'readline';
 import chalk from 'chalk';
-import { getConfig, setConfig, getConfigPath, type CasperConfig } from './config.js';
+import { getConfig, setConfig, deleteConfig, getConfigPath, type CasperConfig } from './config.js';
 import { printAllSettings } from './settings.js';
 
 interface LocalProvider {
@@ -142,15 +142,22 @@ function hasLlmConfig(): boolean {
 }
 
 async function setupOpenAI(queue: InputQueue): Promise<void> {
-  console.log(chalk.cyan('\n  Using OpenAI (or any OpenAI-compatible cloud provider).'));
+  console.log(chalk.cyan('\n  Using an OpenAI-compatible API (OpenAI, OpenRouter, etc.).'));
   console.log(chalk.dim('  Your key is stored owner-only at:') + ` ${getConfigPath()}\n`);
 
-  const key = await askPassword(queue, chalk.white('  OpenAI API key: '));
+  const key = await askPassword(queue, chalk.white('  API key: '));
   if (!key) {
     console.log(chalk.yellow('  No key entered. Skipping.'));
     return;
   }
   setConfig('openaiApiKey', key as CasperConfig['openaiApiKey']);
+
+  const baseUrl = await ask(queue, chalk.white('  Base URL (default: https://api.openai.com/v1, or e.g. https://openrouter.ai/api/v1): '));
+  if (baseUrl) {
+    setConfig('baseUrl', baseUrl.replace(/\/$/, '') as CasperConfig['baseUrl']);
+  } else {
+    deleteConfig('baseUrl');
+  }
 
   const model = await ask(queue, chalk.white('  Model (default: gpt-4.1-mini): '));
   setConfig('model', model || 'gpt-4.1-mini');

@@ -57,9 +57,11 @@ export function createLlmClient(opts?: LlmClientOptions): OpenAI {
     );
   }
 
+  const baseURL = opts?.baseUrl || getConfig('baseUrl') || process.env.OPENAI_BASE_URL;
+
   return new OpenAI({
     apiKey,
-    baseURL: opts?.baseUrl,
+    baseURL,
   });
 }
 
