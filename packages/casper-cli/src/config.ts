@@ -17,6 +17,7 @@ export interface CasperConfig {
   model: string;
   openaiApiKey?: string;
   anthropicApiKey?: string;
+  baseUrl?: string; // OpenAI-compatible base URL (OpenAI, OpenRouter, etc.)
   localLlmUrl?: string; // LM Studio / Ollama endpoint
 
   // Security
