@@ -569,11 +569,14 @@ export const Profile: React.FC = () => {
   const handleRepostReplay = async (replay: StreamRow) => {
     if (!currentUser || replayActionId) return;
     setReplayActionId(replay.id);
-    await repostReplayToFeed(
-      { id: replay.id, title: replay.title, replay_url: replay.replay_url, thumbnail_url: replay.thumbnail_url, category: replay.category as string | null | undefined },
-      currentUser,
-    );
-    setReplayActionId(null);
+    try {
+      await repostReplayToFeed(
+        { id: replay.id, title: replay.title, replay_url: replay.replay_url, thumbnail_url: replay.thumbnail_url, category: replay.category as string | null | undefined },
+        currentUser,
+      );
+    } finally {
+      setReplayActionId(null);
+    }
   };
 
   const handleShareReplay = async (replayId: string) => {
