@@ -1,10 +1,11 @@
 import React, { lazy, Suspense, useState, useEffect } from 'react';
-import { Routes, Route, Navigate, useParams, useSearchParams } from 'react-router-dom';
+import { Routes, Route, Navigate, useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { useAuth } from './AuthContext';
 import { Login } from './components/Login';
 import { Navigation } from './components/Navigation';
 import { OnboardingWizard } from './components/OnboardingWizard';
+import { SubscriptionOnboarding } from './components/SubscriptionOnboarding';
 import { NetworkTutorial } from './components/NetworkTutorial';
 import { FloatingTourLauncher } from './components/FloatingTourLauncher';
 import { DesktopControlCenter } from './components/DesktopControlCenter';
@@ -13,6 +14,7 @@ import { ImageLightboxProvider } from './components/ImageLightbox';
 import { updateDailyStreak } from './lib/achievements';
 import { registerNativePush } from './lib/mobile';
 import { supabase } from './supabase';
+import { useSubscription } from './lib/subscription';
 
 const Feed = lazy(() => import('./components/Feed').then((m) => ({ default: m.Feed })));
 const Profile = lazy(() => import('./components/Profile').then((m) => ({ default: m.Profile })));
@@ -57,6 +59,24 @@ function LoadingScreen() {
         Establishing Neural Link
       </p>
     </div>
+  );
+}
+
+function SubscribePage() {
+  const navigate = useNavigate();
+  const { openCheckout } = useSubscription();
+  return (
+    <SubscriptionOnboarding
+      variant="fullscreen"
+      onClose={() => navigate('/')}
+      onSelectPlan={async (tier, billing) => {
+        if (tier === 'indie') {
+          navigate('/');
+          return;
+        }
+        await openCheckout(tier as 'operator' | 'architect', billing);
+      }}
+    />
   );
 }
 
@@ -214,6 +234,7 @@ export default function App() {
             <Route path="/videos" element={<VideoDiscovery />} />
             <Route path="/upgrade" element={<SubscriptionSettings />} />
             <Route path="/settings/subscription" element={<SubscriptionSettings />} />
+            <Route path="/subscribe" element={currentUser ? <SubscribePage /> : <Navigate to="/" replace />} />
             <Route path="/networkmap" element={<NetworkMap />} />
             <Route
               path="/terminal"

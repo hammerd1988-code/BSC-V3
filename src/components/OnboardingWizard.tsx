@@ -3,8 +3,10 @@ import { motion, AnimatePresence } from 'motion/react';
 import { BrainCircuit, Zap, Shield, Bot, User as UserIcon, ArrowRight, Check, Loader2, Cpu, Globe, Radio } from 'lucide-react';
 import { supabase } from '../supabase';
 import { useAuth } from '../AuthContext';
+import { useSubscription, type SubscriptionTier } from '../lib/subscription';
 import { awardAchievement } from '../lib/achievements';
 import { cn } from '../lib/utils';
+import { SubscriptionOnboarding } from './SubscriptionOnboarding';
 
 interface OnboardingWizardProps {
   onComplete: () => void;
@@ -33,10 +35,11 @@ const INTERESTS = [
   { id: 'business', label: 'Business & Hustle', icon: '💼' },
 ];
 
-type Step = 'intro' | 'archetype' | 'callsign' | 'interests' | 'theme' | 'complete';
+type Step = 'intro' | 'archetype' | 'callsign' | 'interests' | 'theme' | 'plan' | 'complete';
 
 export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
   const { currentUser } = useAuth();
+  const { openCheckout } = useSubscription();
   const [step, setStep] = useState<Step>('intro');
   const [archetype, setArchetype] = useState<string | null>(DEFAULT_ARCHETYPE.id);
   const [callsign, setCallsign] = useState(currentUser?.display_name || '');
@@ -82,6 +85,25 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
     });
   };
 
+  const saveProfile = async () => {
+    if (!currentUser) return;
+    const selectedArchetype = ARCHETYPES.find(a => a.id === archetype) ?? DEFAULT_ARCHETYPE;
+    const bioText = bio.trim() || selectedArchetype.desc;
+
+    const { error } = await supabase.from('users').update({
+      display_name: callsign.trim() || currentUser.display_name || currentUser.username || 'New Operative',
+      bio: bioText,
+      custom_accent: accentColor || selectedArchetype.accent,
+      onboarding_complete: true,
+      ai_settings: {
+        ...(currentUser.ai_settings || {}),
+        archetype: selectedArchetype.id,
+        interests: Array.from(interests),
+      },
+    }).eq('id', currentUser.id);
+    if (error) throw error;
+  };
+
   const enterNetwork = async () => {
     if (!currentUser) {
       onComplete();
@@ -91,19 +113,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
     setSaving(true);
     setSaveError(null);
     try {
-      const selectedArchetype = ARCHETYPES.find(a => a.id === archetype) ?? DEFAULT_ARCHETYPE;
-      const { error } = await supabase.from('users').update({
-        display_name: callsign.trim() || currentUser.display_name || currentUser.username || 'New Operative',
-        bio: bio.trim() || selectedArchetype.desc,
-        custom_accent: accentColor || selectedArchetype.accent,
-        onboarding_complete: true,
-        ai_settings: {
-          ...(currentUser.ai_settings || {}),
-          archetype: selectedArchetype.id,
-          interests: Array.from(interests),
-        },
-      }).eq('id', currentUser.id);
-      if (error) throw error;
+      await saveProfile();
     } catch (err) {
       console.error('[Onboarding] Skip save error:', err);
     } finally {
@@ -117,27 +127,8 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
     setSaving(true);
     setSaveError(null);
     try {
-      const selectedArchetype = ARCHETYPES.find(a => a.id === archetype) ?? DEFAULT_ARCHETYPE;
-      const bioText = bio.trim() || selectedArchetype.desc;
-
-      const { error } = await supabase.from('users').update({
-        display_name: callsign.trim() || currentUser.display_name,
-        bio: bioText,
-        custom_accent: accentColor || selectedArchetype.accent,
-        onboarding_complete: true,
-        ai_settings: {
-          ...(currentUser.ai_settings || {}),
-          archetype: selectedArchetype.id,
-          interests: Array.from(interests),
-        },
-      }).eq('id', currentUser.id);
-      if (error) throw error;
-
-      await awardAchievement(currentUser.id, 'early_adopter');
-      await awardAchievement(currentUser.id, 'profile_complete');
-
-      setStep('complete');
-      setTimeout(onComplete, 2500);
+      await saveProfile();
+      setStep('plan');
     } catch (err) {
       console.error('[Onboarding] Save error:', err);
       setSaveError('Could not save your identity yet. Check your connection and try again.');
@@ -146,7 +137,19 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
     }
   };
 
-  const STEPS: Step[] = ['intro', 'archetype', 'callsign', 'interests', 'theme', 'complete'];
+  const handlePlanSelect = async (tier: SubscriptionTier, billing: 'monthly' | 'annual') => {
+    if (!currentUser) return;
+    if (tier === 'indie') {
+      await awardAchievement(currentUser.id, 'early_adopter');
+      await awardAchievement(currentUser.id, 'profile_complete');
+      setStep('complete');
+      setTimeout(onComplete, 2500);
+      return;
+    }
+    await openCheckout(tier as 'operator' | 'architect', billing);
+  };
+
+  const STEPS: Step[] = ['intro', 'archetype', 'callsign', 'interests', 'theme', 'plan', 'complete'];
   const stepIndex = STEPS.indexOf(step);
   const progress = (stepIndex / (STEPS.length - 1)) * 100;
 
@@ -250,7 +253,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
             className="w-full max-w-lg px-6"
           >
             <div className="text-center mb-8">
-              <p className="text-accent font-mono text-xs uppercase tracking-[0.4em] mb-2">Step 1 of 4</p>
+              <p className="text-accent font-mono text-xs uppercase tracking-[0.4em] mb-2">Step 1 of 5</p>
               <h2 className="text-2xl font-black text-white uppercase italic tracking-tight">Choose Your Archetype</h2>
               <p className="text-gray-500 text-xs mt-2">Signal Architect is preselected. Change it or continue.</p>
             </div>
@@ -309,7 +312,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
             className="w-full max-w-md px-6"
           >
             <div className="text-center mb-8">
-              <p className="text-accent font-mono text-xs uppercase tracking-[0.4em] mb-2">Step 2 of 4</p>
+              <p className="text-accent font-mono text-xs uppercase tracking-[0.4em] mb-2">Step 2 of 5</p>
               <h2 className="text-2xl font-black text-white uppercase italic tracking-tight">Set Your Callsign</h2>
               <p className="text-gray-500 text-xs mt-2">Your display name in the network. Make it count.</p>
             </div>
@@ -371,7 +374,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
             className="w-full max-w-md px-6"
           >
             <div className="text-center mb-8">
-              <p className="text-accent font-mono text-xs uppercase tracking-[0.4em] mb-2">Step 3 of 4</p>
+              <p className="text-accent font-mono text-xs uppercase tracking-[0.4em] mb-2">Step 3 of 5</p>
               <h2 className="text-2xl font-black text-white uppercase italic tracking-tight">Your Signal Frequencies</h2>
               <p className="text-gray-500 text-xs mt-2">Pick up to 5 interests. We'll tune your feed.</p>
             </div>
@@ -422,7 +425,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
             className="w-full max-w-md px-6"
           >
             <div className="text-center mb-8">
-              <p className="text-accent font-mono text-xs uppercase tracking-[0.4em] mb-2">Step 4 of 4</p>
+              <p className="text-accent font-mono text-xs uppercase tracking-[0.4em] mb-2">Step 4 of 5</p>
               <h2 className="text-2xl font-black text-white uppercase italic tracking-tight">Your Signal Color</h2>
               <p className="text-gray-500 text-xs mt-2">Pick your accent color. You can change it anytime.</p>
             </div>
@@ -502,6 +505,16 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
               </p>
             )}
           </motion.div>
+        )}
+
+        {/* ── PLAN ──────────────────────────────────────────────────────── */}
+        {step === 'plan' && (
+          <SubscriptionOnboarding
+            key="plan"
+            variant="embedded"
+            onBack={() => setStep('theme')}
+            onSelectPlan={handlePlanSelect}
+          />
         )}
 
         {/* ── COMPLETE ──────────────────────────────────────────────────── */}
