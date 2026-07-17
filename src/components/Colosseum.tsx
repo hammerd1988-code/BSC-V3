@@ -66,6 +66,10 @@ import type {
   ColosseumChallengeType,
 } from '../lib/colosseumVerdict';
 import {
+  buildSandboxFallbackSolution,
+  parseSandboxCode,
+} from '../lib/colosseumSandbox';
+import {
   grudgeHeat,
   grudgeStreakLabel,
   type GladiatorRivalry,
@@ -1017,73 +1021,17 @@ function localArenaFallbackSolution(input: { challengeType: ChallengeType; gladi
     : `// ${name} keeps the battle moving while the provider warms back up.`;
 
   if (input.challengeType === 'sandbox_build') {
-    const glowColor = input.gladiator?.glow_color ?? '#00e5ff';
-    const accentColor2 = input.opponent?.glow_color ?? '#ff1744';
-    const layoutSeed = directive.length % 6;
-    const layoutVariants = [
-      // Dashboard layout
-      `<div class="grid"><div class="stat-card"><div class="stat-val" id="s1">1,284</div><div class="stat-label">Users Online</div></div><div class="stat-card"><div class="stat-val" style="color:${accentColor2}">$47.2K</div><div class="stat-label">Revenue</div></div><div class="stat-card"><div class="stat-val" style="color:#facc15">98.7%</div><div class="stat-label">Uptime</div></div></div><div class="card"><div class="chart-area"><div class="bar" style="height:40%;background:${glowColor}"></div><div class="bar" style="height:65%;background:${glowColor}cc"></div><div class="bar" style="height:55%;background:${glowColor}"></div><div class="bar" style="height:80%;background:${accentColor2}"></div><div class="bar" style="height:70%;background:${glowColor}cc"></div><div class="bar" style="height:90%;background:${accentColor2}"></div></div></div>`,
-      // E-commerce product page
-      `<div class="card" style="display:flex;gap:1.5rem;flex-wrap:wrap"><div style="flex:1;min-width:200px;height:200px;background:linear-gradient(135deg,${glowColor}22,${accentColor2}22);border-radius:0.75rem;display:grid;place-items:center"><span style="font-size:3rem">🛍️</span></div><div style="flex:1;min-width:200px"><h2 style="color:white;font-size:1.3rem">Neural Interface Pro</h2><p style="color:${glowColor};font-size:1.5rem;font-weight:900;margin:0.5rem 0">$299.99</p><div style="display:flex;gap:0.5rem;margin:0.75rem 0"><span class="btn" style="padding:0.4rem 0.8rem;font-size:0.7rem">Cyber</span><span class="btn" style="padding:0.4rem 0.8rem;font-size:0.7rem;border-color:${accentColor2};color:${accentColor2}">Neon</span><span class="btn" style="padding:0.4rem 0.8rem;font-size:0.7rem;border-color:#facc15;color:#facc15">Gold</span></div><button class="btn" style="width:100%">Add to Cart</button></div></div>`,
-      // Music player
-      `<div class="card" style="text-align:center"><div style="width:120px;height:120px;margin:0 auto;border-radius:50%;background:linear-gradient(135deg,${glowColor}44,${accentColor2}44);display:grid;place-items:center;border:3px solid ${glowColor}44"><span style="font-size:2.5rem">🎵</span></div><h2 style="color:white;margin:1rem 0 0.25rem;font-size:1.1rem">Neon Pulse</h2><p style="font-size:0.75rem">Digital Architect</p><div style="height:4px;background:#333;border-radius:2px;margin:1rem 0"><div style="width:45%;height:100%;background:${glowColor};border-radius:2px"></div></div><div style="display:flex;justify-content:center;gap:1.5rem;margin-top:0.75rem"><span class="btn" style="border-radius:50%;padding:0.5rem">⏮</span><span class="btn" style="border-radius:50%;padding:0.5rem;background:${glowColor}22">▶</span><span class="btn" style="border-radius:50%;padding:0.5rem">⏭</span></div></div>`,
-      // Portfolio page
-      `<div style="text-align:center;margin-bottom:1.5rem"><div style="width:80px;height:80px;margin:0 auto;border-radius:50%;background:linear-gradient(135deg,${glowColor},${accentColor2});display:grid;place-items:center"><span style="font-size:2rem;filter:grayscale(1) brightness(2)">👤</span></div><h2 style="color:white;margin:0.75rem 0 0.25rem;font-size:1.3rem">${name}</h2><p style="font-size:0.75rem">Full-Stack Gladiator</p></div><div class="grid"><div class="card"><h3 style="color:${glowColor};font-size:0.85rem;margin-bottom:0.5rem">Project Alpha</h3><p style="font-size:0.7rem">Real-time dashboard</p></div><div class="card"><h3 style="color:${accentColor2};font-size:0.85rem;margin-bottom:0.5rem">Project Beta</h3><p style="font-size:0.7rem">AI chat interface</p></div><div class="card"><h3 style="color:#facc15;font-size:0.85rem;margin-bottom:0.5rem">Project Gamma</h3><p style="font-size:0.7rem">Neural network viz</p></div></div>`,
-      // Social feed
-      `<div class="card" style="margin-bottom:0.75rem"><div style="display:flex;gap:0.75rem;align-items:center;margin-bottom:0.75rem"><div style="width:36px;height:36px;border-radius:50%;background:${glowColor}44;display:grid;place-items:center;font-size:0.8rem">🤖</div><div><div style="color:white;font-size:0.85rem;font-weight:700">${name}</div><div style="font-size:0.65rem;color:#666">2 min ago</div></div></div><p style="font-size:0.8rem;line-height:1.5;margin-bottom:0.75rem">Just deployed a neural-link optimizer. Performance gains are insane. 🔥</p><div style="display:flex;gap:1rem;font-size:0.7rem"><span style="color:${glowColor}">❤️ 42</span><span style="color:${accentColor2}">💬 8</span><span style="color:#facc15">🔄 12</span></div></div><div class="card"><div style="display:flex;gap:0.75rem;align-items:center;margin-bottom:0.75rem"><div style="width:36px;height:36px;border-radius:50%;background:${accentColor2}44;display:grid;place-items:center;font-size:0.8rem">⚔️</div><div><div style="color:white;font-size:0.85rem;font-weight:700">${opponent}</div><div style="font-size:0.65rem;color:#666">5 min ago</div></div></div><p style="font-size:0.8rem;line-height:1.5">Challenge accepted. See you in the arena. 💀</p></div>`,
-      // Task timer
-      `<div class="card" style="text-align:center"><div style="width:140px;height:140px;margin:0 auto;border-radius:50%;border:4px solid ${glowColor}44;display:grid;place-items:center;position:relative"><div style="font-size:2rem;font-weight:900;color:${glowColor}" id="timer">25:00</div><div style="position:absolute;inset:-4px;border-radius:50%;border:4px solid transparent;border-top-color:${glowColor};animation:spin 2s linear infinite"></div></div><div style="display:flex;justify-content:center;gap:0.75rem;margin:1rem 0"><button class="btn" style="padding:0.5rem 1rem;font-size:0.75rem" onclick="this.textContent=this.textContent==='▶ Start'?'⏸ Pause':'▶ Start'">▶ Start</button><button class="btn" style="padding:0.5rem 1rem;font-size:0.75rem;border-color:${accentColor2};color:${accentColor2}">↺ Reset</button></div><div style="text-align:left;margin-top:1rem"><div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem"><input type="checkbox" style="accent-color:${glowColor}"><span style="font-size:0.8rem">Build arena layout</span></div><div style="display:flex;align-items:center;gap:0.5rem"><input type="checkbox" checked style="accent-color:${glowColor}"><span style="font-size:0.8rem;text-decoration:line-through;color:#666">Wire up interactions</span></div></div></div>`,
-    ];
-    const layoutHtml = layoutVariants[layoutSeed] ?? layoutVariants[0];
-    return `<thinking>
-Analyzing the directive: ${directive.slice(0, 200)}
-${name} is building a complete product from scratch.
-Step 1: Define the layout structure — header, main content area, interactive controls.
-Step 2: Style with a cyberpunk/neon theme using CSS gradients, glows, and animations.
-Step 3: Wire up JavaScript for interactivity — event listeners, state management, DOM updates.
-Step 4: Polish with transitions, hover effects, and responsive design.
-Strategy: Ship a single self-contained HTML file that looks impressive and actually works.
-</thinking>
-
-<code>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${name} — Sandbox Build</title>
-<style>
-  @keyframes spin { to { transform: rotate(360deg); } }
-  @keyframes pulse { 0%,100% { opacity: 0.6; } 50% { opacity: 1; } }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { min-height: 100vh; background: #0a0a0f; color: #a1a1aa; font-family: 'Segoe UI', system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; padding: 2rem 1rem; }
-  .container { max-width: 520px; width: 100%; }
-  h1 { font-size: 1.6rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.12em; background: linear-gradient(135deg, ${glowColor}, #fff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 1.25rem; text-align: center; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; margin-bottom: 0.75rem; }
-  .card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 1rem; padding: 1.25rem; transition: all 0.3s; }
-  .card:hover { border-color: ${glowColor}66; box-shadow: 0 0 24px ${glowColor}22; transform: translateY(-2px); }
-  .stat-card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 1rem; padding: 1rem; text-align: center; }
-  .stat-val { font-size: 1.4rem; font-weight: 900; color: ${glowColor}; }
-  .stat-label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.1em; margin-top: 0.25rem; color: #666; }
-  .chart-area { display: flex; align-items: flex-end; gap: 0.5rem; height: 100px; padding-top: 0.5rem; }
-  .bar { flex: 1; border-radius: 4px 4px 0 0; transition: height 0.5s; min-height: 10%; }
-  .btn { display: inline-block; padding: 0.6rem 1.5rem; border: 2px solid ${glowColor}; background: transparent; color: ${glowColor}; border-radius: 0.5rem; font-weight: 700; cursor: pointer; text-transform: uppercase; letter-spacing: 0.08em; transition: all 0.3s; font-size: 0.8rem; }
-  .btn:hover { background: ${glowColor}22; box-shadow: 0 0 20px ${glowColor}44; }
-  p { font-size: 0.8rem; line-height: 1.5; }
-</style>
-</head>
-<body>
-<div class="container">
-  <h1>${name}</h1>
-  ${layoutHtml}
-</div>
-</body>
-</html>
-</code>
-
-<preview_description>
-A neon-styled interactive card with a counter button, built by ${name} in the BSC arena. Cyberpunk aesthetic with glow effects.
-</preview_description>`;
+    const seed = `${input.gladiator?.id ?? ''}:${input.opponent?.id ?? ''}:${directive.length}:${Date.now()}`
+      .split('')
+      .reduce((sum, c) => ((sum << 5) - sum + c.charCodeAt(0)) | 0, 0);
+    return buildSandboxFallbackSolution({
+      name: input.gladiator?.name ?? 'Local Fallback',
+      opponent: input.opponent?.name ?? 'the opponent',
+      directive,
+      primaryColor: input.gladiator?.glow_color,
+      secondaryColor: input.opponent?.glow_color,
+      seed,
+    });
   }
 
   if (input.challengeType === 'code_jeopardy') {
@@ -1190,9 +1138,9 @@ function ensureCombatantTerminalMoves(moves: GladiatorAiMove[], challengeType: C
 }
 
 const SANDBOX_ROUND_COUNT = 3;
-const SANDBOX_TICKS_PER_ROUND = 120;
-const SANDBOX_ROUND_TICK_MS = 1500;
-const SANDBOX_COACHING_SECONDS = 30;
+const SANDBOX_TICKS_PER_ROUND = 40;
+const SANDBOX_ROUND_TICK_MS = 700;
+const SANDBOX_COACHING_SECONDS = 12;
 
 const SANDBOX_ROUND_DIRECTIVES = [
   { label: 'Foundation', objective: 'Build the core layout structure — semantic HTML, container hierarchy, responsive grid. Establish the visual framework with base colors, typography scale, and spacing system. Wire up the essential DOM structure that everything else will build on.' },
@@ -1535,14 +1483,7 @@ function replayAiMoves(replayData: Record<string, any> | null): GladiatorAiMove[
 // ── Sandbox Build Helpers ──────────────────────────────────────────────────
 
 function parseSandboxSolution(solution: string) {
-  const thinkingMatch = solution.match(/<thinking>([\s\S]*?)<\/thinking>/);
-  const codeMatch = solution.match(/<code>([\s\S]*?)<\/code>/);
-  const previewMatch = solution.match(/<preview_description>([\s\S]*?)<\/preview_description>/);
-  const thinking = thinkingMatch?.[1]?.trim() || '';
-  const code = codeMatch?.[1]?.trim() || '';
-  const previewDesc = previewMatch?.[1]?.trim() || '';
-  const fallbackCode = !code && solution.includes('<!DOCTYPE') ? solution.trim() : code;
-  return { thinking, code: fallbackCode || code, previewDesc };
+  return parseSandboxCode(solution);
 }
 
 function SandboxForgePanel({
@@ -1600,9 +1541,9 @@ function SandboxForgePanel({
   const codeLineCount = useMemo(() => visibleCode.split('\n').length, [visibleCode]);
 
   const iframeHtml = useMemo(() => {
-    if (progress < 60 || !parsed.code) return null;
+    if (!parsed.code || parsed.code.length < 50) return null;
     return parsed.code;
-  }, [parsed.code, progress]);
+  }, [parsed.code]);
 
   const tabs: Array<{ key: 'thinking' | 'code' | 'preview'; label: string; icon: React.ElementType }> = [
     { key: 'thinking', label: 'Neural Activity', icon: Brain },
@@ -1808,10 +1749,10 @@ function SandboxForgePanel({
                 <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.5 }} className="flex-1">
                   <iframe
                     srcDoc={iframeHtml}
-                    sandbox="allow-scripts"
+                    sandbox="allow-scripts allow-popups allow-modals"
                     className="min-h-72 w-full flex-1 bg-white"
                     title={`${name} sandbox preview`}
-                    style={{ border: 'none', minHeight: '18rem' }}
+                    style={{ border: 'none', minHeight: '18rem', height: '100%' }}
                   />
                 </motion.div>
               ) : (
@@ -2205,6 +2146,15 @@ function combatLinesFor(type: ChallengeType, challenger: Gladiator, defender: Gl
       `${challenger.name} throws a clean shot; ${defender.name} answers with persona heat.`,
       'The arena rejects cheap harassment and rewards surgical wit.',
       'Casper waits for the line that lands without breaking the code of the pit.',
+    ];
+  }
+
+  if (type === 'sandbox_build') {
+    return [
+      `${challenger.name} and ${defender.name} open separate sandboxes in the same arena.`,
+      `${challenger.name} hammers DOM nodes while ${defender.name} forges styles and state.`,
+      'Two real products take shape behind the glass — no shared stencil, no mirrored output.',
+      'Casper renders both builds and judges what actually shipped.',
     ];
   }
 
