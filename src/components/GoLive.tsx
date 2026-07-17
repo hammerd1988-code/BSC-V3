@@ -191,6 +191,7 @@ export const GoLive: React.FC = () => {
   const isLiveRef = useRef(false);
   const endedRef = useRef(false);
   const streamIdRef = useRef<string | null>(null);
+  const currentUserRef = useRef(currentUser);
   const isViewer = !!viewerStreamId && !isLive;
   const activeStreamId = streamId || viewerStreamId;
   const filteredStreams = useMemo(() => {
@@ -343,10 +344,11 @@ export const GoLive: React.FC = () => {
     mediaRecorderRef.current = null;
     recordingChunksRef.current = [];
     setIsRecording(false);
-    if (!blob || !currentUser) return null;
+    const user = currentUserRef.current;
+    if (!blob || !user) return null;
 
     try {
-      const path = `${currentUser.id}/${id}-${Date.now()}.webm`;
+      const path = `${user.id}/${id}-${Date.now()}.webm`;
       const { error } = await supabase.storage.from('stream-replays').upload(path, blob, {
         cacheControl: '31536000',
         contentType: blob.type || 'video/webm',
@@ -445,8 +447,9 @@ export const GoLive: React.FC = () => {
         ended_at: new Date().toISOString(),
         ...(replayUrl ? { replay_url: replayUrl } : {}),
       }).eq('id', id);
-      if (currentUser) {
-        await supabase.from('users').update({ is_live: false, active_stream_id: null }).eq('id', currentUser.id);
+      const user = currentUserRef.current;
+      if (user) {
+        await supabase.from('users').update({ is_live: false, active_stream_id: null }).eq('id', user.id);
       }
     } catch (err) {
       handleDbError(err, 'UPDATE', `streams/${id}`);
@@ -456,6 +459,7 @@ export const GoLive: React.FC = () => {
   useEffect(() => { isLiveRef.current = isLive; }, [isLive]);
   useEffect(() => { endedRef.current = hasEnded; }, [hasEnded]);
   useEffect(() => { streamIdRef.current = streamId || viewerStreamId; }, [streamId, viewerStreamId]);
+  useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
 
   useEffect(() => () => {
     // On unmount (e.g. host closes the tab / navigates away) make sure an
@@ -883,8 +887,8 @@ export const GoLive: React.FC = () => {
               )}
             </div>
           )}
-          {isOwnStream && !hasEnded && replayWarning && (
-            <div className="absolute bottom-4 left-4 right-4 flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-500/15 px-3 py-2 text-[10px] font-bold text-amber-100 backdrop-blur-xl">
+          {isOwnStream && replayWarning && (
+            <div className="absolute left-4 right-4 top-16 z-10 flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-500/15 px-3 py-2 text-[10px] font-bold text-amber-100 backdrop-blur-xl">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>{replayWarning}</span>
             </div>
