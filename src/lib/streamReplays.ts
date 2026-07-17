@@ -11,6 +11,15 @@ export interface ReplayLike {
   category?: string | null;
 }
 
+/** Escape HTML-significant characters so user-controlled text can't inject markup. */
+const escapeHtml = (value: string): string =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
 /** Absolute playback link for a stream/replay, reusing the copyStreamLink pattern. */
 export const streamLink = (streamId: string): string =>
   `${window.location.origin}/golive?streamId=${streamId}`;
@@ -34,14 +43,15 @@ export const repostReplayToFeed = async (
   replay: ReplayLike,
   currentUser: Pick<User, 'id'>
 ): Promise<boolean> => {
-  const title = replay.title?.trim() || 'Live broadcast';
+  const title = escapeHtml(replay.title?.trim() || 'Live broadcast');
+  const category = replay.category ? escapeHtml(String(replay.category)) : '';
   const link = streamLink(replay.id);
   const mediaUrl = replay.replay_url || replay.thumbnail_url || null;
   const mediaType = replay.replay_url ? ('video' as const) : replay.thumbnail_url ? ('image' as const) : null;
 
   const content = [
     `<p>📺 Replay: ${title}</p>`,
-    replay.category ? `<p>${replay.category} broadcast</p>` : '',
+    category ? `<p>${category} broadcast</p>` : '',
     `<p><a href="${link}">Watch the replay →</a></p>`,
   ].join('');
 
