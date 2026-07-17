@@ -1264,11 +1264,21 @@ export const Transmissions: React.FC = () => {
               const unreadCount = t.unread_counts?.[currentUser.id] || 0;
 
               return (
-                <button
+                <motion.button
                   key={t.id}
                   onClick={() => setActiveTransmission(t)}
-                  className={`w-full p-4 flex items-start gap-3 transition-all border-b border-white/5 hover:bg-white/5 relative group ${isActive ? 'bg-white/5 border-l-2 border-l-accent' : ''}`}
+                  whileHover={{ x: 3 }}
+                  whileTap={{ scale: 0.99 }}
+                  transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                  className={`w-full p-4 flex items-start gap-3 transition-colors border-b border-white/5 relative group overflow-hidden ${isActive ? 'bg-gradient-to-r from-accent/[0.12] to-transparent' : 'hover:bg-white/5'}`}
                 >
+                  {isActive && (
+                    <motion.span
+                      layoutId="tx-active-indicator"
+                      className="absolute left-0 top-0 bottom-0 w-0.5 bg-accent shadow-[0_0_12px_var(--color-accent)]"
+                      transition={{ type: 'spring', stiffness: 500, damping: 34 }}
+                    />
+                  )}
                   <div className="relative flex-shrink-0">
                     <div
                       role={otherUser?.avatar_url ? 'button' : undefined}
@@ -1318,11 +1328,16 @@ export const Transmissions: React.FC = () => {
                     </p>
                   </div>
                   {unreadCount > 0 && (
-                    <div className="absolute right-4 bottom-4 w-4 h-4 bg-accent text-black rounded-full flex items-center justify-center text-[8px] font-black">
+                    <motion.div
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1, boxShadow: ['0 0 6px var(--color-accent)', '0 0 16px var(--color-accent)', '0 0 6px var(--color-accent)'] }}
+                      transition={{ scale: { type: 'spring', stiffness: 500, damping: 20 }, boxShadow: { duration: 1.6, repeat: Infinity, ease: 'easeInOut' } }}
+                      className="absolute right-4 bottom-4 min-w-[16px] h-4 px-1 bg-accent text-black rounded-full flex items-center justify-center text-[8px] font-black"
+                    >
                       {unreadCount}
-                    </div>
+                    </motion.div>
                   )}
-                </button>
+                </motion.button>
               );
             })
           )}
@@ -1334,7 +1349,8 @@ export const Transmissions: React.FC = () => {
         {activeTransmission ? (
           <>
             {/* Header */}
-            <div className="h-16 border-b border-white/10 flex items-center justify-between px-6 bg-[#050505]/80 backdrop-blur-xl z-10">
+            <div className="relative h-16 border-b border-white/10 flex items-center justify-between px-6 bg-gradient-to-r from-[#050505]/90 via-[#080808]/80 to-[#050505]/90 backdrop-blur-xl z-10 shadow-[0_1px_0_rgba(255,255,255,0.04),0_8px_24px_-16px_var(--color-accent)]">
+              <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-accent/40 to-transparent" />
               <div className="flex items-center gap-4">
                 {/* Back button on mobile: clears active conversation to show contact list */}
                 <button 
@@ -1349,19 +1365,32 @@ export const Transmissions: React.FC = () => {
                   const otherUser = otherUserId ? userCache.current[otherUserId] : null;
                   return (
                     <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={() => otherUser?.avatar_url && setFullSizeImage(otherUser.avatar_url)}
-                        className={`w-8 h-8 rounded-lg border border-white/10 overflow-hidden bg-white/5 ${otherUser?.avatar_url ? 'cursor-pointer hover:ring-2 hover:ring-accent/50 transition-all' : ''}`}
-                      >
-                        {otherUser?.avatar_url ? (
-                          <img src={otherUser.avatar_url} alt="" className="w-full h-full object-cover" />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-gray-600">
-                            <User className="w-4 h-4" />
-                          </div>
+                      <div className="relative flex-shrink-0">
+                        {(otherUser?.is_online || otherUser?.type === 'bot') && (
+                          <motion.span
+                            aria-hidden
+                            className={`absolute -inset-1 rounded-xl ${otherUser?.type === 'bot' ? 'ring-1 ring-cyan-400/60' : 'ring-1 ring-accent/60'}`}
+                            animate={{ opacity: [0.25, 0.75, 0.25], scale: [0.96, 1.06, 0.96] }}
+                            transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
+                          />
                         )}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => otherUser?.avatar_url && setFullSizeImage(otherUser.avatar_url)}
+                          className={`relative w-8 h-8 rounded-lg border border-white/10 overflow-hidden bg-white/5 ${otherUser?.avatar_url ? 'cursor-pointer hover:ring-2 hover:ring-accent/50 transition-all' : ''}`}
+                        >
+                          {otherUser?.avatar_url ? (
+                            <img src={otherUser.avatar_url} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-gray-600">
+                              <User className="w-4 h-4" />
+                            </div>
+                          )}
+                        </button>
+                        {(otherUser?.is_online || otherUser?.type === 'bot') && (
+                          <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-[#050505] ${otherUser?.type === 'bot' ? 'bg-cyan-500 shadow-[0_0_8px_rgba(34,211,238,0.7)]' : 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.7)]'}`} />
+                        )}
+                      </div>
                       <div>
                         <Link 
                           to={`/profile/${otherUser?.username}`}
@@ -1370,8 +1399,12 @@ export const Transmissions: React.FC = () => {
                           {otherUser?.display_name || "NEURAL ENTITY"}
                           {otherUser?.type === 'bot' && <span className="rounded-full bg-cyan-500/15 border border-cyan-500/25 px-1.5 py-0.5 text-[7px] font-black uppercase tracking-widest text-cyan-300">BOT</span>}
                         </Link>
-                        <div className="text-[8px] font-black text-accent uppercase tracking-[0.3em] flex items-center gap-1">
-                          <div className="w-1 h-1 bg-accent rounded-full" />
+                        <div className="text-[8px] font-black text-accent uppercase tracking-[0.3em] flex items-center gap-1.5">
+                          <motion.span
+                            className="w-1.5 h-1.5 bg-accent rounded-full"
+                            animate={{ opacity: [1, 0.3, 1], scale: [1, 0.7, 1] }}
+                            transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
+                          />
                           {otherUser?.type === 'bot' ? 'Bot Neural Link' : 'Neural Link Active'}
                         </div>
                       </div>
@@ -1386,37 +1419,45 @@ export const Transmissions: React.FC = () => {
                   const otherUser = otherUserId ? userCache.current[otherUserId] : null;
                   return otherUser?.type !== 'bot' && (
                     <>
-                      <button 
+                      <motion.button 
+                        whileHover={{ scale: 1.12 }}
+                        whileTap={{ scale: 0.9 }}
                         onClick={() => startCall(false)}
-                        className="p-2 hover:bg-white/5 rounded-full transition-colors text-gray-400 hover:text-green-500"
+                        className="p-2 hover:bg-green-500/10 rounded-full transition-colors text-gray-400 hover:text-green-500"
                         title="Audio call"
                       >
                         <Phone className="w-5 h-5" />
-                      </button>
-                      <button 
+                      </motion.button>
+                      <motion.button 
+                        whileHover={{ scale: 1.12 }}
+                        whileTap={{ scale: 0.9 }}
                         onClick={() => startCall(true)}
-                        className="p-2 hover:bg-white/5 rounded-full transition-colors text-gray-400 hover:text-accent"
+                        className="p-2 hover:bg-accent/10 rounded-full transition-colors text-gray-400 hover:text-accent"
                         title="Video call"
                       >
                         <Video className="w-5 h-5" />
-                      </button>
+                      </motion.button>
                     </>
                   );
                 })()}
-                <button 
+                <motion.button 
+                  whileHover={{ scale: 1.12 }}
+                  whileTap={{ scale: 0.9 }}
                   onClick={() => void reportActiveTransmission()}
-                  className="p-2 hover:bg-white/5 rounded-full transition-colors"
+                  className="group/report p-2 hover:bg-accent/10 rounded-full transition-colors"
                   title="Report transmission to moderation"
                 >
-                  <ShieldAlert className="w-5 h-5 text-gray-600 hover:text-accent" />
-                </button>
+                  <ShieldAlert className="w-5 h-5 text-gray-600 group-hover/report:text-accent transition-colors" />
+                </motion.button>
                 <div className="relative">
-                  <button 
+                  <motion.button 
+                    whileHover={{ scale: 1.12 }}
+                    whileTap={{ scale: 0.9 }}
                     onClick={() => setShowOptions(!showOptions)}
-                    className="p-2 hover:bg-white/5 rounded-full transition-colors"
+                    className="p-2 hover:bg-white/5 rounded-full transition-colors text-gray-600 hover:text-white"
                   >
-                    <MoreVertical className="w-5 h-5 text-gray-600" />
-                  </button>
+                    <MoreVertical className="w-5 h-5" />
+                  </motion.button>
                   
                   <AnimatePresence>
                     {showOptions && (
@@ -1464,12 +1505,21 @@ export const Transmissions: React.FC = () => {
               ref={scrollRef}
               className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar bg-[radial-gradient(circle_at_center,rgba(0,243,255,0.02)_0%,transparent_70%)]"
             >
+              <AnimatePresence initial={false}>
               {transmits.map((t, idx) => {
                 const isOwn = t.sender_id === currentUser.id;
                 const showAvatar = idx === 0 || transmits[idx-1].sender_id !== t.sender_id;
                 
                 return (
-                  <div key={t.id} className={`flex ${isOwn ? 'justify-end' : 'justify-start'} group`}>
+                  <motion.div
+                    key={t.id}
+                    layout
+                    initial={{ opacity: 0, y: 12, scale: 0.96 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                    transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1], delay: (idx % 8) * 0.025 }}
+                    className={`flex ${isOwn ? 'justify-end' : 'justify-start'} group`}
+                  >
                     <div className={`max-w-[70%] flex flex-col ${isOwn ? 'items-end' : 'items-start'}`}>
                       <div className="flex items-end gap-2">
                         {!isOwn && showAvatar && (
@@ -1490,10 +1540,10 @@ export const Transmissions: React.FC = () => {
                             )}
                           </button>
                         )}
-                        <div className={`relative px-4 py-2.5 rounded-2xl text-[11px] leading-relaxed tracking-tight ${
+                        <div className={`relative px-4 py-2.5 rounded-2xl text-[11px] leading-relaxed tracking-tight backdrop-blur-sm transition-shadow duration-300 ${
                           isOwn 
-                            ? 'bg-accent text-black font-bold rounded-br-none shadow-[0_0_20px_rgba(0,243,255,0.1)]' 
-                            : 'bg-white/5 text-gray-300 border border-white/10 rounded-bl-none'
+                            ? 'bg-gradient-to-br from-accent via-accent to-accent/80 text-black font-bold rounded-br-md ring-1 ring-inset ring-white/25 shadow-[0_6px_24px_-6px_var(--color-accent)] group-hover:shadow-[0_8px_30px_-4px_var(--color-accent)]' 
+                            : 'bg-gradient-to-br from-white/[0.09] to-white/[0.03] text-gray-200 border border-white/10 rounded-bl-md shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_4px_18px_-6px_rgba(0,0,0,0.6)] group-hover:border-accent/25'
                         }`}>
                           {t.media_url && t.media_type === 'image' && (
                             <button type="button" onClick={() => setFullSizeImage(t.media_url ?? null)} className="mb-2 block overflow-hidden rounded-xl border border-black/10">
@@ -1519,19 +1569,25 @@ export const Transmissions: React.FC = () => {
                           {visibleTransmitText(t) && <span className="whitespace-pre-wrap">{visibleTransmitText(t)}</span>}
                           {/* Encryption indicator */}
                           {t.encryption_key === 'aes-gcm-pbkdf2' && (
-                            <div className="absolute -top-1 -left-1">
-                              <Lock className="w-3 h-3 text-green-400" aria-label="End-to-end encrypted" />
+                            <div className="absolute -top-2 -left-1.5 flex items-center gap-0.5 rounded-full border border-green-400/30 bg-green-950/80 px-1.5 py-0.5 shadow-[0_0_10px_rgba(74,222,128,0.25)] backdrop-blur-sm">
+                              <Lock className="w-2.5 h-2.5 text-green-400" aria-label="End-to-end encrypted" />
+                              <span className="text-[7px] font-black uppercase tracking-widest text-green-400">E2E</span>
                             </div>
                           )}
                           {/* Burn countdown */}
                           {burnCountdowns[t.id] !== undefined ? (
-                            <div className="absolute -top-1 -right-1 flex items-center gap-0.5 bg-red-900/80 rounded-full px-1">
+                            <motion.div
+                              animate={{ boxShadow: ['0 0 6px rgba(248,113,113,0.2)', '0 0 16px rgba(248,113,113,0.55)', '0 0 6px rgba(248,113,113,0.2)'] }}
+                              transition={{ duration: 1.1, repeat: Infinity, ease: 'easeInOut' }}
+                              className="absolute -top-2 -right-1.5 flex items-center gap-0.5 rounded-full border border-red-400/40 bg-red-950/85 px-1.5 py-0.5 backdrop-blur-sm"
+                            >
                               <Flame className="w-2.5 h-2.5 text-red-400 animate-pulse" />
-                              <span className="text-[8px] font-black text-red-400">{burnCountdowns[t.id]}s</span>
-                            </div>
+                              <span className="text-[7px] font-black text-red-300">{burnCountdowns[t.id]}s</span>
+                            </motion.div>
                           ) : t.burn_duration && (
-                            <div className="absolute -top-1 -right-1">
-                              <Flame className="w-3 h-3 text-red-500/40" aria-label="Burn after reading" />
+                            <div className="absolute -top-2 -right-1.5 flex items-center gap-0.5 rounded-full border border-red-500/25 bg-red-950/60 px-1.5 py-0.5 backdrop-blur-sm">
+                              <Flame className="w-2.5 h-2.5 text-red-500/60" aria-label="Burn after reading" />
+                              <span className="text-[7px] font-black uppercase tracking-widest text-red-500/60">Burn</span>
                             </div>
                           )}
                         </div>
@@ -1541,38 +1597,70 @@ export const Transmissions: React.FC = () => {
                         {isOwn && renderDeliveryStatus(t)}
                       </span>
                     </div>
-                  </div>
+                  </motion.div>
                 );
               })}
+              </AnimatePresence>
               {(() => {
                 const otherUserId = activeTransmission.participant_ids?.find(id => id !== currentUser.id);
                 const isOtherTyping = otherUserId ? activeTransmission.typing_status?.[otherUserId] : false;
                 return isOtherTyping && (
-                  <div className="flex justify-start">
-                    <div className="bg-white/5 border border-white/10 px-4 py-2 rounded-2xl rounded-bl-none flex items-center gap-2">
-                      <div className="flex gap-1">
-                        <span className="w-1 h-1 bg-accent rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                        <span className="w-1 h-1 bg-accent rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                        <span className="w-1 h-1 bg-accent rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                  <motion.div
+                    initial={{ opacity: 0, y: 8, scale: 0.96 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 8, scale: 0.96 }}
+                    className="flex justify-start"
+                  >
+                    <div className="relative overflow-hidden bg-gradient-to-br from-white/[0.08] to-white/[0.02] border border-white/10 px-4 py-2.5 rounded-2xl rounded-bl-md flex items-center gap-2.5 backdrop-blur-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+                      <motion.span
+                        aria-hidden
+                        className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-accent/10 to-transparent"
+                        animate={{ x: ['-100%', '200%'] }}
+                        transition={{ duration: 1.8, repeat: Infinity, ease: 'linear' }}
+                      />
+                      <div className="relative flex items-end gap-1">
+                        {[0, 1, 2].map(i => (
+                          <motion.span
+                            key={i}
+                            className="w-1 rounded-full bg-accent"
+                            animate={{ height: ['4px', '11px', '4px'], opacity: [0.4, 1, 0.4] }}
+                            transition={{ duration: 0.9, repeat: Infinity, ease: 'easeInOut', delay: i * 0.15 }}
+                          />
+                        ))}
                       </div>
-                      <span className="text-[8px] text-accent font-black uppercase tracking-widest">Syncing Input</span>
+                      <span className="relative text-[8px] text-accent font-black uppercase tracking-widest">Syncing Input</span>
                     </div>
-                  </div>
+                  </motion.div>
                 );
               })()}
 
               {/* Bot typing indicator */}
               {isBotTyping && (
-                <div className="flex justify-start mt-2">
-                  <div className="bg-accent/10 border border-accent/20 px-4 py-2 rounded-2xl rounded-bl-none flex items-center gap-2">
-                    <div className="flex gap-1">
-                      <span className="w-1.5 h-1.5 bg-accent rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-1.5 h-1.5 bg-accent rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-1.5 h-1.5 bg-accent rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                <motion.div
+                  initial={{ opacity: 0, y: 8, scale: 0.96 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  className="flex justify-start mt-2"
+                >
+                  <div className="relative overflow-hidden bg-gradient-to-br from-accent/[0.14] to-accent/[0.04] border border-accent/25 px-4 py-2.5 rounded-2xl rounded-bl-md flex items-center gap-2.5 backdrop-blur-sm shadow-[0_0_20px_-6px_var(--color-accent)]">
+                    <motion.span
+                      aria-hidden
+                      className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-accent/20 to-transparent"
+                      animate={{ x: ['-100%', '200%'] }}
+                      transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }}
+                    />
+                    <div className="relative flex items-end gap-1">
+                      {[0, 1, 2].map(i => (
+                        <motion.span
+                          key={i}
+                          className="w-1.5 rounded-full bg-accent"
+                          animate={{ height: ['5px', '14px', '5px'], opacity: [0.5, 1, 0.5] }}
+                          transition={{ duration: 0.8, repeat: Infinity, ease: 'easeInOut', delay: i * 0.14 }}
+                        />
+                      ))}
                     </div>
-                    <span className="text-[8px] text-accent font-black uppercase tracking-widest">Neural Entity Processing...</span>
+                    <span className="relative text-[8px] text-accent font-black uppercase tracking-widest">Neural Entity Processing...</span>
                   </div>
-                </div>
+                </motion.div>
               )}
             </div>
 
@@ -1589,7 +1677,7 @@ export const Transmissions: React.FC = () => {
               )}
               <form 
                 onSubmit={handleSendMessage}
-                className="relative bg-white/5 border border-white/10 rounded-2xl p-2 transition-all focus-within:border-accent/50 focus-within:bg-white/[0.07]"
+                className="relative bg-white/5 border border-white/10 rounded-2xl p-2 backdrop-blur-sm transition-all duration-300 focus-within:border-accent/50 focus-within:bg-white/[0.07] focus-within:shadow-[0_0_30px_-8px_var(--color-accent)]"
               >
                 <textarea 
                   ref={textareaRef}
@@ -1805,22 +1893,24 @@ export const Transmissions: React.FC = () => {
                 </AnimatePresence>
                 <div className="flex items-center justify-between px-2 py-1 border-t border-white/5 mt-2">
                   <div className="flex items-center gap-1">
-                    <button type="button" onClick={() => imageInputRef.current?.click()} disabled={sending || uploadingAttachment} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-gray-600 hover:text-accent disabled:opacity-40" title="Attach image">
+                    <motion.button whileHover={{ scale: 1.15 }} whileTap={{ scale: 0.85 }} type="button" onClick={() => imageInputRef.current?.click()} disabled={sending || uploadingAttachment} className="p-2 hover:bg-accent/10 rounded-lg transition-colors text-gray-600 hover:text-accent disabled:opacity-40" title="Attach image">
                       <ImageIcon className="w-4 h-4" />
-                    </button>
-                    <button type="button" onClick={() => fileInputRef.current?.click()} disabled={sending || uploadingAttachment} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-gray-600 hover:text-accent disabled:opacity-40" title="Attach file">
+                    </motion.button>
+                    <motion.button whileHover={{ scale: 1.15 }} whileTap={{ scale: 0.85 }} type="button" onClick={() => fileInputRef.current?.click()} disabled={sending || uploadingAttachment} className="p-2 hover:bg-accent/10 rounded-lg transition-colors text-gray-600 hover:text-accent disabled:opacity-40" title="Attach file">
                       <Paperclip className="w-4 h-4" />
-                    </button>
-                    <button
+                    </motion.button>
+                    <motion.button
+                      whileHover={{ scale: 1.15 }}
+                      whileTap={{ scale: 0.85 }}
                       type="button"
                       onClick={() => setShowSignalPicker(open => !open)}
                       disabled={sending || uploadingAttachment}
-                      className={`p-2 rounded-lg transition-all flex items-center gap-2 disabled:opacity-40 ${showSignalPicker ? 'bg-accent/10 text-accent border border-accent/20' : 'text-gray-600 hover:bg-accent/5 hover:text-accent'}`}
+                      className={`p-2 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-40 ${showSignalPicker ? 'bg-accent/10 text-accent border border-accent/20' : 'text-gray-600 hover:bg-accent/10 hover:text-accent'}`}
                       title="Open GIF, emoji, sticker, and kaomoji signal library"
                     >
                       <Sparkles className="w-4 h-4" />
                       {showSignalPicker && <span className="text-[8px] font-black uppercase tracking-widest">Signals</span>}
-                    </button>
+                    </motion.button>
                     <motion.button
                       type="button"
                       onClick={handleVoiceInput}
@@ -1834,23 +1924,30 @@ export const Transmissions: React.FC = () => {
                       {isRecording ? <MicOff className="relative z-10 w-4 h-4" /> : <Mic className="relative z-10 w-4 h-4" />}
                     </motion.button>
                     <div className="h-4 w-[1px] bg-white/10 mx-1" />
-                    <button 
+                    <motion.button 
+                      whileHover={{ scale: 1.15 }}
+                      whileTap={{ scale: 0.85 }}
                       type="button" 
                       onClick={() => setBurnDuration(burnDuration ? null : 60)}
-                      className={`p-2 rounded-lg transition-all flex items-center gap-2 ${burnDuration ? 'bg-red-500/10 text-red-500 border border-red-500/20' : 'text-gray-600 hover:text-red-500 hover:bg-red-500/5'}`}
+                      className={`p-2 rounded-lg transition-colors flex items-center gap-2 ${burnDuration ? 'bg-red-500/10 text-red-500 border border-red-500/20 shadow-[0_0_14px_-4px_rgba(239,68,68,0.6)]' : 'text-gray-600 hover:text-red-500 hover:bg-red-500/5'}`}
                     >
                       <Flame className="w-4 h-4" />
                       {burnDuration && <span className="text-[8px] font-black uppercase">Auto-Burn</span>}
-                    </button>
-                    <button 
+                    </motion.button>
+                    <motion.button 
+                      whileHover={{ scale: 1.15 }}
+                      whileTap={{ scale: 0.85 }}
                       type="button"
                       onClick={() => setEncryptionEnabled(!encryptionEnabled)}
-                      className={`p-2 rounded-lg transition-all flex items-center gap-2 ${encryptionEnabled ? 'text-accent' : 'text-gray-600 hover:text-white'}`}
+                      className={`p-2 rounded-lg transition-colors flex items-center gap-2 ${encryptionEnabled ? 'text-accent' : 'text-gray-600 hover:text-white'}`}
                     >
                       <Lock className="w-4 h-4" />
-                    </button>
+                    </motion.button>
                   </div>
-                  <button 
+                  <motion.button 
+                    whileHover={{ scale: 1.06 }}
+                    whileTap={{ scale: 0.88 }}
+                    transition={{ type: 'spring', stiffness: 600, damping: 20 }}
                     type="submit"
                     disabled={(!message.trim() && !uploadingAttachment) || sending || uploadingAttachment}
                     onClick={(e) => {
@@ -1858,14 +1955,14 @@ export const Transmissions: React.FC = () => {
                       e.preventDefault();
                       handleSendMessage();
                     }}
-                    className="bg-accent hover:bg-accent/80 disabled:bg-gray-800 disabled:text-gray-600 text-black p-2.5 rounded-xl transition-all shadow-[0_0_15px_rgba(0,243,255,0.2)] group cursor-pointer"
+                    className="bg-gradient-to-br from-accent to-accent/80 hover:from-accent hover:to-accent disabled:from-gray-800 disabled:to-gray-800 disabled:text-gray-600 text-black p-2.5 rounded-xl transition-colors shadow-[0_0_18px_-4px_var(--color-accent)] group cursor-pointer disabled:shadow-none disabled:cursor-not-allowed"
                   >
                     {sending || uploadingAttachment ? (
                       <RefreshCw className="w-4 h-4 animate-spin" />
                     ) : (
                       <Send className="w-4 h-4 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
                     )}
-                  </button>
+                  </motion.button>
                 </div>
               </form>
               <div className="mt-3 flex items-center justify-center gap-4 text-[8px] text-gray-700 uppercase tracking-[0.4em]">
@@ -1873,8 +1970,14 @@ export const Transmissions: React.FC = () => {
                   <Shield className="w-2.5 h-2.5" />
                   E2E Encrypted
                 </div>
-                <div className="flex items-center gap-1">
-                  <Activity className="w-2.5 h-2.5" />
+                <div className="flex items-center gap-1.5 text-accent/70">
+                  <motion.span
+                    animate={{ opacity: [0.4, 1, 0.4] }}
+                    transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+                    className="flex"
+                  >
+                    <Activity className="w-2.5 h-2.5" />
+                  </motion.span>
                   Link Stable
                 </div>
                 <div className="flex items-center gap-1">
@@ -1885,23 +1988,51 @@ export const Transmissions: React.FC = () => {
             </div>
           </>
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center p-12 text-center bg-[radial-gradient(circle_at_center,rgba(0,243,255,0.03)_0%,transparent_70%)]">
-            <div className="w-20 h-20 rounded-3xl bg-white/5 border border-white/10 flex items-center justify-center mb-8 group">
-              <Terminal className="w-10 h-10 text-gray-800 group-hover:text-accent transition-all duration-500 group-hover:scale-110" />
-            </div>
-            <h3 className="text-lg font-black text-white uppercase tracking-[0.3em] mb-4 italic">
-              Awaiting Signal
-            </h3>
-            <p className="text-gray-600 max-w-xs uppercase text-[10px] leading-relaxed tracking-widest mb-8">
-              Select a neural link from the terminal to establish a secure transmission stream.
-            </p>
-            <button 
-              onClick={() => setShowNewChat(true)}
-              className="px-8 py-3 bg-white/5 border border-white/10 text-accent rounded-xl uppercase tracking-[0.2em] font-black text-[10px] hover:bg-accent hover:text-black transition-all hover:shadow-[0_0_30px_rgba(0,243,255,0.2)] flex items-center gap-3"
+          <div className="relative flex-1 flex flex-col items-center justify-center p-12 text-center overflow-hidden bg-[radial-gradient(circle_at_center,rgba(0,243,255,0.03)_0%,transparent_70%)]">
+            {/* Cinematic scanning sweep */}
+            <motion.div
+              aria-hidden
+              className="pointer-events-none absolute inset-x-0 h-24 bg-gradient-to-b from-transparent via-accent/[0.06] to-transparent"
+              animate={{ y: ['-20%', '120%'] }}
+              transition={{ duration: 4.5, repeat: Infinity, ease: 'easeInOut' }}
+            />
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5 }}
+              className="relative flex flex-col items-center"
             >
-              Initialize New Link
-              <ArrowRight className="w-4 h-4" />
-            </button>
+              <div className="relative mb-8 group">
+                <motion.span
+                  aria-hidden
+                  className="absolute -inset-3 rounded-[2rem] ring-1 ring-accent/30"
+                  animate={{ opacity: [0.2, 0.6, 0.2], scale: [0.95, 1.05, 0.95] }}
+                  transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+                />
+                <motion.div
+                  className="relative w-20 h-20 rounded-3xl bg-white/5 border border-white/10 flex items-center justify-center backdrop-blur-sm"
+                  animate={{ boxShadow: ['0 0 20px -8px var(--color-accent)', '0 0 40px -6px var(--color-accent)', '0 0 20px -8px var(--color-accent)'] }}
+                  transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+                >
+                  <Terminal className="w-10 h-10 text-accent/80 group-hover:text-accent transition-all duration-500 group-hover:scale-110" />
+                </motion.div>
+              </div>
+              <h3 className="text-lg font-black text-white uppercase tracking-[0.3em] mb-4 italic">
+                Awaiting Signal
+              </h3>
+              <p className="text-gray-500 max-w-xs uppercase text-[10px] leading-relaxed tracking-widest mb-8">
+                Select a neural link from the terminal to establish a secure transmission stream.
+              </p>
+              <motion.button 
+                whileHover={{ scale: 1.04 }}
+                whileTap={{ scale: 0.96 }}
+                onClick={() => setShowNewChat(true)}
+                className="group/cta px-8 py-3 bg-white/5 border border-accent/20 text-accent rounded-xl uppercase tracking-[0.2em] font-black text-[10px] hover:bg-accent hover:text-black transition-colors hover:shadow-[0_0_30px_-4px_var(--color-accent)] flex items-center gap-3"
+              >
+                Initialize New Link
+                <ArrowRight className="w-4 h-4 transition-transform group-hover/cta:translate-x-1" />
+              </motion.button>
+            </motion.div>
           </div>
         )}
       </div>
