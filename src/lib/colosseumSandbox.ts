@@ -72,8 +72,12 @@ function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-function escapeJsString(value: string): string {
-  return value.replace(/[\\"']/g, '\\$&').replace(/\n/g, '\\n').replace(/\r/g, '');
+function inlineJsString(value: string): string {
+  // Encode < and > as \u003c / \u003e so a name containing </script> cannot
+  // close the inline <script> block in the generated fallback HTML.
+  return JSON.stringify(value)
+    .split('<').join(String.fromCharCode(92) + 'u003c')
+    .split('>').join(String.fromCharCode(92) + 'u003e');
 }
 
 export function buildSandboxFallbackHtml(input: SandboxFallbackInput): string {
@@ -84,24 +88,26 @@ export function buildSandboxFallbackHtml(input: SandboxFallbackInput): string {
   const secondary = pickColor(input.secondaryColor, '#ff1744');
   const seed = Math.floor(input.seed || 0);
   const feature = sandboxFeature(seed);
-  const layout = seed % 3;
+  const layout = Math.abs(seed) % 3;
 
   // The iframe runs this inline script to pick one interactive feature deterministically.
-  const featureLabel = escapeJsString(feature.label);
+  const featureLabel = inlineJsString(feature.label);
   const script = `<script>
 (function () {
   const seed = ${seed};
-  const name = '${escapeJsString(input.name)}';
-  const opponent = '${escapeJsString(input.opponent)}';
+  const name = ${inlineJsString(input.name)};
+  const opponent = ${inlineJsString(input.opponent)};
   const primary = '${primary}';
   const secondary = '${secondary}';
-  const featureName = '${featureLabel}';
+  const featureName = ${featureLabel};
   const stage = document.getElementById('feature-stage');
 
   function setText(id, text) {
     const el = document.getElementById(id);
     if (el) el.textContent = text;
   }
+
+  const h = (s) => s.replace(/[&<>]/g, c => c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;');
 
   function featureCounter() {
     let count = 0;
@@ -150,13 +156,13 @@ export function buildSandboxFallbackHtml(input: SandboxFallbackInput): string {
           <button class="tab-btn btn" data-tab="lore">Lore</button>
         </div>
         <div id="tab-build" class="tab-panel" style="display:block">
-          <p>\${name} is forging a live product inside the arena sandbox. No external dependencies, just HTML/CSS/JS.</p>
+          <p>\${h(name)} is forging a live product inside the arena sandbox. No external dependencies, just HTML/CSS/JS.</p>
         </div>
         <div id="tab-stats" class="tab-panel" style="display:none">
           <div class="stat-card"><div class="stat-val">97%</div><div class="stat-label">Energy</div></div>
         </div>
         <div id="tab-lore" class="tab-panel" style="display:none">
-          <p>Opponent: <strong>\${opponent}</strong>. The crowd demands a working product.</p>
+          <p>Opponent: <strong>\${h(opponent)}</strong>. The crowd demands a working product.</p>
         </div>
       </div>\`;
     document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -230,7 +236,7 @@ export function buildSandboxFallbackHtml(input: SandboxFallbackInput): string {
 
   function featureAccordion() {
     const sections = [
-      { title: 'Strategy', body: \`\${name} plans a unique layout and interactivity pattern to avoid mirroring \${opponent}.\` },
+      { title: 'Strategy', body: \`\${h(name)} plans a unique layout and interactivity pattern to avoid mirroring \${h(opponent)}.\` },
       { title: 'Stack', body: 'Single HTML file. Embedded CSS and vanilla JavaScript. No build step, no framework.' },
       { title: 'Win Condition', body: 'The product must work, look polished, and feel different from the opponent.' }
     ];
@@ -404,7 +410,7 @@ h1 { font-size: 1.5rem; font-weight: 900; text-transform: uppercase; letter-spac
 .directive { font-size: 0.75rem; color: #71717a; text-align: center; max-width: 520px; margin: 0 auto 1.5rem; line-height: 1.5; }
 .feature-area { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 1rem; padding: 1.5rem; margin-bottom: 1rem; min-height: 220px; display: flex; align-items: center; justify-content: center; }
 .btn { display: inline-flex; align-items: center; justify-content: center; padding: 0.6rem 1.2rem; border: 2px solid var(--primary); background: transparent; color: var(--primary); border-radius: 0.5rem; font-weight: 800; cursor: pointer; text-transform: uppercase; letter-spacing: 0.08em; transition: all 0.2s; font-size: 0.75rem; }
-.btn:hover { background: var(--primary)22; box-shadow: 0 0 20px var(--primary)44; }
+.btn:hover { background: color-mix(in srgb, var(--primary) 13%, transparent); box-shadow: 0 0 20px color-mix(in srgb, var(--primary) 27%, transparent); }
 .stat-card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 1rem; padding: 1rem; text-align: center; }
 .stat-val { font-size: 1.5rem; font-weight: 900; color: var(--primary); }
 .stat-label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.1em; margin-top: 0.25rem; color: #666; }
