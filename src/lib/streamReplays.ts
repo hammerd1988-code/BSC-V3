@@ -22,7 +22,7 @@ const escapeHtml = (value: string): string =>
 
 /** Absolute playback link for a stream/replay, reusing the copyStreamLink pattern. */
 export const streamLink = (streamId: string): string =>
-  `${window.location.origin}/golive?streamId=${streamId}`;
+  `${window.location.origin}/golive?streamId=${encodeURIComponent(streamId)}`;
 
 /** Copy a stream/replay playback link to the clipboard. Returns true on success. */
 export const shareStreamLink = async (streamId: string): Promise<boolean> => {
