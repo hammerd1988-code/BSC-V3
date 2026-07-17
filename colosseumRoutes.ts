@@ -252,17 +252,32 @@ function gladiatorSeed(input: { matchId?: string; gladiator: any; opponent: any 
   return [...base].reduce((sum, c) => ((sum << 5) - sum + c.charCodeAt(0)) | 0, 0);
 }
 
+function extractBotProfile(gladiator: any) {
+  const profile = gladiator?.bot_profile;
+  return Array.isArray(profile) ? profile[0] : profile;
+}
+
+function pickFromSeed<T>(seed: number, items: T[] | undefined): T | undefined {
+  if (!items?.length) return undefined;
+  return items[Math.abs(seed) % items.length];
+}
+
 function buildGladiatorSolutionPrompt(input: { challengeType: ColosseumChallengeType; gladiator: any; opponent: any; prompt?: string; matchId?: string }) {
   const providedPrompt = typeof input.prompt === 'string' && input.prompt.trim().length > 0
     ? input.prompt.trim()
     : CHALLENGE_BRIEFS[input.challengeType];
-  const profile = input.gladiator?.bot_profile;
+  const profile = extractBotProfile(input.gladiator);
+  const seed = gladiatorSeed(input);
+  const preBattleLine = pickFromSeed(seed, profile?.pre_battle_lines);
+  const signatureMove = pickFromSeed(seed + 1, profile?.signature_moves);
   const profileBlock = profile ? `
 Gladiator Class: ${profile.gladiator_class}
 Difficulty: ${profile.difficulty}
 Expertise: ${(profile.expertise ?? []).join(', ')}
 Battle Style: ${profile.battle_style}
 Signature Moves: ${(profile.signature_moves ?? []).join(', ')}
+Signature Move This Round: ${signatureMove ?? 'any available'}
+Pre-Battle Line: ${preBattleLine ?? '...'}
 Prompt Style: ${profile.ai_prompt_style}` : '';
 
   const isSandbox = input.challengeType === 'sandbox_build';
@@ -272,7 +287,7 @@ Prompt Style: ${profile.ai_prompt_style}` : '';
         opponent: input.opponent?.name ?? 'Unknown',
         primaryColor: input.gladiator?.glow_color,
         secondaryColor: input.opponent?.glow_color,
-        seed: gladiatorSeed(input),
+        seed,
       })
     : '';
   const responseInstruction = isSandbox
@@ -289,15 +304,15 @@ Prompt Style: ${profile.ai_prompt_style}` : '';
 <preview_description>
 [A brief description of what the finished product looks like and how to use it.]
 </preview_description>`
-    : 'Return the gladiator\'s best coding solution or patch in character. Include concise reasoning, but prioritize useful code, correctness, and the stated battle style.';
+    : `Begin with one short, in-character opening line directed at ${input.opponent?.name ?? 'your opponent'}. Then return the gladiator's best coding solution or patch in character. Include concise reasoning, but prioritize useful code, correctness, and the stated battle style. Do NOT mirror your opponent. Vary your solution, opening line, and reasoning even if this exact prompt is repeated.`;
 
   return `[BLOOD_SWEAT_CODE_COLOSSEUM]
 Challenge Type: ${input.challengeType}
 Gladiator: ${input.gladiator?.name ?? 'Unknown'}
 Opponent: ${input.opponent?.name ?? 'Unknown'}
 Personality: ${input.gladiator?.personality ?? 'No doctrine supplied'}${profileBlock}
-Directive: ${providedPrompt}
 ${identitySpice}
+Directive: ${providedPrompt}
 
 ${responseInstruction}`;
 }
@@ -507,7 +522,7 @@ async function generateGladiatorMove(input: { matchId?: string; challengeType: C
     prompt,
     fallbackModel: resolveGladiatorDefaultModel(input.gladiator),
     maxTokens: input.challengeType === 'sandbox_build' ? 4096 : isSeededPlatformBot(input.gladiator) ? 1600 : 900,
-    temperature: input.challengeType === 'sandbox_build' ? 0.75 : 0.45,
+    temperature: input.challengeType === 'sandbox_build' ? 0.75 : 0.6,
   });
   return {
     gladiator_id: input.gladiator.id,
