@@ -2,10 +2,12 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
+  AlertTriangle,
   ArrowLeft,
   Bell,
   BellOff,
   Camera,
+  Check,
   Clapperboard,
   Eye,
   Image as ImageIcon,
@@ -16,6 +18,7 @@ import {
   MonitorUp,
   Play,
   Radio,
+  Repeat2,
   Search,
   Send,
   Share2,
@@ -33,13 +36,14 @@ import { supabase } from '../supabase';
 import { cn } from '../lib/utils';
 import { handleDbError } from '../lib/errors';
 import { requestLiveKitToken } from '../lib/livekit';
+import { repostReplayToFeed, shareStreamLink } from '../lib/streamReplays';
 import { Room, RoomEvent, Track } from 'livekit-client';
 
 const STREAM_CATEGORIES = ['Coding', 'Tutorials', 'Code Battles', 'Gaming', 'Music', 'Art', 'Reactions', 'Q&A', 'Creative', 'Other'] as const;
 type StreamCategory = typeof STREAM_CATEGORIES[number];
 type StreamStatus = 'live' | 'ended';
 
-interface StreamRow {
+export interface StreamRow {
   id: string;
   user_id?: string | null;
   host_id?: string | null;
@@ -98,7 +102,7 @@ const formatDuration = (stream: StreamRow) => {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 };
 
-const StreamCard: React.FC<{ stream: StreamRow; onOpen: (id: string) => void }> = ({ stream, onOpen }) => {
+export const StreamCard: React.FC<{ stream: StreamRow; onOpen: (id: string) => void }> = ({ stream, onOpen }) => {
   const isLive = stream.status === 'live' || stream.is_live;
   return (
     <motion.button
@@ -167,6 +171,12 @@ export const GoLive: React.FC = () => {
   const [hasEnded, setHasEnded] = useState(false);
   const [cameraOn, setCameraOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
+  const [mediaSource, setMediaSource] = useState<'camera' | 'screen'>('camera');
+  const [localReady, setLocalReady] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [replayWarning, setReplayWarning] = useState<string | null>(null);
+  const [repostState, setRepostState] = useState<'idle' | 'working' | 'done'>('idle');
+  const [shareCopied, setShareCopied] = useState(false);
   const [liveKitStatus, setLiveKitStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const [liveKitError, setLiveKitError] = useState<string | null>(null);
   const [liveKitParticipantCount, setLiveKitParticipantCount] = useState(0);
@@ -178,6 +188,9 @@ export const GoLive: React.FC = () => {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const isLiveRef = useRef(false);
+  const endedRef = useRef(false);
+  const streamIdRef = useRef<string | null>(null);
   const isViewer = !!viewerStreamId && !isLive;
   const activeStreamId = streamId || viewerStreamId;
   const filteredStreams = useMemo(() => {
@@ -230,11 +243,15 @@ export const GoLive: React.FC = () => {
     }
     setCameraOn(media.getVideoTracks().some((track) => track.enabled));
     setMicOn(media.getAudioTracks().some((track) => track.enabled));
+    // Signal that a local preview source is ready so the self-view effect
+    // re-binds srcObject immediately — independent of LiveKit connection state.
+    setLocalReady(true);
   };
 
   const startMedia = async (source: 'camera' | 'screen' = 'camera') => {
     if (!currentUser) return;
     stopMedia();
+    setMediaSource(source);
     try {
       const media = source === 'screen'
         ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
@@ -297,11 +314,15 @@ export const GoLive: React.FC = () => {
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) recordingChunksRef.current.push(event.data);
       };
+      // Chunk every 5s so partial recordings survive an abrupt tab close.
       recorder.start(5000);
       mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+      setReplayWarning(null);
       void id;
     } catch (err) {
       console.warn('[GoLive] Replay recording unavailable:', err);
+      setReplayWarning('Recording unavailable in this browser — this broadcast will not be saved as a replay.');
     }
   };
 
@@ -321,6 +342,7 @@ export const GoLive: React.FC = () => {
 
     mediaRecorderRef.current = null;
     recordingChunksRef.current = [];
+    setIsRecording(false);
     if (!blob || !currentUser) return null;
 
     try {
@@ -335,6 +357,7 @@ export const GoLive: React.FC = () => {
       return data.publicUrl;
     } catch (err) {
       console.warn('[GoLive] Replay upload failed. Create a public Supabase Storage bucket named stream-replays to persist recordings.', err);
+      setReplayWarning('Replay could not be saved. Ask an admin to create a public Supabase Storage bucket named "stream-replays".');
       return null;
     }
   };
@@ -343,6 +366,8 @@ export const GoLive: React.FC = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
     }
+    setIsRecording(false);
+    setLocalReady(false);
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
@@ -387,7 +412,6 @@ export const GoLive: React.FC = () => {
               : Track.Source.Microphone,
           });
         }
-        startReplayRecording(id);
       } else {
         room.remoteParticipants.forEach((participant) => {
           participant.trackPublications.forEach((publication) => {
@@ -408,17 +432,50 @@ export const GoLive: React.FC = () => {
     }
   };
 
+  // Stop recording, upload the replay, and persist the ended state. Guarded so it
+  // runs at most once whether triggered by End, unmount, or stopMedia.
+  const finalizeBroadcast = async (id: string): Promise<void> => {
+    if (endedRef.current) return;
+    endedRef.current = true;
+    try {
+      const replayUrl = await stopReplayRecordingAndUpload(id);
+      await supabase.from('streams').update({
+        status: 'ended',
+        is_live: false,
+        ended_at: new Date().toISOString(),
+        ...(replayUrl ? { replay_url: replayUrl } : {}),
+      }).eq('id', id);
+      if (currentUser) {
+        await supabase.from('users').update({ is_live: false, active_stream_id: null }).eq('id', currentUser.id);
+      }
+    } catch (err) {
+      handleDbError(err, 'UPDATE', `streams/${id}`);
+    }
+  };
+
+  useEffect(() => { isLiveRef.current = isLive; }, [isLive]);
+  useEffect(() => { endedRef.current = hasEnded; }, [hasEnded]);
+  useEffect(() => { streamIdRef.current = streamId || viewerStreamId; }, [streamId, viewerStreamId]);
+
   useEffect(() => () => {
+    // On unmount (e.g. host closes the tab / navigates away) make sure an
+    // in-progress broadcast is finalized so the recording isn't lost.
+    if (isLiveRef.current && !endedRef.current && streamIdRef.current) {
+      void finalizeBroadcast(streamIdRef.current);
+    }
     disconnectLiveKit();
     stopMedia();
   }, []);
 
+  // Real-time self-view: keep the host's own camera/screen bound to the video
+  // element as soon as the local stream is ready — independent of LiveKit status.
   useEffect(() => {
-    if (isLive && streamRef.current && videoRef.current && !videoRef.current.srcObject) {
+    if (hasEnded) return;
+    if (isLive && streamRef.current && videoRef.current && videoRef.current.srcObject !== streamRef.current) {
       videoRef.current.srcObject = streamRef.current;
       videoRef.current.play().catch(() => undefined);
     }
-  });
+  }, [isLive, localReady, hasEnded]);
 
   const fetchStreamBundle = async (id: string) => {
     const { data, error } = await supabase.from('streams').select('*').eq('id', id).maybeSingle();
@@ -545,10 +602,15 @@ export const GoLive: React.FC = () => {
       const { data, error } = await supabase.from('streams').insert(payload).select().single();
       if (error) throw error;
       const normalized = normalizeStream(data);
+      endedRef.current = false;
       setStreamId(normalized.id);
+      streamIdRef.current = normalized.id;
       setStreamData(normalized);
       setIsLive(true);
       setHasEnded(false);
+      // Record every broadcast (camera AND screen) from the raw local stream,
+      // independent of the LiveKit connection succeeding.
+      startReplayRecording(normalized.id);
       await supabase.from('users').update({ is_live: true, active_stream_id: normalized.id }).eq('id', currentUser.id);
       await connectLiveKitStream(normalized.id, 'host', source);
       navigate(`/golive?streamId=${normalized.id}`, { replace: true });
@@ -561,17 +623,11 @@ export const GoLive: React.FC = () => {
 
   const handleEndStream = async () => {
     if (!activeStreamId || !currentUser) return;
-    try {
-      const replayUrl = await stopReplayRecordingAndUpload(activeStreamId);
-      await supabase.from('streams').update({ status: 'ended', is_live: false, ended_at: new Date().toISOString(), ...(replayUrl ? { replay_url: replayUrl } : {}) }).eq('id', activeStreamId);
-      await supabase.from('users').update({ is_live: false, active_stream_id: null }).eq('id', currentUser.id);
-      setIsLive(false);
-      setHasEnded(true);
-      disconnectLiveKit();
-      stopMedia();
-    } catch (err) {
-      handleDbError(err, 'UPDATE', `streams/${activeStreamId}`);
-    }
+    await finalizeBroadcast(activeStreamId);
+    setIsLive(false);
+    setHasEnded(true);
+    disconnectLiveKit();
+    stopMedia();
   };
 
   const handleSendMessage = async (event: React.FormEvent) => {
@@ -619,7 +675,28 @@ export const GoLive: React.FC = () => {
 
   const copyStreamLink = async () => {
     if (!activeStreamId) return;
-    await navigator.clipboard.writeText(`${window.location.origin}/golive?streamId=${activeStreamId}`);
+    const ok = await shareStreamLink(activeStreamId);
+    if (ok) {
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 1800);
+    }
+  };
+
+  const handleRepostReplay = async () => {
+    if (!currentUser || !activeStreamId || repostState === 'working') return;
+    setRepostState('working');
+    const ok = await repostReplayToFeed(
+      {
+        id: activeStreamId,
+        title: streamData?.title,
+        replay_url: streamData?.replay_url,
+        thumbnail_url: streamData?.thumbnail_url,
+        category: streamData?.category as string | null | undefined,
+      },
+      currentUser,
+    );
+    setRepostState(ok ? 'done' : 'idle');
+    if (ok) setTimeout(() => setRepostState('idle'), 2200);
   };
 
   const toggleTrack = (kind: 'audio' | 'video') => {
@@ -777,7 +854,16 @@ export const GoLive: React.FC = () => {
         </div>
 
         <div className="relative flex-1 overflow-hidden bg-black">
-          <video ref={videoRef} autoPlay playsInline muted={isOwnStream} controls={hasEnded && !!streamData?.replay_url} src={hasEnded ? streamData?.replay_url ?? undefined : undefined} className={cn('h-full w-full object-contain', hasEnded && !streamData?.replay_url ? 'opacity-0' : 'opacity-100')} />
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted={isOwnStream}
+            controls={hasEnded && !!streamData?.replay_url}
+            src={hasEnded ? streamData?.replay_url ?? undefined : undefined}
+            style={isOwnStream && !hasEnded && mediaSource === 'camera' ? { transform: 'scaleX(-1)' } : undefined}
+            className={cn('h-full w-full object-contain', hasEnded && !streamData?.replay_url ? 'opacity-0' : 'opacity-100')}
+          />
           {!hasEnded && (
             <div className="absolute left-4 top-4 flex flex-wrap items-center gap-2">
               <span className={cn('inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[9px] font-black uppercase tracking-widest backdrop-blur-xl', liveKitStatus === 'connected' ? 'border-emerald-300/30 bg-emerald-400/15 text-emerald-100' : liveKitStatus === 'error' ? 'border-red-400/30 bg-red-500/15 text-red-100' : 'border-cyan-300/30 bg-cyan-400/10 text-cyan-100')}>
@@ -789,6 +875,18 @@ export const GoLive: React.FC = () => {
                   <Users className="h-3 w-3 text-cyan-300" /> {liveKitParticipantCount}
                 </span>
               )}
+              {isOwnStream && isRecording && (
+                <span className="inline-flex items-center gap-2 rounded-full border border-red-400/30 bg-red-500/15 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-red-100 backdrop-blur-xl">
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-red-400" />
+                  Recording
+                </span>
+              )}
+            </div>
+          )}
+          {isOwnStream && !hasEnded && replayWarning && (
+            <div className="absolute bottom-4 left-4 right-4 flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-500/15 px-3 py-2 text-[10px] font-bold text-amber-100 backdrop-blur-xl">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{replayWarning}</span>
             </div>
           )}
           {((isViewer && liveKitStatus !== 'connected') || hasEnded) && !streamData?.replay_url && (
@@ -831,7 +929,16 @@ export const GoLive: React.FC = () => {
                   <span className="text-cyan-300">{reactions[reaction.key] ?? 0}</span>
                 </button>
               ))}
-              <button onClick={() => void copyStreamLink()} className="rounded-xl border border-white/10 bg-white/5 p-3 text-zinc-300 hover:text-white"><Share2 className="h-4 w-4" /></button>
+              <button onClick={() => void copyStreamLink()} title="Copy share link" className={cn('inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-zinc-300 transition hover:text-white', shareCopied && 'border-emerald-300/40 text-emerald-200')}>
+                {shareCopied ? <Check className="h-4 w-4" /> : <Share2 className="h-4 w-4" />}
+                <span className="hidden sm:inline">{shareCopied ? 'Copied' : 'Share'}</span>
+              </button>
+              {isOwnStream && hasEnded && (
+                <button onClick={() => void handleRepostReplay()} disabled={repostState === 'working'} className={cn('inline-flex items-center gap-2 rounded-xl border px-4 py-3 text-[10px] font-black uppercase tracking-widest transition disabled:opacity-40', repostState === 'done' ? 'border-emerald-300/40 bg-emerald-400/10 text-emerald-200' : 'border-cyan-300/30 bg-cyan-300/10 text-cyan-100 hover:bg-cyan-300/20')}>
+                  {repostState === 'working' ? <Loader2 className="h-4 w-4 animate-spin" /> : repostState === 'done' ? <Check className="h-4 w-4" /> : <Repeat2 className="h-4 w-4" />}
+                  {repostState === 'done' ? 'Reposted' : 'Repost to Feed'}
+                </button>
+              )}
               {isOwnStream && !hasEnded && (
                 <>
                   <button onClick={() => toggleTrack('video')} className={cn('rounded-xl border p-3', cameraOn ? 'border-white/10 bg-white/5 text-white' : 'border-red-400/40 bg-red-500/10 text-red-300')}>{cameraOn ? <Video className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}</button>

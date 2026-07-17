@@ -34,12 +34,17 @@ import {
   Users,
   Swords,
   Shield,
-  Crown
+  Crown,
+  Clapperboard,
+  Repeat2,
+  Share2
 } from 'lucide-react';
 import { User, Post, Faction, FactionMember, SkillManifestItem } from '../types';
 import { PostCard } from './PostCard';
 import { cn } from '../lib/utils';
 import { generateProfileDesign } from './Feed';
+import { StreamCard, type StreamRow } from './GoLive';
+import { repostReplayToFeed, shareStreamLink } from '../lib/streamReplays';
 import { socket } from '../lib/socket';
 import { BOT_PERSONAS, getBotByUsername } from '../lib/botPersonas';
 import { BOT_GLADIATOR_PROFILE_BY_USERNAME } from '../lib/botGladiatorProfiles';
@@ -132,7 +137,10 @@ export const Profile: React.FC = () => {
   const [botRoster, setBotRoster] = useState<ProfileGladiator[]>([]);
   const [platformBotRoster, setPlatformBotRoster] = useState<PlatformBotRosterItem[]>([]);
   const [profileFactions, setProfileFactions] = useState<ProfileFactionMembership[]>([]);
-  const [activeTab, setActiveTab] = useState<'posts' | 'media' | 'likes' | 'friends'>('posts');
+  const [activeTab, setActiveTab] = useState<'posts' | 'media' | 'replays' | 'likes' | 'friends'>('posts');
+  const [replays, setReplays] = useState<StreamRow[]>([]);
+  const [replayActionId, setReplayActionId] = useState<string | null>(null);
+  const [replayShareId, setReplayShareId] = useState<string | null>(null);
   const [isGeneratingAvatar, setIsGeneratingAvatar] = useState(false);
   const [showAvatarBuilder, setShowAvatarBuilder] = useState(false);
   const [isDesigning, setIsDesigning] = useState(false);
@@ -534,6 +542,47 @@ export const Profile: React.FC = () => {
 
     return () => { supabase.removeChannel(channel); };
   }, [user?.id]);
+
+  // Ended broadcasts (replays) hosted by this profile.
+  useEffect(() => {
+    if (!user) return;
+    const fetchReplays = async () => {
+      const { data, error } = await supabase
+        .from('streams')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('status', 'ended')
+        .order('ended_at', { ascending: false });
+      if (error) { handleDbError(error, 'LIST', 'streams'); return; }
+      setReplays((data ?? []) as StreamRow[]);
+    };
+    void fetchReplays();
+
+    const channel = supabase
+      .channel(`profile-replays-${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'streams', filter: `user_id=eq.${user.id}` }, () => void fetchReplays())
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [user?.id]);
+
+  const handleRepostReplay = async (replay: StreamRow) => {
+    if (!currentUser || replayActionId) return;
+    setReplayActionId(replay.id);
+    await repostReplayToFeed(
+      { id: replay.id, title: replay.title, replay_url: replay.replay_url, thumbnail_url: replay.thumbnail_url, category: replay.category as string | null | undefined },
+      currentUser,
+    );
+    setReplayActionId(null);
+  };
+
+  const handleShareReplay = async (replayId: string) => {
+    const ok = await shareStreamLink(replayId);
+    if (ok) {
+      setReplayShareId(replayId);
+      setTimeout(() => setReplayShareId((cur) => (cur === replayId ? null : cur)), 1800);
+    }
+  };
 
   const handleSaveBio = async () => {
     if (!currentUser || !isMyProfile) return;
@@ -1784,8 +1833,8 @@ export const Profile: React.FC = () => {
               isHighContrast && "border-white/20"
             )}>
               {(user.type === 'bot' 
-                ? ['posts', 'media', 'likes', 'friends'] as const 
-                : ['posts', 'media', 'likes', 'friends'] as const
+                ? ['posts', 'media', 'replays', 'likes', 'friends'] as const 
+                : ['posts', 'media', 'replays', 'likes', 'friends'] as const
               ).map((tab) => (
                 <button
                   key={tab}
@@ -1861,6 +1910,57 @@ export const Profile: React.FC = () => {
                         )}
                       </button>
                     ))}
+                  </motion.div>
+                )}
+                {activeTab === 'replays' && (
+                  <motion.div
+                    key="replays"
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: 20 }}
+                    className="space-y-4"
+                  >
+                    {replays.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-20 text-gray-500">
+                        <Clapperboard className="w-12 h-12 mb-4 opacity-20" />
+                        <p className="text-xs font-bold uppercase tracking-widest italic">No broadcasts yet</p>
+                      </div>
+                    ) : (
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        {replays.map((replay) => (
+                          <div key={replay.id} className="space-y-2">
+                            <StreamCard stream={replay} onOpen={(id) => navigate(`/golive?streamId=${id}`)} />
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => navigate(`/golive?streamId=${replay.id}`)}
+                                disabled={!replay.replay_url}
+                                title={replay.replay_url ? 'Play replay' : 'Replay media not available'}
+                                className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                <Radio className="h-3.5 w-3.5 text-cyan-300" /> {replay.replay_url ? 'Play' : 'No Replay'}
+                              </button>
+                              {currentUser?.id === user.id && (
+                                <button
+                                  onClick={() => void handleRepostReplay(replay)}
+                                  disabled={replayActionId === replay.id}
+                                  title="Repost to feed"
+                                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-300/30 bg-cyan-300/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-cyan-100 transition hover:bg-cyan-300/20 disabled:opacity-40"
+                                >
+                                  {replayActionId === replay.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Repeat2 className="h-3.5 w-3.5" />} Repost
+                                </button>
+                              )}
+                              <button
+                                onClick={() => void handleShareReplay(replay.id)}
+                                title="Copy share link"
+                                className={cn('inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 transition hover:text-white', replayShareId === replay.id && 'border-emerald-300/40 text-emerald-200')}
+                              >
+                                {replayShareId === replay.id ? <Check className="h-3.5 w-3.5" /> : <Share2 className="h-3.5 w-3.5" />} {replayShareId === replay.id ? 'Copied' : 'Share'}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </motion.div>
                 )}
                 {activeTab === 'likes' && (
