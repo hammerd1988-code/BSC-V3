@@ -46,6 +46,7 @@ export function printAllSettings(): void {
 
   const rows: Array<[string, string]> = [
     ['LLM source', bool(cfg.preferLocalLlm) ? 'local (LM Studio / Ollama)' : 'cloud'],
+    ['Base URL', cfg.baseUrl || chalk.dim('(not set — default: https://api.openai.com/v1)')],
     ['Local LLM URL', cfg.localLlmUrl || chalk.dim('(not set)')],
     ['Model', cfg.model || chalk.dim('(not set)')],
     ['OpenAI API key', mask(cfg.openaiApiKey)],
@@ -70,13 +71,14 @@ function printMenu(cfg: CasperConfig): void {
   console.log(chalk.dim(`  ${getConfigPath()}\n`));
   const lines: Array<[string, string, string]> = [
     ['1', 'LLM source', bool(cfg.preferLocalLlm) ? 'local (LM Studio / Ollama)' : 'cloud'],
-    ['2', 'Local LLM URL', cfg.localLlmUrl || chalk.dim('(not set)')],
-    ['3', 'Model', cfg.model || chalk.dim('(not set)')],
-    ['4', 'OpenAI API key', mask(cfg.openaiApiKey)],
-    ['5', 'Anthropic API key', mask(cfg.anthropicApiKey)],
-    ['6', 'Approval level', cfg.approvalLevel],
-    ['7', 'Working directory', cfg.workingDirectory],
-    ['8', 'Audit log', bool(cfg.auditLog) ? 'on' : 'off'],
+    ['2', 'Base URL', cfg.baseUrl || chalk.dim('(default: https://api.openai.com/v1)')],
+    ['3', 'Local LLM URL', cfg.localLlmUrl || chalk.dim('(not set)')],
+    ['4', 'Model', cfg.model || chalk.dim('(not set)')],
+    ['5', 'OpenAI API key', mask(cfg.openaiApiKey)],
+    ['6', 'Anthropic API key', mask(cfg.anthropicApiKey)],
+    ['7', 'Approval level', cfg.approvalLevel],
+    ['8', 'Working directory', cfg.workingDirectory],
+    ['9', 'Audit log', bool(cfg.auditLog) ? 'on' : 'off'],
   ];
   for (const [num, label, value] of lines) {
     console.log(`  ${chalk.cyan(num)}) ${label.padEnd(18)} ${chalk.dim('→')} ${value}`);
@@ -118,11 +120,24 @@ export async function runSettings(): Promise<void> {
           setConfig('preferLocalLlm', useLocal);
           console.log(chalk.green(`  ✔ LLM source set to ${useLocal ? 'local' : 'cloud'}.`));
           if (useLocal && !cfg.localLlmUrl) {
-            console.log(chalk.yellow('  Tip: set the Local LLM URL (option 2), e.g. http://localhost:1234/v1'));
+            console.log(chalk.yellow('  Tip: set the Local LLM URL (option 3), e.g. http://localhost:1234/v1'));
           }
           break;
         }
         case '2': {
+          const answer = (
+            await ask(rl, `  Base URL (blank = keep "${cfg.baseUrl || 'not set'}", "-" to clear): `)
+          ).trim();
+          if (answer === '-') {
+            deleteConfig('baseUrl');
+            console.log(chalk.green('  ✔ Cleared.'));
+          } else if (answer) {
+            setConfig('baseUrl', answer);
+            console.log(chalk.green('  ✔ Updated.'));
+          }
+          break;
+        }
+        case '3': {
           const answer = (
             await ask(rl, `  Local LLM URL (blank = keep "${cfg.localLlmUrl || 'not set'}", "-" to clear): `)
           ).trim();
@@ -135,7 +150,7 @@ export async function runSettings(): Promise<void> {
           }
           break;
         }
-        case '3': {
+        case '4': {
           const answer = (await ask(rl, `  Model id (blank = keep "${cfg.model}"): `)).trim();
           if (answer) {
             setConfig('model', answer);
@@ -143,7 +158,7 @@ export async function runSettings(): Promise<void> {
           }
           break;
         }
-        case '4': {
+        case '5': {
           const answer = (
             await ask(rl, `  OpenAI API key (current ${mask(cfg.openaiApiKey)}; blank = keep, "-" to clear): `)
           ).trim();
@@ -156,7 +171,7 @@ export async function runSettings(): Promise<void> {
           }
           break;
         }
-        case '5': {
+        case '6': {
           const answer = (
             await ask(rl, `  Anthropic API key (current ${mask(cfg.anthropicApiKey)}; blank = keep, "-" to clear): `)
           ).trim();
@@ -169,7 +184,7 @@ export async function runSettings(): Promise<void> {
           }
           break;
         }
-        case '6': {
+        case '7': {
           console.log(`    ${chalk.cyan('1')}) auto           ${chalk.dim('— run everything without asking')}`);
           console.log(`    ${chalk.cyan('2')}) confirm-local  ${chalk.dim('— ask before risky local commands')}`);
           console.log(`    ${chalk.cyan('3')}) confirm-remote ${chalk.dim('— ask before remote-triggered commands')}`);
@@ -183,7 +198,7 @@ export async function runSettings(): Promise<void> {
           }
           break;
         }
-        case '7': {
+        case '8': {
           const answer = (await ask(rl, `  Working directory (blank = keep "${cfg.workingDirectory}"): `)).trim();
           if (answer) {
             setConfig('workingDirectory', answer);
@@ -191,7 +206,7 @@ export async function runSettings(): Promise<void> {
           }
           break;
         }
-        case '8': {
+        case '9': {
           const next = !bool(cfg.auditLog);
           setConfig('auditLog', next);
           console.log(chalk.green(`  ✔ Audit log ${next ? 'enabled' : 'disabled'}.`));

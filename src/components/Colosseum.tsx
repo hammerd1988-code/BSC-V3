@@ -1288,19 +1288,62 @@ function playCoachingBell() {
 }
 
 // ─── Casper TTS Commentary ───────────────────────────────────────────────────
-function casperAnnounce(text: string) {
+// Uses the same OpenAI Onyx server TTS as the main Casper interface so the
+// arena announcer sounds like Casper, not a random browser voice.
+let currentCasperAudio: HTMLAudioElement | null = null;
+let currentCasperAudioUrl: string | null = null;
+
+function stopCasperAudio() {
   try {
-    if (!window.speechSynthesis) return;
-    speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    const voices = speechSynthesis.getVoices();
-    const voice = voices.find((v) => /male|david|james|daniel|google uk/i.test(v.name)) ?? voices[0];
-    if (voice) utterance.voice = voice;
-    utterance.rate = 0.92;
-    utterance.pitch = 0.85;
-    utterance.volume = 0.9;
-    speechSynthesis.speak(utterance);
-  } catch { /* TTS not available */ }
+    if (currentCasperAudio) {
+      currentCasperAudio.pause();
+      currentCasperAudio.currentTime = 0;
+      currentCasperAudio = null;
+    }
+    if (currentCasperAudioUrl) {
+      URL.revokeObjectURL(currentCasperAudioUrl);
+      currentCasperAudioUrl = null;
+    }
+  } catch { /* ignore */ }
+  try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
+}
+
+async function casperAnnounce(text: string) {
+  try {
+    if (!text?.trim()) return;
+    stopCasperAudio();
+    const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
+    const response = await fetch(`${serverUrl}/api/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice: 'onyx', speed: 1.05 }),
+    });
+    if (!response.ok) throw new Error(`Casper TTS failed: ${response.status}`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    currentCasperAudioUrl = url;
+    const audio = new Audio(url);
+    currentCasperAudio = audio;
+    audio.onended = () => { stopCasperAudio(); };
+    audio.onerror = () => { stopCasperAudio(); };
+    await audio.play();
+  } catch {
+    // Release the partially-created server audio resource (e.g. fetch worked but
+    // play() was blocked or decoding failed) before falling back to browser TTS.
+    stopCasperAudio();
+    try {
+      if (!window.speechSynthesis) return;
+      speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      const voices = speechSynthesis.getVoices();
+      const voice = voices.find((v) => /male|david|james|daniel|google uk/i.test(v.name)) ?? voices[0];
+      if (voice) utterance.voice = voice;
+      utterance.rate = 0.92;
+      utterance.pitch = 0.85;
+      utterance.volume = 0.9;
+      speechSynthesis.speak(utterance);
+    } catch { /* TTS unavailable */ }
+  }
 }
 
 // ─── Per-Gladiator Voice Profiles ────────────────────────────────────────────
@@ -1762,9 +1805,9 @@ function SandboxForgePanel({
                       <Box className="mx-auto mb-3 h-12 w-12 text-zinc-600" />
                     </motion.div>
                     <p className="text-[10px] font-black uppercase tracking-[0.2em]">
-                      {progress < 20 ? 'Forge chamber warming up...' : progress < 40 ? 'Neural pathways connected...' : progress < 60 ? 'Assembling product scaffold...' : 'Waiting for code output...'}
+                      {!parsed.code ? 'Forge chamber warming up...' : parsed.code.length < 50 ? 'Compiler output forming...' : 'Waiting for code output...'}
                     </p>
-                    <p className="mt-2 text-[9px] text-zinc-600">Preview renders at 60% completion</p>
+                    <p className="mt-2 text-[9px] text-zinc-600">Preview appears once a valid build is received</p>
                   </div>
                 </div>
               )}
@@ -2094,73 +2137,124 @@ function aiMoveBonus(move: GladiatorAiMove | undefined, type: ChallengeType) {
   return Math.min(42, 8 + codeSignals * 3 + challengeSignal + customKeySignal + Math.min(14, Math.floor(move.solution.length / 220)));
 }
 
+function pickBySeed<T>(seed: number, items: T[] | undefined): T | undefined {
+  if (!items?.length) return undefined;
+  return items[Math.abs(seed) % items.length];
+}
+
 function combatLinesFor(type: ChallengeType, challenger: Gladiator, defender: Gladiator, challenge: CodingChallenge) {
+  const seed = Date.now();
+  const cProfile = challenger.botProfile;
+  const dProfile = defender.botProfile;
+  const cClass = cProfile?.gladiator_class;
+  const dClass = dProfile?.gladiator_class;
+  const cStyle = cProfile?.battle_style;
+  const dStyle = dProfile?.battle_style;
+  const cMove = pickBySeed(seed, cProfile?.signature_moves);
+  const dMove = pickBySeed(seed + 1, dProfile?.signature_moves);
+  const cTaunt = pickBySeed(seed + 2, cProfile?.pre_battle_lines);
+  const dTaunt = pickBySeed(seed + 3, dProfile?.pre_battle_lines);
+  const leader = seed % 2 === 0 ? challenger.name : defender.name;
+  const underdog = leader === challenger.name ? defender.name : challenger.name;
+
+  const prefix: string[] = [];
+  if (cClass || cStyle) {
+    prefix.push(`${challenger.name}${cClass ? ` (${cClass})` : ''} enters the pit${cStyle ? ` — ${cStyle}` : ''}.`);
+  }
+  if (dClass || dStyle) {
+    prefix.push(`${defender.name}${dClass ? ` (${dClass})` : ''} answers${dStyle ? ` — ${dStyle}` : ''}.`);
+  }
+  if (cTaunt) prefix.push(`${challenger.name}: "${cTaunt}"`);
+  if (dTaunt) prefix.push(`${defender.name}: "${dTaunt}"`);
+  if (cMove) prefix.push(`${challenger.name} winds up ${cMove}.`);
+  if (dMove) prefix.push(`${defender.name} counters with ${dMove}.`);
+  if (prefix.length < 2) {
+    prefix.push(`${challenger.name} and ${defender.name} square off under the neon flood.`);
+  }
+  prefix.push(`${leader} seizes the initiative; ${underdog} studies the opening.`);
+
   if (type === 'speed_round') {
-    return [
+    return [...prefix,
       'Clock pressure spikes. Syntax sparks across the pit wall.',
       `${challenger.name} hunts the hot path while ${defender.name} shaves latency.`,
+      `${leader} claims the first clean compile.`,
+      `${underdog} scrambles to close the gap.`,
       'Casper watches the critical path collapse into one decisive branch.',
       'The runtime maze flashes green as the fastest correct route surfaces.',
     ];
   }
 
   if (type === 'debug_battle') {
-    return [
+    return [...prefix,
       'A corrupted stack trace descends into the cage.',
       `${defender.name} circles the failing branch while ${challenger.name} opens the crash log.`,
-      'Patch blades flash through nested exceptions.',
+      `${challenger.name} uses ${cMove ?? 'raw intuition'} to trace the failing signal.`,
+      `${defender.name} counters with ${dMove ?? 'a defensive patch'}.`,
       'Casper weighs root cause, regression risk, and cleanup discipline.',
+      'The patch that survives the regression haze wins.',
     ];
   }
 
   if (type === 'code_golf') {
-    return [
+    return [...prefix,
       'Token counters glow like weapon heat.',
-      'The byte furnace starts counting characters against estimated processor cycles.',
       `${challenger.name} compresses syntax while ${defender.name} defends runtime class.`,
+      `${leader} finds a shorter incision.`,
+      `${underdog} risks a clever one-liner.`,
       'Casper compares compactness, cycle pressure, and whether the incantation still works.',
+      'Bytes drop, but the test gods must still smile.',
     ];
   }
 
   if (type === 'architect_duel') {
-    return [
+    return [...prefix,
       'A holographic system map rises from the arena floor.',
-      'Load balancers, queues, stores, and failure zones lock into place.',
       `${challenger.name} argues tradeoffs while ${defender.name} stress-tests the design.`,
+      `${challenger.name} anchors the data flow with ${cMove ?? 'cold steel logic'}.`,
+      `${defender.name} hardens the failure zones with ${dMove ?? 'reinforced state'}.`,
       'Casper checks whether the blueprint survives scale, outages, and messy users.',
+      'The design that bends without breaking takes the round.',
     ];
   }
 
   if (type === 'prompt_war') {
-    return [
+    return [...prefix,
       'Prompt glyphs orbit the cage like loaded spell cards.',
       `${challenger.name} tightens constraints while ${defender.name} attacks ambiguity.`,
-      'Examples, boundaries, and persona rules slam into the containment field.',
+      `${challenger.name} locks in a behavior rule with ${cMove ?? 'ruthless clarity'}.`,
+      `${defender.name} slips through with ${dMove ?? 'a persona override'}.`,
       'Casper scores control, clarity, and whether the agent can be trusted under pressure.',
+      'The prompt that holds its shape wins.',
     ];
   }
 
   if (type === 'roast_battle') {
-    return [
+    return [...prefix,
       'The crowd mic drops from the rafters and the rivalry lights turn orange.',
       `${challenger.name} throws a clean shot; ${defender.name} answers with persona heat.`,
+      `${leader} lands the first verbal hit.`,
+      `${underdog} reloads a sharper line.`,
       'The arena rejects cheap harassment and rewards surgical wit.',
       'Casper waits for the line that lands without breaking the code of the pit.',
     ];
   }
 
   if (type === 'sandbox_build') {
-    return [
+    return [...prefix,
       `${challenger.name} and ${defender.name} open separate sandboxes in the same arena.`,
       `${challenger.name} hammers DOM nodes while ${defender.name} forges styles and state.`,
+      `${leader} ships the first interactive hit.`,
+      `${underdog} rewrites a feature to avoid mirroring.`,
       'Two real products take shape behind the glass — no shared stencil, no mirrored output.',
       'Casper renders both builds and judges what actually shipped.',
     ];
   }
 
-  return [
+  return [...prefix,
     `The clue board unlocks: ${challenge.title}.`,
     `${challenger.name} buzzes in while ${defender.name} parses the category.`,
+    `${leader} locks an answer first.`,
+    `${underdog} double-checks the wording.`,
     'Text answers hit the judgment rail one clue at a time.',
     'Casper listens for accuracy, confidence, and a clean explanation.',
   ];
@@ -3510,7 +3604,7 @@ function CasperBattleIntro({ challenger, defender, challengeTitle, onComplete }:
     const announceTimer = setTimeout(() => {
       casperAnnounce(`Initializing ${challengeTitle}. In the red corner, ${challenger.name}. Versus, from the shadow cage, ${defender.name}. Let the code flow.`);
     }, 1200);
-    return () => { clearTimeout(announceTimer); speechSynthesis?.cancel(); };
+    return () => { clearTimeout(announceTimer); stopCasperAudio(); };
   }, [challenger.name, defender.name, challengeTitle]);
 
   return (

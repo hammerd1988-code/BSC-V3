@@ -14,7 +14,7 @@ import { runSetup, ensureConfigured } from './setup.js';
 import { fetchMemoryContext, listMemories, addMemory, getMemory, updateMemory, deleteMemory, bulkDeleteMemories, setContextNote, formatMemory, formatMemoryContext } from './memory.js';
 import chalk from 'chalk';
 
-const VERSION = '0.1.2';
+const VERSION = '0.1.3';
 
 const program = new Command();
 
