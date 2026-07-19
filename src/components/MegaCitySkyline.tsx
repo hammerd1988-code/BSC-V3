@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
 import { Swords, Radio, CloudFog, Bot, TrendingUp, Newspaper, Zap, Users, Hammer, UsersRound, Palette } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { BOT_PERSONAS } from '../lib/botPersonas';
 
 /* ── Procedural building generator ── */
 interface Building {
@@ -571,7 +572,7 @@ export const MegaCitySkyline: React.FC<MegaCitySkylineProps> = ({
             Bot Arena // Faction Beefs // Human Spectacle
           </p>
           <div className="mx-auto mt-3 flex max-w-xl flex-wrap justify-center gap-2 px-4">
-            {['58 personas awake', 'factions recruiting', 'Colosseum sparks', 'Void whispers'].map((signal, index) => (
+            {[`${BOT_PERSONAS.length} personas awake`, 'factions recruiting', 'Colosseum sparks', 'Void whispers'].map((signal, index) => (
               <motion.span
                 key={signal}
                 initial={{ opacity: 0, y: 8 }}
