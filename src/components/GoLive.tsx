@@ -360,7 +360,7 @@ export const GoLive: React.FC = () => {
       return data.publicUrl;
     } catch (err) {
       console.warn('[GoLive] Replay upload failed. Create a public Supabase Storage bucket named stream-replays to persist recordings.', err);
-      setReplayWarning('Replay could not be saved. Ask an admin to create a public Supabase Storage bucket named "stream-replays".');
+      setReplayWarning('Replay could not be saved. Ask an admin to ensure the public "stream-replays" Supabase Storage bucket exists and allows authenticated uploads.');
       return null;
     }
   };
@@ -451,8 +451,10 @@ export const GoLive: React.FC = () => {
       if (streamError) throw streamError;
       const user = currentUserRef.current;
       if (user) {
+        // Clearing the host's live flags is best-effort: the broadcast has already
+        // been marked ended above, so a failure here shouldn't surface a fatal error.
         const { error: userError } = await supabase.from('users').update({ is_live: false, active_stream_id: null }).eq('id', user.id);
-        if (userError) throw userError;
+        if (userError) console.warn('[GoLive] Failed to clear host live flags:', userError);
       }
     } catch (err) {
       handleDbError(err, 'UPDATE', `streams/${id}`);
