@@ -466,12 +466,18 @@ export const GoLive: React.FC = () => {
 
   useEffect(() => () => {
     // On unmount (e.g. host closes the tab / navigates away) make sure an
-    // in-progress broadcast is finalized so the recording isn't lost.
+    // in-progress broadcast is finalized so the recording isn't lost. Tear down
+    // media only after finalize resolves — stopMedia() stops the tracks, which
+    // would cut the MediaRecorder off before it can flush its final chunk.
     if (isLiveRef.current && !endedRef.current && streamIdRef.current) {
-      void finalizeBroadcast(streamIdRef.current);
+      void finalizeBroadcast(streamIdRef.current).finally(() => {
+        disconnectLiveKit();
+        stopMedia();
+      });
+    } else {
+      disconnectLiveKit();
+      stopMedia();
     }
-    disconnectLiveKit();
-    stopMedia();
   }, []);
 
   // Real-time self-view: keep the host's own camera/screen bound to the video
