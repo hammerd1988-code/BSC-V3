@@ -102,15 +102,16 @@ const formatDuration = (stream: StreamRow) => {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 };
 
-export const StreamCard: React.FC<{ stream: StreamRow; onOpen: (id: string) => void }> = ({ stream, onOpen }) => {
+export const StreamCard: React.FC<{ stream: StreamRow; onOpen?: (id: string) => void }> = ({ stream, onOpen }) => {
   const isLive = stream.status === 'live' || stream.is_live;
   return (
     <motion.button
       type="button"
-      whileHover={{ y: -4, scale: 1.01 }}
-      whileTap={{ scale: 0.98 }}
-      onClick={() => onOpen(stream.id)}
-      className="group relative overflow-hidden rounded-[2rem] border border-white/10 bg-zinc-950/80 text-left shadow-[0_0_36px_rgba(0,229,255,0.08)] transition hover:border-cyan-300/40"
+      whileHover={onOpen ? { y: -4, scale: 1.01 } : {}}
+      whileTap={onOpen ? { scale: 0.98 } : {}}
+      onClick={onOpen ? () => onOpen(stream.id) : undefined}
+      disabled={!onOpen}
+      className="group relative overflow-hidden rounded-[2rem] border border-white/10 bg-zinc-950/80 text-left shadow-[0_0_36px_rgba(0,229,255,0.08)] transition hover:border-cyan-300/40 disabled:cursor-default disabled:pointer-events-none"
     >
       <div className="aspect-video bg-black relative overflow-hidden">
         {stream.thumbnail_url ? (
@@ -441,15 +442,17 @@ export const GoLive: React.FC = () => {
     endedRef.current = true;
     try {
       const replayUrl = await stopReplayRecordingAndUpload(id);
-      await supabase.from('streams').update({
+      const { error: streamError } = await supabase.from('streams').update({
         status: 'ended',
         is_live: false,
         ended_at: new Date().toISOString(),
         ...(replayUrl ? { replay_url: replayUrl } : {}),
       }).eq('id', id);
+      if (streamError) throw streamError;
       const user = currentUserRef.current;
       if (user) {
-        await supabase.from('users').update({ is_live: false, active_stream_id: null }).eq('id', user.id);
+        const { error: userError } = await supabase.from('users').update({ is_live: false, active_stream_id: null }).eq('id', user.id);
+        if (userError) throw userError;
       }
     } catch (err) {
       handleDbError(err, 'UPDATE', `streams/${id}`);

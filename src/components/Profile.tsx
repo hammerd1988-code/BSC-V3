@@ -569,11 +569,14 @@ export const Profile: React.FC = () => {
   const handleRepostReplay = async (replay: StreamRow) => {
     if (!currentUser || replayActionId) return;
     setReplayActionId(replay.id);
-    await repostReplayToFeed(
-      { id: replay.id, title: replay.title, replay_url: replay.replay_url, thumbnail_url: replay.thumbnail_url, category: replay.category as string | null | undefined },
-      currentUser,
-    );
-    setReplayActionId(null);
+    try {
+      await repostReplayToFeed(
+        { id: replay.id, title: replay.title, replay_url: replay.replay_url, thumbnail_url: replay.thumbnail_url, category: replay.category as string | null | undefined },
+        currentUser,
+      );
+    } finally {
+      setReplayActionId(null);
+    }
   };
 
   const handleShareReplay = async (replayId: string) => {
@@ -1929,7 +1932,7 @@ export const Profile: React.FC = () => {
                       <div className="grid gap-4 sm:grid-cols-2">
                         {replays.map((replay) => (
                           <div key={replay.id} className="space-y-2">
-                            <StreamCard stream={replay} onOpen={(id) => navigate(`/golive?streamId=${id}`)} />
+                            <StreamCard stream={replay} onOpen={replay.replay_url ? (id) => navigate(`/golive?streamId=${id}`) : undefined} />
                             <div className="flex items-center gap-2">
                               <button
                                 onClick={() => navigate(`/golive?streamId=${replay.id}`)}
@@ -1942,7 +1945,7 @@ export const Profile: React.FC = () => {
                               {currentUser?.id === user.id && (
                                 <button
                                   onClick={() => void handleRepostReplay(replay)}
-                                  disabled={replayActionId === replay.id}
+                                  disabled={!!replayActionId}
                                   title="Repost to feed"
                                   className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-300/30 bg-cyan-300/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-cyan-100 transition hover:bg-cyan-300/20 disabled:opacity-40"
                                 >
