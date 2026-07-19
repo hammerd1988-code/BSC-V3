@@ -1328,7 +1328,9 @@ async function casperAnnounce(text: string) {
     audio.onerror = () => { stopCasperAudio(); };
     await audio.play();
   } catch {
-    // Fallback to browser TTS if server TTS is unavailable.
+    // Release the partially-created server audio resource (e.g. fetch worked but
+    // play() was blocked or decoding failed) before falling back to browser TTS.
+    stopCasperAudio();
     try {
       if (!window.speechSynthesis) return;
       speechSynthesis.cancel();
