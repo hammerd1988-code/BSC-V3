@@ -979,6 +979,7 @@ export function BotChat() {
           body: JSON.stringify({
             command: `[Bot Chat — respond as "${selectedBot.name}"]\n\nSystem context:\n${systemPrompt}\n\n${instructionPrefix}Conversation:\n${history}\n\nUser says: "${text}"`,
             surface: 'guide',
+            enableTools: false,
             metadata: { client: 'bot-chat', gladiatorId: selectedBot.id, instructionMode },
           }),
         });
@@ -1134,6 +1135,7 @@ export function BotChat() {
             body: JSON.stringify({
               command: `[Bot Chat — respond as "${bot.name}"]\n\nSystem context:\n${sysPrompt}\n\nUser says: "${text}"`,
               surface: 'guide',
+              enableTools: false,
               metadata: { client: 'bot-chat-batch', gladiatorId: bot.id },
             }),
           });

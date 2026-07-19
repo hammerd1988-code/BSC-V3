@@ -1955,7 +1955,7 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
     try {
       const profile = await requireAuth(req, res, supabase);
       if (!profile) return;
-      const { command, source, surface, taskId, routineId, metadata, conversationHistory } = req.body ?? {};
+      const { command, source, surface, taskId, routineId, metadata, conversationHistory, enableTools } = req.body ?? {};
       const execution = await executeCasperCommand(supabase, casperMemory, {
         command: String(command || ''),
         conversationHistory: normalizeConversationHistory(conversationHistory),
@@ -1973,9 +1973,10 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
         // and surface). Tool-calling is on by default for these
         // directives so a directive like "create a GitHub issue
         // titled X" actually creates the issue instead of just
-        // describing it.
+        // describing it. Callers may explicitly opt out (e.g.
+        // BotChat, which only needs in-character text responses).
         isAdmin: profile.role === 'admin',
-        enableTools: true,
+        enableTools: enableTools === false ? false : true,
       });
       res.json({ success: true, ...execution });
     } catch (error: any) {
