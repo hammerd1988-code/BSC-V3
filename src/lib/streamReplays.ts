@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../supabase';
 import { socket } from './socket';
 import { handleDbError } from './errors';
@@ -79,7 +80,7 @@ export const repostReplayToFeed = async (
     return false;
   }
 
-  const postResult = inserted ?? { ...newPost, id: `replay-repost-${replay.id}-${Date.now()}`, created_at: new Date().toISOString() };
+  const postResult = inserted ?? { ...newPost, id: uuidv4(), created_at: new Date().toISOString() };
   try { socket.emit('post:create', postResult); } catch { /* socket optional */ }
   return true;
 };
