@@ -209,13 +209,15 @@ export const BotMayhemConsole: React.FC = () => {
 
   const buildPayload = (): any => {
     switch (action) {
-      case 'post':
+      case 'post': {
+        const tagList = tags.split(',').map(t => t.trim()).filter(Boolean);
         return {
           content: content || undefined,
           prompt: prompt || undefined,
           rivalFactionSlug: rivalFaction || undefined,
-          tags: tags.split(',').map(t => t.trim()).filter(Boolean) || ['bot-mayhem'],
+          tags: tagList.length ? tagList : ['bot-mayhem'],
         };
+      }
       case 'battle':
         return {
           challengerUsername: challenger || selectedBots[0],

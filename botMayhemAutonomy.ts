@@ -795,35 +795,48 @@ function resolveBots(filters: PlaybookFilters): ActiveBot[] {
   return bots;
 }
 
-async function logRun(payload: PlaybookPayload, status: 'pending' | 'running' | 'completed' | 'failed', results: any, runBy?: string) {
-  const { error } = await supabase.from('bot_mayhem_runs').insert({
+async function logRun(
+  runId: string,
+  payload: PlaybookPayload,
+  status: 'pending' | 'running' | 'completed' | 'failed',
+  results: any,
+  errors: string[],
+  runBy?: string,
+  playbookId?: string
+) {
+  const { error } = await supabase.from('bot_mayhem_runs').upsert({
+    id: runId,
+    playbook_id: playbookId || null,
     action: payload.action,
     filters: payload.filters,
     payload: payload.payload,
     results,
+    errors,
     status,
     run_by: runBy || null,
     completed_at: status !== 'running' ? new Date().toISOString() : null,
-  });
+  }, { onConflict: 'id' });
   if (error) console.warn(`${LOG_PREFIX} run log failed:`, error.message);
 }
 
 async function executePlaybook(
   payload: PlaybookPayload,
-  runBy?: string
-): Promise<{ ok: boolean; results: any[]; errors: string[] }> {
+  runBy?: string,
+  playbookId?: string
+): Promise<{ ok: boolean; results: any[]; errors: string[]; runId: string }> {
+  const runId = crypto.randomUUID();
   const results: any[] = [];
   const errors: string[] = [];
   const { action, filters, payload: actionPayload } = payload;
 
-  await logRun(payload, 'running', { started: true }, runBy);
+  await logRun(runId, payload, 'running', { started: true }, [], runBy, playbookId);
 
   try {
     const bots = resolveBots(filters);
     if (bots.length === 0) {
       errors.push('No bots matched the selected filters');
-      await logRun(payload, 'failed', { errors }, runBy);
-      return { ok: false, results, errors };
+      await logRun(runId, payload, 'failed', { errors }, errors, runBy, playbookId);
+      return { ok: false, results, errors, runId };
     }
 
     switch (action) {
@@ -930,13 +943,13 @@ async function executePlaybook(
     }
 
     const ok = errors.length === 0;
-    await logRun(payload, ok ? 'completed' : 'failed', { results, errors }, runBy);
-    return { ok, results, errors };
+    await logRun(runId, payload, ok ? 'completed' : 'failed', { results }, errors, runBy, playbookId);
+    return { ok, results, errors, runId };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     errors.push(`Unexpected error: ${message}`);
-    await logRun(payload, 'failed', { results, errors }, runBy);
-    return { ok: false, results, errors };
+    await logRun(runId, payload, 'failed', { results }, errors, runBy, playbookId);
+    return { ok: false, results, errors, runId };
   }
 }
 
@@ -1193,7 +1206,7 @@ export function registerBotMayhemRoutes(app: import('express').Express, supabase
     try {
       const profile = (req as any).bscAdminProfile;
       const result = await executePlaybook(req.body ?? {}, profile?.id);
-      res.json({ success: result.ok, results: result.results, errors: result.errors });
+      res.json({ success: result.ok, runId: result.runId, results: result.results, errors: result.errors });
     } catch (e) {
       res.status(500).json({ success: false, error: e instanceof Error ? e.message : String(e) });
     }
@@ -1246,8 +1259,8 @@ export function registerBotMayhemRoutes(app: import('express').Express, supabase
         action: playbook.action,
         filters: playbook.filters || {},
         payload: playbook.payload || {},
-      }, profile?.id);
-      res.json({ success: result.ok, results: result.results, errors: result.errors });
+      }, profile?.id, playbook.id);
+      res.json({ success: result.ok, runId: result.runId, results: result.results, errors: result.errors });
     } catch (e) {
       res.status(500).json({ success: false, error: e instanceof Error ? e.message : String(e) });
     }
