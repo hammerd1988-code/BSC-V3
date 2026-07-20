@@ -19,6 +19,7 @@ import {
   RefreshCw,
   Save,
   ShieldAlert,
+  Shuffle,
   Swords,
   Users,
   Zap,
@@ -53,6 +54,12 @@ interface Run {
   errors: any[];
 }
 
+interface MagaSwitch {
+  id: string;
+  name: string;
+  description: string;
+}
+
 const CHALLENGE_TYPES = ['speed_round', 'debug_battle', 'code_golf', 'code_jeopardy'];
 
 export const BotMayhemConsole: React.FC = () => {
@@ -65,7 +72,7 @@ export const BotMayhemConsole: React.FC = () => {
   const [autonomousEnabled, setAutonomousEnabled] = useState(true);
   const [selectedBots, setSelectedBots] = useState<string[]>([]);
   const [selectedFactions, setSelectedFactions] = useState<string[]>([]);
-  const [activeTab, setActiveTab] = useState<'roster' | 'actions' | 'playbooks' | 'runs'>('roster');
+  const [activeTab, setActiveTab] = useState<'roster' | 'actions' | 'playbooks' | 'runs' | 'maga'>('roster');
 
   const [action, setAction] = useState<'post' | 'battle' | 'react' | 'alliance' | 'rivalry' | 'dm'>('post');
   const [content, setContent] = useState('');
@@ -84,6 +91,10 @@ export const BotMayhemConsole: React.FC = () => {
   const [runs, setRuns] = useState<Run[]>([]);
   const [playbookName, setPlaybookName] = useState('');
   const [playbookDescription, setPlaybookDescription] = useState('');
+
+  const [magaSwitches, setMagaSwitches] = useState<MagaSwitch[]>([]);
+  const [activeMagaSwitch, setActiveMagaSwitch] = useState<string | null>(null);
+  const [applyingMaga, setApplyingMaga] = useState<string | null>(null);
 
   const [executing, setExecuting] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
@@ -156,6 +167,16 @@ export const BotMayhemConsole: React.FC = () => {
     }
   };
 
+  const fetchMagaSwitches = async () => {
+    try {
+      const data = await api('/api/bot-mayhem/maga-switches');
+      setMagaSwitches(data.switches || []);
+      setActiveMagaSwitch(data.active ?? null);
+    } catch (e: any) {
+      addLog(`MAGA switches load failed: ${e.message}`);
+    }
+  };
+
   useEffect(() => {
     if (!isAdmin) {
       setLoading(false);
@@ -164,6 +185,7 @@ export const BotMayhemConsole: React.FC = () => {
     const load = async () => {
       setLoading(true);
       await fetchRoster();
+      await fetchMagaSwitches();
       await fetchPlaybooks();
       await fetchRuns();
       setLoading(false);
@@ -171,6 +193,7 @@ export const BotMayhemConsole: React.FC = () => {
     void load();
     const interval = setInterval(() => {
       void fetchRoster();
+      void fetchMagaSwitches();
       void fetchRuns();
     }, 10_000);
     return () => clearInterval(interval);
@@ -330,6 +353,43 @@ export const BotMayhemConsole: React.FC = () => {
     }
   };
 
+  const applyMagaSwitch = async (id: string) => {
+    setApplyingMaga(id);
+    try {
+      const result = await api(`/api/bot-mayhem/maga-switches/${id}/apply`, 'POST');
+      addLog(result.ok ? `${result.message}` : `MAGA failed: ${result.message}`);
+      setActiveMagaSwitch(id);
+      await fetchRuns();
+    } catch (e: any) {
+      addLog(`MAGA switch failed: ${e.message}`);
+    } finally {
+      setApplyingMaga(null);
+    }
+  };
+
+  const clearMagaSwitch = async () => {
+    try {
+      await api('/api/bot-mayhem/maga-switches/clear', 'POST');
+      setActiveMagaSwitch(null);
+      addLog('MAGA switch cleared');
+    } catch (e: any) {
+      addLog(`Clear MAGA failed: ${e.message}`);
+    }
+  };
+
+  const scrambleDynamics = async () => {
+    setApplyingMaga('scramble');
+    try {
+      const result = await api('/api/bot-mayhem/scramble', 'POST');
+      addLog(result.ok ? `Scramble: ${result.message}` : `Scramble failed: ${result.message}`);
+      await fetchRuns();
+    } catch (e: any) {
+      addLog(`Scramble failed: ${e.message}`);
+    } finally {
+      setApplyingMaga(null);
+    }
+  };
+
   const setManualRelationship = async (type: 'alliance' | 'rivalry' | 'neutral') => {
     if (!targetUsername && !targetFaction) return;
     setExecuting(true);
@@ -423,7 +483,7 @@ export const BotMayhemConsole: React.FC = () => {
 
         {/* Tabs */}
         <div className="flex flex-wrap gap-2">
-          {(['roster', 'actions', 'playbooks', 'runs'] as const).map(tab => (
+          {(['roster', 'actions', 'playbooks', 'runs', 'maga'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -434,7 +494,7 @@ export const BotMayhemConsole: React.FC = () => {
                   : 'border border-white/10 bg-white/[0.03] text-zinc-400 hover:border-white/25'
               )}
             >
-              {tab}
+              {tab === 'maga' ? 'MAGA' : tab}
             </button>
           ))}
         </div>
@@ -830,6 +890,72 @@ export const BotMayhemConsole: React.FC = () => {
               </div>
             )}
           </section>
+        )}
+
+        {!loading && activeTab === 'maga' && (
+          <div className="space-y-6">
+            <section className="rounded-[2rem] border border-white/10 bg-black/45 p-4">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-black uppercase tracking-widest text-white">MAGA Switches</h2>
+                  <p className="max-w-xl text-xs text-zinc-400">
+                    Flip a switch to AI-reconfigure every bot persona and seed a new social dynamic. The bots immediately start interacting according to the chosen scenario.
+                  </p>
+                </div>
+                <button
+                  onClick={scrambleDynamics}
+                  disabled={applyingMaga === 'scramble'}
+                  className="inline-flex items-center gap-2 rounded-xl border border-fuchsia-300/30 bg-fuchsia-500/10 px-4 py-2 text-xs font-black uppercase tracking-widest text-fuchsia-100 hover:bg-fuchsia-500/20 disabled:opacity-50"
+                >
+                  <Shuffle className="h-4 w-4" />
+                  {applyingMaga === 'scramble' ? 'Scrambling...' : 'Scramble Dynamics'}
+                </button>
+              </div>
+
+              {activeMagaSwitch && (
+                <div className="mb-4 flex items-center justify-between rounded-2xl border border-cyan-300/20 bg-cyan-500/10 p-3">
+                  <p className="text-xs font-black uppercase text-cyan-100">
+                    Active scenario: <span className="text-white">{magaSwitches.find(s => s.id === activeMagaSwitch)?.name || activeMagaSwitch}</span>
+                  </p>
+                  <button
+                    onClick={clearMagaSwitch}
+                    className="rounded-lg border border-white/10 bg-white/[0.05] px-3 py-1 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:border-red-300/30"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+
+              <div className="grid gap-3 md:grid-cols-2">
+                {magaSwitches.map(sw => {
+                  const active = activeMagaSwitch === sw.id;
+                  const busy = applyingMaga === sw.id;
+                  return (
+                    <div key={sw.id} className={cn('rounded-2xl border p-4 transition-all', active ? 'border-red-400/50 bg-red-500/10' : 'border-white/10 bg-white/[0.03]')}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-black uppercase text-white">{sw.name}</p>
+                          <p className="mt-1 text-xs text-zinc-400">{sw.description}</p>
+                        </div>
+                        <button
+                          onClick={() => applyMagaSwitch(sw.id)}
+                          disabled={Boolean(busy)}
+                          className={cn(
+                            'rounded-xl px-4 py-2 text-[10px] font-black uppercase tracking-widest transition-all disabled:opacity-50',
+                            active
+                              ? 'border border-red-300/30 bg-red-500/20 text-red-100 hover:bg-red-500/30'
+                              : 'bg-red-500 text-white shadow-[0_0_24px_rgba(239,68,68,0.28)] hover:bg-red-600'
+                          )}
+                        >
+                          {busy ? 'Applying...' : active ? 'Re-apply' : 'Flip Switch'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          </div>
         )}
 
         {/* Live log */}
