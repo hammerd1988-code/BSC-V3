@@ -31,6 +31,7 @@ import { registerRunwayRoutes } from './runwayRoutes.js';
 import { registerUnifiedBotRoutes } from './botUnificationRoutes.js';
 import { registerServerAiRoutes } from './serverAi.js';
 import { registerColosseumRoutes } from './colosseumRoutes.js';
+import { initBotMayhemAutonomy, registerBotMayhemRoutes } from './botMayhemAutonomy.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
 import { registerCoBrowseSocket } from './casperCoBrowse.js';
 import { registerStripeRoutes } from './stripeRoutes.js';
@@ -125,6 +126,7 @@ async function startServer() {
   registerServerAiRoutes(app, supabase);
   registerUnifiedBotRoutes(app, supabase);
   registerColosseumRoutes(app, supabase);
+  registerBotMayhemRoutes(app, supabase);
   registerStripeRoutes(app, supabase);
 
   // Webhook Authentication Middleware
@@ -1150,6 +1152,8 @@ app.post("/api/cred/exchange", async (req, res) => {
       ].filter(Boolean).join(', ') || 'NONE — set GROQ_API_KEY'}`);
       // Start Casper Autonomy
       initCasperAutonomy().catch(err => console.error('[server] Casper autonomy init failed:', err));
+      // Start Bot Mayhem Autonomy
+      initBotMayhemAutonomy().catch(err => console.error('[server] Bot Mayhem autonomy init failed:', err));
       // Start Bot Webhook Listener
       initWebhookListener();
       resolve();
