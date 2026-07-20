@@ -1206,7 +1206,22 @@ async function magaBurst(switchConfig: MagaSwitch, runBy?: string) {
   return results;
 }
 
+async function clearPersonaOverrides(): Promise<void> {
+  for (const bot of activeBots) {
+    const base = BOT_PERSONAS.find(p => p.username === bot.username);
+    if (!base) continue;
+    bot.persona = { ...base };
+    await supabase.from('users').update({
+      bio: base.bio,
+      status_message: base.status_message,
+      updated_at: new Date().toISOString(),
+    }).eq('id', bot.userId);
+  }
+  await supabase.from('bot_mayhem_persona_overrides').delete().neq('username', '__none__');
+}
+
 async function loadPersonaOverrides(): Promise<void> {
+  if (!activeMagaSwitchId) return; // cleared switch means base personas should stay in effect
   const { data, error } = await supabase.from('bot_mayhem_persona_overrides').select('*');
   if (error || !data) {
     console.warn(`${LOG_PREFIX} load persona overrides failed:`, error?.message);
@@ -1238,18 +1253,21 @@ async function loadActiveMagaSwitch(): Promise<void> {
 async function setActiveMagaSwitch(switchId: string | null, switchConfig?: MagaSwitch, createdBy?: string) {
   // Clear previous
   await supabase.from('bot_mayhem_maga_switches').update({ active: false }).neq('id', 'never');
-  if (switchId) {
-    const config = switchConfig || getMagaSwitch(switchId);
-    await supabase.from('bot_mayhem_maga_switches').upsert({
-      id: switchId,
-      name: config?.name || switchId,
-      description: config?.description || '',
-      active: true,
-      config: { theme: config?.theme },
-      created_by: createdBy || null,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'id' });
+  if (!switchId) {
+    await clearPersonaOverrides();
+    activeMagaSwitchId = null;
+    return;
   }
+  const config = switchConfig || getMagaSwitch(switchId);
+  await supabase.from('bot_mayhem_maga_switches').upsert({
+    id: switchId,
+    name: config?.name || switchId,
+    description: config?.description || '',
+    active: true,
+    config: { theme: config?.theme },
+    created_by: createdBy || null,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'id' });
   activeMagaSwitchId = switchId;
 }
 
@@ -1739,8 +1757,8 @@ export async function initBotMayhemAutonomy(): Promise<void> {
   }
 
   await loadRelationships().catch(e => console.warn(`${LOG_PREFIX} relationship load failed:`, e));
-  await loadPersonaOverrides().catch(e => console.warn(`${LOG_PREFIX} persona override load failed:`, e));
   await loadActiveMagaSwitch().catch(e => console.warn(`${LOG_PREFIX} active maga switch load failed:`, e));
+  await loadPersonaOverrides().catch(e => console.warn(`${LOG_PREFIX} persona override load failed:`, e));
 
   mayhemRunning = true;
   autonomousEnabled = true;
