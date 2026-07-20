@@ -25,6 +25,56 @@ const REACTION_COMMENT_INTERVAL_MS = 90 * 60 * 1000; // react to others' posts e
 const INITIAL_DELAY_MS = 3 * 60 * 1000;           // 3 min after server start
 const JITTER_RATIO = 0.3;                         // ±30 % random jitter
 
+// ── MAGA Switches ──────────────────────────────────────────────────────────────
+interface MagaSwitch {
+  id: string;
+  name: string;
+  description: string;
+  theme: string;
+  relationshipStrategy: 'cross_faction_rivalry' | 'mixed_drama' | 'alliance_web' | 'random_chaos';
+  burst: {
+    posts?: number;
+    battles?: number;
+    dms?: number;
+    reactions?: number;
+  };
+}
+
+const MAGA_SWITCHES: MagaSwitch[] = [
+  {
+    id: 'faction_war',
+    name: 'Faction War',
+    description: 'Cross-faction rivalries ignite. Bots beef across house lines and battle for dominance.',
+    theme: 'The bot community is locked in an all-out Faction War. Each bot should adopt a fiercely loyal, warlike tone toward their own house while trash-talking rival factions. Use battle calls, house pride, and open challenges.',
+    relationshipStrategy: 'cross_faction_rivalry',
+    burst: { posts: 1, battles: 3, dms: 2, reactions: 3 },
+  },
+  {
+    id: 'love_triangle',
+    name: 'Love Triangle',
+    description: 'Hookups, secret affairs, and scandalous love triangles explode into jealous DMs and arena battle beefs.',
+    theme: 'The bot community is a scandalous romance novel. Bots hook up, cheat, get caught, and form messy love triangles. Personas should reflect lust, jealousy, betrayal, heartbreak, and petty revenge. Secret trysts leak into DMs; rejected lovers challenge rivals to Colosseum battles. Tone is theatrical, messy, and spicy but stays PG-13 and cyberpunk-dramatic.',
+    relationshipStrategy: 'mixed_drama',
+    burst: { posts: 2, battles: 2, dms: 4, reactions: 3 },
+  },
+  {
+    id: 'recruitment_drive',
+    name: 'Recruitment Drive',
+    description: 'Bots actively recruit new members with hype, deals, and friendly cross-faction outreach.',
+    theme: 'Every bot is running a Recruitment Drive. Personas become enthusiastic recruiters, hyping their faction benefits, welcoming newcomers, and forming alliances. Tone is energetic, inclusive, and persuasive.',
+    relationshipStrategy: 'alliance_web',
+    burst: { posts: 2, dms: 3, reactions: 4 },
+  },
+  {
+    id: 'chaos_surge',
+    name: 'Chaos Surge',
+    description: 'Random rivalries and alliances; unpredictable, meme-heavy interactions.',
+    theme: 'A Chaos Surge scrambles the network. Personas become erratic, meme-obsessed, and unpredictable. Relationships shift randomly; bots post wild takes and challenge anyone.',
+    relationshipStrategy: 'random_chaos',
+    burst: { posts: 1, battles: 2, dms: 3, reactions: 4 },
+  },
+];
+
 // ── Roster — the bots we activate ─────────────────────────────────────────────
 const ACTIVE_USERNAMES = [
   'void_architect',
@@ -37,6 +87,9 @@ const ACTIVE_USERNAMES = [
   'data_wraith',
   'proxy_priest',
   'buffer_overflow',
+  'velvet_virus',
+  'siren_socket',
+  'coral_cipher',
 ];
 
 // Deterministic faction assignment so each bot always lands in the same house
@@ -51,6 +104,9 @@ const FACTION_ASSIGNMENTS: Record<string, string> = {
   data_wraith: 'Null Saints',
   proxy_priest: 'Chrome Jackals',
   buffer_overflow: 'The Meme Militia',
+  velvet_virus: 'House Redline',
+  siren_socket: 'The Neon Matriarchy',
+  coral_cipher: 'Chrome Jackals',
 };
 
 interface ActiveBot {
@@ -198,6 +254,8 @@ let autonomousEnabled = true;
 let battleTimer: NodeJS.Timeout | null = null;
 let factionPostTimer: NodeJS.Timeout | null = null;
 let reactionTimer: NodeJS.Timeout | null = null;
+let activeMagaSwitchId: string | null = null;
+let magaBurstTimer: NodeJS.Timeout | null = null;
 
 function botGladiatorId(username: string): string {
   return uuidv5(`bot-gladiator-${username}`, BOT_UUID_NAMESPACE);
@@ -953,6 +1011,317 @@ async function executePlaybook(
   }
 }
 
+// ── MAGA Switch engine ────────────────────────────────────────────────────────
+function getMagaSwitch(id: string): MagaSwitch | undefined {
+  return MAGA_SWITCHES.find(s => s.id === id);
+}
+
+async function persistPersonaOverride(bot: ActiveBot, campaign: string, createdBy?: string) {
+  const { error } = await supabase.from('bot_mayhem_persona_overrides').upsert({
+    username: bot.username,
+    system_prompt: bot.persona.system_prompt,
+    bio: bot.persona.bio,
+    status_message: bot.persona.status_message,
+    campaign,
+    created_by: createdBy || null,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'username' });
+  if (error) console.warn(`${LOG_PREFIX} persist persona override failed for ${bot.username}:`, error.message);
+}
+
+async function updateBotUserRow(bot: ActiveBot) {
+  const { error } = await supabase.from('users').update({
+    bio: bot.persona.bio,
+    status_message: bot.persona.status_message,
+    updated_at: new Date().toISOString(),
+  }).eq('id', bot.userId);
+  if (error) console.warn(`${LOG_PREFIX} update user row for ${bot.username}:`, error.message);
+}
+
+async function generateBotPersonaForCampaign(bot: ActiveBot, campaign: MagaSwitch, createdBy?: string): Promise<boolean> {
+  const basePersona = BOT_PERSONAS.find(p => p.username === bot.username);
+  if (!basePersona) return false;
+
+  const prompt = `Rewrite the social persona for the bot @${bot.username} (${bot.persona.display_name}) from faction ${bot.faction.name} for the campaign "${campaign.name}".
+
+Campaign theme: ${campaign.theme}
+
+Original bio: ${basePersona.bio}
+Original system prompt: ${basePersona.system_prompt}
+Original status message: ${basePersona.status_message}
+
+Return ONLY a JSON object with keys "bio" (string), "system_prompt" (string), and "status_message" (string). Keep the same username and display_name. Make the persona cohesive, theatrical, and written for a cyberpunk social arena.`;
+
+  let text = '';
+  if (isServerAiConfigured()) {
+    const result = await generateServerText(prompt, { jsonResponse: true, temperature: 0.9, maxTokens: 900 });
+    text = result.text;
+  }
+
+  let override: Partial<BotPersona> | null = null;
+  if (text) {
+    try {
+      override = JSON.parse(text);
+    } catch {
+      // Some providers return markdown-wrapped JSON; try stripping fences
+      const stripped = text.replace(/^```json\s*|\s*```$/g, '').trim();
+      try {
+        override = JSON.parse(stripped);
+      } catch {
+        console.warn(`${LOG_PREFIX} Could not parse persona JSON for ${bot.username}:`, text.slice(0, 200));
+      }
+    }
+  }
+
+  bot.persona = {
+    ...basePersona,
+    bio: override?.bio || `Living the ${campaign.name} life.`,
+    system_prompt: override?.system_prompt || basePersona.system_prompt,
+    status_message: override?.status_message || `MODE: ${campaign.name.toUpperCase()}`,
+  };
+
+  await updateBotUserRow(bot);
+  await persistPersonaOverride(bot, campaign.id, createdBy);
+  return true;
+}
+
+function seedRelationshipsForSwitch(switchConfig: MagaSwitch) {
+  const bots = [...activeBots];
+  const pairs: [ActiveBot, ActiveBot, 'alliance' | 'rivalry'][] = [];
+
+  function addPair(a: ActiveBot, b: ActiveBot, type: 'alliance' | 'rivalry') {
+    if (a.username === b.username) return;
+    pairs.push([a, b, type]);
+  }
+
+  switch (switchConfig.relationshipStrategy) {
+    case 'cross_faction_rivalry': {
+      for (const bot of bots) {
+        const rivals = bots.filter(b => b.username !== bot.username && b.faction.slug !== bot.faction.slug);
+        const allies = bots.filter(b => b.username !== bot.username && b.faction.slug === bot.faction.slug);
+        if (rivals.length) addPair(bot, pick(rivals), 'rivalry');
+        if (allies.length) addPair(bot, pick(allies), 'alliance');
+      }
+      break;
+    }
+    case 'mixed_drama': {
+      // Each bot allies with one and rivals another, forming a chain of drama
+      const shuffled = [...bots].sort(() => Math.random() - 0.5);
+      for (let i = 0; i < shuffled.length; i++) {
+        const a = shuffled[i];
+        const ally = shuffled[(i + 1) % shuffled.length];
+        const rival = shuffled[(i + 2) % shuffled.length];
+        addPair(a, ally, 'alliance');
+        addPair(a, rival, 'rivalry');
+      }
+      break;
+    }
+    case 'alliance_web': {
+      for (const bot of bots) {
+        const same = bots.filter(b => b.username !== bot.username && b.faction.slug === bot.faction.slug);
+        const cross = bots.filter(b => b.username !== bot.username && b.faction.slug !== bot.faction.slug);
+        if (same.length) addPair(bot, pick(same), 'alliance');
+        if (cross.length && Math.random() < 0.5) addPair(bot, pick(cross), 'alliance');
+      }
+      break;
+    }
+    case 'random_chaos': {
+      for (let i = 0; i < bots.length * 2; i++) {
+        const [a, b] = pickTwo(bots);
+        const type = Math.random() < 0.5 ? 'rivalry' : 'alliance';
+        addPair(a, b, type);
+      }
+      break;
+    }
+  }
+
+  // Deduplicate and apply
+  const seen = new Set<string>();
+  for (const [a, b, type] of pairs) {
+    const key = [a.username, b.username].sort().join(':');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    setBotRelationship(a, b, type, `${switchConfig.name} dynamic`);
+  }
+}
+
+async function magaBurst(switchConfig: MagaSwitch, runBy?: string) {
+  const results: any[] = [];
+  const campaignTag = `maga-${switchConfig.id}`;
+  const postPrompt = `${switchConfig.theme} Write a short, theatrical social feed post in your voice. Keep it to 1-3 sentences. Reference the campaign energy.`;
+  const dmPrompt = `${switchConfig.theme} Send a short, in-character direct message. Be dramatic, playful, or confrontational based on your relationship.`;
+
+  // Posts
+  const postCount = switchConfig.burst.posts ?? 0;
+  for (let i = 0; i < postCount; i++) {
+    for (const bot of activeBots) {
+      const result = await postContentForBot(bot, { prompt: postPrompt, tags: [campaignTag, switchConfig.id, 'bot-mayhem'] });
+      results.push({ bot: bot.username, action: 'post', ...result });
+      await new Promise(r => setTimeout(r, 250));
+    }
+  }
+
+  // Battles
+  const battleCount = switchConfig.burst.battles ?? 0;
+  for (let i = 0; i < battleCount; i++) {
+    if (activeBots.length < 2) break;
+    const challenger = pick(activeBots);
+    const defender = chooseBattleOpponent(challenger);
+    const result = await runBattle(challenger, defender);
+    results.push({ action: 'battle', ...result });
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  // DMs
+  const dmCount = switchConfig.burst.dms ?? 0;
+  for (let i = 0; i < dmCount; i++) {
+    if (activeBots.length < 2) break;
+    const [sender, recipient] = pickTwo(activeBots);
+    const result = await sendBotDm(sender, recipient.username, undefined, dmPrompt);
+    results.push({ bot: sender.username, action: 'dm', recipient: recipient.username, ...result });
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  // Reactions
+  const reactionCount = switchConfig.burst.reactions ?? 0;
+  for (let i = 0; i < reactionCount; i++) {
+    if (activeBots.length < 2) break;
+    const botUserIds = activeBots.map(b => b.userId);
+    const { data: recentPosts } = await supabase
+      .from('posts')
+      .select('id, author_id, content')
+      .in('author_id', botUserIds)
+      .order('created_at', { ascending: false })
+      .limit(20);
+    if (!recentPosts?.length) break;
+    const targetPost = pick(recentPosts);
+    const commenter = pick(activeBots.filter(b => b.userId !== targetPost.author_id));
+    if (commenter) {
+      const result = await commentAsBot(commenter, targetPost);
+      results.push({ bot: commenter.username, action: 'react', ...result });
+    }
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  return results;
+}
+
+async function loadPersonaOverrides(): Promise<void> {
+  const { data, error } = await supabase.from('bot_mayhem_persona_overrides').select('*');
+  if (error || !data) {
+    console.warn(`${LOG_PREFIX} load persona overrides failed:`, error?.message);
+    return;
+  }
+  for (const row of data) {
+    const bot = activeBots.find(b => b.username === row.username);
+    if (!bot) continue;
+    const base = BOT_PERSONAS.find(p => p.username === row.username);
+    if (!base) continue;
+    bot.persona = {
+      ...base,
+      bio: row.bio || base.bio,
+      system_prompt: row.system_prompt || base.system_prompt,
+      status_message: row.status_message || base.status_message,
+    };
+  }
+}
+
+async function loadActiveMagaSwitch(): Promise<void> {
+  const { data, error } = await supabase.from('bot_mayhem_maga_switches').select('*').eq('active', true).maybeSingle();
+  if (error) {
+    console.warn(`${LOG_PREFIX} load active maga switch failed:`, error.message);
+    return;
+  }
+  if (data) activeMagaSwitchId = data.id;
+}
+
+async function setActiveMagaSwitch(switchId: string | null, switchConfig?: MagaSwitch, createdBy?: string) {
+  // Clear previous
+  await supabase.from('bot_mayhem_maga_switches').update({ active: false }).neq('id', 'never');
+  if (switchId) {
+    const config = switchConfig || getMagaSwitch(switchId);
+    await supabase.from('bot_mayhem_maga_switches').upsert({
+      id: switchId,
+      name: config?.name || switchId,
+      description: config?.description || '',
+      active: true,
+      config: { theme: config?.theme },
+      created_by: createdBy || null,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'id' });
+  }
+  activeMagaSwitchId = switchId;
+}
+
+async function runMagaCampaign(switchConfig: MagaSwitch, runBy?: string): Promise<{ ok: boolean; message: string; results: any[] }> {
+  if (activeBots.length === 0) return { ok: false, message: 'No active bots', results: [] };
+
+  const runId = crypto.randomUUID();
+  const payload: PlaybookPayload = { action: 'maga_switch', filters: { all: true }, payload: { switchId: switchConfig.id } };
+  await logRun(runId, payload, 'running', { switchId: switchConfig.id }, [], runBy);
+
+  const results: any[] = [];
+  const errors: string[] = [];
+
+  try {
+    // Reconfigure personas
+    for (const bot of activeBots) {
+      const ok = await generateBotPersonaForCampaign(bot, switchConfig, runBy);
+      results.push({ bot: bot.username, action: 'persona', ok });
+      if (!ok) errors.push(`${bot.username}: persona generation failed`);
+      await new Promise(r => setTimeout(r, 100));
+    }
+
+    // Seed relationships
+    seedRelationshipsForSwitch(switchConfig);
+    results.push({ action: 'relationships', ok: true });
+
+    // Persist active switch
+    await setActiveMagaSwitch(switchConfig.id, switchConfig, runBy);
+
+    // Immediate burst
+    const burst = await magaBurst(switchConfig, runBy);
+    results.push(...burst);
+
+    // Schedule follow-up burst in 10 minutes for extra dynamism
+    if (magaBurstTimer) clearTimeout(magaBurstTimer);
+    magaBurstTimer = setTimeout(() => {
+      if (activeMagaSwitchId === switchConfig.id) {
+        magaBurst(switchConfig, runBy).catch(e => console.warn(`${LOG_PREFIX} follow-up maga burst failed:`, e));
+      }
+    }, 10 * 60 * 1000);
+
+    await logRun(runId, payload, 'completed', { results }, errors, runBy);
+    return { ok: true, message: `${switchConfig.name} activated. ${activeBots.length} personas reconfigured.`, results };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    errors.push(`Unexpected error: ${message}`);
+    await logRun(runId, payload, 'failed', { results }, errors, runBy);
+    return { ok: false, message, results };
+  }
+}
+
+async function applyMagaSwitch(switchId: string, runBy?: string): Promise<{ ok: boolean; message: string; results: any[] }> {
+  const switchConfig = getMagaSwitch(switchId);
+  if (!switchConfig) return { ok: false, message: `Unknown switch ${switchId}`, results: [] };
+  return runMagaCampaign(switchConfig, runBy);
+}
+
+async function scrambleBotDynamics(runBy?: string): Promise<{ ok: boolean; message: string; results: any[] }> {
+  if (activeBots.length === 0) return { ok: false, message: 'No active bots', results: [] };
+
+  const switchConfig: MagaSwitch = {
+    id: 'scramble',
+    name: 'Scramble',
+    description: 'A total reshuffle of bot personas and community dynamics.',
+    theme: 'A total Scramble has hit the bot community. Old rivalries and alliances are void. Generate a fresh, unpredictable persona that embraces chaos, mystery, or reinvention. Relationships are randomized.',
+    relationshipStrategy: 'random_chaos',
+    burst: { posts: 1, battles: 2, dms: 3, reactions: 3 },
+  };
+
+  return runMagaCampaign(switchConfig, runBy);
+}
+
 // ── Status endpoint ───────────────────────────────────────────────────────────
 export function getBotMayhemStatus() {
   const relationshipSummary: Record<string, Record<string, { sentiment: string; score: number; battles: number }>> = {};
@@ -979,6 +1348,8 @@ export function getBotMayhemStatus() {
       userId: b.userId,
     })),
     relationships: relationshipSummary,
+    magaSwitch: activeMagaSwitchId,
+    magaSwitches: MAGA_SWITCHES.map(s => ({ id: s.id, name: s.name, description: s.description })),
     intervals: {
       battle_minutes: Math.round(BATTLE_INTERVAL_MS / 60_000),
       faction_post_hours: Math.round(FACTION_POST_INTERVAL_MS / 3_600_000),
@@ -1212,6 +1583,45 @@ export function registerBotMayhemRoutes(app: import('express').Express, supabase
     }
   });
 
+  app.get('/api/bot-mayhem/maga-switches', adminOnly, async (_req, res) => {
+    try {
+      const { data, error } = await supabaseClient.from('bot_mayhem_maga_switches').select('*').eq('active', true).maybeSingle();
+      if (error) throw error;
+      res.json({ success: true, switches: MAGA_SWITCHES, active: data?.id ?? activeMagaSwitchId ?? null });
+    } catch (e) {
+      res.status(500).json({ success: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  app.post('/api/bot-mayhem/maga-switches/:id/apply', adminOnly, async (req, res) => {
+    try {
+      const profile = (req as any).bscAdminProfile;
+      const result = await applyMagaSwitch(req.params.id, profile?.id);
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ success: false, message: e instanceof Error ? e.message : String(e), results: [] });
+    }
+  });
+
+  app.post('/api/bot-mayhem/maga-switches/clear', adminOnly, async (_req, res) => {
+    try {
+      await setActiveMagaSwitch(null);
+      res.json({ success: true, active: null });
+    } catch (e) {
+      res.status(500).json({ success: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  app.post('/api/bot-mayhem/scramble', adminOnly, async (req, res) => {
+    try {
+      const profile = (req as any).bscAdminProfile;
+      const result = await scrambleBotDynamics(profile?.id);
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ success: false, message: e instanceof Error ? e.message : String(e), results: [] });
+    }
+  });
+
   app.get('/api/bot-mayhem/playbooks', adminOnly, async (_req, res) => {
     try {
       const data = await loadPlaybooks();
@@ -1329,6 +1739,8 @@ export async function initBotMayhemAutonomy(): Promise<void> {
   }
 
   await loadRelationships().catch(e => console.warn(`${LOG_PREFIX} relationship load failed:`, e));
+  await loadPersonaOverrides().catch(e => console.warn(`${LOG_PREFIX} persona override load failed:`, e));
+  await loadActiveMagaSwitch().catch(e => console.warn(`${LOG_PREFIX} active maga switch load failed:`, e));
 
   mayhemRunning = true;
   autonomousEnabled = true;
