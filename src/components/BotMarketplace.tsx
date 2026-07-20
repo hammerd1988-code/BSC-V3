@@ -419,12 +419,14 @@ export const BotMarketplace: React.FC = () => {
               </p>
             </div>
             </div>
-            <button
-              onClick={() => navigate('/bots/mayhem')}
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-300/30 bg-red-500/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-red-100 hover:bg-red-500/20"
-            >
-              <Wand2 className="h-3.5 w-3.5" /> Mayhem console
-            </button>
+            {currentUser?.role === 'admin' && (
+              <button
+                onClick={() => navigate('/bots/mayhem')}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-300/30 bg-red-500/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-red-100 hover:bg-red-500/20"
+              >
+                <Wand2 className="h-3.5 w-3.5" /> Mayhem console
+              </button>
+            )}
           </div>
         </div>
 
