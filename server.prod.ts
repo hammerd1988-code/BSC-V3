@@ -23,6 +23,7 @@ import { registerLiveKitRoutes } from './livekitRoutes.js';
 import { registerRunwayRoutes } from './runwayRoutes.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
 import { registerCasperRelay } from './casperRelay.js';
+import { initBotMayhemAutonomy, registerBotMayhemRoutes } from './botMayhemAutonomy.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -94,6 +95,7 @@ async function startServer() {
   registerLiveKitRoutes(app, supabase);
   registerRunwayRoutes(app, supabase);
   registerCasperControlRoutes(app, supabase, casperMemory);
+  registerBotMayhemRoutes(app, supabase);
   registerCasperRelay(io, app, supabase);
 
   // Webhook Authentication Middleware
@@ -588,6 +590,8 @@ async function startServer() {
 
   // Start Casper's autonomous posting and comment reply system
   initCasperAutonomy().catch(e => console.error('[server] Casper autonomy init failed:', e));
+  // Start Bot Mayhem Autonomy
+  initBotMayhemAutonomy().catch(e => console.error('[server] Bot Mayhem autonomy init failed:', e));
 }
 
 startServer();

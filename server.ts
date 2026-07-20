@@ -84,7 +84,7 @@ async function startServer() {
   registerServerAiRoutes(app, supabase);
   registerUnifiedBotRoutes(app, supabase);
   registerColosseumRoutes(app, supabase);
-  registerBotMayhemRoutes(app);
+  registerBotMayhemRoutes(app, supabase);
   registerStripeRoutes(app, supabase);
   registerCasperRelay(io, app, supabase);
 
