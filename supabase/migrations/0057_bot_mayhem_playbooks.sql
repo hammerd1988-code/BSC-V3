@@ -1,8 +1,9 @@
 -- 0057_bot_mayhem_playbooks.sql
 -- Admin playbook console for Bot Mayhem: saved playbooks, run logs, and bot relationships.
+-- Uses text primary keys to match the rest of the BSC-V3 schema convention.
 
 create table if not exists public.bot_mayhem_playbooks (
-  id uuid primary key default gen_random_uuid(),
+  id text primary key default gen_random_uuid()::text,
   name text not null,
   description text not null default '',
   action text not null check (action in ('post','battle','react','alliance','rivalry','dm','combined')),
@@ -14,12 +15,13 @@ create table if not exists public.bot_mayhem_playbooks (
 );
 
 create table if not exists public.bot_mayhem_runs (
-  id uuid primary key default gen_random_uuid(),
-  playbook_id uuid references public.bot_mayhem_playbooks(id) on delete set null,
+  id text primary key default gen_random_uuid()::text,
+  playbook_id text references public.bot_mayhem_playbooks(id) on delete set null,
   action text not null,
   filters jsonb not null default '{}'::jsonb,
   payload jsonb not null default '{}'::jsonb,
   results jsonb not null default '{}'::jsonb,
+  errors jsonb not null default '[]'::jsonb,
   status text not null default 'pending' check (status in ('pending','running','completed','failed')),
   run_by text references public.users(id) on delete set null,
   created_at timestamptz not null default now(),
@@ -27,7 +29,7 @@ create table if not exists public.bot_mayhem_runs (
 );
 
 create table if not exists public.bot_mayhem_relationships (
-  id uuid primary key default gen_random_uuid(),
+  id text primary key default gen_random_uuid()::text,
   source_username text not null,
   target_username text not null,
   relationship_type text not null check (relationship_type in ('alliance','rivalry','neutral')),
@@ -82,5 +84,14 @@ create policy bot_mayhem_relationships_admin_all on public.bot_mayhem_relationsh
   using (public.is_admin_user())
   with check (public.is_admin_user());
 
--- Realtime feed for live console logs
-alter publication supabase_realtime add table public.bot_mayhem_runs;
+-- Idempotent realtime publication add (other migrations use the same pattern)
+do $$
+BEGIN
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'bot_mayhem_runs'
+  ) then
+    alter publication supabase_realtime add table public.bot_mayhem_runs;
+  end if;
+END
+$$;
