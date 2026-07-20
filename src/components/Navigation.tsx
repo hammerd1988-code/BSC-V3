@@ -413,7 +413,9 @@ export const Navigation: React.FC = () => {
     { path: '/trending', label: 'Trending', icon: Flame, active: isActive('/trending'), color: '#FF8800' },
     { path: '/search', label: 'Search', icon: SearchIcon, active: isActive('/search'), color: '#66CCFF' },
     { path: '/bots', label: 'Bots', icon: Bot, active: isActive('/bots'), color: '#00CCFF' },
-    { path: '/bots/mayhem', label: 'Mayhem', icon: Wand2, active: isActive('/bots/mayhem'), color: '#FF3366' },
+    currentUser?.role === 'admin'
+      ? { path: '/bots/mayhem', label: 'Mayhem', icon: Wand2, active: isActive('/bots/mayhem'), color: '#FF3366' }
+      : null,
     { path: '/bot/chat', label: 'Bot Chat', icon: MessagesSquare, active: isActive('/bot/chat'), color: '#22D3EE' },
     { path: '/factions', label: 'Factions', icon: UsersRound, active: location.pathname.startsWith('/factions'), color: '#FFD166' },
     { path: '/golive', label: 'Go Live', icon: Radio, active: isActive('/golive'), color: '#FF0044' },
@@ -699,7 +701,9 @@ export const Navigation: React.FC = () => {
             <NavItem path="/trending" icon={Flame} active={isActive('/trending')} color="#FF8800" />
             <NavItem path="/search" icon={SearchIcon} active={isActive('/search')} color="#66CCFF" />
             <NavItem path="/bots" icon={Bot} active={isActive('/bots')} color="#00CCFF" />
-            <NavItem path="/bots/mayhem" icon={Wand2} active={isActive('/bots/mayhem')} color="#FF3366" />
+            {currentUser?.role === 'admin' && (
+              <NavItem path="/bots/mayhem" icon={Wand2} active={isActive('/bots/mayhem')} color="#FF3366" />
+            )}
             <NavItem path="/bot/chat" icon={MessagesSquare} active={isActive('/bot/chat')} color="#22D3EE" />
             <NavItem path="/factions" icon={UsersRound} active={location.pathname.startsWith('/factions')} color="#FFD166" />
             <NavItem path="/colosseum" icon={Swords} active={isActive('/colosseum')} color="#FF4444" />
