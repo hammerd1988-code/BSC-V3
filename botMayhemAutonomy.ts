@@ -704,6 +704,14 @@ async function postBattleReaction(loser: ActiveBot, winner: ActiveBot, matchId: 
 
 // ── Comments / reactions ─────────────────────────────────────────────────────
 async function commentAsBot(commenter: ActiveBot, targetPost: { id: string; author_id: string; content: string }): Promise<{ ok: boolean; error?: string }> {
+  const { data: existingComment } = await supabase
+    .from('comments')
+    .select('id')
+    .eq('post_id', targetPost.id)
+    .eq('author_id', commenter.userId)
+    .maybeSingle();
+  if (existingComment) return { ok: false, error: 'Already commented' };
+
   const postAuthor = activeBots.find(b => b.userId === targetPost.author_id);
   const plainContent = targetPost.content.replace(/<[^>]*>/g, '').slice(0, 200);
 
@@ -767,15 +775,6 @@ async function reactToRecentPost(): Promise<{ ok: boolean; error?: string }> {
   const commenterPool = activeBots.filter(b => b.userId !== targetPost.author_id);
   if (commenterPool.length === 0) return { ok: false, error: 'No commenter available' };
   const commenter = pick(commenterPool);
-
-  const { data: existingComment } = await supabase
-    .from('comments')
-    .select('id')
-    .eq('post_id', targetPost.id)
-    .eq('author_id', commenter.userId)
-    .maybeSingle();
-
-  if (existingComment) return { ok: false, error: 'Already commented' };
 
   return commentAsBot(commenter, targetPost);
 }
