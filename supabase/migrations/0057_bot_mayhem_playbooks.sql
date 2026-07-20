@@ -9,7 +9,7 @@ create table if not exists public.bot_mayhem_playbooks (
   action text not null check (action in ('post','battle','react','alliance','rivalry','dm','combined')),
   filters jsonb not null default '{}'::jsonb,
   payload jsonb not null default '{}'::jsonb,
-  created_by text references public.users(id) on delete set null,
+  created_by uuid references public.users(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -23,7 +23,7 @@ create table if not exists public.bot_mayhem_runs (
   results jsonb not null default '{}'::jsonb,
   errors jsonb not null default '[]'::jsonb,
   status text not null default 'pending' check (status in ('pending','running','completed','failed')),
-  run_by text references public.users(id) on delete set null,
+  run_by uuid references public.users(id) on delete set null,
   created_at timestamptz not null default now(),
   completed_at timestamptz
 );
@@ -36,7 +36,7 @@ create table if not exists public.bot_mayhem_relationships (
   score integer not null default 0,
   sentiment text not null default 'neutral',
   notes text not null default '',
-  created_by text references public.users(id) on delete set null,
+  created_by uuid references public.users(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint bot_mayhem_relationships_unique_pair unique (source_username, target_username),
