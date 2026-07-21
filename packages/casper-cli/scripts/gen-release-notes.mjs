@@ -10,7 +10,7 @@
  * Usage: node scripts/gen-release-notes.mjs <tag>
  * Prints markdown to stdout.
  */
-import { execFileSync, execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -50,10 +50,8 @@ let commits = [];
 const prev = previousCasperTag(tag);
 try {
   const range = prev ? `${prev}..${tag}` : tag;
-  const raw = execSync(
-    `git log --no-merges --pretty=format:%s ${range} -- ${PKG_PATH}`,
-    { cwd: repoRoot, encoding: 'utf8' },
-  ).trim();
+  // Args array (no shell) so a crafted tag can't inject a command.
+  const raw = git(['log', '--no-merges', '--pretty=format:%s', range, '--', PKG_PATH]);
   commits = raw ? raw.split('\n').map((s) => s.trim()).filter(Boolean) : [];
 } catch {
   commits = [];
