@@ -8,6 +8,7 @@ import { saveSession, loadSession, getLastSessionId } from './sessions.js';
 import { loadProjectInstructions } from './init.js';
 import { orchestrate } from './swarm/index.js';
 import { discoverPlugins } from './plugins/index.js';
+import { VERSION } from './version.js';
 
 export interface ReplOptions {
   model: string;
@@ -18,7 +19,7 @@ export interface ReplOptions {
 
 const BANNER = `
 ${chalk.magenta('╔══════════════════════════════════════════╗')}
-${chalk.magenta('║')}  ${chalk.bold.cyan('🔮 Casper CLI')} ${chalk.dim('v0.1.1')}                     ${chalk.magenta('║')}
+${chalk.magenta('║')}  ${chalk.bold.cyan('🔮 Casper CLI')} ${chalk.dim(`v${VERSION}`)}                     ${chalk.magenta('║')}
 ${chalk.magenta('║')}  ${chalk.dim('Ghost in the machine. At your service.')} ${chalk.magenta('║')}
 ${chalk.magenta('╚══════════════════════════════════════════╝')}
 `;
