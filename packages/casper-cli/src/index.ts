@@ -165,8 +165,11 @@ config
 
     // Validate + normalize URL-shaped keys before persisting.
     try {
-      if (key === 'baseUrl' || key === 'relayUrl') {
+      if (key === 'baseUrl') {
         value = validateBaseUrl(value);
+      } else if (key === 'relayUrl') {
+        // Relay is a WebSocket endpoint (ws://wss://) but also accepts http(s).
+        value = validateBaseUrl(value, { allowWebSocket: true });
       } else if (key === 'localLlmUrl') {
         value = validateBaseUrl(value, { allowInsecureHttp: true });
       }
