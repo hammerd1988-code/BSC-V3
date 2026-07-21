@@ -56,6 +56,18 @@ if (!('machineId' in config.store)) {
   config.set('machineId', defaults.machineId);
 }
 
+// Keys that hold secrets — never echo their raw value to stdout/logs.
+export const SECRET_KEYS: ReadonlyArray<keyof CasperConfig> = [
+  'openaiApiKey',
+  'anthropicApiKey',
+  'accessToken',
+  'refreshToken',
+];
+
+export function isSecretKey(key: string): key is keyof CasperConfig {
+  return (SECRET_KEYS as readonly string[]).includes(key);
+}
+
 export function getConfig<K extends keyof CasperConfig>(key: K): CasperConfig[K] {
   return config.get(key);
 }

@@ -5,22 +5,19 @@ import {
   setConfig,
   deleteConfig,
   getConfigPath,
+  SECRET_KEYS,
   type CasperConfig,
 } from './config.js';
+import { validateBaseUrl } from './utils/url.js';
 
-// Keys that hold secrets — never print their raw value.
-const SECRET_KEYS: ReadonlyArray<keyof CasperConfig> = [
-  'openaiApiKey',
-  'anthropicApiKey',
-  'accessToken',
-  'refreshToken',
-];
+// Re-export so callers that already import from settings keep working.
+export { SECRET_KEYS };
 
 /**
  * Mask a secret for display: keep the first/last few chars so the user can
  * recognise it, hide the middle. Short values are fully masked.
  */
-function mask(value?: string): string {
+export function mask(value?: string): string {
   if (!value) return chalk.dim('(not set)');
   if (value.length <= 8) return '*'.repeat(value.length);
   return `${value.slice(0, 4)}${'*'.repeat(Math.max(4, value.length - 8))}${value.slice(-4)}`;
@@ -132,8 +129,12 @@ export async function runSettings(): Promise<void> {
             deleteConfig('baseUrl');
             console.log(chalk.green('  ✔ Cleared.'));
           } else if (answer) {
-            setConfig('baseUrl', answer);
-            console.log(chalk.green('  ✔ Updated.'));
+            try {
+              setConfig('baseUrl', validateBaseUrl(answer));
+              console.log(chalk.green('  ✔ Updated.'));
+            } catch (err) {
+              console.log(chalk.yellow(`  ${(err as Error).message} Left unchanged.`));
+            }
           }
           break;
         }
@@ -145,8 +146,12 @@ export async function runSettings(): Promise<void> {
             deleteConfig('localLlmUrl');
             console.log(chalk.green('  ✔ Cleared.'));
           } else if (answer) {
-            setConfig('localLlmUrl', answer);
-            console.log(chalk.green('  ✔ Updated.'));
+            try {
+              setConfig('localLlmUrl', validateBaseUrl(answer, { allowInsecureHttp: true }));
+              console.log(chalk.green('  ✔ Updated.'));
+            } catch (err) {
+              console.log(chalk.yellow(`  ${(err as Error).message} Left unchanged.`));
+            }
           }
           break;
         }
