@@ -4,6 +4,7 @@ import fs from 'fs/promises';
 import chalk from 'chalk';
 import { io, type Socket } from 'socket.io-client';
 import { getConfig } from './config.js';
+import { VERSION } from './version.js';
 import { getRelayHttpBase } from './auth.js';
 import { runToolLoop } from './llm/tool-loop.js';
 import type { ChatMessage } from './llm/client.js';
@@ -18,7 +19,6 @@ import type {
   ProcessInfo,
 } from './protocol.js';
 
-const VERSION = '0.1.1';
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
 const INBOX_DIRNAME = 'casper-inbox';

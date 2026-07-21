@@ -2,6 +2,7 @@ import https from 'https';
 import http from 'http';
 import { URL } from 'url';
 import { audit } from '../utils/logger.js';
+import { VERSION } from '../version.js';
 
 export interface ScrapeArgs {
   url: string;
@@ -34,7 +35,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 120_000;
 const MAX_REDIRECTS = 5;
 
-const USER_AGENT = 'CasperCLI/0.1.1 (+https://bloodsweatcode.org)';
+const USER_AGENT = `CasperCLI/${VERSION} (+https://bloodsweatcode.org)`;
 
 function fetch(url: string, opts: {
   maxBytes: number;

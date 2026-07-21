@@ -1,7 +1,9 @@
 import readline from 'readline';
+import { Writable } from 'stream';
 import chalk from 'chalk';
 import { getConfig, setConfig, deleteConfig, getConfigPath, type CasperConfig } from './config.js';
 import { printAllSettings } from './settings.js';
+import { validateBaseUrl } from './utils/url.js';
 
 interface LocalProvider {
   name: string;
@@ -38,8 +40,24 @@ class InputQueue {
   }
 }
 
+// When `echoMuted` is true, characters readline would normally echo back to
+// the terminal are dropped. This lets us collect a secret without ever
+// printing it — no raw-mode toggling required (raw mode segfaults inside the
+// pkg-bundled standalone binary).
+let echoMuted = false;
+const mutableOut = new Writable({
+  write(chunk, _enc, cb) {
+    if (!echoMuted) process.stdout.write(chunk as Buffer);
+    cb();
+  },
+});
+
 function createReadline(): readline.Interface {
-  return readline.createInterface({ input: process.stdin, output: process.stdout });
+  return readline.createInterface({
+    input: process.stdin,
+    output: mutableOut,
+    terminal: process.stdout.isTTY,
+  });
 }
 
 async function ask(queue: InputQueue, question: string): Promise<string> {
@@ -57,20 +75,22 @@ async function ask(queue: InputQueue, question: string): Promise<string> {
 
 async function askPassword(queue: InputQueue, question: string): Promise<string> {
   process.stdout.write(question);
-  const line = await queue.next();
+  // Suppress echo of the typed secret entirely (never rendered to the screen),
+  // then print a masked confirmation once the line is submitted.
+  echoMuted = true;
+  let line: string | null;
+  try {
+    line = await queue.next();
+  } finally {
+    echoMuted = false;
+  }
   if (line === null) {
     throw new Error('stdin closed before input was received');
   }
   const trimmed = line.trim();
   const mask = trimmed ? '*'.repeat(Math.min(trimmed.length, 12)) : '(skipped)';
-
-  if (process.stdout.isTTY) {
-    // Move up one line and overwrite the typed key with a masked version.
-    process.stdout.write(`\x1B[1A\x1B[2K\r${question} ${mask}\n`);
-  } else {
-    process.stdout.write(`${mask}\n`);
-  }
-
+  // No characters were echoed (input was muted), so just render the mask.
+  process.stdout.write(`${mask}\n`);
   return trimmed;
 }
 
@@ -154,7 +174,12 @@ async function setupOpenAI(queue: InputQueue): Promise<void> {
 
   const baseUrl = await ask(queue, chalk.white('  Base URL (default: https://api.openai.com/v1, or e.g. https://openrouter.ai/api/v1): '));
   if (baseUrl) {
-    setConfig('baseUrl', baseUrl.replace(/\/$/, '') as CasperConfig['baseUrl']);
+    try {
+      setConfig('baseUrl', validateBaseUrl(baseUrl) as CasperConfig['baseUrl']);
+    } catch (err) {
+      console.log(chalk.yellow(`  ${(err as Error).message} Using the default base URL.`));
+      deleteConfig('baseUrl');
+    }
   } else {
     deleteConfig('baseUrl');
   }
@@ -199,8 +224,16 @@ async function setupLocal(queue: InputQueue): Promise<void> {
   if (!url) {
     const defaultUrl = 'http://localhost:1234/v1';
     const input = await ask(queue, chalk.white(`  Local LLM base URL (default: ${defaultUrl}): `));
-    url = input || defaultUrl;
-    url = url.replace(/\/$/, '');
+    if (input) {
+      try {
+        url = validateBaseUrl(input, { allowInsecureHttp: true });
+      } catch (err) {
+        console.log(chalk.yellow(`  ${(err as Error).message} Using ${defaultUrl}.`));
+        url = defaultUrl;
+      }
+    } else {
+      url = defaultUrl;
+    }
     models = await fetchModels(url);
     if (models.length > 0) {
       sourceName = 'Local LLM';

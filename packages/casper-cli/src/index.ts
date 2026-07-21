@@ -3,18 +3,20 @@ import { Command } from 'commander';
 import { startRepl } from './cli.js';
 import { startDaemon, stopDaemon, daemonStatus } from './daemon.js';
 import { runOnce } from './exec.js';
-import { getConfig, setConfig } from './config.js';
+import { getConfig, setConfig, isSecretKey } from './config.js';
+import { validateBaseUrl } from './utils/url.js';
+import { readStdin } from './utils/stdin.js';
 import { loginFlow, logout, authStatus } from './auth.js';
 import { initProject } from './init.js';
 import { listSessions, deleteSession } from './sessions.js';
 import { orchestrate } from './swarm/index.js';
 import { pluginList, pluginInfo, pluginInit, pluginRemove } from './plugins/index.js';
-import { runSettings, printAllSettings } from './settings.js';
+import { runSettings, printAllSettings, mask } from './settings.js';
 import { runSetup, ensureConfigured } from './setup.js';
+import { runUpdate } from './update.js';
 import { fetchMemoryContext, listMemories, addMemory, getMemory, updateMemory, deleteMemory, bulkDeleteMemories, setContextNote, formatMemory, formatMemoryContext } from './memory.js';
 import chalk from 'chalk';
-
-const VERSION = '0.1.3';
+import { VERSION } from './version.js';
 
 const program = new Command();
 
@@ -125,22 +127,66 @@ const config = program.command('config').description('Manage CLI configuration')
 
 config
   .command('get <key>')
-  .description('Get a config value')
-  .action((key) => {
+  .description('Get a config value (secrets are masked unless --reveal is passed)')
+  .option('--reveal', 'Print the raw value even for secret keys')
+  .action((key, opts) => {
     const value = getConfig(key);
-    if (value !== undefined) {
-      console.log(value);
-    } else {
+    if (value === undefined || value === '') {
       console.log(chalk.dim('(not set)'));
+      return;
     }
+    if (isSecretKey(key) && !opts.reveal) {
+      console.log(mask(String(value)));
+      console.log(chalk.dim('  (secret masked — pass --reveal to print the raw value)'));
+      return;
+    }
+    console.log(value);
   });
 
 config
-  .command('set <key> <value>')
-  .description('Set a config value')
-  .action((key, value) => {
+  .command('set <key> [value]')
+  .description('Set a config value. For secrets prefer `casper setup`, or pipe the value with --stdin to keep it out of shell history.')
+  .option('--stdin', 'Read the value from stdin instead of an argument (recommended for secrets)')
+  .action(async (key, value, opts) => {
+    // Prefer piped input so secrets never appear in argv / shell history.
+    if (opts.stdin) {
+      const piped = (await readStdin()).replace(/\r?\n$/, '');
+      if (!piped) {
+        console.error(chalk.red('  ✗ --stdin was set but no data was piped in.'));
+        process.exit(1);
+      }
+      value = piped;
+    }
+
+    if (value === undefined) {
+      console.error(chalk.red('  ✗ No value provided. Pass a value, or use --stdin to pipe it in.'));
+      process.exit(1);
+    }
+
+    // Validate + normalize URL-shaped keys before persisting.
+    try {
+      if (key === 'baseUrl' || key === 'relayUrl') {
+        value = validateBaseUrl(value);
+      } else if (key === 'localLlmUrl') {
+        value = validateBaseUrl(value, { allowInsecureHttp: true });
+      }
+    } catch (err) {
+      console.error(chalk.red(`  ✗ ${(err as Error).message}`));
+      process.exit(1);
+    }
+
+    if (isSecretKey(key) && !opts.stdin) {
+      console.warn(chalk.yellow('  ⚠ Passing a secret as a command-line argument exposes it via shell history and process listings.'));
+      console.warn(chalk.yellow(`    Prefer:  casper setup   — or pipe it:  echo -n <value> | casper config set ${key} --stdin`));
+    }
+
     setConfig(key, value);
-    console.log(chalk.green(`Set ${key} = ${value}`));
+
+    if (isSecretKey(key)) {
+      console.log(chalk.green(`  ✔ Set ${key} (value hidden).`));
+    } else {
+      console.log(chalk.green(`  Set ${key} = ${value}`));
+    }
   });
 
 config
@@ -157,6 +203,20 @@ program
   .description('Open the interactive settings menu (model, local LLM, API keys, approvals)')
   .action(async () => {
     await runSettings();
+  });
+
+// Self-update: re-run the platform installer in upgrade mode.
+program
+  .command('update')
+  .description('Upgrade Casper to the latest release (re-runs the verified installer)')
+  .option('--tag <tag>', 'Install a specific version tag, e.g. casper-cli-v0.2.0')
+  .action(async (opts) => {
+    try {
+      await runUpdate({ version: opts.tag });
+    } catch (err: any) {
+      console.error(chalk.red(`\n  Update failed: ${err.message}\n`));
+      process.exit(1);
+    }
   });
 
 // Guided first-run setup for new users.

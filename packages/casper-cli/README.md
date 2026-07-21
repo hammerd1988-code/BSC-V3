@@ -19,13 +19,41 @@ curl -fsSL https://raw.githubusercontent.com/hammerd1988-code/BSC-V3/main/packag
 ```
 
 The script detects your platform, downloads the latest release from
-[GitHub releases](https://github.com/hammerd1988-code/BSC-V3/releases), and
+[GitHub releases](https://github.com/hammerd1988-code/BSC-V3/releases),
+**verifies the download's SHA-256 checksum** against the release manifest, and
 installs `casper` to a directory on your `PATH`.
 
-### From npm
+> **npm:** `@bsc/casper-cli` is **not currently published to npm.** Use the
+> one-liner installers above or build from source. (The release workflow does
+> not yet publish to npm; this section will return once trusted publishing with
+> provenance is set up.)
+
+### Upgrading
 
 ```bash
-npm install -g @bsc/casper-cli
+# Self-update to the latest release (re-runs the verified installer)
+casper update
+
+# …or re-run the installer in update mode
+curl -fsSL https://raw.githubusercontent.com/hammerd1988-code/BSC-V3/main/packages/casper-cli/scripts/install.sh | bash -s -- --update
+```
+
+The installers refuse to clobber an existing install unless you pass `--update`
+(upgrade in place) or `--force` (overwrite). Pin a specific version with
+`--version casper-cli-v0.2.0` (bash) / `-Version casper-cli-v0.2.0`
+(PowerShell) / `casper update --tag casper-cli-v0.2.0`.
+
+### Verifying downloads
+
+Every release ships a `SHA256SUMS` file and a `manifest.json`, and the binaries
+carry a GitHub [build-provenance attestation](https://docs.github.com/actions/security-guides/using-artifact-attestations).
+The installers verify the checksum automatically; to check manually:
+
+```bash
+curl -fsSLO https://github.com/hammerd1988-code/BSC-V3/releases/download/casper-cli-v0.2.0/SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing
+# and (optional) verify provenance:
+gh attestation verify casper-linux-x64 --repo hammerd1988-code/BSC-V3
 ```
 
 ### Build from source
@@ -38,9 +66,11 @@ npm run build:binary
 
 Binaries are written to `bin/dist/`:
 - `casper-linux-x64` — Linux x64
+- `casper-linux-arm64` — Linux ARM64
 - `casper-macos-x64` — macOS Intel
 - `casper-macos-arm64` — macOS Apple Silicon
 - `casper-win-x64.exe` — Windows x64
+- `casper-win-arm64.exe` — Windows ARM64
 
 ## Quick Start
 
@@ -67,9 +97,21 @@ casper ask "what's in my git stash?"
 # Interactive wizard — recommended for first-time setup
 casper setup
 
-# Manual config
-casper config set openaiApiKey sk-...
+# Set your model manually
 casper config set model gpt-4.1-mini
+
+# API keys: prefer `casper setup` (never echoed). To script it, pipe the key
+# via --stdin so it does NOT land in your shell history / process list:
+echo -n "sk-..." | casper config set openaiApiKey --stdin
+# …or export it in the environment (takes precedence over saved config):
+export OPENAI_API_KEY=sk-...
+
+# (Deprecated) Passing a secret as a positional argument leaks it via shell
+# history and process listings — Casper will warn you if you do this:
+#   casper config set openaiApiKey sk-...
+
+# Read a value back (secrets are masked unless you pass --reveal)
+casper config get openaiApiKey
 
 # Or use a local LLM (LM Studio / Ollama)
 casper config set localLlmUrl http://localhost:1234/v1

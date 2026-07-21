@@ -48,7 +48,10 @@ export function createLlmClient(opts?: LlmClientOptions): OpenAI {
     });
   }
 
-  const apiKey = opts?.apiKey || getConfig('openaiApiKey') || process.env.OPENAI_API_KEY;
+  // Precedence: explicit CLI option → environment → saved config → default.
+  // Environment intentionally overrides saved config so `OPENAI_API_KEY` /
+  // `OPENAI_BASE_URL` can override a stale value without editing config.
+  const apiKey = opts?.apiKey || process.env.OPENAI_API_KEY || getConfig('openaiApiKey');
   if (!apiKey) {
     throw new Error(
       'No LLM API key configured. Run:\n' +
@@ -57,7 +60,7 @@ export function createLlmClient(opts?: LlmClientOptions): OpenAI {
     );
   }
 
-  const baseURL = opts?.baseUrl || getConfig('baseUrl') || process.env.OPENAI_BASE_URL;
+  const baseURL = opts?.baseUrl || process.env.OPENAI_BASE_URL || getConfig('baseUrl');
 
   return new OpenAI({
     apiKey,
