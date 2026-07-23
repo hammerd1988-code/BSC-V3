@@ -47,6 +47,7 @@ export function printAllSettings(): void {
     ['Local LLM URL', cfg.localLlmUrl || chalk.dim('(not set)')],
     ['Model', cfg.model || chalk.dim('(not set)')],
     ['OpenAI API key', mask(cfg.openaiApiKey)],
+    ['OpenRouter API key', mask(cfg.openrouterApiKey)],
     ['Anthropic API key', mask(cfg.anthropicApiKey)],
     ['Approval level', cfg.approvalLevel],
     ['Working directory', cfg.workingDirectory],
@@ -72,10 +73,11 @@ function printMenu(cfg: CasperConfig): void {
     ['3', 'Local LLM URL', cfg.localLlmUrl || chalk.dim('(not set)')],
     ['4', 'Model', cfg.model || chalk.dim('(not set)')],
     ['5', 'OpenAI API key', mask(cfg.openaiApiKey)],
-    ['6', 'Anthropic API key', mask(cfg.anthropicApiKey)],
-    ['7', 'Approval level', cfg.approvalLevel],
-    ['8', 'Working directory', cfg.workingDirectory],
-    ['9', 'Audit log', bool(cfg.auditLog) ? 'on' : 'off'],
+    ['6', 'OpenRouter API key', mask(cfg.openrouterApiKey)],
+    ['7', 'Anthropic API key', mask(cfg.anthropicApiKey)],
+    ['8', 'Approval level', cfg.approvalLevel],
+    ['9', 'Working directory', cfg.workingDirectory],
+    ['10', 'Audit log', bool(cfg.auditLog) ? 'on' : 'off'],
   ];
   for (const [num, label, value] of lines) {
     console.log(`  ${chalk.cyan(num)}) ${label.padEnd(18)} ${chalk.dim('→')} ${value}`);
@@ -178,6 +180,19 @@ export async function runSettings(): Promise<void> {
         }
         case '6': {
           const answer = (
+            await ask(rl, `  OpenRouter API key (current ${mask(cfg.openrouterApiKey)}; blank = keep, "-" to clear): `)
+          ).trim();
+          if (answer === '-') {
+            deleteConfig('openrouterApiKey');
+            console.log(chalk.green('  ✔ Cleared.'));
+          } else if (answer) {
+            setConfig('openrouterApiKey', answer);
+            console.log(chalk.green('  ✔ Saved (stored owner-only at the config path above).'));
+          }
+          break;
+        }
+        case '7': {
+          const answer = (
             await ask(rl, `  Anthropic API key (current ${mask(cfg.anthropicApiKey)}; blank = keep, "-" to clear): `)
           ).trim();
           if (answer === '-') {
@@ -189,7 +204,7 @@ export async function runSettings(): Promise<void> {
           }
           break;
         }
-        case '7': {
+        case '8': {
           console.log(`    ${chalk.cyan('1')}) auto           ${chalk.dim('— run everything without asking')}`);
           console.log(`    ${chalk.cyan('2')}) confirm-local  ${chalk.dim('— ask before risky local commands')}`);
           console.log(`    ${chalk.cyan('3')}) confirm-remote ${chalk.dim('— ask before remote-triggered commands')}`);
@@ -203,7 +218,7 @@ export async function runSettings(): Promise<void> {
           }
           break;
         }
-        case '8': {
+        case '9': {
           const answer = (await ask(rl, `  Working directory (blank = keep "${cfg.workingDirectory}"): `)).trim();
           if (answer) {
             setConfig('workingDirectory', answer);
@@ -211,7 +226,7 @@ export async function runSettings(): Promise<void> {
           }
           break;
         }
-        case '9': {
+        case '10': {
           const next = !bool(cfg.auditLog);
           setConfig('auditLog', next);
           console.log(chalk.green(`  ✔ Audit log ${next ? 'enabled' : 'disabled'}.`));
