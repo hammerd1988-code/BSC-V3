@@ -4,6 +4,7 @@ import chalk from 'chalk';
 import { getConfig, setConfig, deleteConfig, getConfigPath, type CasperConfig } from './config.js';
 import { printAllSettings } from './settings.js';
 import { validateBaseUrl } from './utils/url.js';
+import { OPENROUTER_BASE_URL, resolveCloudConfig } from './llm/client.js';
 
 interface LocalProvider {
   name: string;
@@ -156,13 +157,16 @@ async function detectLocalProviders(): Promise<LocalProvider[]> {
 
 function hasLlmConfig(): boolean {
   if (getConfig('preferLocalLlm') && getConfig('localLlmUrl')) return true;
-  if (getConfig('openaiApiKey')) return true;
-  if (process.env.OPENAI_API_KEY) return true;
-  return false;
+  try {
+    resolveCloudConfig();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function setupOpenAI(queue: InputQueue): Promise<void> {
-  console.log(chalk.cyan('\n  Using an OpenAI-compatible API (OpenAI, OpenRouter, etc.).'));
+  console.log(chalk.cyan('\n  Using OpenAI or a custom OpenAI-compatible API.'));
   console.log(chalk.dim('  Your key is stored owner-only at:') + ` ${getConfigPath()}\n`);
 
   const key = await askPassword(queue, chalk.white('  API key: '));
@@ -171,6 +175,9 @@ async function setupOpenAI(queue: InputQueue): Promise<void> {
     return;
   }
   setConfig('openaiApiKey', key as CasperConfig['openaiApiKey']);
+  // Avoid a previously saved OpenRouter key selecting OpenRouter when the
+  // user intentionally switches back to OpenAI's default endpoint.
+  deleteConfig('openrouterApiKey');
 
   const baseUrl = await ask(queue, chalk.white('  Base URL (default: https://api.openai.com/v1, or e.g. https://openrouter.ai/api/v1): '));
   if (baseUrl) {
@@ -186,6 +193,29 @@ async function setupOpenAI(queue: InputQueue): Promise<void> {
 
   const model = await ask(queue, chalk.white('  Model (default: gpt-4.1-mini): '));
   setConfig('model', model || 'gpt-4.1-mini');
+  setConfig('preferLocalLlm', false);
+}
+
+async function setupOpenRouter(queue: InputQueue): Promise<void> {
+  console.log(chalk.cyan('\n  Using OpenRouter.'));
+  console.log(chalk.dim(`  Endpoint: ${OPENROUTER_BASE_URL}`));
+  console.log(chalk.dim('  Create a key at https://openrouter.ai/settings/keys'));
+  console.log(chalk.dim('  Your key is stored owner-only at:') + ` ${getConfigPath()}\n`);
+
+  const key = await askPassword(queue, chalk.white('  OpenRouter API key: '));
+  if (!key) {
+    console.log(chalk.yellow('  No key entered. Skipping.'));
+    return;
+  }
+
+  setConfig('openrouterApiKey', key);
+  setConfig('baseUrl', OPENROUTER_BASE_URL);
+
+  const model = await ask(
+    queue,
+    chalk.white('  OpenRouter model id (default: openai/gpt-4.1-mini): '),
+  );
+  setConfig('model', model || 'openai/gpt-4.1-mini');
   setConfig('preferLocalLlm', false);
 }
 
@@ -276,7 +306,8 @@ export async function runSetup(): Promise<void> {
       queue,
       'How do you want to power Casper?',
       [
-        { label: 'OpenAI API key (cloud)', value: 'openai' as const },
+        { label: 'OpenRouter (cloud — many model providers)', value: 'openrouter' as const },
+        { label: 'OpenAI / custom OpenAI-compatible API (cloud)', value: 'openai' as const },
         { label: 'Local LLM — LM Studio / Ollama', value: 'local' as const },
         { label: 'Skip for now (configure later with `casper setup`)', value: 'skip' as const },
       ],
@@ -287,7 +318,9 @@ export async function runSetup(): Promise<void> {
       return;
     }
 
-    if (provider.value === 'openai') {
+    if (provider.value === 'openrouter') {
+      await setupOpenRouter(queue);
+    } else if (provider.value === 'openai') {
       await setupOpenAI(queue);
     } else if (provider.value === 'local') {
       await setupLocal(queue);
@@ -312,7 +345,7 @@ export async function ensureConfigured(): Promise<void> {
 
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error(
-      'No LLM configured. Set OPENAI_API_KEY, or run `casper setup` in an interactive terminal.',
+      'No LLM configured. Set OPENAI_API_KEY / OPENROUTER_API_KEY, or run `casper setup` in an interactive terminal.',
     );
   }
 

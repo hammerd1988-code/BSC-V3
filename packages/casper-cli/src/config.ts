@@ -16,6 +16,7 @@ export interface CasperConfig {
   // LLM
   model: string;
   openaiApiKey?: string;
+  openrouterApiKey?: string;
   anthropicApiKey?: string;
   baseUrl?: string; // OpenAI-compatible base URL (OpenAI, OpenRouter, etc.)
   localLlmUrl?: string; // LM Studio / Ollama endpoint
@@ -59,6 +60,7 @@ if (!('machineId' in config.store)) {
 // Keys that hold secrets — never echo their raw value to stdout/logs.
 export const SECRET_KEYS: ReadonlyArray<keyof CasperConfig> = [
   'openaiApiKey',
+  'openrouterApiKey',
   'anthropicApiKey',
   'accessToken',
   'refreshToken',

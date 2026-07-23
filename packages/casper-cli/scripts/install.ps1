@@ -152,3 +152,6 @@ if (-not $NoPath) {
 
 Write-Host ""
 & $targetPath --version
+Write-Host ""
+Write-Host "Next step: configure an LLM provider (OpenRouter, OpenAI, or local):" -ForegroundColor Cyan
+Write-Host "  casper setup"

@@ -38,6 +38,9 @@ jobs:
         shell: bash
         run: |
           npm ci
+          npm run lint
+          npm run build
+          npm run test:providers
           npm run bundle
           mkdir -p ../desktop/resources/casper
           node node_modules/@yao-pkg/pkg/lib-es5/bin.js bundle/casper.cjs \
