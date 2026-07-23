@@ -10,6 +10,7 @@
     "gen-version": "node scripts/gen-version.mjs",
     "prebuild": "node scripts/gen-version.mjs",
     "build": "tsc",
+    "test:providers": "node scripts/test-provider-resolution.mjs",
     "predev": "node scripts/gen-version.mjs",
     "dev": "tsc --watch",
     "start": "node dist/index.js",

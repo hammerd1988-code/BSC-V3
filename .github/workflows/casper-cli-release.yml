@@ -52,6 +52,8 @@ jobs:
       # Full type-check before we spend time bundling/packaging.
       - name: Type-check
         run: npm run lint
+      - name: Test OpenRouter and OpenAI provider resolution
+        run: npm run build && npm run test:providers
       - run: npm run bundle
       - name: Package binary
         shell: bash

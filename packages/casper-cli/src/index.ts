@@ -225,7 +225,7 @@ program
 // Guided first-run setup for new users.
 program
   .command('setup')
-  .description('Guided first-run setup: model, API keys, local LLM (LM Studio / Ollama)')
+  .description('Guided first-run setup: OpenRouter, OpenAI-compatible APIs, or a local LLM')
   .action(async () => {
     await runSetup();
   });

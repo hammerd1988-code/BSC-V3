@@ -244,3 +244,11 @@ if [[ ":${PATH}:" == *":${INSTALL_DIR}:"* ]]; then
 else
   echo "Casper installed to: ${TARGET_PATH}"
 fi
+
+echo ""
+echo "Next step: configure an LLM provider (OpenRouter, OpenAI, or local):"
+if [[ ":${PATH}:" == *":${INSTALL_DIR}:"* ]]; then
+  echo "  casper setup"
+else
+  echo "  ${TARGET_PATH} setup"
+fi

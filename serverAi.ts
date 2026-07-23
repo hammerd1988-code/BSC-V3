@@ -6,15 +6,49 @@ const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 let geminiCooldownUntil = 0;
 
-const OPENAI_API_KEY = () =>
-  process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_ADMIN_KEY || process.env.VITE_AI_API_KEY || '';
-const OPENAI_BASE_URL = () => {
-  if (process.env.OPENAI_BASE_URL) return process.env.OPENAI_BASE_URL.replace(/\/$/, '');
-  if (process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_ADMIN_KEY) return 'https://openrouter.ai/api/v1';
-  return (process.env.VITE_AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
-};
-const OPENAI_MODEL = () =>
-  process.env.CASPER_MODEL || process.env.OPENAI_MODEL || process.env.VITE_AI_MODEL || 'gpt-4o-mini';
+const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+
+function isOpenRouterBaseUrl(value: string): boolean {
+  try {
+    const hostname = new URL(value).hostname.toLowerCase();
+    return hostname === 'openrouter.ai' || hostname.endsWith('.openrouter.ai');
+  } catch {
+    return false;
+  }
+}
+
+export function resolveServerOpenAIConfig(env: NodeJS.ProcessEnv = process.env): {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+} {
+  const explicitBaseUrl = env.OPENAI_BASE_URL?.trim().replace(/\/+$/, '');
+  const viteBaseUrl = env.VITE_AI_BASE_URL?.trim().replace(/\/+$/, '');
+  const openRouterKey = env.OPENROUTER_API_KEY?.trim()
+    || env.VITE_OPENROUTER_ADMIN_KEY?.trim()
+    || '';
+
+  const baseUrl = explicitBaseUrl
+    || (openRouterKey ? OPENROUTER_BASE_URL : viteBaseUrl)
+    || 'https://api.openai.com/v1';
+  const usingOpenRouter = isOpenRouterBaseUrl(baseUrl);
+
+  const apiKey = usingOpenRouter
+    ? openRouterKey || env.OPENAI_API_KEY?.trim() || env.VITE_AI_API_KEY?.trim() || ''
+    : env.OPENAI_API_KEY?.trim() || env.VITE_AI_API_KEY?.trim() || openRouterKey;
+
+  const configuredModel = env.CASPER_MODEL?.trim()
+    || env.OPENAI_MODEL?.trim()
+    || env.VITE_AI_MODEL?.trim();
+  const model = configuredModel
+    || (usingOpenRouter ? 'openai/gpt-4.1-mini' : 'gpt-4.1-mini');
+
+  return { apiKey, baseUrl, model };
+}
+
+const OPENAI_API_KEY = () => resolveServerOpenAIConfig().apiKey;
+const OPENAI_BASE_URL = () => resolveServerOpenAIConfig().baseUrl;
+const OPENAI_MODEL = () => resolveServerOpenAIConfig().model;
 
 export interface ServerAIOptions {
   systemPrompt?: string;
