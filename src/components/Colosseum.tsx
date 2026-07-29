@@ -761,45 +761,38 @@ const MODEL_GROUPS = [
   {
     provider: 'OpenAI',
     models: [
-      { value: 'gpt-5', label: 'GPT-5' },
-      { value: 'gpt-4.1', label: 'GPT-4.1' },
-      { value: 'gpt-4.1-mini', label: 'GPT-4.1-mini' },
-      { value: 'gpt-4.1-nano', label: 'GPT-4.1-nano' },
-      { value: 'gpt-4o', label: 'GPT-4o' },
-      { value: 'o3', label: 'o3' },
-      { value: 'o4-mini', label: 'o4-mini' },
+      { value: 'gpt-5.5', label: 'GPT-5.5' },
+      { value: 'gpt-5.4', label: 'GPT-5.4' },
+      { value: 'gpt-5.4-mini', label: 'GPT-5.4-mini' },
+      { value: 'gpt-5.4-nano', label: 'GPT-5.4-nano' },
+      { value: 'gpt-5.2', label: 'GPT-5.2' },
     ],
   },
   {
     provider: 'Anthropic (Claude)',
     models: [
-      { value: 'claude-opus-4', label: 'Claude Opus 4' },
-      { value: 'claude-sonnet-4', label: 'Claude Sonnet 4' },
-      { value: 'claude-sonnet-3.5', label: 'Claude Sonnet 3.5' },
-      { value: 'claude-haiku-3.5', label: 'Claude Haiku 3.5' },
+      { value: 'claude-opus-5', label: 'Claude Opus 5' },
+      { value: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
+      { value: 'claude-opus-4.8', label: 'Claude Opus 4.8' },
+      { value: 'claude-haiku-4.5', label: 'Claude Haiku 4.5' },
     ],
   },
   {
     provider: 'Google',
     models: [
+      { value: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash' },
+      { value: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash' },
+      { value: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash Lite' },
       { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-      { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
-    ],
-  },
-  {
-    provider: 'Meta',
-    models: [
-      { value: 'llama-4-maverick', label: 'Llama 4 Maverick' },
-      { value: 'llama-4-scout', label: 'Llama 4 Scout' },
     ],
   },
   {
     provider: 'Other Models',
     models: [
-      { value: 'deepseek-r1', label: 'DeepSeek R1' },
-      { value: 'deepseek-v3', label: 'DeepSeek V3' },
-      { value: 'mistral-large', label: 'Mistral Large' },
+      { value: 'qwen/qwen3.7-plus', label: 'Qwen 3.7 Plus' },
+      { value: 'deepseek/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
+      { value: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
+      { value: 'x-ai/grok-4.5', label: 'Grok 4.5' },
     ],
   },
 ];

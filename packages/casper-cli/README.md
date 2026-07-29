@@ -97,7 +97,7 @@ casper ask "what's in my git stash?"
 
 Run `casper setup` and choose **OpenRouter**. Casper sets the required
 `https://openrouter.ai/api/v1` endpoint automatically and uses an
-OpenRouter-style model id such as `openai/gpt-4.1-mini`.
+OpenRouter-style model id such as `openai/gpt-5.4-mini`.
 
 For non-interactive environments, set `OPENROUTER_API_KEY`; Casper will select
 the OpenRouter endpoint automatically:
@@ -114,7 +114,7 @@ To store the key in Casper's owner-only config instead:
 ```bash
 echo -n "sk-or-..." | casper config set openrouterApiKey --stdin
 casper config set baseUrl https://openrouter.ai/api/v1
-casper config set model openai/gpt-4.1-mini
+casper config set model openai/gpt-5.4-mini
 ```
 
 ```bash
@@ -122,7 +122,7 @@ casper config set model openai/gpt-4.1-mini
 casper setup
 
 # Set your model manually
-casper config set model gpt-4.1-mini
+casper config set model gpt-5.4-mini
 
 # API keys: prefer `casper setup` (never echoed). To script it, pipe the key
 # via --stdin so it does NOT land in your shell history / process list:
