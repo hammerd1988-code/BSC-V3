@@ -45,19 +45,29 @@ const FIREWORKS_BOT_MODEL = `${FIREWORKS_MODEL_PREFIX}qwen3p6-plus`;
 const PLATFORM_DEFAULT_MODEL = process.env.COLOSSEUM_DEFAULT_MODEL || process.env.OPENAI_MODEL || 'gpt-5.4-mini';
 const BOT_OPENAI_COMPATIBLE_BASE_URL = (process.env.BOT_OPENAI_BASE_URL || process.env.BOT_AI_BASE_URL || '').replace(/\/$/, '');
 
-function hasBotProviderCredentials() {
-  return Boolean(process.env.BOT_OPENAI_API_KEY || process.env.BOT_AI_API_KEY);
+function isFireworksBaseUrl(value: string) {
+  try {
+    return new URL(value).hostname.toLowerCase().endsWith('fireworks.ai');
+  } catch {
+    return false;
+  }
+}
+
+function botFireworksConfigured() {
+  return Boolean(process.env.BOT_OPENAI_API_KEY || process.env.BOT_AI_API_KEY)
+    && isFireworksBaseUrl(BOT_OPENAI_COMPATIBLE_BASE_URL);
 }
 
 // `accounts/fireworks/models/*` ids only exist on Fireworks — sending one to
 // OpenAI or OpenRouter returns "model not found". Only fall back to the
-// Fireworks bot model when bot-specific provider credentials are configured.
+// Fireworks bot model when both a Fireworks base URL and a bot key are set.
 function botDefaultModel() {
   return process.env.BOT_DEFAULT_MODEL
     || process.env.BOT_AI_MODEL
     || process.env.COLOSSEUM_DEFAULT_MODEL
-    || (hasBotProviderCredentials() ? FIREWORKS_BOT_MODEL : PLATFORM_DEFAULT_MODEL);
+    || (botFireworksConfigured() ? FIREWORKS_BOT_MODEL : PLATFORM_DEFAULT_MODEL);
 }
+
 function openaiCompatibleBaseUrl() {
   if (process.env.OPENAI_BASE_URL) return process.env.OPENAI_BASE_URL.replace(/\/$/, '');
   if (process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_ADMIN_KEY) return 'https://openrouter.ai/api/v1';
@@ -228,7 +238,7 @@ function resolveGladiatorDefaultModel(gladiator: any) {
 function resolveGladiatorBaseUrl(gladiator: any) {
   const defaultBaseUrl = isSeededPlatformBot(gladiator) && BOT_OPENAI_COMPATIBLE_BASE_URL ? BOT_OPENAI_COMPATIBLE_BASE_URL : openaiCompatibleBaseUrl();
   if (normalizeModel(gladiator?.model, resolveGladiatorDefaultModel(gladiator)).startsWith(FIREWORKS_MODEL_PREFIX)) {
-    return BOT_OPENAI_COMPATIBLE_BASE_URL || FIREWORKS_BASE_URL;
+    return isFireworksBaseUrl(BOT_OPENAI_COMPATIBLE_BASE_URL) ? BOT_OPENAI_COMPATIBLE_BASE_URL : FIREWORKS_BASE_URL;
   }
   return defaultBaseUrl;
 }
