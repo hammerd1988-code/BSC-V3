@@ -3,6 +3,18 @@ import { getConfig } from '../config.js';
 
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
+// GPT-5.x and the o-series reject `max_tokens` and require
+// `max_completion_tokens`; everything else (and OpenRouter, which normalises
+// the parameter itself) expects `max_tokens`.
+const MAX_COMPLETION_TOKENS_MODELS = /(?:^|\/)(?:gpt-5|o[1-4])(?:$|[-.])/i;
+
+function tokenLimitParam(model: string, baseUrl: string | undefined, limit: number) {
+  if (baseUrl?.includes('openrouter.ai') || !MAX_COMPLETION_TOKENS_MODELS.test(model.trim())) {
+    return { max_tokens: limit };
+  }
+  return { max_completion_tokens: limit };
+}
+
 export type ChatMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
@@ -152,7 +164,7 @@ export async function chatCompletion(
       ? tools as OpenAI.Chat.Completions.ChatCompletionTool[]
       : undefined,
     temperature: 0.7,
-    max_tokens: 4096,
+    ...tokenLimitParam(modelName, client.baseURL, 4096),
   });
 }
 
@@ -175,7 +187,7 @@ export async function chatCompletionStream(
       ? tools as OpenAI.Chat.Completions.ChatCompletionTool[]
       : undefined,
     temperature: 0.7,
-    max_tokens: 4096,
+    ...tokenLimitParam(modelName, client.baseURL, 4096),
     stream: true,
   });
 }
