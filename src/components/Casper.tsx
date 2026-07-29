@@ -135,41 +135,41 @@ const CASPER_MODEL_GROUPS = [
   { 
     provider: 'Platform Default', 
     models: [
-      { value: 'platform_default', label: 'Casper Standard (Gemini 2.5 Flash)' }
+      { value: 'platform_default', label: 'Casper Standard (Gemini 3.6 Flash)' }
     ] 
   },
   { 
     provider: 'OpenAI', 
     models: [
-      { value: 'gpt-4o', label: 'GPT-4o' },
-      { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
-      { value: 'o1', label: 'o1' },
-      { value: 'o1-mini', label: 'o1-mini' }
+      { value: 'gpt-5.5', label: 'GPT-5.5' },
+      { value: 'gpt-5.4', label: 'GPT-5.4' },
+      { value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
+      { value: 'gpt-5.4-nano', label: 'GPT-5.4 Nano' }
     ] 
   },
   { 
     provider: 'Anthropic', 
     models: [
-      { value: 'claude-3-5-sonnet-latest', label: 'Claude 3.5 Sonnet' },
-      { value: 'claude-3-5-haiku-latest', label: 'Claude 3.5 Haiku' },
-      { value: 'claude-3-opus-latest', label: 'Claude 3 Opus' }
+      { value: 'claude-opus-5', label: 'Claude Opus 5' },
+      { value: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
+      { value: 'claude-haiku-4.5', label: 'Claude Haiku 4.5' }
     ] 
   },
   { 
     provider: 'Google', 
     models: [
+      { value: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash' },
+      { value: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash' },
+      { value: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash Lite' },
       { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-      { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
-      { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
     ] 
   },
   { 
-    provider: 'Meta (via OpenRouter/Groq)', 
+    provider: 'Open models (via OpenRouter)', 
     models: [
-      { value: 'meta-llama/llama-3.1-405b', label: 'Llama 3.1 405B' },
-      { value: 'meta-llama/llama-3.1-70b', label: 'Llama 3.1 70B' },
-      { value: 'meta-llama/llama-3.1-8b', label: 'Llama 3.1 8B' }
+      { value: 'qwen/qwen3.7-plus', label: 'Qwen 3.7 Plus' },
+      { value: 'deepseek/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
+      { value: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash' }
     ] 
   },
   { 
@@ -245,9 +245,9 @@ type CasperProviderPreset = {
 };
 
 const CASPER_PROVIDER_PRESETS: CasperProviderPreset[] = [
-  { id: 'openai',       label: 'OpenAI',       description: 'Direct to OpenAI (GPT-4o, o1, etc.)',                baseUrl: 'https://api.openai.com/v1',     exampleModel: 'gpt-4o-mini' },
-  { id: 'openrouter',   label: 'OpenRouter',   description: 'Aggregator — pay-per-token for Claude/Llama/etc.',   baseUrl: 'https://openrouter.ai/api/v1',  exampleModel: 'anthropic/claude-3.5-sonnet' },
-  { id: 'anthropic',    label: 'Anthropic',    description: 'Anthropic via OpenAI-compatible adapter',            baseUrl: 'https://api.anthropic.com/v1',  exampleModel: 'claude-3-5-sonnet-latest' },
+  { id: 'openai',       label: 'OpenAI',       description: 'Direct to OpenAI (GPT-5.x family)',                 baseUrl: 'https://api.openai.com/v1',     exampleModel: 'gpt-5.4-mini' },
+  { id: 'openrouter',   label: 'OpenRouter',   description: 'Aggregator — pay-per-token for Gemini/Claude/etc.',  baseUrl: 'https://openrouter.ai/api/v1',  exampleModel: 'google/gemini-3.6-flash' },
+  { id: 'anthropic',    label: 'Anthropic',    description: 'Anthropic via OpenAI-compatible adapter',            baseUrl: 'https://api.anthropic.com/v1',  exampleModel: 'claude-sonnet-5' },
   { id: 'together',     label: 'Together.ai',  description: 'Llama / Qwen / DeepSeek / etc. cheaply',             baseUrl: 'https://api.together.xyz/v1',   exampleModel: 'meta-llama/Llama-3.1-8B-Instruct-Turbo' },
   { id: 'groq',         label: 'Groq',         description: 'Ultra-fast Llama / Mixtral inference',                baseUrl: 'https://api.groq.com/openai/v1', exampleModel: 'llama-3.1-70b-versatile' },
   { id: 'fireworks',    label: 'Fireworks',    description: 'Fast Llama / DeepSeek / Qwen',                       baseUrl: 'https://api.fireworks.ai/inference/v1', exampleModel: 'accounts/fireworks/models/llama-v3p1-70b-instruct' },

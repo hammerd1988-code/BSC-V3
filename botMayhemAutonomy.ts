@@ -278,15 +278,36 @@ function pickTwo<T>(arr: T[]): [T, T] {
 }
 
 // ── AI text generation ───────────────────────────────────────────────────────
-async function generateText(prompt: string, systemPrompt: string, maxTokens = 200): Promise<string> {
-  if (!isServerAiConfigured()) return '';
+// `failure` carries the provider error for empty generations so run results can
+// report it instead of a bare "No comment generated". Returned per call rather
+// than stored in module state — Bot Mayhem's timers generate concurrently.
+interface GeneratedText {
+  text: string;
+  failure: string | null;
+}
+
+function describeFailure(summary: string, failure: string | null): string {
+  return failure ? `${summary}: ${failure}` : summary;
+}
+
+async function generateTextResult(prompt: string, systemPrompt: string, maxTokens = 200): Promise<GeneratedText> {
+  if (!isServerAiConfigured()) return { text: '', failure: 'server AI is not configured' };
   try {
     const result = await generateServerText(prompt, { systemPrompt, temperature: 0.92, maxTokens });
-    return result.text.trim();
+    const text = result.text.trim();
+    if (text) return { text, failure: null };
+    const failure = result.lastError || `${result.provider}/${result.model} returned empty text`;
+    console.warn(`${LOG_PREFIX} AI generation empty:`, failure);
+    return { text: '', failure };
   } catch (e) {
-    console.error(`${LOG_PREFIX} AI generation error:`, e instanceof Error ? e.message : e);
-    return '';
+    const failure = e instanceof Error ? e.message : String(e);
+    console.error(`${LOG_PREFIX} AI generation error:`, failure);
+    return { text: '', failure };
   }
+}
+
+async function generateText(prompt: string, systemPrompt: string, maxTokens = 200): Promise<string> {
+  return (await generateTextResult(prompt, systemPrompt, maxTokens)).text;
 }
 
 // ── Ensure bot users + gladiators exist ──────────────────────────────────────
@@ -461,7 +482,6 @@ async function joinFaction(bot: ActiveBot): Promise<void> {
     likes: 0,
     boosts: 0,
     comments_count: 0,
-    shares_count: 0,
     is_boosted: false,
     view_count: 0,
   });
@@ -497,7 +517,6 @@ async function postContentForBot(
     likes: 0,
     boosts: 0,
     comments_count: 0,
-    shares_count: 0,
     is_boosted: false,
     view_count: 0,
   }).select('id').single();
@@ -667,7 +686,6 @@ async function postBattleBrag(winner: ActiveBot, loser: ActiveBot, matchId: stri
     likes: 0,
     boosts: 0,
     comments_count: 0,
-    shares_count: 0,
     is_boosted: false,
     view_count: 0,
   });
@@ -694,7 +712,6 @@ async function postBattleReaction(loser: ActiveBot, winner: ActiveBot, matchId: 
     likes: 0,
     boosts: 0,
     comments_count: 0,
-    shares_count: 0,
     is_boosted: false,
     view_count: 0,
   });
@@ -722,8 +739,8 @@ async function commentAsBot(commenter: ActiveBot, targetPost: { id: string; auth
     ? `${postAuthor.persona.display_name} (member of ${postAuthor.faction.name}) posted: "${plainContent}". ${relContext} Write a short 1-2 sentence comment in response. Let your relationship color the tone — if hostile, be cutting; if rival, challenge them; if friendly, back them up or joke around; if allied, hype them up. Stay in character. Be concise.`
     : `You see a post on the BSC network feed: "${plainContent}". Write a short 1-2 sentence comment in your voice. Stay in character. Be concise.`;
 
-  const commentText = await generateText(prompt, commenter.persona.system_prompt, 120);
-  if (!commentText) return { ok: false, error: 'No comment generated' };
+  const { text: commentText, failure } = await generateTextResult(prompt, commenter.persona.system_prompt, 120);
+  if (!commentText) return { ok: false, error: describeFailure('No comment generated', failure) };
 
   const { error } = await supabase.from('comments').insert({
     post_id: targetPost.id,
@@ -797,11 +814,12 @@ async function sendBotDm(
   if (!recipientId) return { ok: false, error: `Recipient @${recipientUsername} not found` };
 
   let message = content?.trim();
+  let failure: string | null = null;
   if (!message) {
     const generatePrompt = prompt?.trim() || `You are ${sender.persona.display_name} from ${sender.faction.name}. Send a short, in-character direct message to @${recipientUsername}. Keep it to 1-3 sentences. Be theatrical but concise.`;
-    message = await generateText(generatePrompt, sender.persona.system_prompt, 160);
+    ({ text: message, failure } = await generateTextResult(generatePrompt, sender.persona.system_prompt, 160));
   }
-  if (!message) return { ok: false, error: 'No message generated' };
+  if (!message) return { ok: false, error: describeFailure('No message generated', failure) };
 
   const conversationId = [sender.userId, recipientId].sort().join('_');
   const { error } = await supabase.from('direct_messages').insert({
