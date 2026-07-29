@@ -34,7 +34,7 @@ const defaults: CasperConfig = {
   relayUrl: 'https://bloodsweatcode.org',
   machineId: `${os.hostname()}-${Math.random().toString(36).slice(2, 6)}`,
   machineName: os.hostname(),
-  model: 'gpt-4.1-mini',
+  model: 'gpt-5.4-mini',
   approvalLevel: 'confirm-local',
   workingDirectory: process.cwd(),
   auditLog: true,

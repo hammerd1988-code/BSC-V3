@@ -35,7 +35,7 @@ program
   .action(async (opts) => {
     await ensureConfigured();
     await startRepl({
-      model: opts.model || getConfig('model') || 'gpt-4.1-mini',
+      model: opts.model || getConfig('model') || 'gpt-5.4-mini',
       preferLocal: opts.local ?? getConfig('preferLocalLlm') ?? false,
       localLlmUrl: opts.local ? getConfig('localLlmUrl') : undefined,
       resume: opts.resume,
@@ -51,7 +51,7 @@ program
   .action(async (command, opts) => {
     await ensureConfigured();
     await runOnce(command, {
-      model: opts.model || getConfig('model') || 'gpt-4.1-mini',
+      model: opts.model || getConfig('model') || 'gpt-5.4-mini',
       preferLocal: opts.local ?? getConfig('preferLocalLlm') ?? false,
       localLlmUrl: opts.local ? getConfig('localLlmUrl') : undefined,
     });
@@ -66,7 +66,7 @@ program
   .action(async (question, opts) => {
     await ensureConfigured();
     await runOnce(question.join(' '), {
-      model: opts.model || getConfig('model') || 'gpt-4.1-mini',
+      model: opts.model || getConfig('model') || 'gpt-5.4-mini',
       preferLocal: opts.local ?? getConfig('preferLocalLlm') ?? false,
       localLlmUrl: opts.local ? getConfig('localLlmUrl') : undefined,
     });
@@ -443,7 +443,7 @@ program
   .action(async (objective, opts) => {
     await ensureConfigured();
     await orchestrate(objective.join(' '), {
-      model: opts.model || getConfig('model') || 'gpt-4.1-mini',
+      model: opts.model || getConfig('model') || 'gpt-5.4-mini',
       maxParallel: parseInt(opts.parallel, 10) || 4,
       maxTasks: parseInt(opts.maxTasks, 10) || 10,
       dryRun: opts.dryRun,

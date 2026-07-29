@@ -96,7 +96,7 @@ export async function planTasks(
   return {
     objective,
     tasks,
-    model: opts.model ?? 'gpt-4.1-mini',
+    model: opts.model ?? 'gpt-5.4-mini',
     sessionId: randomId('swarm'),
     createdAt: Date.now(),
     maxParallel: 4,
