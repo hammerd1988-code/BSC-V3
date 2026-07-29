@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { maxTokensParam } from './src/lib/modelParams.js';
 
 const GEMINI_API_KEY = () => process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-3.6-flash';
@@ -376,7 +377,7 @@ async function callOpenAICompatibleWithTools(input: {
       model: input.model,
       messages: input.messages,
       temperature: input.temperature,
-      max_tokens: input.maxTokens,
+      ...maxTokensParam(input.model, input.maxTokens, input.baseUrl),
     };
     if (input.tools.length > 0) {
       body.tools = input.tools;
@@ -635,7 +636,7 @@ async function callOpenAIVision(
           },
         ],
         temperature: 0.7,
-        max_tokens: 2048,
+        ...maxTokensParam(VISION_MODEL(), 2048, baseUrl),
       }),
       signal: controller.signal,
     });
@@ -736,7 +737,7 @@ async function callOpenAICompatible(
           { role: 'user', content: prompt },
         ],
         temperature,
-        max_tokens: maxTokens,
+        ...maxTokensParam(model, maxTokens, baseUrl),
         ...(jsonResponse ? { response_format: { type: 'json_object' } } : {}),
       }),
       signal: controller.signal,
