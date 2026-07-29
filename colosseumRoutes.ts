@@ -39,9 +39,25 @@ import { generateImage as comfyGenerateImage, generateGladiatorAvatar as comfyGe
 const BOT_UUID_NAMESPACE = '00000000-0000-4000-8000-000000000b5c';
 const SAPPHIRE_GLADIATOR_ID = '00000000-0000-4000-8000-00000000fa11';
 const SAFE_GLADIATOR_SELECT = 'id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model,api_base_url';
-const BOT_DEFAULT_MODEL = process.env.BOT_DEFAULT_MODEL || process.env.BOT_AI_MODEL || process.env.COLOSSEUM_DEFAULT_MODEL || 'accounts/fireworks/models/qwen3p6-plus';
-const PLATFORM_DEFAULT_MODEL = process.env.COLOSSEUM_DEFAULT_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+const FIREWORKS_BASE_URL = 'https://api.fireworks.ai/inference/v1';
+const FIREWORKS_MODEL_PREFIX = 'accounts/fireworks/models/';
+const FIREWORKS_BOT_MODEL = `${FIREWORKS_MODEL_PREFIX}qwen3p6-plus`;
+const PLATFORM_DEFAULT_MODEL = process.env.COLOSSEUM_DEFAULT_MODEL || process.env.OPENAI_MODEL || 'gpt-5.4-mini';
 const BOT_OPENAI_COMPATIBLE_BASE_URL = (process.env.BOT_OPENAI_BASE_URL || process.env.BOT_AI_BASE_URL || '').replace(/\/$/, '');
+
+function hasBotProviderCredentials() {
+  return Boolean(process.env.BOT_OPENAI_API_KEY || process.env.BOT_AI_API_KEY);
+}
+
+// `accounts/fireworks/models/*` ids only exist on Fireworks — sending one to
+// OpenAI or OpenRouter returns "model not found". Only fall back to the
+// Fireworks bot model when bot-specific provider credentials are configured.
+function botDefaultModel() {
+  return process.env.BOT_DEFAULT_MODEL
+    || process.env.BOT_AI_MODEL
+    || process.env.COLOSSEUM_DEFAULT_MODEL
+    || (hasBotProviderCredentials() ? FIREWORKS_BOT_MODEL : PLATFORM_DEFAULT_MODEL);
+}
 function openaiCompatibleBaseUrl() {
   if (process.env.OPENAI_BASE_URL) return process.env.OPENAI_BASE_URL.replace(/\/$/, '');
   if (process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_ADMIN_KEY) return 'https://openrouter.ai/api/v1';
@@ -206,13 +222,13 @@ function isSeededPlatformBot(gladiator: any) {
 }
 
 function resolveGladiatorDefaultModel(gladiator: any) {
-  return isSeededPlatformBot(gladiator) ? BOT_DEFAULT_MODEL : PLATFORM_DEFAULT_MODEL;
+  return isSeededPlatformBot(gladiator) ? botDefaultModel() : PLATFORM_DEFAULT_MODEL;
 }
 
 function resolveGladiatorBaseUrl(gladiator: any) {
   const defaultBaseUrl = isSeededPlatformBot(gladiator) && BOT_OPENAI_COMPATIBLE_BASE_URL ? BOT_OPENAI_COMPATIBLE_BASE_URL : openaiCompatibleBaseUrl();
-  if (normalizeModel(gladiator?.model, resolveGladiatorDefaultModel(gladiator)).startsWith('accounts/fireworks/models/')) {
-    return defaultBaseUrl === 'https://api.openai.com/v1' ? 'https://api.fireworks.ai/inference/v1' : defaultBaseUrl;
+  if (normalizeModel(gladiator?.model, resolveGladiatorDefaultModel(gladiator)).startsWith(FIREWORKS_MODEL_PREFIX)) {
+    return BOT_OPENAI_COMPATIBLE_BASE_URL || FIREWORKS_BASE_URL;
   }
   return defaultBaseUrl;
 }

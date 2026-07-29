@@ -2,7 +2,7 @@ import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 const GEMINI_API_KEY = () => process.env.GEMINI_API_KEY || '';
-const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 
 let geminiCooldownUntil = 0;
 
@@ -41,7 +41,7 @@ export function resolveServerOpenAIConfig(env: NodeJS.ProcessEnv = process.env):
     || env.OPENAI_MODEL?.trim()
     || env.VITE_AI_MODEL?.trim();
   const model = configuredModel
-    || (usingOpenRouter ? 'openai/gpt-4.1-mini' : 'gpt-4.1-mini');
+    || (usingOpenRouter ? 'openai/gpt-5.4-mini' : 'gpt-5.4-mini');
 
   return { apiKey, baseUrl, model };
 }
@@ -49,6 +49,11 @@ export function resolveServerOpenAIConfig(env: NodeJS.ProcessEnv = process.env):
 const OPENAI_API_KEY = () => resolveServerOpenAIConfig().apiKey;
 const OPENAI_BASE_URL = () => resolveServerOpenAIConfig().baseUrl;
 const OPENAI_MODEL = () => resolveServerOpenAIConfig().model;
+const VISION_MODEL = () => {
+  const configured = process.env.VISION_MODEL?.trim();
+  if (configured) return configured;
+  return isOpenRouterBaseUrl(OPENAI_BASE_URL()) ? 'openai/gpt-5.4-mini' : 'gpt-5.4-mini';
+};
 
 export interface ServerAIOptions {
   systemPrompt?: string;
@@ -618,7 +623,7 @@ async function callOpenAIVision(
       method: 'POST',
       headers,
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: VISION_MODEL(),
         messages: [
           { role: 'system', content: systemPrompt },
           {

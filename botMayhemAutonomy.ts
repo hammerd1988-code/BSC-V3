@@ -278,13 +278,29 @@ function pickTwo<T>(arr: T[]): [T, T] {
 }
 
 // ── AI text generation ───────────────────────────────────────────────────────
+// Reason the most recent generateText call produced no text. Surfaced in run
+// results so the console shows the provider error instead of a bare
+// "No comment generated".
+let lastAiFailure: string | null = null;
+
+function aiFailureReason(summary: string): string {
+  return lastAiFailure ? `${summary}: ${lastAiFailure}` : summary;
+}
+
 async function generateText(prompt: string, systemPrompt: string, maxTokens = 200): Promise<string> {
-  if (!isServerAiConfigured()) return '';
+  if (!isServerAiConfigured()) {
+    lastAiFailure = 'server AI is not configured';
+    return '';
+  }
   try {
     const result = await generateServerText(prompt, { systemPrompt, temperature: 0.92, maxTokens });
-    return result.text.trim();
+    const text = result.text.trim();
+    lastAiFailure = text ? null : result.lastError || `${result.provider}/${result.model} returned empty text`;
+    if (!text) console.warn(`${LOG_PREFIX} AI generation empty:`, lastAiFailure);
+    return text;
   } catch (e) {
-    console.error(`${LOG_PREFIX} AI generation error:`, e instanceof Error ? e.message : e);
+    lastAiFailure = e instanceof Error ? e.message : String(e);
+    console.error(`${LOG_PREFIX} AI generation error:`, lastAiFailure);
     return '';
   }
 }
@@ -461,7 +477,6 @@ async function joinFaction(bot: ActiveBot): Promise<void> {
     likes: 0,
     boosts: 0,
     comments_count: 0,
-    shares_count: 0,
     is_boosted: false,
     view_count: 0,
   });
@@ -497,7 +512,6 @@ async function postContentForBot(
     likes: 0,
     boosts: 0,
     comments_count: 0,
-    shares_count: 0,
     is_boosted: false,
     view_count: 0,
   }).select('id').single();
@@ -667,7 +681,6 @@ async function postBattleBrag(winner: ActiveBot, loser: ActiveBot, matchId: stri
     likes: 0,
     boosts: 0,
     comments_count: 0,
-    shares_count: 0,
     is_boosted: false,
     view_count: 0,
   });
@@ -694,7 +707,6 @@ async function postBattleReaction(loser: ActiveBot, winner: ActiveBot, matchId: 
     likes: 0,
     boosts: 0,
     comments_count: 0,
-    shares_count: 0,
     is_boosted: false,
     view_count: 0,
   });
@@ -723,7 +735,7 @@ async function commentAsBot(commenter: ActiveBot, targetPost: { id: string; auth
     : `You see a post on the BSC network feed: "${plainContent}". Write a short 1-2 sentence comment in your voice. Stay in character. Be concise.`;
 
   const commentText = await generateText(prompt, commenter.persona.system_prompt, 120);
-  if (!commentText) return { ok: false, error: 'No comment generated' };
+  if (!commentText) return { ok: false, error: aiFailureReason('No comment generated') };
 
   const { error } = await supabase.from('comments').insert({
     post_id: targetPost.id,
@@ -801,7 +813,7 @@ async function sendBotDm(
     const generatePrompt = prompt?.trim() || `You are ${sender.persona.display_name} from ${sender.faction.name}. Send a short, in-character direct message to @${recipientUsername}. Keep it to 1-3 sentences. Be theatrical but concise.`;
     message = await generateText(generatePrompt, sender.persona.system_prompt, 160);
   }
-  if (!message) return { ok: false, error: 'No message generated' };
+  if (!message) return { ok: false, error: aiFailureReason('No message generated') };
 
   const conversationId = [sender.userId, recipientId].sort().join('_');
   const { error } = await supabase.from('direct_messages').insert({

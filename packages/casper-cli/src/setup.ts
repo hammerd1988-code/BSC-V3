@@ -191,8 +191,8 @@ async function setupOpenAI(queue: InputQueue): Promise<void> {
     deleteConfig('baseUrl');
   }
 
-  const model = await ask(queue, chalk.white('  Model (default: gpt-4.1-mini): '));
-  setConfig('model', model || 'gpt-4.1-mini');
+  const model = await ask(queue, chalk.white('  Model (default: gpt-5.4-mini): '));
+  setConfig('model', model || 'gpt-5.4-mini');
   setConfig('preferLocalLlm', false);
 }
 
@@ -213,9 +213,9 @@ async function setupOpenRouter(queue: InputQueue): Promise<void> {
 
   const model = await ask(
     queue,
-    chalk.white('  OpenRouter model id (default: openai/gpt-4.1-mini): '),
+    chalk.white('  OpenRouter model id (default: openai/gpt-5.4-mini): '),
   );
-  setConfig('model', model || 'openai/gpt-4.1-mini');
+  setConfig('model', model || 'openai/gpt-5.4-mini');
   setConfig('preferLocalLlm', false);
 }
 
