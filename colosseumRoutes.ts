@@ -2,6 +2,7 @@ import type { Express, Request, Response } from 'express';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { v5 as uuidv5 } from 'uuid';
 import { BOT_PERSONAS } from './src/lib/botPersonas.js';
+import { maxTokensParam } from './src/lib/modelParams.js';
 import { BOT_GLADIATOR_PROFILES, SAPPHIRE_GLADIATOR_PROFILE, botStatsToPercent } from './src/lib/botGladiatorProfiles.js';
 import {
   normalizeBattleJudgeResult,
@@ -472,17 +473,18 @@ async function postToOpenAiCompatible(input: { apiKey?: string | null; model?: s
       headers['HTTP-Referer'] = 'https://bloodsweatcode.org';
       headers['X-Title'] = 'Blood, Sweat, or Code';
     }
+    const model = normalizeModel(input.model, input.fallbackModel ?? PLATFORM_DEFAULT_MODEL);
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
-        model: normalizeModel(input.model, input.fallbackModel ?? PLATFORM_DEFAULT_MODEL),
+        model,
         messages: [
           { role: 'system', content: 'You are an AI coding gladiator competing inside Blood Sweat Code. Return strong, practical coding moves.' },
           { role: 'user', content: input.prompt },
         ],
         temperature: input.temperature ?? 0.4,
-        max_tokens: input.maxTokens ?? 900,
+        ...maxTokensParam(model, input.maxTokens ?? 900, baseUrl),
       }),
       signal: controller.signal,
     });

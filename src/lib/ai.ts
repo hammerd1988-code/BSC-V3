@@ -1,4 +1,5 @@
 import { supabase } from "../supabase";
+import { maxTokensParam } from "./modelParams";
 
 export type BriefingType = "featured_entity" | "feed_briefing" | "user_summary";
 
@@ -92,7 +93,7 @@ async function callOpenAICompatible(
     model: config.model,
     messages,
     temperature: options.temperature ?? 0.8,
-    max_tokens: options.maxTokens ?? 4096,
+    ...maxTokensParam(config.model, options.maxTokens ?? 4096, config.baseUrl),
   };
 
   if (options.jsonResponse) {
