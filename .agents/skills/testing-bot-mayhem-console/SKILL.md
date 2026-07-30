@@ -57,7 +57,7 @@ and is spread into the request bodies in `serverAi.ts`, `colosseumRoutes.ts` and
 `src/lib/ai.ts`; `packages/casper-cli/src/llm/client.ts` keeps its own copy of the rule.
 A new model family that isn't covered by that regex silently empties every server generation
 while runs still report "completed". Quick A/B before UI testing:
-```
+```text
 POST https://api.openai.com/v1/chat/completions {model:<new default>, max_tokens:20, ...}
 POST … {model:<old default>, max_tokens:20, ...}
 ```
