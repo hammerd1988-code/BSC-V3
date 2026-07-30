@@ -1130,6 +1130,13 @@ function ensureCombatantTerminalMoves(moves: GladiatorAiMove[], challengeType: C
   });
 }
 
+// How long the gate waits for the server-side gladiator solutions before it
+// opens with local fallback code. A real model round-trip takes several
+// seconds, so anything short here guarantees every battle is fought by
+// `localArenaFallbackSolution` instead of the gladiators' models.
+const AI_PACKET_GATE_TIMEOUT_MS = 45_000;
+const AI_PACKET_WAIT_TICK_MS = 6_000;
+
 const SANDBOX_ROUND_COUNT = 3;
 const SANDBOX_TICKS_PER_ROUND = 40;
 const SANDBOX_ROUND_TICK_MS = 700;
@@ -6996,13 +7003,22 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
         runSimulation(match, challenger, defender, activeChallengeType, openingLogs, sapphireMove, aiMoves, codingChallenge, submittedSolution);
       };
 
+      // Keep the pre-gate wait legible instead of looking frozen.
+      const waitTicker = window.setInterval(() => {
+        setSimulation((prev) => prev && !launched ? {
+          ...prev,
+          log: [...prev.log, 'Combat compilers still streaming. Holding the gate for the live AI packet.'],
+        } : prev);
+      }, AI_PACKET_WAIT_TICK_MS);
+
       const fallbackTimer = window.setTimeout(() => {
+        window.clearInterval(waitTicker);
         launchSimulation(
-          [...bootLogs, 'AI cores are still compiling. Gate opens now; judging will still score real submitted code and any late bot packet.'],
+          [...bootLogs, 'AI cores never answered in time. Gate opens now; judging will still score real submitted code and any late bot packet.'],
           null,
           []
         );
-      }, 1500);
+      }, AI_PACKET_GATE_TIMEOUT_MS);
 
       void requestGladiatorAiMoves(match, activeChallengeType, challenger, defender, battlePrompt).then((moves) => {
         let sapphireMove: SapphireMove | null = null;
@@ -7022,6 +7038,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
           ...aiMoves.map((move) => `${move.gladiator_name} returned a ${move.source} solution using ${move.model}.`),
         ];
         window.clearTimeout(fallbackTimer);
+        window.clearInterval(waitTicker);
         if (launched) {
           setSimulation((prev) => prev ? {
             ...prev,
@@ -7034,6 +7051,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       }).catch((err) => {
         console.warn('[Colosseum] Gladiator AI solution generation failed', err);
         window.clearTimeout(fallbackTimer);
+        window.clearInterval(waitTicker);
         const aiMoves = ensureCombatantTerminalMoves([], activeChallengeType, challenger, defender, battlePrompt);
         launchSimulation([...bootLogs, 'Server-side AI cores did not answer. Casper switched both terminals to live-code fallback instead of stalling.'], null, aiMoves);
       });
