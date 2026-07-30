@@ -85,8 +85,8 @@ PASS evidence to collect:
 ## Colosseum battle caveat (arena-fallback-compiler)
 `Colosseum.tsx` arms a **1500 ms `fallbackTimer`** and opens the gate with empty `aiMoves` if the
 server solutions haven't arrived; `ensureCombatantTerminalMoves` then fills in local solutions
-labelled `model=arena-fallback-compiler` / `source=local-live-terminal` / `latency=0ms`, and that
-is what gets persisted into `matches.replay_data.ai_moves`. A real LLM round-trip cannot beat
+labelled `source=local-live-terminal` / `latency=0ms` (and `model` is `gladiator.model` or
+`arena-fallback-compiler` if unset), and that is what gets persisted into `matches.replay_data.ai_moves`.
 1.5 s, so seeing `arena-fallback-compiler` does **not** by itself prove an AI failure — check
 `matches.replay_data.judge` too. If `judge.used_ai` is false with
 `provider: "rule-judge"` and a summary like `Expected ',' or ']' … in JSON at position NNNN`,
