@@ -144,6 +144,8 @@ async function startServer() {
     if (profile.role !== 'admin' && String(userId) !== profile.id) {
         return res.status(403).send({ message: 'You can only purchase CRED for your own account.' });
     }
+    // JSON bodies are untyped; keep ledger rows keyed by a string id.
+    const targetUserId = String(userId);
 
     try {
         const squareClient = createSquareClient();
@@ -162,13 +164,13 @@ async function startServer() {
         if (payment && payment.status === 'COMPLETED') {
             // Update user's CRED balance in Supabase
             const { error: userError } = await supabase
-                .rpc('increment_cred_balance', { p_user_id: userId, p_amount: credAmount });
+                .rpc('increment_cred_balance', { p_user_id: targetUserId, p_amount: credAmount });
 
             if (userError) throw userError;
 
             // Record transaction
             const { error: transactionError } = await supabase.from('transactions').insert({
-                user_id: userId,
+                user_id: targetUserId,
                 amount: credAmount,
                 type: 'purchase',
                 description: `Purchased ${credAmount} CRED via Square`,
@@ -198,17 +200,19 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     if (profile.role !== 'admin' && String(userId) !== profile.id) {
         return res.status(403).send({ message: 'You can only exchange CRED from your own account.' });
     }
+    // JSON bodies are untyped; keep ledger rows keyed by a string id.
+    const targetUserId = String(userId);
 
     try {
         // Deduct CRED and add tokens (assuming 1 CRED = 1 token for now)
         const { data: userUpdate, error: userError } = await supabase
-            .rpc("exchange_cred_for_tokens", { user_id: userId, cred_to_deduct: credAmount, tokens_to_add: credAmount });
+            .rpc("exchange_cred_for_tokens", { user_id: targetUserId, cred_to_deduct: credAmount, tokens_to_add: credAmount });
 
         if (userError) throw userError;
 
         // Record transaction
         const { error: transactionError } = await supabase.from("transactions").insert({
-            user_id: userId,
+            user_id: targetUserId,
             amount: credAmount,
             type: "exchange",
             description: `Exchanged ${credAmount} CRED for ${credAmount} tokens`,
