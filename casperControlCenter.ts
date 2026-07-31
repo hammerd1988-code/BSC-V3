@@ -21,6 +21,7 @@ import {
   type LlmToolCallResult,
   type ToolExecutionContext,
 } from './casperTools.js';
+import { createRateLimiter } from './serverSecurity.js';
 
 const PLATFORM_DEFAULT_MODEL = process.env.CASPER_MODEL || process.env.OPENAI_MODEL || 'gpt-5.4-mini';
 const ROUTINE_POLL_INTERVAL_MS = Number(process.env.CASPER_ROUTINE_POLL_INTERVAL_MS || 60_000);
@@ -1868,6 +1869,8 @@ function sanitizeLikePattern(value: string): string {
 }
 
 export function registerCasperControlRoutes(app: Express, supabase: SupabaseClient, casperMemory: any) {
+  const directiveRateLimit = createRateLimiter({ name: 'Casper directives', windowMs: 60_000, max: 30 });
+
   // Public diagnostic endpoint. Reports whether the server's Supabase
   // configuration matches the project that issued the bearer token (if one
   // is supplied). Designed to make "Your session has expired or is
@@ -1951,7 +1954,7 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
     }
   });
 
-  app.post('/api/casper/command', async (req, res) => {
+  app.post('/api/casper/command', directiveRateLimit, async (req, res) => {
     try {
       const profile = await requireAuth(req, res, supabase);
       if (!profile) return;
@@ -2102,7 +2105,7 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
   // single browser operation (navigate, screenshot, click, type, etc.)
   // without going through the full tool-calling loop. Returns the
   // screenshot URL directly so the chat can render it inline.
-  app.post('/api/casper/browser/action', async (req, res) => {
+  app.post('/api/casper/browser/action', directiveRateLimit, async (req, res) => {
     try {
       const profile = await requireAuth(req, res, supabase);
       if (!profile) return;
@@ -2159,7 +2162,7 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
   // in casper_subagents are updated in real-time so the UI's existing
   // postgres_changes subscription animates the tree without any
   // additional client wiring.
-  app.post('/api/casper/subagents/spawn', async (req, res) => {
+  app.post('/api/casper/subagents/spawn', directiveRateLimit, async (req, res) => {
     try {
       const profile = await requireAuth(req, res, supabase);
       if (!profile) return;
