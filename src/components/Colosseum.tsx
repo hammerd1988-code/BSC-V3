@@ -6010,6 +6010,10 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
   // has left the arena.
   const gateTimersRef = React.useRef<number[]>([]);
   const arenaMountedRef = React.useRef(true);
+  // Match row that exists but has not reached the gate yet. If the arena
+  // unmounts while it is pending, nothing will ever write completed_at, and an
+  // eternally open match keeps its gladiator under the active-match lock.
+  const pendingGateMatchRef = React.useRef<string | null>(null);
 
   useEffect(() => {
     arenaMountedRef.current = true;
@@ -6017,6 +6021,14 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       arenaMountedRef.current = false;
       gateTimersRef.current.forEach((id) => { window.clearTimeout(id); window.clearInterval(id); });
       gateTimersRef.current = [];
+      const abandonedMatchId = pendingGateMatchRef.current;
+      pendingGateMatchRef.current = null;
+      if (abandonedMatchId) {
+        void supabase.from('matches').update({
+          completed_at: new Date().toISOString(),
+          replay_data: { abandoned: true, intro: 'The challenger left the arena before the gate opened.' },
+        }).eq('id', abandonedMatchId);
+      }
     };
   }, []);
 
@@ -7015,6 +7027,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       ) => {
         if (launched || !arenaMountedRef.current) return;
         launched = true;
+        pendingGateMatchRef.current = null;
         runSimulation(match, challenger, defender, activeChallengeType, openingLogs, sapphireMove, aiMoves, codingChallenge, submittedSolution);
       };
 
@@ -7035,6 +7048,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
         );
       }, AI_PACKET_GATE_TIMEOUT_MS);
       gateTimersRef.current.push(waitTicker, fallbackTimer);
+      pendingGateMatchRef.current = match.id;
 
       void requestGladiatorAiMoves(match, activeChallengeType, challenger, defender, battlePrompt).then((moves) => {
         let sapphireMove: SapphireMove | null = null;
