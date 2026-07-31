@@ -2285,6 +2285,28 @@ async function requestGladiatorAiMoves(match: MatchRow, type: ChallengeType, cha
   return (payload?.moves ?? []) as GladiatorAiMove[];
 }
 
+// Closing a match needs completed_at, which authenticated clients may not
+// write (`grant update (replay_data)` in 0047), so it goes through the server.
+async function abandonPendingMatch(matchId: string) {
+  try {
+    const session = await getValidSession();
+    const response = await fetch('/api/colosseum/abandon-match', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ matchId }),
+      keepalive: true,
+    });
+    if (!response.ok) {
+      console.warn('[Colosseum] Could not abandon pending match', matchId, response.status);
+    }
+  } catch (err) {
+    console.warn('[Colosseum] Could not abandon pending match', matchId, err);
+  }
+}
+
 async function requestTrainingBattle(input: {
   type: ChallengeType;
   challenge: CodingChallenge;
@@ -6023,21 +6045,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       gateTimersRef.current = [];
       const abandonedMatchId = pendingGateMatchRef.current;
       pendingGateMatchRef.current = null;
-      if (abandonedMatchId) {
-        // replay_data already holds the challenge and the submitted solution,
-        // and the server may have merged ai_moves into it, so merge rather than
-        // replace.
-        void supabase.from('matches').select('replay_data').eq('id', abandonedMatchId).single().then(({ data }) => {
-          void supabase.from('matches').update({
-            completed_at: new Date().toISOString(),
-            replay_data: {
-              ...((data?.replay_data ?? {}) as Record<string, any>),
-              abandoned: true,
-              abandoned_reason: 'The challenger left the arena before the gate opened.',
-            },
-          }).eq('id', abandonedMatchId);
-        });
-      }
+      if (abandonedMatchId) void abandonPendingMatch(abandonedMatchId);
     };
   }, []);
 
