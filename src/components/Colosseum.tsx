@@ -6004,6 +6004,21 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
   const [showWinnerReveal, setShowWinnerReveal] = useState<{ winner: Gladiator; loser: Gladiator; summary: string } | null>(null);
   const [showBattleIntro, setShowBattleIntro] = useState<{ challenger: Gladiator; defender: Gladiator; title: string } | null>(null);
   const coachingIntervalRef = React.useRef<number | null>(null);
+  // Timers that hold the arena gate open while the live AI packet is in flight.
+  // The wait can run for AI_PACKET_GATE_TIMEOUT_MS, so they must not outlive the
+  // component or a battle keeps announcing and recording itself after the user
+  // has left the arena.
+  const gateTimersRef = React.useRef<number[]>([]);
+  const arenaMountedRef = React.useRef(true);
+
+  useEffect(() => {
+    arenaMountedRef.current = true;
+    return () => {
+      arenaMountedRef.current = false;
+      gateTimersRef.current.forEach((id) => { window.clearTimeout(id); window.clearInterval(id); });
+      gateTimersRef.current = [];
+    };
+  }, []);
 
   const normalizeGladiator = (row: any, profileByGladiatorId?: Map<string, BotGladiatorProfileRow>): Gladiator => ({
     id: row.id,
@@ -6998,7 +7013,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
         sapphireMove: SapphireMove | null,
         aiMoves: GladiatorAiMove[]
       ) => {
-        if (launched) return;
+        if (launched || !arenaMountedRef.current) return;
         launched = true;
         runSimulation(match, challenger, defender, activeChallengeType, openingLogs, sapphireMove, aiMoves, codingChallenge, submittedSolution);
       };
@@ -7019,6 +7034,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
           []
         );
       }, AI_PACKET_GATE_TIMEOUT_MS);
+      gateTimersRef.current.push(waitTicker, fallbackTimer);
 
       void requestGladiatorAiMoves(match, activeChallengeType, challenger, defender, battlePrompt).then((moves) => {
         let sapphireMove: SapphireMove | null = null;
