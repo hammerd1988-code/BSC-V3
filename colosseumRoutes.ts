@@ -740,8 +740,10 @@ Writing rules:
       jsonResponse: true,
     });
     if (!result.text) {
+      // A bigger budget cannot fix an outage, a bad key or a rate limit, and
+      // every attempt walks the full provider chain — fail fast instead.
       providerError = result.lastError || 'AI judge returned no text.';
-      continue;
+      break;
     }
     try {
       const parsed = extractJsonObject(result.text);
