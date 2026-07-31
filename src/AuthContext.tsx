@@ -4,6 +4,7 @@ import type { Session, User as SupaUser } from '@supabase/supabase-js';
 import { User } from './types';
 import { BOT_PERSONAS } from './lib/botPersonas';
 import { startVisibilityRefresh } from './lib/authSession';
+import { isBootstrapAdminEmail } from './lib/adminAllowlist';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -40,7 +41,7 @@ function buildDefaultProfile(supaUser: SupaUser): User & { auth_uid: string; ema
     cred_balance: 500,
     is_online: false,
     is_live: false,
-    role: supaUser.email === 'hammerd1988@gmail.com' ? 'admin' : 'user',
+    role: isBootstrapAdminEmail(supaUser.email) ? 'admin' : 'user',
     tech_stack: [],
     currently_building: null,
     profile_layout: 'developer',
@@ -112,7 +113,7 @@ async function ensureUserProfile(supaUser: SupaUser): Promise<User> {
   if (!existing.avatar_url && (meta.avatar_url || meta.picture)) {
     updates.avatar_url = meta.avatar_url ?? meta.picture;
   }
-  if (supaUser.email === 'hammerd1988@gmail.com' && existing.role !== 'admin') {
+  if (isBootstrapAdminEmail(supaUser.email) && existing.role !== 'admin') {
     updates.role = 'admin';
   }
 

@@ -5,7 +5,7 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import os from 'os';
 import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
-import { registerCasperControlRoutes } from './casperControlCenter.js';
+import { registerCasperControlRoutes, requireCasperAuth } from './casperControlCenter.js';
 import botApi from './botApi.js';
 import { registerPushRoutes } from './pushNotifications.js';
 import { registerLiveKitRoutes } from './livekitRoutes.js';
@@ -17,6 +17,13 @@ import { initBotMayhemAutonomy, registerBotMayhemRoutes } from './botMayhemAuton
 import { createServerSupabaseClient } from './serverSupabase.js';
 import { registerStripeRoutes } from './stripeRoutes.js';
 import { registerCasperRelay } from './casperRelay.js';
+import {
+  assertProductionConfig,
+  createRateLimiter,
+  createWebhookAuthMiddleware,
+  parseAllowedOrigins,
+  resolveSocketCorsOrigin,
+} from './serverSecurity.js';
 
 const supabase = createServerSupabaseClient();
 
@@ -29,21 +36,6 @@ function readWorkspaceResourceSnapshot() {
   return { cpu, gpu, ram, source: 'server' as const, updatedAt: new Date().toISOString() };
 }
 
-function parseAllowedOrigins(): string[] {
-  const raw = [
-    process.env.APP_URL,
-    process.env.CLIENT_ORIGIN,
-    process.env.VITE_APP_URL,
-  ]
-    .filter(Boolean)
-    .join(',');
-
-  return raw
-    .split(',')
-    .map((v) => v.trim())
-    .filter((v) => v.length > 0);
-}
-
 async function startServer() {
   const app = express();
   const isProd = process.env.NODE_ENV === 'production';
@@ -52,10 +44,11 @@ async function startServer() {
   // for per-client rate limiting in casperRelay to work correctly.
   app.set('trust proxy', 1);
   const allowedOrigins = parseAllowedOrigins();
+  assertProductionConfig({ isProd, allowedOrigins });
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
     cors: {
-      origin: allowedOrigins.length > 0 ? allowedOrigins : (isProd ? false : '*'),
+      origin: resolveSocketCorsOrigin(allowedOrigins, isProd),
     },
   });
 
@@ -88,26 +81,8 @@ async function startServer() {
   registerStripeRoutes(app, supabase);
   registerCasperRelay(io, app, supabase);
 
-  // Webhook Authentication Middleware
-  const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const apiKey = req.headers['x-api-key'] || req.body.apiKey;
-    const expectedKey = process.env.AGENT_WEBHOOK_SECRET;
-
-    if (!expectedKey) {
-      if (isProd) {
-        console.error('[WEBHOOK] AGENT_WEBHOOK_SECRET is required in production.');
-        return res.status(500).json({ success: false, error: 'Server webhook auth is not configured' });
-      }
-      console.warn('[WEBHOOK] AGENT_WEBHOOK_SECRET is not set. Using dev fallback key.');
-    }
-    const validKey = expectedKey || 'dev-secret-key';
-    
-    if (!apiKey || apiKey !== validKey) {
-      console.warn(`[WEBHOOK] Unauthorized access attempt from ${req.ip}`);
-      return res.status(401).json({ success: false, error: 'Unauthorized: Invalid or missing API Key' });
-    }
-    next();
-  };
+  const requireWebhookAuth = createWebhookAuthMiddleware({ isProd });
+  const aiRateLimit = createRateLimiter({ name: 'AI generation', windowMs: 60_000, max: 30 });
 
   // API Routes
   app.get('/api/health', (req, res) => {
@@ -125,12 +100,15 @@ async function startServer() {
   // ── Casper Memory Endpoints ──
   app.get('/api/casper/memory', async (req, res) => {
     try {
-      const userId = req.query.userId as string || null;
+      const profile = await requireCasperAuth(req, res, supabase);
+      if (!profile) return;
+      const requestedUserId = (req.query.userId as string | undefined) || null;
+      const targetUserId = profile.role === 'admin' ? requestedUserId : profile.id;
       if (!casperMemory) {
         return res.json({ stateModifier: '', relevantMemories: '' });
       }
       const stateModifier = await casperMemory.getStatePromptModifier();
-      const relevantMemories = await casperMemory.getRelevantMemories(userId, 15);
+      const relevantMemories = await casperMemory.getRelevantMemories(targetUserId, 15);
       res.json({ stateModifier, relevantMemories });
     } catch (error) {
       console.error('Error fetching Casper memory:', error);
@@ -140,8 +118,18 @@ async function startServer() {
 
   app.post('/api/casper/memory', async (req, res) => {
     try {
-      const { userId, userMessage, casperReply } = req.body;
-      if (casperMemory && userId && userMessage && casperReply) {
+      const profile = await requireCasperAuth(req, res, supabase);
+      if (!profile) return;
+      const { userId, userMessage, casperReply } = req.body ?? {};
+      if (!userId || !userMessage || !casperReply) {
+        return res.status(400).json({ error: 'userId, userMessage, and casperReply are required.' });
+      }
+      // Non-admin callers can only persist memories for themselves so a leaked
+      // session token cannot poison another user's Casper memory store.
+      if (profile.role !== 'admin' && String(userId) !== profile.id) {
+        return res.status(403).json({ error: 'You can only store Casper memory for your own profile.' });
+      }
+      if (casperMemory) {
         // Store the full exchange and extract facts (preferences, project/release, workspace context).
         casperMemory.storeConversationExchange?.(userId, userMessage, casperReply)?.catch?.(() => {});
         await casperMemory.extractConversationMemory(userId, userMessage, casperReply);
@@ -155,7 +143,7 @@ async function startServer() {
 
   // ── Text-to-Speech (OpenAI) ──
   const OPENAI_TTS_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'] as const;
-  app.post('/api/tts', async (req, res) => {
+  app.post('/api/tts', aiRateLimit, async (req, res) => {
     try {
       const { text, voice, speed } = req.body;
 
@@ -206,7 +194,7 @@ async function startServer() {
   });
 
   // ── Text-to-Speech (Mimo) ──
-  app.post('/api/tts/mimo', async (req, res) => {
+  app.post('/api/tts/mimo', aiRateLimit, async (req, res) => {
     try {
       const { text, voice, speed } = req.body;
 
