@@ -42,6 +42,7 @@ export function assertProductionConfig(
   options: { isProd: boolean; allowedOrigins: string[]; env?: NodeJS.ProcessEnv },
 ): void {
   if (!options.isProd) return;
+  const env = options.env ?? process.env;
 
   const problems: string[] = [];
   if (options.allowedOrigins.length === 0) {
@@ -55,6 +56,18 @@ export function assertProductionConfig(
     throw new ProductionConfigError(
       `Refusing to start in production with invalid configuration:\n  - ${problems.join('\n  - ')}`,
     );
+  }
+
+  // These fail per-request rather than platform-wide, so surface them at boot
+  // instead of aborting a deployment that never touches the feature.
+  const degraded = [
+    !env.AGENT_WEBHOOK_SECRET && 'AGENT_WEBHOOK_SECRET (agent webhooks will return 500)',
+    !env.SQUARE_ACCESS_TOKEN && 'SQUARE_ACCESS_TOKEN (CRED purchases will fail)',
+    !env.SQUARE_LOCATION_ID && 'SQUARE_LOCATION_ID (CRED purchases will fail)',
+  ].filter((entry): entry is string => typeof entry === 'string');
+
+  if (degraded.length > 0) {
+    console.warn(`[config] Missing production secrets:\n  - ${degraded.join('\n  - ')}`);
   }
 }
 

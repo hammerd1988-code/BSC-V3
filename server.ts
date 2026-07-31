@@ -129,10 +129,12 @@ async function startServer() {
       if (profile.role !== 'admin' && String(userId) !== profile.id) {
         return res.status(403).json({ error: 'You can only store Casper memory for your own profile.' });
       }
+      // JSON bodies are untyped; the memory store keys rows by a string id.
+      const targetUserId = profile.role === 'admin' ? String(userId) : profile.id;
       if (casperMemory) {
         // Store the full exchange and extract facts (preferences, project/release, workspace context).
-        casperMemory.storeConversationExchange?.(userId, userMessage, casperReply)?.catch?.(() => {});
-        await casperMemory.extractConversationMemory(userId, userMessage, casperReply);
+        casperMemory.storeConversationExchange?.(targetUserId, userMessage, casperReply)?.catch?.(() => {});
+        await casperMemory.extractConversationMemory(targetUserId, userMessage, casperReply);
       }
       res.json({ success: true });
     } catch (error) {

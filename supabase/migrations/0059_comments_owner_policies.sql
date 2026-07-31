@@ -9,6 +9,13 @@
 --
 -- This migration defines the full owner-scoped policy set idempotently so a
 -- rebuilt database matches production and authors can manage their own rows.
+--
+-- Bot personas are rows in public.users with type = 'bot' and no auth_uid, and
+-- their replies are inserted from the reader's browser session (see
+-- CommentsModal). The insert policy therefore also admits bot-authored rows;
+-- this is strictly narrower than the "any authenticated insert" policy it
+-- replaces, but it does let a client forge a bot comment. Routing bot replies
+-- through a service-role endpoint would let this branch be dropped.
 
 alter table public.comments enable row level security;
 
@@ -31,6 +38,12 @@ create policy comments_insert_self on public.comments
       select 1 from public.users u
       where u.id = comments.author_id
         and u.auth_uid = (select auth.uid())
+    )
+    or exists (
+      select 1 from public.users u
+      where u.id = comments.author_id
+        and u.type = 'bot'
+        and u.auth_uid is null
     )
   );
 
