@@ -4,6 +4,7 @@ import { X, Coins, ArrowUpRight, ArrowDownRight, CreditCard, Loader2, Zap, Exter
 import { User } from '../types';
 import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
+import { authedFetch } from '../lib/authSession';
 import { cn } from '../lib/utils';
 
 interface WalletModalProps {
@@ -127,7 +128,7 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
     setExchanging(true);
     try {
       const tokensReceived = amount * 1000;
-      const response = await fetch('/api/cred/exchange', {
+      const response = await authedFetch('/api/cred/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -139,7 +140,7 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
       const data = await response.json();
 
       if (!response.ok || !data.success) {
-        throw new Error(data.message || 'CRED exchange failed on server.');
+        throw new Error(data.message || data.error || 'CRED exchange failed on server.');
       }
       setExchangeAmount('10');
       fetchTransactions();
@@ -162,7 +163,7 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
       }
 
       const credToAdd = selectedTier.amount + selectedTier.bonus;
-      const response = await fetch('/api/square/process-payment', {
+      const response = await authedFetch('/api/square/process-payment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -178,7 +179,7 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
       if (response.ok && data.success) {
         setPaymentSuccess(`✓ ${credToAdd} CRED added to your wallet!`);
       } else {
-        throw new Error(data.message || 'Payment failed on server.');
+        throw new Error(data.message || data.error || 'Payment failed on server.');
       }
 
       setPaymentSuccess(`✓ ${credToAdd} CRED added to your wallet!`);

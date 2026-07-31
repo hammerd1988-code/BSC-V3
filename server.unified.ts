@@ -493,7 +493,8 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
   // Webhook-authed to keep the existing bot integration working; an
   // alternative Supabase-authed entrypoint is mounted below at
   // /api/casper/terminal/execute for the Casper operator console.
-  app.post('/api/terminal/execute', executionRateLimit, requireWebhookAuth, async (req, res) => {
+  // Auth first: anonymous traffic must not drain the shared per-IP bucket.
+  app.post('/api/terminal/execute', requireWebhookAuth, executionRateLimit, async (req, res) => {
     try {
       const { command, agentId, mode: requestedMode, timeoutMs, maxOutputBytes } = req.body ?? {};
       console.log(`[TERMINAL] Agent '${agentId}' executed: ${command}`);
