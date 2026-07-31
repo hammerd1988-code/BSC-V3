@@ -1683,6 +1683,48 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
     }
   });
 
+  // Closes a match the challenger walked away from before the arena gate
+  // opened. Authenticated clients only hold `grant update (replay_data)` on
+  // public.matches, so completed_at has to be written with the service role.
+  app.post('/api/colosseum/abandon-match', async (req, res) => {
+    try {
+      const authUser = await authenticatedRequestUser(req, supabase);
+      if (!authUser) return res.status(401).json({ success: false, error: 'Authentication required.' });
+      const matchId = String(req.body?.matchId ?? '');
+      if (!matchId) return res.status(400).json({ success: false, error: 'matchId is required' });
+      if (!(await userOwnsOpenMatch(supabase, matchId, authUser.id))) {
+        return res.status(403).json({ success: false, error: 'Only the challenger owner can abandon this match.' });
+      }
+
+      const { data: match, error: matchError } = await supabase
+        .from('matches')
+        .select('replay_data')
+        .eq('id', matchId)
+        .maybeSingle();
+      if (matchError) throw matchError;
+
+      const existingReplay = (match?.replay_data && typeof match.replay_data === 'object') ? match.replay_data : {};
+      const { error } = await supabase
+        .from('matches')
+        .update({
+          completed_at: new Date().toISOString(),
+          replay_data: {
+            ...existingReplay,
+            abandoned: true,
+            abandoned_reason: 'The challenger left the arena before the gate opened.',
+          },
+        })
+        .eq('id', matchId)
+        .is('completed_at', null);
+      if (error) throw error;
+
+      return res.json({ success: true });
+    } catch (error: any) {
+      console.error('[colosseum:abandon-match]', error);
+      return res.status(500).json({ success: false, error: error.message || 'Could not abandon match' });
+    }
+  });
+
   app.post('/api/colosseum/judge-battle', async (req, res) => {
     try {
       const isInternal = isLoopbackRequest(req);
