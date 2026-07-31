@@ -6024,10 +6024,19 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       const abandonedMatchId = pendingGateMatchRef.current;
       pendingGateMatchRef.current = null;
       if (abandonedMatchId) {
-        void supabase.from('matches').update({
-          completed_at: new Date().toISOString(),
-          replay_data: { abandoned: true, intro: 'The challenger left the arena before the gate opened.' },
-        }).eq('id', abandonedMatchId);
+        // replay_data already holds the challenge and the submitted solution,
+        // and the server may have merged ai_moves into it, so merge rather than
+        // replace.
+        void supabase.from('matches').select('replay_data').eq('id', abandonedMatchId).single().then(({ data }) => {
+          void supabase.from('matches').update({
+            completed_at: new Date().toISOString(),
+            replay_data: {
+              ...((data?.replay_data ?? {}) as Record<string, any>),
+              abandoned: true,
+              abandoned_reason: 'The challenger left the arena before the gate opened.',
+            },
+          }).eq('id', abandonedMatchId);
+        });
       }
     };
   }, []);
