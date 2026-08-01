@@ -190,6 +190,10 @@ export const GoLive: React.FC = () => {
   const recordingChunksRef = useRef<Blob[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isLiveRef = useRef(false);
+  // True only in the tab that actually captured/started this broadcast. A host
+  // can open their own live stream in a second tab (or reload then browse away)
+  // where isLive is true but no capture is owned — that tab must NOT finalize.
+  const ownsCaptureRef = useRef(false);
   const endedRef = useRef(false);
   const streamIdRef = useRef<string | null>(null);
   const currentUserRef = useRef(currentUser);
@@ -371,6 +375,7 @@ export const GoLive: React.FC = () => {
     }
     setIsRecording(false);
     setLocalReady(false);
+    ownsCaptureRef.current = false;
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
@@ -471,7 +476,9 @@ export const GoLive: React.FC = () => {
     // in-progress broadcast is finalized so the recording isn't lost. Tear down
     // media only after finalize resolves — stopMedia() stops the tracks, which
     // would cut the MediaRecorder off before it can flush its final chunk.
-    if (isLiveRef.current && !endedRef.current && streamIdRef.current) {
+    // Only the tab that owns the capture may finalize, so a host viewing their
+    // own live stream in another tab can't end the real broadcast on unmount.
+    if (ownsCaptureRef.current && isLiveRef.current && !endedRef.current && streamIdRef.current) {
       void finalizeBroadcast(streamIdRef.current).finally(() => {
         disconnectLiveKit();
         stopMedia();
@@ -618,6 +625,7 @@ export const GoLive: React.FC = () => {
       if (error) throw error;
       const normalized = normalizeStream(data);
       endedRef.current = false;
+      ownsCaptureRef.current = true;
       setStreamId(normalized.id);
       streamIdRef.current = normalized.id;
       setStreamData(normalized);
