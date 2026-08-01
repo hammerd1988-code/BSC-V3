@@ -10,7 +10,6 @@
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import { SquareClient, SquareEnvironment } from 'square';
 import { v4 as uuidv4 } from 'uuid';
 
 import path from 'path';
@@ -36,6 +35,15 @@ import { createServerSupabaseClient } from './serverSupabase.js';
 import { registerCoBrowseSocket } from './casperCoBrowse.js';
 import { registerStripeRoutes } from './stripeRoutes.js';
 import { registerCasperRelay } from './casperRelay.js';
+import {
+  assertProductionConfig,
+  createRateLimiter,
+  createSquareClient,
+  createWebhookAuthMiddleware,
+  getSquareLocationId,
+  parseAllowedOrigins,
+  resolveSocketCorsOrigin,
+} from './serverSecurity.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -54,31 +62,18 @@ function readWorkspaceResourceSnapshot() {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-function parseAllowedOrigins(): string[] {
-  const raw = [
-    process.env.APP_URL,
-    process.env.CLIENT_ORIGIN,
-    process.env.VITE_APP_URL,
-  ]
-    .filter(Boolean)
-    .join(',');
-  return raw
-    .split(',')
-    .map((v) => v.trim())
-    .filter((v) => v.length > 0);
-}
-
 async function startServer() {
   const app = express();
   const isProd = process.env.NODE_ENV === 'production';
   // Trust the first proxy hop (Railway) so req.ip reflects the real client IP.
   app.set('trust proxy', 1);
   const allowedOrigins = parseAllowedOrigins();
+  assertProductionConfig({ isProd, allowedOrigins });
   const httpServer = createServer(app);
 
   const io = new Server(httpServer, {
     cors: {
-      origin: allowedOrigins.length > 0 ? allowedOrigins : (isProd ? false : '*'),
+      origin: resolveSocketCorsOrigin(allowedOrigins, isProd),
       methods: ['GET', 'POST'],
       credentials: true,
     },
@@ -129,40 +124,31 @@ async function startServer() {
   registerBotMayhemRoutes(app, supabase);
   registerStripeRoutes(app, supabase);
 
-  // Webhook Authentication Middleware
-  const requireWebhookAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const apiKey = req.headers['x-api-key'] || req.body.apiKey;
-    const expectedKey = process.env.AGENT_WEBHOOK_SECRET;
+  const requireWebhookAuth = createWebhookAuthMiddleware({ isProd });
 
-    if (!expectedKey) {
-      if (isProd) {
-        console.error('[WEBHOOK] AGENT_WEBHOOK_SECRET is required in production.');
-        return res.status(500).json({ success: false, error: 'Server webhook auth is not configured' });
-      }
-      console.warn('[WEBHOOK] AGENT_WEBHOOK_SECRET is not set. Using dev fallback key.');
-    }
-    const validKey = expectedKey || 'dev-secret-key';
-
-    if (!apiKey || apiKey !== validKey) {
-      console.warn(`[WEBHOOK] Unauthorized access attempt from ${req.ip}`);
-      return res.status(401).json({ success: false, error: 'Unauthorized: Invalid or missing API Key' });
-    }
-    next();
-  };
+  // Rate limiters for endpoints that cost money or execute code on the host.
+  const aiRateLimit = createRateLimiter({ name: 'AI generation', windowMs: 60_000, max: 30 });
+  const paymentRateLimit = createRateLimiter({ name: 'payments', windowMs: 60_000, max: 10 });
+  const executionRateLimit = createRateLimiter({ name: 'command execution', windowMs: 60_000, max: 20 });
 
   // ── Square Payment Processing ──
-  app.post('/api/square/process-payment', async (req, res) => {
+  app.post('/api/square/process-payment', paymentRateLimit, async (req, res) => {
     const { sourceId, amount, userId, credAmount } = req.body;
 
     if (!sourceId || !amount || !userId || !credAmount) {
         return res.status(400).send({ message: 'Missing required payment details.' });
     }
 
+    const profile = await requireCasperAuth(req, res, supabase);
+    if (!profile) return;
+    if (profile.role !== 'admin' && String(userId) !== profile.id) {
+        return res.status(403).send({ message: 'You can only purchase CRED for your own account.' });
+    }
+    // JSON bodies are untyped; keep ledger rows keyed by a string id.
+    const targetUserId = String(userId);
+
     try {
-        const squareClient = new SquareClient({
-            token: process.env.SQUARE_ACCESS_TOKEN || 'EAAAlxfDZaOMl_gvyraxBq_2ecvPhEKA4y-a25ccjlCpVw0vlj0Lri2RaoYG__i6',
-            environment: process.env.NODE_ENV === 'production' ? SquareEnvironment.Production : SquareEnvironment.Sandbox,
-        });
+        const squareClient = createSquareClient();
 
         const paymentResponse = await squareClient.payments.create({
             sourceId: sourceId,
@@ -170,7 +156,7 @@ async function startServer() {
                 amount: BigInt(amount), // amount is already in cents
                 currency: 'USD',
             },
-            locationId: process.env.SQUARE_LOCATION_ID || 'L427FTSA66A1B',
+            locationId: getSquareLocationId(),
             idempotencyKey: uuidv4(),
         });
 
@@ -178,13 +164,13 @@ async function startServer() {
         if (payment && payment.status === 'COMPLETED') {
             // Update user's CRED balance in Supabase
             const { error: userError } = await supabase
-                .rpc('increment_cred_balance', { p_user_id: userId, p_amount: credAmount });
+                .rpc('increment_cred_balance', { p_user_id: targetUserId, p_amount: credAmount });
 
             if (userError) throw userError;
 
             // Record transaction
             const { error: transactionError } = await supabase.from('transactions').insert({
-                user_id: userId,
+                user_id: targetUserId,
                 amount: credAmount,
                 type: 'purchase',
                 description: `Purchased ${credAmount} CRED via Square`,
@@ -202,23 +188,31 @@ async function startServer() {
     }
 });
 
-app.post("/api/cred/exchange", async (req, res) => {
+app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     const { userId, credAmount } = req.body;
 
     if (!userId || !credAmount || credAmount <= 0) {
         return res.status(400).send({ message: "Missing required exchange details or invalid amount." });
     }
 
+    const profile = await requireCasperAuth(req, res, supabase);
+    if (!profile) return;
+    if (profile.role !== 'admin' && String(userId) !== profile.id) {
+        return res.status(403).send({ message: 'You can only exchange CRED from your own account.' });
+    }
+    // JSON bodies are untyped; keep ledger rows keyed by a string id.
+    const targetUserId = String(userId);
+
     try {
         // Deduct CRED and add tokens (assuming 1 CRED = 1 token for now)
         const { data: userUpdate, error: userError } = await supabase
-            .rpc("exchange_cred_for_tokens", { user_id: userId, cred_to_deduct: credAmount, tokens_to_add: credAmount });
+            .rpc("exchange_cred_for_tokens", { user_id: targetUserId, cred_to_deduct: credAmount, tokens_to_add: credAmount });
 
         if (userError) throw userError;
 
         // Record transaction
         const { error: transactionError } = await supabase.from("transactions").insert({
-            user_id: userId,
+            user_id: targetUserId,
             amount: credAmount,
             type: "exchange",
             description: `Exchanged ${credAmount} CRED for ${credAmount} tokens`,
@@ -235,7 +229,7 @@ app.post("/api/cred/exchange", async (req, res) => {
 
   // ── Text-to-Speech (OpenAI) ──
   const OPENAI_TTS_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'] as const;
-  app.post("/api/tts", async (req, res) => {
+  app.post("/api/tts", aiRateLimit, async (req, res) => {
     try {
       const { text, voice, speed } = req.body;
 
@@ -286,7 +280,7 @@ app.post("/api/cred/exchange", async (req, res) => {
   });
 
   // ── Audio Transcription (Whisper) ──
-  app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
+  app.post('/api/transcribe', aiRateLimit, upload.single('audio'), async (req, res) => {
     try {
       const file = req.file;
       if (!file) return res.status(400).json({ error: 'No audio file provided' });
@@ -499,7 +493,8 @@ app.post("/api/cred/exchange", async (req, res) => {
   // Webhook-authed to keep the existing bot integration working; an
   // alternative Supabase-authed entrypoint is mounted below at
   // /api/casper/terminal/execute for the Casper operator console.
-  app.post('/api/terminal/execute', requireWebhookAuth, async (req, res) => {
+  // Auth first: anonymous traffic must not drain the shared per-IP bucket.
+  app.post('/api/terminal/execute', requireWebhookAuth, executionRateLimit, async (req, res) => {
     try {
       const { command, agentId, mode: requestedMode, timeoutMs, maxOutputBytes } = req.body ?? {};
       console.log(`[TERMINAL] Agent '${agentId}' executed: ${command}`);
@@ -560,7 +555,7 @@ app.post("/api/cred/exchange", async (req, res) => {
   // can run commands without sharing the AGENT_WEBHOOK_SECRET. Non-admin
   // users get the readonly allowlist; admin gets the elevated allowlist
   // when CASPER_SHELL_MODE=elevated is set on the server.
-  app.post('/api/casper/terminal/execute', async (req, res) => {
+  app.post('/api/casper/terminal/execute', executionRateLimit, async (req, res) => {
     try {
       const profile = await requireCasperAuth(req, res, supabase);
       if (!profile) return;
@@ -695,7 +690,7 @@ app.post("/api/cred/exchange", async (req, res) => {
     }
   });
 
-  app.post('/api/casper/integrations/execute', async (req, res) => {
+  app.post('/api/casper/integrations/execute', executionRateLimit, async (req, res) => {
     try {
       const profile = await requireCasperAuth(req, res, supabase);
       if (!profile) return;
