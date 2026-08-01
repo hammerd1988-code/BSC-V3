@@ -50,7 +50,7 @@ const DEFAULT_INSTRUCTIONS = `# Custom Casper Instructions
 #
 # Example:
 # This is a React + Express monorepo.
-# Frontend is in src/, backend is in server.unified.ts.
+# Frontend is in src/, backend is in server.ts.
 # Always run "npm run lint" before committing.
 # Tests use Vitest: "npm test"
 `;

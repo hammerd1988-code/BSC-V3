@@ -1,9 +1,9 @@
 /**
  * Shared server hardening primitives.
  *
- * Every entrypoint (server.ts, server.prod.ts, server.unified.ts) imports from
- * here so that CORS resolution, webhook authentication, rate limiting, and
- * payment-client construction cannot drift between them.
+ * CORS resolution, webhook authentication, rate limiting, and payment-client
+ * construction live here rather than in the entrypoint or route modules, so
+ * they stay identical wherever they are applied.
  */
 import crypto from 'crypto';
 import { SquareClient, SquareEnvironment } from 'square';

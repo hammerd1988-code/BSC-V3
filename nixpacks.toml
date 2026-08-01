@@ -20,4 +20,4 @@ cmds = ["npm ci --include=dev"]
 cmds = ["npm run build", "ls -la dist/"]
 
 [start]
-cmd = "npm run start:unified"
+cmd = "npm start"

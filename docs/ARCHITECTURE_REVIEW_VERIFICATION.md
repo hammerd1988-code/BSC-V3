@@ -40,8 +40,8 @@ Verified against `main` @ `8e12a33`. Baseline: `tsc --noEmit` clean, 16 test fil
 7. ✅ `0060_prevent_role_self_escalation.sql` pins `users.role` against self-service escalation; client-side role promotion removed from `AuthContext`.
 8. ✅ `.github/workflows/ci.yml` — typecheck + tests + build on every PR.
 
-### Phase 2 — Consolidate entrypoints
-Reduce to one runtime server module with environment-based branching (Vite middleware conditionally imported for dev). `server.ts` stays the canonical module that owns Express routes, webhook ingestion, WebRTC signalling, live-stream crowd state, and Socket.io handlers; `server.prod.ts` / `server.unified.ts` collapse into it.
+### Phase 2 — Consolidate entrypoints — **done**
+One runtime module: `server.ts`. `server.prod.ts` and `server.unified.ts` are deleted, and the environment difference they encoded is now an `isProd` branch — Vite middleware (dynamically imported, since `vite` is a devDependency) in development, `dist/` static serving in production. The formerly triplicated speech routes (`/api/tts`, `/api/tts/mimo`, `/api/tts/voices`, `/api/transcribe`) moved to `speechRoutes.ts`. `npm start`, `npm run dev:full`, `railway.json`, and `nixpacks.toml` all point at the one file.
 
 ### Phase 3 — Structure & hygiene
 Split `casperControlCenter.ts`, `colosseumRoutes.ts`, and `botMayhemAutonomy.ts`; add ESLint + Prettier; add a CI workflow running typecheck + tests on PRs; add pre-commit hooks; replace `console.*` with a structured logger; document the single-instance constraint (including the process-local rate limiter) or move quota enforcement to a shared store / gateway.
