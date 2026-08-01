@@ -61,7 +61,7 @@ async function captureAndEmit(
 }
 
 // Resolve the authenticated userId for this socket. The main Socket.IO
-// handler in server.unified.ts stores userId on `user:register`; we
+// handler in server.ts stores userId on `user:register`; we
 // mirror that by stashing it on socket.data.
 function getSocketUserId(socket: Socket): string | undefined {
   return (socket.data as { cobrowseUserId?: string })?.cobrowseUserId;

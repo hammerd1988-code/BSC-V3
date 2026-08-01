@@ -165,7 +165,7 @@ The Anthropic-compatible endpoint `token-plan-sgp.xiaomimimo.com/anthropic` retu
 This project is deployed on **Railway**.
 
 - Build command: `npm install && npm run build`
-- Start command: `npm run start:unified`
+- Start command: `npm start`
 - Healthcheck: `GET /api/health`
 
 Vercel is only used as the domain registrar and is not the production deployment platform for BSC-V3.

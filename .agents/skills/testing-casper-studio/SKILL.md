@@ -19,7 +19,7 @@ Casper Studio is the content creation cockpit at `/casper/studio`. It supports i
 - **Frontend:** `src/components/ContentCreationStudio.tsx` — image/video/thumbnail modes, export, upload-before-post, and composer actions.
 - **Frontend API lib:** `src/lib/runway.ts` — `requestRunwayGeneration()` and `uploadStudioAsset()` call the Express API.
 - **Backend route:** `runwayRoutes.ts` — validates Runway generation and Studio asset upload requests, uploads Studio assets into Supabase Storage.
-- **Server entries:** `server.ts`, `server.prod.ts`, and `server.unified.ts` register Runway routes and must allow large Studio upload JSON bodies.
+- **Server entry:** `server.ts` is the single entrypoint; it registers Runway routes and must allow large Studio upload JSON bodies.
 - **Feed rendering:** `src/components/Feed.tsx` and `src/components/PostCard.tsx` render published media posts.
 
 ## Local Setup
