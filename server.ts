@@ -967,8 +967,8 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
   app.get('/install.ps1', serveInstallScript('install.ps1', 'text/plain; charset=utf-8'));
 
   // Frontend: Vite dev middleware outside production, built assets in it.
-  // `vite` is a devDependency, so the import has to stay dynamic — a top-level
-  // import would crash a production install that pruned dev dependencies.
+  // Vite is only needed in development; keep this import dynamic so production
+  // installs can omit it (and to avoid paying its startup cost in prod).
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
