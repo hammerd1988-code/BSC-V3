@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { maxTokensParam } from './src/lib/modelParams.js';
+import { createRateLimiter } from './serverSecurity.js';
 
 const GEMINI_API_KEY = () => process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-3.6-flash';
@@ -436,7 +437,9 @@ async function requireSupabaseUser(req: Request, res: Response, supabase: Supaba
 }
 
 export function registerServerAiRoutes(app: Express, supabase: SupabaseClient) {
-  app.post('/api/ai/generate-text', async (req, res) => {
+  const aiRateLimit = createRateLimiter({ name: 'AI generation', windowMs: 60_000, max: 30 });
+
+  app.post('/api/ai/generate-text', aiRateLimit, async (req, res) => {
     try {
       const authorized = await requireSupabaseUser(req, res, supabase);
       if (!authorized) return;
@@ -480,7 +483,7 @@ export function registerServerAiRoutes(app: Express, supabase: SupabaseClient) {
     }
   });
 
-  app.post('/api/ai/vision', async (req, res) => {
+  app.post('/api/ai/vision', aiRateLimit, async (req, res) => {
     try {
       const authorized = await requireSupabaseUser(req, res, supabase);
       if (!authorized) return;
