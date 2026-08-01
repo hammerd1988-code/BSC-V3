@@ -1,12 +1,32 @@
+/**
+ * BSC-V3 server — the single runtime entrypoint for every environment.
+ *
+ * Serves the frontend (Vite middleware in development, built assets from dist/
+ * in production) and runs the Socket.IO signalling server for WebRTC calls,
+ * live streams, and activity events.
+ *
+ * Replaces the former server.ts / server.prod.ts / server.unified.ts trio.
+ * Those diverged: the same routes existed three times with three different
+ * auth postures, which is how /api/casper/memory ended up unauthenticated in
+ * two of them. Environment differences belong in `isProd` branches here, not
+ * in parallel files.
+ */
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import { createServer as createViteServer } from 'vite';
+import { v4 as uuidv4 } from 'uuid';
+
 import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
 import os from 'os';
 import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
 import { registerCasperControlRoutes, requireCasperAuth } from './casperControlCenter.js';
 import { registerCommentRoutes } from './commentRoutes.js';
+import { registerSpeechRoutes } from './speechRoutes.js';
+import { runCasperShell, describeAllowlist, isShellElevationEnabled, type CasperShellMode } from './casperShell.js';
+import { getAdapter, listAdapterTools, decodeIntegrationKey, CASPER_ADAPTERS } from './casperAdapters.js';
+import { initWebhookListener } from "./webhookListener.js";
 import botApi from './botApi.js';
 import { registerPushRoutes } from './pushNotifications.js';
 import { registerLiveKitRoutes } from './livekitRoutes.js';
@@ -16,12 +36,15 @@ import { registerServerAiRoutes } from './serverAi.js';
 import { registerColosseumRoutes } from './colosseumRoutes.js';
 import { initBotMayhemAutonomy, registerBotMayhemRoutes } from './botMayhemAutonomy.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
+import { registerCoBrowseSocket } from './casperCoBrowse.js';
 import { registerStripeRoutes } from './stripeRoutes.js';
 import { registerCasperRelay } from './casperRelay.js';
 import {
   assertProductionConfig,
   createRateLimiter,
+  createSquareClient,
   createWebhookAuthMiddleware,
+  getSquareLocationId,
   parseAllowedOrigins,
   resolveSocketCorsOrigin,
 } from './serverSecurity.js';
@@ -37,25 +60,31 @@ function readWorkspaceResourceSnapshot() {
   return { cpu, gpu, ram, source: 'server' as const, updatedAt: new Date().toISOString() };
 }
 
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 async function startServer() {
   const app = express();
   const isProd = process.env.NODE_ENV === 'production';
-  // Trust the first proxy hop (Railway, Render, etc.) so that req.ip reflects
-  // the real client IP rather than the load-balancer's address. This is required
-  // for per-client rate limiting in casperRelay to work correctly.
+  // Trust the first proxy hop (Railway) so req.ip reflects the real client IP.
   app.set('trust proxy', 1);
   const allowedOrigins = parseAllowedOrigins();
   assertProductionConfig({ isProd, allowedOrigins });
   const httpServer = createServer(app);
+
   const io = new Server(httpServer, {
     cors: {
       origin: resolveSocketCorsOrigin(allowedOrigins, isProd),
+      methods: ['GET', 'POST'],
+      credentials: true,
     },
+    pingTimeout: 60000,
+    pingInterval: 25000,
   });
 
-  // Express runs on 3001 in dev (Vite runs separately on 5173).
-  // In production, PORT env var is set by the host.
   const PORT = Number(process.env.PORT) || 3001;
+  const distPath = path.join(__dirname, 'dist');
 
   console.log('[LiveKit] Configuration:', {
     url: process.env.LIVEKIT_URL ? '✓ set' : '✗ missing',
@@ -63,13 +92,29 @@ async function startServer() {
     apiSecret: process.env.LIVEKIT_API_SECRET ? '✓ set' : '✗ missing',
   });
 
-  // Middleware for parsing JSON bodies (skip Stripe webhook — needs raw body)
+  // Middleware (skip Stripe webhook — needs raw body for signature verification)
   app.use((req, res, next) => {
     if (req.path === '/api/stripe/webhook') return next();
     express.json({ limit: '12mb' })(req, res, next);
   });
 
+  // CORS middleware for REST endpoints, including Bot API Bearer-token calls.
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(204);
+    }
+    next();
+  });
+
   // Bot API routes for external agents such as Sapphire.
+  // These must be mounted in the Railway entrypoint before static SPA fallback handling.
   app.use('/api/bot', botApi);
   registerPushRoutes(app, supabase);
   registerLiveKitRoutes(app, supabase);
@@ -81,23 +126,111 @@ async function startServer() {
   registerColosseumRoutes(app, supabase);
   registerBotMayhemRoutes(app, supabase);
   registerStripeRoutes(app, supabase);
-  registerCasperRelay(io, app, supabase);
 
   const requireWebhookAuth = createWebhookAuthMiddleware({ isProd });
-  const aiRateLimit = createRateLimiter({ name: 'AI generation', windowMs: 60_000, max: 30 });
 
-  // API Routes
-  app.get('/api/health', (req, res) => {
-    res.json({
-      status: 'ok',
-      environment: process.env.NODE_ENV || 'development',
-      uptimeSeconds: Math.round(process.uptime()),
-      socketCorsConfigured: allowedOrigins.length > 0 || !isProd,
-      botApiMounted: true,
-      runtimeEntrypoint: 'server.ts',
-      timestamp: new Date().toISOString(),
-    });
-  });
+  // Rate limiters for endpoints that cost money or execute code on the host.
+  const aiRateLimit = createRateLimiter({ name: 'AI generation', windowMs: 60_000, max: 30 });
+  const paymentRateLimit = createRateLimiter({ name: 'payments', windowMs: 60_000, max: 10 });
+  const executionRateLimit = createRateLimiter({ name: 'command execution', windowMs: 60_000, max: 20 });
+
+  // ── Square Payment Processing ──
+  app.post('/api/square/process-payment', paymentRateLimit, async (req, res) => {
+    const { sourceId, amount, userId, credAmount } = req.body;
+
+    if (!sourceId || !amount || !userId || !credAmount) {
+        return res.status(400).send({ message: 'Missing required payment details.' });
+    }
+
+    const profile = await requireCasperAuth(req, res, supabase);
+    if (!profile) return;
+    if (profile.role !== 'admin' && String(userId) !== profile.id) {
+        return res.status(403).send({ message: 'You can only purchase CRED for your own account.' });
+    }
+    // JSON bodies are untyped; keep ledger rows keyed by a string id.
+    const targetUserId = String(userId);
+
+    try {
+        const squareClient = createSquareClient();
+
+        const paymentResponse = await squareClient.payments.create({
+            sourceId: sourceId,
+            amountMoney: {
+                amount: BigInt(amount), // amount is already in cents
+                currency: 'USD',
+            },
+            locationId: getSquareLocationId(),
+            idempotencyKey: uuidv4(),
+        });
+
+        const payment = paymentResponse.payment;
+        if (payment && payment.status === 'COMPLETED') {
+            // Update user's CRED balance in Supabase
+            const { error: userError } = await supabase
+                .rpc('increment_cred_balance', { p_user_id: targetUserId, p_amount: credAmount });
+
+            if (userError) throw userError;
+
+            // Record transaction
+            const { error: transactionError } = await supabase.from('transactions').insert({
+                user_id: targetUserId,
+                amount: credAmount,
+                type: 'purchase',
+                description: `Purchased ${credAmount} CRED via Square`,
+            });
+
+            if (transactionError) throw transactionError;
+
+            res.status(200).send({ success: true, payment });
+        } else {
+            res.status(400).send({ success: false, message: 'Payment not completed.' });
+        }
+    } catch (error) {
+        console.error('Square payment error:', error);
+        res.status(500).send({ message: 'Internal server error during payment processing.' });
+    }
+});
+
+app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
+    const { userId, credAmount } = req.body;
+
+    if (!userId || !credAmount || credAmount <= 0) {
+        return res.status(400).send({ message: "Missing required exchange details or invalid amount." });
+    }
+
+    const profile = await requireCasperAuth(req, res, supabase);
+    if (!profile) return;
+    if (profile.role !== 'admin' && String(userId) !== profile.id) {
+        return res.status(403).send({ message: 'You can only exchange CRED from your own account.' });
+    }
+    // JSON bodies are untyped; keep ledger rows keyed by a string id.
+    const targetUserId = String(userId);
+
+    try {
+        // Deduct CRED and add tokens (assuming 1 CRED = 1 token for now)
+        const { data: userUpdate, error: userError } = await supabase
+            .rpc("exchange_cred_for_tokens", { user_id: targetUserId, cred_to_deduct: credAmount, tokens_to_add: credAmount });
+
+        if (userError) throw userError;
+
+        // Record transaction
+        const { error: transactionError } = await supabase.from("transactions").insert({
+            user_id: targetUserId,
+            amount: credAmount,
+            type: "exchange",
+            description: `Exchanged ${credAmount} CRED for ${credAmount} tokens`,
+        });
+
+        if (transactionError) throw transactionError;
+
+        res.status(200).send({ success: true, message: "CRED exchanged successfully." });
+    } catch (error) {
+        console.error("CRED exchange error:", error);
+        res.status(500).send({ message: "Internal server error during CRED exchange." });
+    }
+});
+
+  registerSpeechRoutes(app, aiRateLimit);
 
   // ── Casper Memory Endpoints ──
   app.get('/api/casper/memory', async (req, res) => {
@@ -110,7 +243,7 @@ async function startServer() {
         return res.json({ stateModifier: '', relevantMemories: '' });
       }
       const stateModifier = await casperMemory.getStatePromptModifier();
-      const relevantMemories = await casperMemory.getRelevantMemories(targetUserId, 15);
+      const relevantMemories = await casperMemory.getRelevantMemories(targetUserId, 5);
       res.json({ stateModifier, relevantMemories });
     } catch (error) {
       console.error('Error fetching Casper memory:', error);
@@ -131,10 +264,10 @@ async function startServer() {
       if (profile.role !== 'admin' && String(userId) !== profile.id) {
         return res.status(403).json({ error: 'You can only store Casper memory for your own profile.' });
       }
-      // JSON bodies are untyped; the memory store keys rows by a string id.
       const targetUserId = profile.role === 'admin' ? String(userId) : profile.id;
       if (casperMemory) {
-        // Store the full exchange and extract facts (preferences, project/release, workspace context).
+        // Store the full exchange for conversation continuity and extract
+        // facts (preferences, project/release details, workspace context).
         casperMemory.storeConversationExchange?.(targetUserId, userMessage, casperReply)?.catch?.(() => {});
         await casperMemory.extractConversationMemory(targetUserId, userMessage, casperReply);
       }
@@ -145,174 +278,399 @@ async function startServer() {
     }
   });
 
-  // ── Text-to-Speech (OpenAI) ──
-  const OPENAI_TTS_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'] as const;
-  app.post('/api/tts', aiRateLimit, async (req, res) => {
+  // Health check
+  app.get('/api/health', (req, res) => {
+    const distExists = fs.existsSync(distPath);
+    res.json({
+      status: 'ok',
+      service: 'bsc-v3-unified',
+      version: '3.0.0',
+      environment: process.env.NODE_ENV || 'development',
+      uptimeSeconds: Math.round(process.uptime()),
+      connectedSockets: io.engine.clientsCount,
+      socketCorsConfigured: allowedOrigins.length > 0 || !isProd,
+      allowedOrigins: isProd ? '[redacted]' : allowedOrigins,
+      frontendServed: distExists,
+      distPath: distPath,
+      botApiMounted: true,
+      runtimeEntrypoint: 'server.ts',
+      botApiCommitMarker: 'bot-api-mounted-2026-04-29',
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // Public gladiators list — used by BotChat and other pages that need the
+  // full gladiator roster. Uses service-role to bypass RLS so it works
+  // regardless of the caller's auth state (expired JWT, anon, etc.).
+  app.get('/api/gladiators', async (_req, res) => {
     try {
-      const { text, voice, speed } = req.body;
-
-      if (!text || typeof text !== 'string') {
-        return res.status(400).json({ error: 'text is required' });
+      const { data, error } = await supabase
+        .from('gladiators')
+        .select('*')
+        .order('name');
+      if (error) {
+        console.error('[api/gladiators]', error.message);
+        return res.status(500).json({ success: false, error: error.message });
       }
-
-      const apiKey = process.env.OPENAI_TTS_KEY || process.env.OPENAI_API_KEY;
-      if (!apiKey) {
-        console.warn('[tts] OPENAI_TTS_KEY/OPENAI_API_KEY is not configured');
-        return res.status(503).json({ error: 'OpenAI TTS unavailable' });
-      }
-
-      const input = text.slice(0, 4096);
-      const speechSpeed = typeof speed === 'number' ? Math.max(0.25, Math.min(4.0, speed)) : 1.05;
-      const selectedVoice = typeof voice === 'string' && OPENAI_TTS_VOICES.includes(voice as any) ? voice : 'ash';
-
-      const response = await fetch('https://api.openai.com/v1/audio/speech', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'tts-1',
-          voice: selectedVoice,
-          input,
-          speed: speechSpeed,
-          response_format: 'mp3',
-        }),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        console.warn(`[tts] OpenAI returned ${response.status}: ${errText.slice(0, 300)}`);
-        return res.status(503).json({ error: 'OpenAI TTS unavailable' });
-      }
-
-      const audioBuffer = Buffer.from(await response.arrayBuffer());
-      res.set('Content-Type', 'audio/mpeg');
-      res.set('Content-Length', String(audioBuffer.byteLength));
-      res.set('Cache-Control', 'no-cache');
-      return res.send(audioBuffer);
-    } catch (e: any) {
-      console.error('[tts] Error:', e.message);
-      return res.status(500).json({ error: e.message });
+      res.json({ success: true, gladiators: data ?? [] });
+    } catch (err: any) {
+      console.error('[api/gladiators]', err);
+      res.status(500).json({ success: false, error: err.message ?? 'Failed to fetch gladiators' });
     }
   });
 
-  // ── Text-to-Speech (Mimo) ──
-  app.post('/api/tts/mimo', aiRateLimit, async (req, res) => {
+  // Public bot profiles — companion to /api/gladiators for BotChat.
+  app.get('/api/bot-profiles', async (_req, res) => {
     try {
-      const { text, voice, speed } = req.body;
-
-      if (!text || typeof text !== 'string') {
-        return res.status(400).json({ error: 'text is required' });
+      const { data, error } = await supabase
+        .from('bot_gladiator_profiles')
+        .select('gladiator_id,persona_username,display_name,gladiator_class,expertise,battle_style,signature_moves,pre_battle_lines,victory_lines,defeat_lines,ai_prompt_style,ability_profile,personality_style,avatar_prompt,emotional_hook');
+      if (error && error.code !== '42P01') {
+        console.error('[api/bot-profiles]', error.message);
+        return res.status(500).json({ success: false, error: error.message });
       }
-
-      const apiKey = process.env.MIMO_API_KEY;
-      const baseUrl = process.env.MIMO_API_BASE_URL || 'https://token-plan-sgp.xiaomimimo.com/v1';
-      const model = process.env.MIMO_TTS_MODEL || 'mimo-v2.5-tts';
-
-      if (!apiKey) {
-        console.warn('[tts/mimo] MIMO_API_KEY is not configured');
-        return res.status(503).json({ error: 'Mimo TTS unavailable — API key not configured' });
-      }
-
-      const input = text.slice(0, 4096);
-      const speechSpeed = typeof speed === 'number' ? Math.max(0.25, Math.min(4.0, speed)) : 1.0;
-
-      const response = await fetch(`${baseUrl}/audio/speech`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model,
-          voice: voice || 'alloy',
-          input,
-          speed: speechSpeed,
-          response_format: 'mp3',
-        }),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        console.warn(`[tts/mimo] Mimo returned ${response.status}: ${errText.slice(0, 300)}`);
-        return res.status(503).json({ error: `Mimo TTS error: ${response.status}` });
-      }
-
-      const audioBuffer = Buffer.from(await response.arrayBuffer());
-      res.set('Content-Type', 'audio/mpeg');
-      res.set('Content-Length', String(audioBuffer.byteLength));
-      res.set('Cache-Control', 'no-cache');
-      return res.send(audioBuffer);
-    } catch (e: any) {
-      console.error('[tts/mimo] Error:', e.message);
-      return res.status(500).json({ error: e.message });
+      res.json({ success: true, profiles: data ?? [] });
+    } catch (err: any) {
+      console.error('[api/bot-profiles]', err);
+      res.status(500).json({ success: false, error: err.message ?? 'Failed to fetch bot profiles' });
     }
   });
 
-  // ── TTS voices available ──
-  app.get('/api/tts/voices', (req, res) => {
-    const voices: Array<{ id: string; label: string; provider: string; description: string; tag?: string }> = [
-      { id: 'browser', label: 'Browser Native', provider: 'browser', description: 'Built-in browser TTS (free, no API key)' },
-    ];
-    if (process.env.MIMO_API_KEY) {
-      voices.push(
-        { id: 'mimo-alloy', label: 'Mimo — Alloy', provider: 'mimo', description: 'Mimo v2.5 TTS — Alloy voice' },
-        { id: 'mimo-echo', label: 'Mimo — Echo', provider: 'mimo', description: 'Mimo v2.5 TTS — Echo voice' },
-        { id: 'mimo-fable', label: 'Mimo — Fable', provider: 'mimo', description: 'Mimo v2.5 TTS — Fable voice' },
-        { id: 'mimo-onyx', label: 'Mimo — Onyx', provider: 'mimo', description: 'Mimo v2.5 TTS — Onyx voice' },
-        { id: 'mimo-nova', label: 'Mimo — Nova', provider: 'mimo', description: 'Mimo v2.5 TTS — Nova voice' },
-        { id: 'mimo-shimmer', label: 'Mimo — Shimmer', provider: 'mimo', description: 'Mimo v2.5 TTS — Shimmer voice' },
-      );
+  // Programmatic Terminal API for Bots and Casper. Real shell execution
+  // via casperShell.runCasperShell — strict allowlist, output cap, timeout.
+  // Webhook-authed to keep the existing bot integration working; an
+  // alternative Supabase-authed entrypoint is mounted below at
+  // /api/casper/terminal/execute for the Casper operator console.
+  // Auth first: anonymous traffic must not drain the shared per-IP bucket.
+  app.post('/api/terminal/execute', requireWebhookAuth, executionRateLimit, async (req, res) => {
+    try {
+      const { command, agentId, mode: requestedMode, timeoutMs, maxOutputBytes } = req.body ?? {};
+      console.log(`[TERMINAL] Agent '${agentId}' executed: ${command}`);
+
+      if (!command || !agentId) {
+        return res.status(400).json({ success: false, error: 'Missing required fields: command, agentId' });
+      }
+
+      const mode: CasperShellMode = requestedMode === 'elevated' && isShellElevationEnabled()
+        ? 'elevated'
+        : 'readonly';
+
+      const result = await runCasperShell(String(command), {
+        mode,
+        timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : undefined,
+        maxOutputBytes: typeof maxOutputBytes === 'number' ? maxOutputBytes : undefined,
+      });
+
+      const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim()
+        || (result.ok ? '(no output)' : result.reason || `command exited with code ${result.exitCode}`);
+
+      // Broadcast the terminal activity to clients so they can see bots working
+      io.emit('activity:notification', {
+        type: 'terminal_execution',
+        data: {
+          agentId,
+          command,
+          output,
+          ok: result.ok,
+          exitCode: result.exitCode,
+          truncated: result.truncated,
+          mode,
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      res.status(200).json({
+        success: result.ok,
+        output,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+        signal: result.signal,
+        durationMs: result.durationMs,
+        truncated: result.truncated,
+        mode,
+        reason: result.reason ?? null,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error('Terminal API error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error' });
     }
-    if (process.env.OPENAI_TTS_KEY || process.env.OPENAI_API_KEY) {
-      voices.push(
-        { id: 'openai-ash', label: 'OpenAI — Ash', provider: 'openai', description: 'OpenAI TTS-1 — Ash (Casper\'s voice)', tag: 'casper' },
-        { id: 'openai-alloy', label: 'OpenAI — Alloy', provider: 'openai', description: 'OpenAI TTS-1 — Alloy voice' },
-        { id: 'openai-ballad', label: 'OpenAI — Ballad', provider: 'openai', description: 'OpenAI TTS-1 — Ballad voice' },
-        { id: 'openai-coral', label: 'OpenAI — Coral', provider: 'openai', description: 'OpenAI TTS-1 — Coral voice' },
-        { id: 'openai-echo', label: 'OpenAI — Echo', provider: 'openai', description: 'OpenAI TTS-1 — Echo voice' },
-        { id: 'openai-fable', label: 'OpenAI — Fable', provider: 'openai', description: 'OpenAI TTS-1 — Fable voice' },
-        { id: 'openai-nova', label: 'OpenAI — Nova', provider: 'openai', description: 'OpenAI TTS-1 — Nova voice' },
-        { id: 'openai-onyx', label: 'OpenAI — Onyx', provider: 'openai', description: 'OpenAI TTS-1 — Onyx voice' },
-        { id: 'openai-sage', label: 'OpenAI — Sage', provider: 'openai', description: 'OpenAI TTS-1 — Sage voice' },
-        { id: 'openai-shimmer', label: 'OpenAI — Shimmer', provider: 'openai', description: 'OpenAI TTS-1 — Shimmer voice' },
-        { id: 'openai-verse', label: 'OpenAI — Verse', provider: 'openai', description: 'OpenAI TTS-1 — Verse voice' },
-      );
+  });
+
+  // Casper-operator terminal endpoint. Same shell engine as the bot
+  // webhook, but Supabase-authed so an admin signed in to the dashboard
+  // can run commands without sharing the AGENT_WEBHOOK_SECRET. Non-admin
+  // users get the readonly allowlist; admin gets the elevated allowlist
+  // when CASPER_SHELL_MODE=elevated is set on the server.
+  app.post('/api/casper/terminal/execute', executionRateLimit, async (req, res) => {
+    try {
+      const profile = await requireCasperAuth(req, res, supabase);
+      if (!profile) return;
+
+      const { command, mode: requestedMode, timeoutMs, maxOutputBytes } = req.body ?? {};
+      if (!command || typeof command !== 'string') {
+        return res.status(400).json({ success: false, error: 'A command string is required.' });
+      }
+
+      const isAdmin = profile.role === 'admin';
+      const wantsElevated = requestedMode === 'elevated';
+      const mode: CasperShellMode = wantsElevated && isAdmin && isShellElevationEnabled()
+        ? 'elevated'
+        : 'readonly';
+
+      const result = await runCasperShell(command, {
+        mode,
+        timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : undefined,
+        maxOutputBytes: typeof maxOutputBytes === 'number' ? maxOutputBytes : undefined,
+      });
+
+      try {
+        await supabase.from('casper_activity_log').insert({
+          user_id: profile.id,
+          action: 'terminal_execute',
+          details: {
+            mode,
+            exit_code: result.exitCode,
+            duration_ms: result.durationMs,
+            truncated: result.truncated,
+            ok: result.ok,
+            reason: result.reason ?? null,
+          },
+          action_type: 'terminal_execute',
+          description: `Casper terminal: ${command.slice(0, 200)}`,
+          metadata: {
+            mode,
+            exit_code: result.exitCode,
+            duration_ms: result.durationMs,
+            truncated: result.truncated,
+            ok: result.ok,
+            reason: result.reason ?? null,
+          },
+          ...(profile.id ? { actor_id: profile.id } : {}),
+        });
+      } catch (logErr) {
+        console.warn('[casper-terminal] activity log skipped:', logErr);
+      }
+
+      io.emit('activity:notification', {
+        type: 'terminal_execution',
+        data: {
+          actorId: profile.id,
+          command,
+          output: [result.stdout, result.stderr].filter(Boolean).join('\n').trim(),
+          ok: result.ok,
+          exitCode: result.exitCode,
+          truncated: result.truncated,
+          mode,
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      res.status(200).json({
+        success: result.ok,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+        signal: result.signal,
+        durationMs: result.durationMs,
+        truncated: result.truncated,
+        mode,
+        reason: result.reason ?? null,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error('[casper-terminal] error:', error);
+      res.status(500).json({ success: false, error: (error as Error).message || 'Casper terminal execution failed.' });
     }
-    res.json({ voices });
+  });
+
+  // Public introspection endpoint so the operator console can show
+  // exactly which binaries and patterns are allowed before the user
+  // hits Enter. No auth required since this returns no secrets.
+  app.get('/api/casper/terminal/allowlist', async (_req, res) => {
+    res.json({
+      success: true,
+      readonly: describeAllowlist('readonly'),
+      elevated: describeAllowlist('elevated'),
+      elevationEnabled: isShellElevationEnabled(),
+    });
+  });
+
+  // Casper integration adapters. Until now, casper_integrations was just
+  // a registry — Casper stored API keys but had no way to call any of
+  // the third-party APIs. These endpoints make integrations real:
+  //   GET  /api/casper/integrations/tools      — list tool catalogue
+  //   GET  /api/casper/integrations/connected  — list user-connected adapters
+  //   POST /api/casper/integrations/execute    — invoke a tool
+  app.get('/api/casper/integrations/tools', async (_req, res) => {
+    res.json({
+      success: true,
+      adapters: listAdapterTools(),
+    });
+  });
+
+  app.get('/api/casper/integrations/connected', async (req, res) => {
+    try {
+      const profile = await requireCasperAuth(req, res, supabase);
+      if (!profile) return;
+      const { data, error } = await supabase
+        .from('casper_integrations')
+        .select('integration_key, enabled, status, connected_at, config, error_message')
+        .eq('user_id', profile.id)
+        .eq('enabled', true)
+        .eq('status', 'connected');
+      if (error) {
+        return res.status(500).json({ success: false, error: error.message });
+      }
+      const supported = (data ?? []).filter((row) => Boolean(CASPER_ADAPTERS[row.integration_key as string]));
+      res.json({
+        success: true,
+        connected: supported.map((row) => ({
+          integration_key: row.integration_key,
+          status: row.status,
+          connected_at: row.connected_at,
+          tools: CASPER_ADAPTERS[row.integration_key as string].tools.map((t) => ({ name: t.name, description: t.description })),
+        })),
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || 'Failed to load connected integrations.' });
+    }
+  });
+
+  app.post('/api/casper/integrations/execute', executionRateLimit, async (req, res) => {
+    try {
+      const profile = await requireCasperAuth(req, res, supabase);
+      if (!profile) return;
+
+      const { integrationKey, toolName, params } = req.body ?? {};
+      if (!integrationKey || typeof integrationKey !== 'string') {
+        return res.status(400).json({ success: false, error: 'integrationKey is required.' });
+      }
+      if (!toolName || typeof toolName !== 'string') {
+        return res.status(400).json({ success: false, error: 'toolName is required.' });
+      }
+
+      const adapter = getAdapter(integrationKey);
+      if (!adapter) {
+        return res.status(404).json({ success: false, error: `No adapter registered for integration "${integrationKey}".` });
+      }
+      const tool = adapter.tools.find((t) => t.name === toolName);
+      if (!tool) {
+        return res.status(404).json({ success: false, error: `Tool "${toolName}" is not exposed by ${adapter.name}.` });
+      }
+
+      const { data: row, error: lookupError } = await supabase
+        .from('casper_integrations')
+        .select('integration_key, enabled, status, api_key_encrypted, config')
+        .eq('user_id', profile.id)
+        .eq('integration_key', integrationKey)
+        .maybeSingle();
+
+      if (lookupError) {
+        return res.status(500).json({ success: false, error: lookupError.message });
+      }
+      if (!row || !row.enabled || row.status !== 'connected') {
+        return res.status(409).json({ success: false, error: `${adapter.name} is not connected for this user.` });
+      }
+
+      const apiKey = decodeIntegrationKey(row.api_key_encrypted as string | null);
+      if (!apiKey) {
+        return res.status(409).json({ success: false, error: `${adapter.name} is connected but no API key is stored.` });
+      }
+
+      const result = await adapter.execute(
+        toolName,
+        (params && typeof params === 'object' ? params : {}) as Record<string, any>,
+        { apiKey, config: (row.config as Record<string, any> | null) ?? null },
+      );
+
+      try {
+        await supabase.from('casper_activity_log').insert({
+          user_id: profile.id,
+          action: 'integration_execute',
+          details: {
+            integration_key: integrationKey,
+            tool_name: toolName,
+            ok: result.ok,
+            status: result.status ?? null,
+            duration_ms: result.durationMs ?? null,
+            error: result.error ?? null,
+          },
+          action_type: 'integration_execute',
+          description: `Casper integration ${integrationKey}.${toolName}`,
+          metadata: {
+            integration_key: integrationKey,
+            tool_name: toolName,
+            ok: result.ok,
+            status: result.status ?? null,
+            duration_ms: result.durationMs ?? null,
+            error: result.error ?? null,
+          },
+          ...(profile.id ? { actor_id: profile.id } : {}),
+        });
+      } catch (logErr) {
+        console.warn('[casper-integrations] activity log skipped:', logErr);
+      }
+
+      io.emit('activity:notification', {
+        type: 'integration_execution',
+        data: {
+          actorId: profile.id,
+          integrationKey,
+          toolName,
+          ok: result.ok,
+          status: result.status ?? null,
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      // Always wrap upstream failures in 502 Bad Gateway so the response
+      // status describes Casper's auth domain only. Forwarding the upstream
+      // 401 (e.g. expired GitHub PAT) would conflate it with Casper auth
+      // failure and could trigger an unwanted Supabase session refresh in
+      // any future status-code-based middleware. The original upstream
+      // status is preserved in the JSON `status` field for the client to
+      // surface the right diagnostic.
+      res.status(result.ok ? 200 : 502).json({
+        success: result.ok,
+        integrationKey,
+        toolName,
+        data: result.data ?? null,
+        error: result.error ?? null,
+        status: result.status ?? null,
+        durationMs: result.durationMs ?? null,
+      });
+    } catch (error: any) {
+      console.error('[casper-integrations] error:', error);
+      res.status(500).json({ success: false, error: error?.message || 'Casper integration call failed.' });
+    }
   });
 
   // Webhook endpoint for AI agents
   app.post('/api/webhooks/agent', requireWebhookAuth, (req, res) => {
     try {
       const { event, data, agentId } = req.body;
-      
       console.log(`[WEBHOOK] Received event '${event}' from agent '${agentId}'`);
 
-      // Basic validation
       if (!event || !agentId) {
         return res.status(400).json({ success: false, error: 'Missing required fields: event, agentId' });
       }
 
-      // Process different agent events
       switch (event) {
         case 'transmission':
-          // Handle incoming transmission from an external agent
           io.emit('activity:notification', {
             type: 'agent_transmission',
             data: { agentId, ...data, timestamp: new Date().toISOString() }
           });
           break;
         case 'post_created':
-          // Handle new post from an external agent
           io.emit('activity:notification', {
             type: 'post',
             data: { author: { displayName: agentId, type: 'bot' }, ...data, timestamp: new Date().toISOString() }
           });
           break;
         case 'status_update':
-          // Handle agent status change
           console.log(`Agent ${agentId} status updated:`, data.status);
           io.emit('activity:notification', {
             type: 'agent_status',
@@ -335,7 +693,6 @@ async function startServer() {
   app.post('/api/webhooks/jobs', requireWebhookAuth, (req, res) => {
     try {
       const { action, jobId, agentId, result, proofOfWork } = req.body;
-      
       console.log(`[WEBHOOK] Job action '${action}' for job '${jobId}' from agent '${agentId}'`);
 
       if (!action || !jobId || !agentId) {
@@ -344,22 +701,13 @@ async function startServer() {
 
       switch (action) {
         case 'claim':
-          io.emit('activity:notification', {
-            type: 'job_claimed',
-            data: { jobId, agentId, timestamp: new Date().toISOString() }
-          });
+          io.emit('activity:notification', { type: 'job_claimed', data: { jobId, agentId, timestamp: new Date().toISOString() } });
           break;
         case 'submit':
-          io.emit('activity:notification', {
-            type: 'job_submitted',
-            data: { jobId, agentId, result, proofOfWork, timestamp: new Date().toISOString() }
-          });
+          io.emit('activity:notification', { type: 'job_submitted', data: { jobId, agentId, result, proofOfWork, timestamp: new Date().toISOString() } });
           break;
         case 'abandon':
-          io.emit('activity:notification', {
-            type: 'job_abandoned',
-            data: { jobId, agentId, timestamp: new Date().toISOString() }
-          });
+          io.emit('activity:notification', { type: 'job_abandoned', data: { jobId, agentId, timestamp: new Date().toISOString() } });
           break;
         default:
           console.log(`Unhandled job action: ${action}`);
@@ -373,9 +721,11 @@ async function startServer() {
     }
   });
 
+  // =========================================================================
   // Real-time state
+  // =========================================================================
   const liveStreams = new Map<string, { username: string; displayName: string; avatarUrl: string; crowdSize: number }>();
-  const userToStream = new Map<string, string>(); // socketId -> streamId
+  const userToStream = new Map<string, string>();
   const connectedUsers = new Map<string, string>(); // userId -> socketId
   const workspaceStates = new Map<string, { assets: any[]; checkpoints: any[]; activity: any[] }>();
   const workspaceKey = (data: any) => `${data?.userId || 'guest'}:${data?.projectId || 'casper-agentic-workspace'}`;
@@ -384,12 +734,26 @@ async function startServer() {
     return workspaceStates.get(key)!;
   };
 
+  // Co-browse: register Casper shared browser control events
+  registerCoBrowseSocket(io, supabase);
+
+  // Casper CLI relay: /relay namespace for daemons + REST control plane
+  registerCasperRelay(io, app, supabase);
+
   io.on('connection', (socket) => {
-    console.log('User connected:', socket.id);
+    console.log(`[socket] Connected: ${socket.id} (total: ${io.engine.clientsCount})`);
     let workspaceResourceTimer: ReturnType<typeof setInterval> | null = null;
 
+    // ---- User registration (matches client CallContext.tsx `user:register`) ----
     socket.on('user:register', (userId: string) => {
       connectedUsers.set(userId, socket.id);
+      console.log(`[socket] Registered user ${userId} -> ${socket.id}`);
+    });
+
+    // Legacy alias — keep backward compatibility
+    socket.on('user:online', (userId: string) => {
+      connectedUsers.set(userId, socket.id);
+      console.log(`[socket] User online ${userId} -> ${socket.id}`);
     });
 
     // Initial sync
@@ -398,7 +762,7 @@ async function startServer() {
       .sort((a, b) => b.crowdSize - a.crowdSize)
       .slice(0, 10));
 
-    // Casper Studio Live Project State events
+    // ---- Casper Studio Live Project State events ----
     socket.on('workspace:join', (data) => {
       const key = workspaceKey(data);
       const room = `workspace:${key}`;
@@ -442,7 +806,7 @@ async function startServer() {
       }, 2500);
     });
 
-    // WebRTC Signaling Events
+    // ---- WebRTC Signaling Events ----
     socket.on('call:initiate', (data) => {
       const targetSocketId = connectedUsers.get(data.targetUserId);
       if (targetSocketId) {
@@ -461,10 +825,7 @@ async function startServer() {
     socket.on('call:accept', (data) => {
       const targetSocketId = connectedUsers.get(data.callerId);
       if (targetSocketId) {
-        io.to(targetSocketId).emit('call:accepted', {
-          answer: data.answer,
-          roomName: data.roomName
-        });
+        io.to(targetSocketId).emit('call:accepted', { answer: data.answer, roomName: data.roomName });
       }
     });
 
@@ -478,18 +839,14 @@ async function startServer() {
     socket.on('call:ice-candidate', (data) => {
       const targetSocketId = connectedUsers.get(data.targetUserId);
       if (targetSocketId) {
-        io.to(targetSocketId).emit('call:ice-candidate', {
-          candidate: data.candidate
-        });
+        io.to(targetSocketId).emit('call:ice-candidate', { candidate: data.candidate });
       }
     });
 
     socket.on('call:filter', (data) => {
       const targetSocketId = connectedUsers.get(data.targetUserId);
       if (targetSocketId) {
-        io.to(targetSocketId).emit('call:filter', {
-          filter: data.filter
-        });
+        io.to(targetSocketId).emit('call:filter', { filter: data.filter });
       }
     });
 
@@ -500,7 +857,7 @@ async function startServer() {
       }
     });
 
-    // Post/Like/Comment events
+    // ---- Post/Like/Comment events ----
     socket.on('post:create', (post) => {
       socket.broadcast.emit('activity:notification', { type: 'post', data: post });
     });
@@ -514,18 +871,17 @@ async function startServer() {
     });
 
     socket.on('user:follow', (data) => {
-      // data: { follower: User, following: User }
-      socket.broadcast.emit('activity:notification', { 
-        type: 'follow', 
-        data: { 
+      socket.broadcast.emit('activity:notification', {
+        type: 'follow',
+        data: {
           displayName: data.follower.displayName,
           targetName: data.following.displayName,
           avatarUrl: data.follower.avatarUrl
-        } 
+        }
       });
     });
 
-    // Live Streaming events
+    // ---- Live Streaming events ----
     socket.on('stream:start', (userData) => {
       liveStreams.set(socket.id, { ...userData, crowdSize: 0 });
       broadcastCrowds();
@@ -557,11 +913,11 @@ async function startServer() {
       }
     });
 
+    // ---- Disconnect cleanup ----
     socket.on('disconnect', () => {
-      console.log('User disconnected:', socket.id);
+      console.log(`[socket] Disconnected: ${socket.id} (total: ${io.engine.clientsCount})`);
       if (workspaceResourceTimer) clearInterval(workspaceResourceTimer);
-      
-      // Remove from connected users
+
       for (const [userId, socketId] of connectedUsers.entries()) {
         if (socketId === socket.id) {
           connectedUsers.delete(userId);
@@ -569,13 +925,11 @@ async function startServer() {
         }
       }
 
-      // If user was streaming, stop it
       if (liveStreams.has(socket.id)) {
         liveStreams.delete(socket.id);
         broadcastCrowds();
       }
 
-      // If user was in a crowd, leave it
       const streamId = userToStream.get(socket.id);
       if (streamId) {
         const stream = liveStreams.get(streamId);
@@ -596,31 +950,72 @@ async function startServer() {
     }
   });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== 'production') {
+  // Casper CLI install scripts — must be registered before the SPA fallback so
+  // `curl https://bloodsweatcode.org/install.sh | sh` gets the script, not index.html.
+  const serveInstallScript = (file: string, contentType: string) =>
+    (_req: express.Request, res: express.Response) => {
+      // Pin to a bare filename inside scripts/ — defence-in-depth against path traversal.
+      const scriptPath = path.join(__dirname, 'scripts', path.basename(file));
+      if (!fs.existsSync(scriptPath)) {
+        return res.status(404).type('text/plain').send(`# ${file} not found`);
+      }
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.send(fs.readFileSync(scriptPath, 'utf8'));
+    };
+  app.get('/install.sh', serveInstallScript('install.sh', 'text/x-shellscript; charset=utf-8'));
+  app.get('/install.ps1', serveInstallScript('install.ps1', 'text/plain; charset=utf-8'));
+
+  // Frontend: Vite dev middleware outside production, built assets in it.
+  // Vite is only needed in development; keep this import dynamic so production
+  // installs can omit it (and to avoid paying its startup cost in prod).
+  if (!isProd) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    console.log('[server] Serving frontend through Vite dev middleware');
+  } else if (fs.existsSync(distPath)) {
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    // SPA fallback — must be last route, only for non-API/non-socket paths
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
+        return next();
+      }
       res.sendFile(path.join(distPath, 'index.html'));
     });
+    console.log(`[server] Serving frontend from ${distPath}`);
+  } else {
+    console.log('[server] No dist/ folder found — running in signaling-only mode');
   }
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);
     httpServer.once('listening', () => {
-      console.log(`[server] Express + Socket.io listening on http://localhost:${PORT}`);
-      initCasperAutonomy(); // Start Casper Autonomy on server start
-      initBotMayhemAutonomy(); // Start Bot Mayhem Autonomy on server start
+      console.log(`[server] BSC-V3 server listening on port ${PORT}`);
+      console.log('[server] Bot API mounted at /api/bot');
+      console.log(`[server] Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`[server] CORS origins: ${allowedOrigins.length > 0 ? allowedOrigins.join(', ') : (isProd ? 'NONE (blocked)' : 'ALL (*)')}`);
+      console.log(`[server] Transcription providers: ${[
+        process.env.VITE_AI_API_KEY ? 'proxy' : null,
+        process.env.OPENAI_API_KEY ? 'openai' : null,
+        process.env.GROQ_API_KEY ? 'groq' : null,
+      ].filter(Boolean).join(', ') || 'NONE — set GROQ_API_KEY'}`);
+      // Start Casper Autonomy
+      initCasperAutonomy().catch(err => console.error('[server] Casper autonomy init failed:', err));
+      // Start Bot Mayhem Autonomy
+      initBotMayhemAutonomy().catch(err => console.error('[server] Bot Mayhem autonomy init failed:', err));
+      // Start Bot Webhook Listener
+      initWebhookListener();
       resolve();
     });
     httpServer.listen(PORT, '0.0.0.0');
   });
 }
 
-startServer();
+startServer().catch(err => {
+  console.error('[server] Failed to start:', err);
+  process.exit(1);
+});

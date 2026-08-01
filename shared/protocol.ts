@@ -2,7 +2,7 @@
 //
 // This file defines the message contract between:
 //   • Casper CLI daemon (local machine)
-//   • Railway backend (server.unified.ts relay namespace)
+//   • Railway backend (server.ts relay namespace)
 //   • Mobile / Web clients (indirect, via Railway)
 //
 // Both sides serialize these types as JSON over WSS.

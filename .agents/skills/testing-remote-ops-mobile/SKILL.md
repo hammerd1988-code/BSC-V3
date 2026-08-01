@@ -21,7 +21,7 @@ Because the mobile layout is gated on viewport width too (not just native), it i
   pasting the literal value.
 
 ## Setup
-- Test against production `https://bloodsweatcode.org/casper/remote` (deploys on Railway, NOT Vercel — ignore Vercel CI failures). For unmerged PRs, run a local stack on the branch: `npm run dev:full` (Express + Vite middleware on :3001) for the UI; `server.unified.ts` on `PORT=4000` for the production entrypoint (where install routes live).
+- Test against production `https://bloodsweatcode.org/casper/remote` (deploys on Railway, NOT Vercel — ignore Vercel CI failures). For unmerged PRs, run a local stack on the branch: `npm run dev:full` (Express + Vite middleware on :3001) for the UI; the same `server.ts` with `NODE_ENV=production PORT=4000` to exercise the production path (built `dist/` serving, where install routes live).
 - Use IPv4 `127.0.0.1` explicitly in CDP/Playwright scripts (Chrome may not reach IPv6 `localhost`/`::1`).
 - Auth: magic link via service-role admin `generate_link` → verify with `token_hash` (NOT `token`, which 403s otp_expired) → inject session into localStorage key `sb-kxfhxrdrlvnvtzdeuvwb-auth-token`.
 - Playwright scripts MUST be `.cjs` (repo is `"type": "module"`). Connect via `chromium.connectOverCDP('http://127.0.0.1:29229')`.
@@ -68,7 +68,7 @@ await page.reload({ waitUntil: 'domcontentloaded' });
 ```
 
 ## Install endpoints (PR #207) — shell evidence
-Run `server.unified.ts` on `PORT=4000` and curl:
+Run `NODE_ENV=production PORT=4000 npm start` and curl:
 - `GET /install.sh` → 200, `Content-Type: text/x-shellscript`, body starts `#!/bin/sh`.
 - `GET /install.ps1` → 200, `text/plain`, body starts `# Casper CLI installer (Windows)`.
 - `GET /<spa-route>` → 200, `text/html` (SPA fallback). Proves install routes are matched BEFORE the catch-all.
