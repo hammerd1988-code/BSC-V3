@@ -198,19 +198,28 @@ export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler) 
       let audioMime = file.mimetype || 'audio/webm';
       let audioExt = 'webm';
 
+      // ffmpeg is optional — the deployment image does not ship it, so the
+      // conversion routinely throws. Clean up in `finally` or every request
+      // that takes this path leaks its upload (up to 25 MB) onto disk.
+      const tmpIn = `${tmpdir()}/casper_in_${Date.now()}.webm`;
+      const tmpOut = `${tmpdir()}/casper_out_${Date.now()}.wav`;
       try {
-        const tmpIn = `${tmpdir()}/casper_in_${Date.now()}.webm`;
-        const tmpOut = `${tmpdir()}/casper_out_${Date.now()}.wav`;
         fs.writeFileSync(tmpIn, file.buffer);
         execSync(`ffmpeg -y -i "${tmpIn}" -ar 16000 -ac 1 -f wav "${tmpOut}" 2>/dev/null`);
         audioBuffer = fs.readFileSync(tmpOut);
         audioMime = 'audio/wav';
         audioExt = 'wav';
-        fs.unlinkSync(tmpIn);
-        fs.unlinkSync(tmpOut);
         console.log(`[transcribe] Converted webm to wav (${audioBuffer.length} bytes)`);
       } catch (convErr) {
         console.warn('[transcribe] ffmpeg conversion failed, using original:', (convErr as Error).message);
+      } finally {
+        for (const tmp of [tmpIn, tmpOut]) {
+          try {
+            fs.rmSync(tmp, { force: true });
+          } catch (cleanupErr) {
+            console.warn(`[transcribe] Failed to remove ${tmp}:`, (cleanupErr as Error).message);
+          }
+        }
       }
 
       let lastError = '';
