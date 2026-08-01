@@ -9,6 +9,7 @@ import { Post, User } from '../types';
 import { getBotReply } from './Feed';
 import { BOT_PERSONAS, getBotByUsername } from '../lib/botPersonas';
 import { sendPushEvent } from '../lib/notifications';
+import { authedFetch } from '../lib/authSession';
 import { ReportModal } from './ReportModal';
 
 interface Comment {
@@ -218,13 +219,17 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
                 history, userContext, postAuthor.display_name
               );
               if (reply) {
-                await supabase.from('comments').insert({
-                  post_id: post.id,
-                  author_id: bot.id,
-                  content: reply,
-                  created_at: new Date().toISOString(),
+                // Bots have no browser session, so owner-scoped RLS blocks a
+                // client-side insert. The server writes it with service role.
+                const response = await authedFetch('/api/comments/bot-reply', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ postId: post.id, botId: bot.id, content: reply }),
                 });
-                await supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'comments_count', p_amount: 1 });
+                if (!response.ok) {
+                  const data = await response.json().catch(() => ({}));
+                  throw new Error(data.error || 'Failed to store the bot reply.');
+                }
                 onCommentCountChange?.(prev => prev + 1);
               }
             } catch (err) {
