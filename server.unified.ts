@@ -20,7 +20,6 @@ import { execSync } from 'child_process';
 import os, { tmpdir } from 'os';
 import { initCasperAutonomy, casperMemory } from './casperAutonomy.js';
 import { registerCasperControlRoutes, requireCasperAuth } from './casperControlCenter.js';
-import { registerCommentRoutes } from './commentRoutes.js';
 import { runCasperShell, describeAllowlist, isShellElevationEnabled, type CasperShellMode } from './casperShell.js';
 import { getAdapter, listAdapterTools, decodeIntegrationKey, CASPER_ADAPTERS } from './casperAdapters.js';
 import { initWebhookListener } from "./webhookListener.js";
@@ -119,7 +118,6 @@ async function startServer() {
   registerLiveKitRoutes(app, supabase);
   registerRunwayRoutes(app, supabase);
   registerCasperControlRoutes(app, supabase, casperMemory);
-  registerCommentRoutes(app, supabase);
   registerServerAiRoutes(app, supabase);
   registerUnifiedBotRoutes(app, supabase);
   registerColosseumRoutes(app, supabase);
