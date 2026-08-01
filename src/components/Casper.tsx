@@ -250,7 +250,7 @@ const CASPER_PROVIDER_PRESETS: CasperProviderPreset[] = [
   { id: 'anthropic',    label: 'Anthropic',    description: 'Anthropic via OpenAI-compatible adapter',            baseUrl: 'https://api.anthropic.com/v1',  exampleModel: 'claude-sonnet-5' },
   { id: 'together',     label: 'Together.ai',  description: 'Llama / Qwen / DeepSeek / etc. cheaply',             baseUrl: 'https://api.together.xyz/v1',   exampleModel: 'meta-llama/Llama-3.1-8B-Instruct-Turbo' },
   { id: 'groq',         label: 'Groq',         description: 'Ultra-fast Llama / Mixtral inference',                baseUrl: 'https://api.groq.com/openai/v1', exampleModel: 'llama-3.1-70b-versatile' },
-  { id: 'fireworks',    label: 'Fireworks',    description: 'Fast Llama / DeepSeek / Qwen',                       baseUrl: 'https://api.fireworks.ai/inference/v1', exampleModel: 'accounts/fireworks/models/llama-v3p1-70b-instruct' },
+  { id: 'fireworks',    label: 'Fireworks',    description: 'Fast GLM / DeepSeek / Qwen',                        baseUrl: 'https://api.fireworks.ai/inference/v1', exampleModel: 'accounts/fireworks/models/glm-5p2' },
   { id: 'lmstudio',     label: 'LM Studio (Local)', description: 'Free — runs on your machine. Enable CORS in LM Studio settings.', baseUrl: 'http://localhost:1234/v1',      exampleModel: 'lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF', isLocal: true },
   { id: 'ollama',       label: 'Ollama (Local)',    description: 'Free — runs on your machine. Set OLLAMA_ORIGINS=* before starting.', baseUrl: 'http://localhost:11434/v1',     exampleModel: 'llama3.1:8b', isLocal: true },
 ];
