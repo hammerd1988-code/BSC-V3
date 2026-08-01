@@ -46,7 +46,7 @@ const JUDGE_MAX_TOKENS = 3000;
 const JUDGE_SANDBOX_MAX_TOKENS = 4500;
 const FIREWORKS_BASE_URL = 'https://api.fireworks.ai/inference/v1';
 const FIREWORKS_MODEL_PREFIX = 'accounts/fireworks/models/';
-const FIREWORKS_BOT_MODEL = `${FIREWORKS_MODEL_PREFIX}qwen3p6-plus`;
+const FIREWORKS_BOT_MODEL = `${FIREWORKS_MODEL_PREFIX}qwen3p7-plus`;
 const PLATFORM_DEFAULT_MODEL = process.env.COLOSSEUM_DEFAULT_MODEL || process.env.OPENAI_MODEL || 'gpt-5.4-mini';
 const BOT_OPENAI_COMPATIBLE_BASE_URL = (process.env.BOT_OPENAI_BASE_URL || process.env.BOT_AI_BASE_URL || '').replace(/\/$/, '');
 
