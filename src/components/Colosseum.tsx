@@ -1130,6 +1130,13 @@ function ensureCombatantTerminalMoves(moves: GladiatorAiMove[], challengeType: C
   });
 }
 
+// How long the gate waits for the server-side gladiator solutions before it
+// opens with local fallback code. A real model round-trip takes several
+// seconds, so anything short here guarantees every battle is fought by
+// `localArenaFallbackSolution` instead of the gladiators' models.
+const AI_PACKET_GATE_TIMEOUT_MS = 45_000;
+const AI_PACKET_WAIT_TICK_MS = 6_000;
+
 const SANDBOX_ROUND_COUNT = 3;
 const SANDBOX_TICKS_PER_ROUND = 40;
 const SANDBOX_ROUND_TICK_MS = 700;
@@ -2276,6 +2283,28 @@ async function requestGladiatorAiMoves(match: MatchRow, type: ChallengeType, cha
   }
 
   return (payload?.moves ?? []) as GladiatorAiMove[];
+}
+
+// Closing a match needs completed_at, which authenticated clients may not
+// write (`grant update (replay_data)` in 0047), so it goes through the server.
+async function abandonPendingMatch(matchId: string) {
+  try {
+    const session = await getValidSession();
+    const response = await fetch('/api/colosseum/abandon-match', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ matchId }),
+      keepalive: true,
+    });
+    if (!response.ok) {
+      console.warn('[Colosseum] Could not abandon pending match', matchId, response.status);
+    }
+  } catch (err) {
+    console.warn('[Colosseum] Could not abandon pending match', matchId, err);
+  }
 }
 
 async function requestTrainingBattle(input: {
@@ -5997,6 +6026,28 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
   const [showWinnerReveal, setShowWinnerReveal] = useState<{ winner: Gladiator; loser: Gladiator; summary: string } | null>(null);
   const [showBattleIntro, setShowBattleIntro] = useState<{ challenger: Gladiator; defender: Gladiator; title: string } | null>(null);
   const coachingIntervalRef = React.useRef<number | null>(null);
+  // Timers that hold the arena gate open while the live AI packet is in flight.
+  // The wait can run for AI_PACKET_GATE_TIMEOUT_MS, so they must not outlive the
+  // component or a battle keeps announcing and recording itself after the user
+  // has left the arena.
+  const gateTimersRef = React.useRef<number[]>([]);
+  const arenaMountedRef = React.useRef(true);
+  // Match row that exists but has not reached the gate yet. If the arena
+  // unmounts while it is pending, nothing will ever write completed_at, and an
+  // eternally open match keeps its gladiator under the active-match lock.
+  const pendingGateMatchRef = React.useRef<string | null>(null);
+
+  useEffect(() => {
+    arenaMountedRef.current = true;
+    return () => {
+      arenaMountedRef.current = false;
+      gateTimersRef.current.forEach((id) => { window.clearTimeout(id); window.clearInterval(id); });
+      gateTimersRef.current = [];
+      const abandonedMatchId = pendingGateMatchRef.current;
+      pendingGateMatchRef.current = null;
+      if (abandonedMatchId) void abandonPendingMatch(abandonedMatchId);
+    };
+  }, []);
 
   const normalizeGladiator = (row: any, profileByGladiatorId?: Map<string, BotGladiatorProfileRow>): Gladiator => ({
     id: row.id,
@@ -6991,18 +7042,30 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
         sapphireMove: SapphireMove | null,
         aiMoves: GladiatorAiMove[]
       ) => {
-        if (launched) return;
+        if (launched || !arenaMountedRef.current) return;
         launched = true;
+        pendingGateMatchRef.current = null;
         runSimulation(match, challenger, defender, activeChallengeType, openingLogs, sapphireMove, aiMoves, codingChallenge, submittedSolution);
       };
 
+      // Keep the pre-gate wait legible instead of looking frozen.
+      const waitTicker = window.setInterval(() => {
+        setSimulation((prev) => prev && !launched ? {
+          ...prev,
+          log: [...prev.log, 'Combat compilers still streaming. Holding the gate for the live AI packet.'],
+        } : prev);
+      }, AI_PACKET_WAIT_TICK_MS);
+
       const fallbackTimer = window.setTimeout(() => {
+        window.clearInterval(waitTicker);
         launchSimulation(
-          [...bootLogs, 'AI cores are still compiling. Gate opens now; judging will still score real submitted code and any late bot packet.'],
+          [...bootLogs, 'AI cores never answered in time. Gate opens now; judging will still score real submitted code and any late bot packet.'],
           null,
           []
         );
-      }, 1500);
+      }, AI_PACKET_GATE_TIMEOUT_MS);
+      gateTimersRef.current.push(waitTicker, fallbackTimer);
+      pendingGateMatchRef.current = match.id;
 
       void requestGladiatorAiMoves(match, activeChallengeType, challenger, defender, battlePrompt).then((moves) => {
         let sapphireMove: SapphireMove | null = null;
@@ -7022,6 +7085,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
           ...aiMoves.map((move) => `${move.gladiator_name} returned a ${move.source} solution using ${move.model}.`),
         ];
         window.clearTimeout(fallbackTimer);
+        window.clearInterval(waitTicker);
         if (launched) {
           setSimulation((prev) => prev ? {
             ...prev,
@@ -7034,6 +7098,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       }).catch((err) => {
         console.warn('[Colosseum] Gladiator AI solution generation failed', err);
         window.clearTimeout(fallbackTimer);
+        window.clearInterval(waitTicker);
         const aiMoves = ensureCombatantTerminalMoves([], activeChallengeType, challenger, defender, battlePrompt);
         launchSimulation([...bootLogs, 'Server-side AI cores did not answer. Casper switched both terminals to live-code fallback instead of stalling.'], null, aiMoves);
       });

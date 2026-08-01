@@ -40,6 +40,10 @@ import { generateImage as comfyGenerateImage, generateGladiatorAvatar as comfyGe
 const BOT_UUID_NAMESPACE = '00000000-0000-4000-8000-000000000b5c';
 const SAPPHIRE_GLADIATOR_ID = '00000000-0000-4000-8000-00000000fa11';
 const SAFE_GLADIATOR_SELECT = 'id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model,api_base_url';
+// Verdict JSON is large (weighted rubric + annotations) and gpt-5.x charges
+// hidden reasoning tokens against the same budget.
+const JUDGE_MAX_TOKENS = 3000;
+const JUDGE_SANDBOX_MAX_TOKENS = 4500;
 const FIREWORKS_BASE_URL = 'https://api.fireworks.ai/inference/v1';
 const FIREWORKS_MODEL_PREFIX = 'accounts/fireworks/models/';
 const FIREWORKS_BOT_MODEL = `${FIREWORKS_MODEL_PREFIX}qwen3p6-plus`;
@@ -678,7 +682,7 @@ async function judgeColosseumBattle(input: {
 
 Extract the <code> section from each solution and evaluate the actual HTML/CSS/JS product.`
     : '';
-  const result = await generateServerText(`Casper is judging this ${isSandbox ? 'sandbox build battle' : 'coding battle'}. Score both combatants with the supplied weighted rubric.
+  const judgePrompt = `Casper is judging this ${isSandbox ? 'sandbox build battle' : 'coding battle'}. Score both combatants with the supplied weighted rubric.
 
 Challenge type: ${input.challengeType}
 Challenge:
@@ -716,30 +720,50 @@ Writing rules:
 - Each rubric commentary must be UNIQUE and specific to that criterion. Do not copy the same sentence across criteria.
 - Avoid generic conclusions like "both solutions were strong" or "the winner was more complete"; instead say WHERE and WHY one edged the other out.
 - Keep the tone energetic and arena-appropriate.
-- Return valid JSON only.`, {
-    systemPrompt: isSandbox
-      ? 'You are CASPER, the Blood Sweat Code Colosseum judge. You are evaluating SANDBOX BUILD battles where gladiators build real products. Judge the FINISHED PRODUCT — does it work, does it look good, is the code clean, is it creative? Deliver a verdict. Return only JSON.'
-      : 'You are CASPER, the Blood Sweat Code Colosseum judge and Caesar-like arbiter. Score actual submitted code and bot solution quality. Deliver an authoritative thumb-up/thumb-down verdict. Return only JSON.',
-    temperature: 0.45,
-    maxTokens: isSandbox ? 1200 : 700,
-    jsonResponse: true,
-  });
-  if (!result.text) return fallbackColosseumJudge({ ...input, providerError: result.lastError || 'AI judge returned no text.' });
-  try {
-    const parsed = extractJsonObject(result.text);
-    return normalizeBattleJudgeResult({
-      raw: parsed,
-      challengeType: input.challengeType,
-      challengerId: String(input.challenger.id),
-      defenderId: String(input.defender.id),
-      provider: result.provider,
-      model: result.model,
-      usedAi: true,
-      fallbackSummary: 'Casper scored the submitted solutions.',
+- Return valid JSON only.`;
+  const judgeSystemPrompt = isSandbox
+    ? 'You are CASPER, the Blood Sweat Code Colosseum judge. You are evaluating SANDBOX BUILD battles where gladiators build real products. Judge the FINISHED PRODUCT — does it work, does it look good, is the code clean, is it creative? Deliver a verdict. Return only JSON.'
+    : 'You are CASPER, the Blood Sweat Code Colosseum judge and Caesar-like arbiter. Score actual submitted code and bot solution quality. Deliver an authoritative thumb-up/thumb-down verdict. Return only JSON.';
+
+  // The verdict JSON carries a full rubric plus up to 8 annotations, and
+  // reasoning models spend part of the budget on hidden reasoning tokens, so a
+  // tight cap truncates the JSON mid-array and silently demotes every battle to
+  // the rule judge. Retry once with a doubled budget before giving up.
+  const baseMaxTokens = isSandbox ? JUDGE_SANDBOX_MAX_TOKENS : JUDGE_MAX_TOKENS;
+  let providerError = 'AI judge returned no text.';
+
+  for (const maxTokens of [baseMaxTokens, baseMaxTokens * 2]) {
+    const result = await generateServerText(judgePrompt, {
+      systemPrompt: judgeSystemPrompt,
+      temperature: 0.45,
+      maxTokens,
+      jsonResponse: true,
     });
-  } catch (error: any) {
-    return fallbackColosseumJudge({ ...input, providerError: error?.message ?? 'AI judge parse failed.' });
+    if (!result.text) {
+      // A bigger budget cannot fix an outage, a bad key or a rate limit, and
+      // every attempt walks the full provider chain — fail fast instead.
+      providerError = result.lastError || 'AI judge returned no text.';
+      break;
+    }
+    try {
+      const parsed = extractJsonObject(result.text);
+      return normalizeBattleJudgeResult({
+        raw: parsed,
+        challengeType: input.challengeType,
+        challengerId: String(input.challenger.id),
+        defenderId: String(input.defender.id),
+        provider: result.provider,
+        model: result.model,
+        usedAi: true,
+        fallbackSummary: 'Casper scored the submitted solutions.',
+      });
+    } catch (error: any) {
+      providerError = error?.message ?? 'AI judge parse failed.';
+      console.warn(`[Colosseum] AI judge JSON unusable at maxTokens=${maxTokens}: ${providerError}`);
+    }
   }
+
+  return fallbackColosseumJudge({ ...input, providerError });
 }
 
 async function ensurePersonaBotGladiators(supabase: SupabaseClient) {
@@ -1656,6 +1680,48 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
     } catch (error: any) {
       console.error('[colosseum:gladiator-solutions]', error);
       return res.status(502).json({ success: false, error: error.message || 'Gladiator solution generation failed' });
+    }
+  });
+
+  // Closes a match the challenger walked away from before the arena gate
+  // opened. Authenticated clients only hold `grant update (replay_data)` on
+  // public.matches, so completed_at has to be written with the service role.
+  app.post('/api/colosseum/abandon-match', async (req, res) => {
+    try {
+      const authUser = await authenticatedRequestUser(req, supabase);
+      if (!authUser) return res.status(401).json({ success: false, error: 'Authentication required.' });
+      const matchId = String(req.body?.matchId ?? '');
+      if (!matchId) return res.status(400).json({ success: false, error: 'matchId is required' });
+      if (!(await userOwnsOpenMatch(supabase, matchId, authUser.id))) {
+        return res.status(403).json({ success: false, error: 'Only the challenger owner can abandon this match.' });
+      }
+
+      const { data: match, error: matchError } = await supabase
+        .from('matches')
+        .select('replay_data')
+        .eq('id', matchId)
+        .maybeSingle();
+      if (matchError) throw matchError;
+
+      const existingReplay = (match?.replay_data && typeof match.replay_data === 'object') ? match.replay_data : {};
+      const { error } = await supabase
+        .from('matches')
+        .update({
+          completed_at: new Date().toISOString(),
+          replay_data: {
+            ...existingReplay,
+            abandoned: true,
+            abandoned_reason: 'The challenger left the arena before the gate opened.',
+          },
+        })
+        .eq('id', matchId)
+        .is('completed_at', null);
+      if (error) throw error;
+
+      return res.json({ success: true });
+    } catch (error: any) {
+      console.error('[colosseum:abandon-match]', error);
+      return res.status(500).json({ success: false, error: error.message || 'Could not abandon match' });
     }
   });
 
