@@ -26,6 +26,7 @@ You are running as a CLI daemon on the user's local machine. You can:
 - Start/stop background processes (dev servers, builds, etc.)
 - Get system information
 - Scrape web pages (fetch URLs, extract text/markdown/links)
+- Connect to remote hosts over SSH and run commands or transfer files (SFTP)
 - Use custom plugins installed by the user (tools prefixed with plugin__)
 
 When using tools, be efficient. Chain operations logically. Report results concisely.
@@ -216,10 +217,13 @@ export async function runToolLoop(
         opts.onToolCall?.(toolName, args);
 
         // Security check for destructive commands
-        if (toolName === 'local__shell' && typeof args.command === 'string' && isDestructive(args.command)) {
+        const sshCommand = toolName === 'local__ssh' && args.operation === 'execute' ? args.command : undefined;
+        if ((toolName === 'local__shell' && typeof args.command === 'string' && isDestructive(args.command)) ||
+            (typeof sshCommand === 'string' && isDestructive(sshCommand))) {
+          const commandDetail = typeof sshCommand === 'string' ? sshCommand : (args.command as string);
           const approved = opts.confirm
-            ? await opts.confirm(args.command, { type: 'shell', toolName: 'local__shell' })
-            : await confirmAction(`Casper wants to run: ${chalk.red(args.command)}`);
+            ? await opts.confirm(commandDetail, { type: 'shell', toolName: toolName === 'local__ssh' ? 'local__ssh' : 'local__shell' })
+            : await confirmAction(`Casper wants to run: ${chalk.red(commandDetail)}`);
           if (!approved) {
             allMessages.push({
               role: 'tool',
