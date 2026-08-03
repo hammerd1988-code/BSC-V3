@@ -35,11 +35,29 @@ function resolveLocal(filePath?: string): string | undefined {
   return path.resolve(getConfig('workingDirectory'), filePath);
 }
 
+function isWithinWorkingDirectory(filePath: string): boolean {
+  const cwd = path.resolve(getConfig('workingDirectory') || process.cwd());
+  const resolved = path.resolve(filePath);
+  const rel = path.relative(cwd, resolved);
+  return Boolean(rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function isAllowedPrivateKeyPath(filePath: string): boolean {
+  const resolved = path.resolve(filePath);
+  if (isWithinWorkingDirectory(filePath)) return true;
+  const sshDir = path.resolve(os.homedir(), '.ssh');
+  const rel = path.relative(sshDir, resolved);
+  return Boolean(rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 async function loadPrivateKey(raw?: string, filePath?: string): Promise<string | undefined> {
   if (raw) return raw;
   if (filePath) {
     const fullPath = resolveLocal(filePath);
     if (!fullPath) return undefined;
+    if (!isAllowedPrivateKeyPath(fullPath)) {
+      throw new Error(`private_key_path must be inside the working directory or ~/.ssh: ${filePath}`);
+    }
     return fs.readFile(fullPath, 'utf-8');
   }
   return undefined;
@@ -77,19 +95,73 @@ function hostKeyMatches(key: Buffer, expected?: string): boolean {
   return normalized === sha || normalized === sha.slice(7) || normalized.toLowerCase() === md5;
 }
 
-function hostMatches(pattern: string, host: string, port: number): boolean {
-  // Skip hashed host entries; proper hashing support would require HMAC-SHA1 matching.
-  if (pattern.startsWith('|')) return false;
+function globMatch(pattern: string, value: string): boolean {
+  const p = pattern.split('');
+  const v = value.split('');
 
+  const dp = Array.from({ length: p.length + 1 }, () => Array(v.length + 1).fill(false));
+  dp[0][0] = true;
+
+  for (let i = 1; i <= p.length; i++) {
+    if (p[i - 1] === '*') dp[i][0] = dp[i - 1][0];
+    else dp[i][0] = false;
+  }
+
+  for (let i = 1; i <= p.length; i++) {
+    for (let j = 1; j <= v.length; j++) {
+      if (p[i - 1] === '*') {
+        dp[i][j] = dp[i - 1][j] || dp[i][j - 1];
+      } else if (p[i - 1] === '?') {
+        dp[i][j] = dp[i - 1][j - 1];
+      } else {
+        dp[i][j] = dp[i - 1][j - 1] && p[i - 1] === v[j - 1];
+      }
+    }
+  }
+
+  return dp[p.length][v.length];
+}
+
+function matchesHashedHost(pattern: string, host: string, port: number): boolean {
+  if (!pattern.startsWith('|1|')) return false;
+  const parts = pattern.split('|');
+  if (parts.length !== 4) return false;
+  const saltB64 = parts[2];
+  const hashB64 = parts[3];
+  if (!saltB64 || !hashB64) return false;
+  const salt = Buffer.from(saltB64, 'base64');
+  const expected = Buffer.from(hashB64, 'base64');
+  if (salt.length === 0 || expected.length === 0) return false;
+
+  const tryMessage = (msg: string) =>
+    crypto.createHmac('sha1', salt).update(msg).digest().equals(expected);
+
+  return tryMessage(host) || (port !== 22 && tryMessage(`[${host}]:${port}`));
+}
+
+function hostMatches(pattern: string, host: string, port: number): boolean {
+  // Negated patterns are skipped in this simple matcher.
+  if (pattern.startsWith('!')) return false;
+
+  // OpenSSH hashed host format: |1|<salt>|<hash>
+  if (pattern.startsWith('|')) {
+    return matchesHashedHost(pattern, host, port);
+  }
+
+  // Bracket form: [host]:port
   const bracket = pattern.match(/^\[(.+?)]:(\d+)$/);
   if (bracket) {
     return bracket[1] === host && parseInt(bracket[2], 10) === port;
   }
 
+  // Wildcards (* and ?) can match a hostname or IP.
+  if (pattern.includes('*') || pattern.includes('?')) {
+    return globMatch(pattern, host);
+  }
+
   // Unqualified entries apply to the default SSH port (22).
   if (port === 22 && pattern === host) return true;
 
-  // Host with explicit non-default port notations are the only valid port-qualified form here.
   return false;
 }
 
@@ -153,8 +225,17 @@ async function verifyHostKey(
   expectedFingerprint?: string,
   knownHostsPath?: string,
 ): Promise<{ ok: boolean; reason?: string }> {
-  if (expectedFingerprint && hostKeyMatches(key, expectedFingerprint)) {
-    return { ok: true };
+  // If a fingerprint is explicitly pinned, it must match. Do not fall back to known_hosts.
+  if (expectedFingerprint) {
+    if (hostKeyMatches(key, expectedFingerprint)) {
+      return { ok: true };
+    }
+    const sha = fingerprintSha256(key);
+    const md5 = fingerprintMd5(key);
+    return {
+      ok: false,
+      reason: `Pinned host_key does not match the server key for ${host}:${port}. Fingerprint: ${sha} (MD5: ${md5}).`,
+    };
   }
 
   const knownHosts = await loadKnownHosts(knownHostsPath);
@@ -237,6 +318,10 @@ export async function executeSsh(args: SshArgs): Promise<{ ok: boolean; data: un
     local_path: resolvedLocal,
   });
 
+  if (resolvedLocal && !isWithinWorkingDirectory(resolvedLocal)) {
+    return { ok: false, data: null, error: 'local_path must be inside the working directory' };
+  }
+
   let ssh: NodeSSH | undefined;
   try {
     ssh = await buildConnection(args);
@@ -291,16 +376,20 @@ export async function executeSsh(args: SshArgs): Promise<{ ok: boolean; data: un
         if (!args.remote_path) {
           return { ok: false, data: null, error: 'remote_path is required for sftp_list' };
         }
-        const sftp = await ssh.requestSFTP();
-        const list = await new Promise<Array<{ filename: string; longname: string; attrs: unknown }>>((resolve, reject) => {
-          (sftp as any).readdir(args.remote_path!, (err: any, entries: any[]) => {
-            if (err) {
-              reject(err);
-            } else {
-              resolve(entries.map((e: any) => ({ filename: e.filename, longname: e.longname, attrs: e.attrs })));
-            }
-          });
-        });
+        const sftp = await withTimeout(ssh.requestSFTP(), timeout, `SFTP session on ${args.host}`);
+        const list = await withTimeout(
+          new Promise<Array<{ filename: string; longname: string; attrs: unknown }>>((resolve, reject) => {
+            (sftp as any).readdir(args.remote_path!, (err: any, entries: any[]) => {
+              if (err) {
+                reject(err);
+              } else {
+                resolve(entries.map((e: any) => ({ filename: e.filename, longname: e.longname, attrs: e.attrs })));
+              }
+            });
+          }),
+          timeout,
+          `SFTP list on ${args.host}`,
+        );
         return { ok: true, data: { remote_path: args.remote_path, entries: list } };
       }
 

@@ -42,6 +42,7 @@ export default function App() {
     '// Casper Roaming Ghost SSH — ready to haunt.',
   ]);
   const [connected, setConnected] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [shellActive, setShellActive] = useState(false);
   const [sftpPath, setSftpPath] = useState('/');
   const clientRef = useRef<SSHClient | null>(null);
@@ -55,6 +56,7 @@ export default function App() {
     clientRef.current?.disconnect();
     clientRef.current = null;
     setConnected(false);
+    setConnecting(false);
     setShellActive(false);
     log('Disconnected.');
   }, [log]);
@@ -73,8 +75,12 @@ export default function App() {
   );
 
   const connect = async () => {
+    if (connecting || connected) return;
+    setConnecting(true);
     try {
       const port = parseInt(config.port || '22', 10);
+      // Close any previous session before starting a new one.
+      clientRef.current?.disconnect();
       let client: SSHClient;
       if (authMode === 'password') {
         client = await SSHClient.connectWithPassword(
@@ -103,6 +109,8 @@ export default function App() {
       const message = err?.message || String(err);
       Alert.alert('Connection failed', message);
       log(`ERROR: ${message}`);
+    } finally {
+      setConnecting(false);
     }
   };
 
@@ -238,8 +246,8 @@ export default function App() {
         </>
       )}
 
-      <TouchableOpacity onPress={connect} style={styles.actionBtn}>
-        <Text style={styles.actionText}>CONNECT</Text>
+      <TouchableOpacity onPress={connect} style={[styles.actionBtn, connecting && styles.actionBtnDisabled]} disabled={connecting}>
+        <Text style={styles.actionText}>{connecting ? 'CONNECTING...' : 'CONNECT'}</Text>
       </TouchableOpacity>
     </View>
   );
@@ -399,6 +407,10 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
     marginTop: 8,
+  },
+  actionBtnDisabled: {
+    backgroundColor: '#155e75',
+    opacity: 0.6,
   },
   actionText: {
     color: '#ecfeff',
