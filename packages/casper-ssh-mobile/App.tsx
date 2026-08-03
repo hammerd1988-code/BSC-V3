@@ -200,6 +200,10 @@ export default function App() {
         </TouchableOpacity>
       </View>
 
+      <Text style={styles.warning}>
+        The SSH library does not yet verify server host keys. Connect only on trusted networks and prefer key-based auth.
+      </Text>
+
       {authMode === 'password' ? (
         <TextInput
           style={styles.input}
@@ -382,6 +386,12 @@ const styles = StyleSheet.create({
   modeText: {
     color: '#94a3b8',
     fontWeight: '700',
+  },
+  warning: {
+    color: '#f59e0b',
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 4,
   },
   actionBtn: {
     backgroundColor: '#0e7490',

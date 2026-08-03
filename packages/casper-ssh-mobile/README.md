@@ -41,6 +41,10 @@ With a local Android SDK:
 npm run build:apk
 ```
 
+## Security note
+
+The underlying `@dylankenneally/react-native-ssh-sftp` library does not yet verify remote server host keys (it disables `StrictHostKeyChecking` on Android and does not pin host keys on iOS). Treat connections as safe only on trusted networks, and prefer key-based authentication over passwords where possible. Credentials are held in memory only while the app is connected and are not persisted to disk.
+
 ## Usage
 
 1. Enter host, port, username, and choose **Password** or **Private Key**.
