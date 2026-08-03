@@ -184,6 +184,8 @@ export const LOCAL_TOOL_SPECS: ToolSpec[] = [
           local_path: { type: 'string', description: 'Local file path for SFTP operations. Relative paths resolve to the working directory.' },
           cwd: { type: 'string', description: 'Working directory for execute operations on the remote host.' },
           timeout_ms: { type: 'number', description: 'Timeout in ms (default 120000, max 600000).' },
+          host_key: { type: 'string', description: 'Expected host-key fingerprint, e.g. SHA256:... or MD5:...' },
+          known_hosts_path: { type: 'string', description: 'Path to an OpenSSH known_hosts file. Defaults to ~/.ssh/known_hosts and ~/.config/casper-cli/known_hosts.' },
         },
         required: ['host', 'username', 'operation'],
       },
