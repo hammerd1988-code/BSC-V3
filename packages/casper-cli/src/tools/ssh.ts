@@ -55,19 +55,26 @@ function fingerprintMd5(key: Buffer): string {
 
 function hostKeyMatches(key: Buffer, expected?: string): boolean {
   if (!expected) return false;
-  const sha = fingerprintSha256(key);
-  const md5 = fingerprintMd5(key);
+  const sha = fingerprintSha256(key); // "SHA256:<base64>" with padding stripped
+  const md5 = fingerprintMd5(key); // lower-case "ab:cd:..."
   const normalized = expected.trim();
+
+  // SHA256 fingerprints are base64, so case is significant for the digest.
   if (normalized.toLowerCase().startsWith('sha256:')) {
-    return normalized.toLowerCase() === sha.toLowerCase();
+    return normalized.slice(7) === sha.slice(7);
   }
+
+  // MD5 fingerprints are hex, so case is not significant.
   if (normalized.toLowerCase().startsWith('md5:')) {
-    return normalized.toLowerCase() === md5.toLowerCase();
+    return normalized.slice(4).toLowerCase() === md5;
   }
+
+  // Bare MD5 hex contains colons; bare SHA256 base64 does not.
   if (normalized.includes(':')) {
-    return normalized.toLowerCase() === md5.toLowerCase();
+    return normalized.toLowerCase() === md5;
   }
-  return normalized === sha || normalized === md5;
+
+  return normalized === sha || normalized === sha.slice(7) || normalized.toLowerCase() === md5;
 }
 
 function hostMatches(pattern: string, host: string, port: number): boolean {
