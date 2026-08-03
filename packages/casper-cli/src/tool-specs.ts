@@ -166,6 +166,32 @@ export const LOCAL_TOOL_SPECS: ToolSpec[] = [
   {
     type: 'function',
     function: {
+      name: `${PREFIX}${SEP}ssh`,
+      description: '[Local] Connect to a remote host over SSH and execute a command or transfer files via SFTP. Supports password or private-key authentication.',
+      parameters: {
+        type: 'object',
+        properties: {
+          host: { type: 'string', description: 'Remote host to connect to.' },
+          port: { type: 'number', description: 'SSH port. Defaults to 22.' },
+          username: { type: 'string', description: 'SSH username.' },
+          password: { type: 'string', description: 'Password for authentication. Not required if private_key is provided.' },
+          private_key: { type: 'string', description: 'PEM-encoded private key string. Not required if password is provided.' },
+          private_key_path: { type: 'string', description: 'Path to a PEM-encoded private key file. Not required if password or private_key is provided.' },
+          passphrase: { type: 'string', description: 'Passphrase for the private key, if needed.' },
+          operation: { type: 'string', enum: ['execute', 'sftp_get', 'sftp_put', 'sftp_list'], description: 'Operation to perform: execute a command, download a file, upload a file, or list a remote directory.' },
+          command: { type: 'string', description: 'Shell command to run when operation is execute.' },
+          remote_path: { type: 'string', description: 'Remote file or directory path for SFTP operations.' },
+          local_path: { type: 'string', description: 'Local file path for SFTP operations. Relative paths resolve to the working directory.' },
+          cwd: { type: 'string', description: 'Working directory for execute operations on the remote host.' },
+          timeout_ms: { type: 'number', description: 'Timeout in ms (default 120000, max 600000).' },
+        },
+        required: ['host', 'username', 'operation'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: `${PREFIX}${SEP}open_browser`,
       description: '[Local] Open a URL in the system default browser.',
       parameters: {
