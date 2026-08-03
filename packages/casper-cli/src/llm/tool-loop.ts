@@ -216,11 +216,17 @@ export async function runToolLoop(
 
         opts.onToolCall?.(toolName, args);
 
-        // Security check for destructive commands
+        // Security check for destructive commands and SSH file transfers
         const sshCommand = toolName === 'local__ssh' && args.operation === 'execute' ? args.command : undefined;
+        const sshFileTransfer = toolName === 'local__ssh' && (args.operation === 'sftp_get' || args.operation === 'sftp_put');
         if ((toolName === 'local__shell' && typeof args.command === 'string' && isDestructive(args.command)) ||
-            (typeof sshCommand === 'string' && isDestructive(sshCommand))) {
-          const commandDetail = typeof sshCommand === 'string' ? sshCommand : (args.command as string);
+            (typeof sshCommand === 'string' && isDestructive(sshCommand)) ||
+            sshFileTransfer) {
+          const commandDetail = typeof sshCommand === 'string'
+            ? sshCommand
+            : (sshFileTransfer
+                ? `SFTP ${args.operation}: ${args.remote_path} <-> ${args.local_path}`
+                : (args.command as string));
           const approved = opts.confirm
             ? await opts.confirm(commandDetail, { type: 'shell', toolName: toolName === 'local__ssh' ? 'local__ssh' : 'local__shell' })
             : await confirmAction(`Casper wants to run: ${chalk.red(commandDetail)}`);
