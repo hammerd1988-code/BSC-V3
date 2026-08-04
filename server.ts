@@ -6,6 +6,14 @@ import path from 'path';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
 
+// Anon-key client used only to verify user JWTs sent by the browser
+const supabaseAnon = (() => {
+  const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+  const key = process.env.VITE_SUPABASE_ANON_KEY || '';
+  if (!url || !key) return null;
+  return createClient(url, key, { auth: { persistSession: false } });
+})();
+
 // Service-role Supabase client for server-side DB writes (webhooks, CRED transfers)
 const supabaseAdmin = (() => {
   const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
@@ -16,6 +24,20 @@ const supabaseAdmin = (() => {
   }
   return createClient(url, key, { auth: { persistSession: false } });
 })();
+
+/**
+ * Extract and verify the Supabase JWT from the Authorization header.
+ * Returns the authenticated user's ID, or null if the token is absent/invalid.
+ */
+async function getAuthUserId(req: express.Request): Promise<string | null> {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+  const token = authHeader.slice(7);
+  if (!supabaseAnon) return null;
+  const { data, error } = await supabaseAnon.auth.getUser(token);
+  if (error || !data?.user) return null;
+  return data.user.id;
+}
 
 function parseAllowedOrigins(): string[] {
   const raw = [
@@ -117,12 +139,21 @@ async function startServer() {
   // -----------------------------------------------------------------------
   app.post('/api/cred/transfer', async (req, res) => {
     if (!supabaseAdmin) return res.status(503).json({ error: 'Admin DB not available' });
-    const { fromUserId, toUserId, amount, description } = req.body;
+
+    // Authenticate the caller
+    const callerId = await getAuthUserId(req);
+    if (!callerId) return res.status(401).json({ error: 'Authentication required' });
+
+    const { fromUserId, toUserId, amount, description, notifyRecipient, notifyPayload } = req.body;
     if (!fromUserId || !toUserId || !amount) {
       return res.status(400).json({ error: 'fromUserId, toUserId, and amount are required' });
     }
     if (typeof amount !== 'number' || amount <= 0) {
       return res.status(400).json({ error: 'amount must be a positive number' });
+    }
+    // Enforce that the caller is the owner of the source account
+    if (callerId !== fromUserId) {
+      return res.status(403).json({ error: 'Forbidden: you may only transfer CRED from your own account' });
     }
     try {
       const { error } = await supabaseAdmin.rpc('transfer_cred', {
@@ -132,6 +163,18 @@ async function startServer() {
         p_description: description || 'CRED transfer',
       });
       if (error) throw error;
+
+      // Optionally create a notification for the recipient (server-side, bypasses RLS)
+      if (notifyRecipient && notifyPayload) {
+        await supabaseAdmin.from('notifications').insert({
+          user_id: toUserId,
+          type: notifyPayload.type || 'tip',
+          payload: notifyPayload,
+          is_read: false,
+          created_at: new Date().toISOString(),
+        });
+      }
+
       res.json({ success: true });
     } catch (err: any) {
       console.error('[CRED transfer]', err?.message);
@@ -140,10 +183,15 @@ async function startServer() {
   });
 
   // -----------------------------------------------------------------------
-  // CRED spend — deduct from a user and log transaction atomically
+  // CRED spend — atomic via stored procedure
   // -----------------------------------------------------------------------
   app.post('/api/cred/spend', async (req, res) => {
     if (!supabaseAdmin) return res.status(503).json({ error: 'Admin DB not available' });
+
+    // Authenticate the caller
+    const callerId = await getAuthUserId(req);
+    if (!callerId) return res.status(401).json({ error: 'Authentication required' });
+
     const { userId, amount, description } = req.body;
     if (!userId || !amount) {
       return res.status(400).json({ error: 'userId and amount are required' });
@@ -151,6 +199,36 @@ async function startServer() {
     if (typeof amount !== 'number' || amount <= 0) {
       return res.status(400).json({ error: 'amount must be a positive number' });
     }
+    if (callerId !== userId) {
+      return res.status(403).json({ error: 'Forbidden: you may only spend your own CRED' });
+    }
+    try {
+      // Atomic balance check + deduct + ledger insert via stored procedure
+      const { data: newBalance, error: spendErr } = await supabaseAdmin
+        .rpc('spend_cred', {
+          p_user_id: userId,
+          p_amount: amount,
+          p_description: description || 'CRED spend',
+        });
+      if (spendErr) throw spendErr;
+      res.json({ success: true, newBalance });
+    } catch (err: any) {
+      console.error('[CRED spend]', err?.message);
+      res.status(400).json({ error: err?.message || 'Spend failed' });
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // CRED boost — atomically spend CRED and boost the target post server-side
+  // so that RLS does not block the post update for non-authors.
+  // -----------------------------------------------------------------------
+  app.post('/api/cred/boost', async (req, res) => {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Admin DB not available' });
+    const { userId, postId } = req.body;
+    if (!userId || !postId) {
+      return res.status(400).json({ error: 'userId and postId are required' });
+    }
+    const BOOST_COST = 50;
     try {
       // Check balance first
       const { data: user } = await supabaseAdmin
@@ -158,27 +236,34 @@ async function startServer() {
         .select('cred_balance')
         .eq('id', userId)
         .single();
-      if (!user || (user.cred_balance ?? 0) < amount) {
+      if (!user || (user.cred_balance ?? 0) < BOOST_COST) {
         return res.status(400).json({ error: 'Insufficient CRED balance' });
       }
-      // Deduct
+      // Deduct CRED
       const { error: deductErr } = await supabaseAdmin
         .from('users')
-        .update({ cred_balance: user.cred_balance - amount })
+        .update({ cred_balance: user.cred_balance - BOOST_COST })
         .eq('id', userId);
       if (deductErr) throw deductErr;
-      // Log
+      // Log transaction
       await supabaseAdmin.from('transactions').insert({
         user_id: userId,
-        amount,
+        amount: BOOST_COST,
         type: 'spend',
-        description: description || 'CRED spend',
+        description: 'Boosted a transmission',
         created_at: new Date().toISOString(),
       });
-      res.json({ success: true, newBalance: user.cred_balance - amount });
+      // Update the post using service role (bypasses RLS)
+      const [updateRes, rpcRes] = await Promise.all([
+        supabaseAdmin.from('posts').update({ is_boosted: true }).eq('id', postId),
+        supabaseAdmin.rpc('increment_counter', { p_table: 'posts', p_id: postId, p_field: 'boosts', p_amount: 1 }),
+      ]);
+      if (updateRes.error) throw updateRes.error;
+      if (rpcRes.error) throw rpcRes.error;
+      res.json({ success: true, newBalance: user.cred_balance - BOOST_COST });
     } catch (err: any) {
-      console.error('[CRED spend]', err?.message);
-      res.status(400).json({ error: err?.message || 'Spend failed' });
+      console.error('[CRED boost]', err?.message);
+      res.status(400).json({ error: err?.message || 'Boost failed' });
     }
   });
 

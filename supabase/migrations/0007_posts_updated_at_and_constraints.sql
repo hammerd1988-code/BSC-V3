@@ -49,6 +49,7 @@ create or replace function public.transfer_cred(
 returns void
 language plpgsql
 security definer
+set search_path = public, pg_temp
 as $$
 begin
     -- Validate amount
@@ -78,3 +79,62 @@ $$;
 
 -- Revoke public execute — only service role may call this
 revoke execute on function public.transfer_cred(text, text, integer, text) from public, anon, authenticated;
+
+-- =========================================================================
+-- Atomic CRED spend stored procedure
+-- Performs balance check + debit + ledger insert in a single transaction.
+-- Call from server-side only (service role) — never from the client.
+-- =========================================================================
+create or replace function public.spend_cred(
+    p_user_id     text,
+    p_amount      integer,
+    p_description text default 'CRED spend'
+)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_new_balance integer;
+begin
+    -- Validate amount
+    if p_amount <= 0 then
+        raise exception 'spend amount must be positive';
+    end if;
+
+    -- Lock the row and verify sufficient balance atomically
+    perform pg_advisory_xact_lock(hashtext(p_user_id));
+    if (select cred_balance from public.users where id = p_user_id for update) < p_amount then
+        raise exception 'insufficient CRED balance';
+    end if;
+
+    -- Debit
+    update public.users
+       set cred_balance = cred_balance - p_amount
+     where id = p_user_id
+    returning cred_balance into v_new_balance;
+
+    -- Ledger entry
+    perform pg_advisory_xact_lock(hashtext(p_user_id));
+
+    update public.users
+       set cred_balance = cred_balance - p_amount
+     where id = p_user_id
+       and cred_balance >= p_amount
+    returning cred_balance into v_new_balance;
+
+    if not found then
+        raise exception 'insufficient CRED balance';
+    end if;
+
+    insert into public.transactions (user_id, amount, type, description, created_at)
+    values (p_user_id, p_amount, 'spend', p_description, now());
+
+    return v_new_balance;
+end;
+$$;
+
+-- Revoke public execute — only service role may call this
+revoke execute on function public.spend_cred(text, integer, text) from public, anon, authenticated;
+grant execute on function public.spend_cred(text, integer, text) to service_role;
