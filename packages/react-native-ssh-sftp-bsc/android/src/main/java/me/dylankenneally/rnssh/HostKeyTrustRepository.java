@@ -53,8 +53,6 @@ final class HostKeyTrustRepository implements HostKeyRepository {
         decision = DECISION_PIN_MISMATCH;
         return CHANGED;
       }
-      decision = DECISION_NONE;
-      return OK;
     }
 
     int result = delegate.check(requestedHost, key);
@@ -68,6 +66,10 @@ final class HostKeyTrustRepository implements HostKeyRepository {
     if (result == CHANGED) {
       decision = DECISION_CHANGED;
       return CHANGED;
+    }
+    if (result == NOT_INCLUDED && pinnedFingerprint != null) {
+      decision = DECISION_NONE;
+      return OK;
     }
     if (acceptNewHostKey) {
       try {
