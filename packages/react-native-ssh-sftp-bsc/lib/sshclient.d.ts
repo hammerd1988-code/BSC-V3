@@ -84,6 +84,7 @@ export type PasswordOrKey = string | KeyPair;
  * - SSHClient.connectWithPassword()
  */
 export default class SSHClient {
+    static removeHostKey(host: string, port: number, knownHostsPath: string): Promise<void>;
     /**
     * Retrieves the details of an SSH key.
     * @param key - The SSH private key as a string.

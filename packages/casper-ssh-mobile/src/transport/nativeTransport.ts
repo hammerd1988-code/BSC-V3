@@ -18,7 +18,7 @@ type Handler<T> = (value: T) => void;
 export const nativeCapabilities = {
   hostKeyVerification: Platform.OS === 'android',
   rawShellOutput: Platform.OS === 'android',
-  sftpChmod: false,
+  sftpChmod: Platform.OS === 'android',
   shellResize: Platform.OS === 'android',
   keyboardInteractive: false,
   agentForwarding: false,

@@ -24,6 +24,26 @@ export var PtyType;
  * - SSHClient.connectWithPassword()
  */
 export default class SSHClient {
+    static removeHostKey(host, port, knownHostsPath) {
+        return new Promise((resolve, reject) => {
+            if (!RNSSHClient.removeHostKey) {
+                const error = new Error('Native host-key removal is unavailable');
+                error.code = 'SSH_HOST_KEY_NATIVE_UNAVAILABLE';
+                reject(error);
+                return;
+            }
+            RNSSHClient.removeHostKey(host, port, knownHostsPath, (code, message) => {
+                if (code) {
+                    const error = new Error(message || code);
+                    error.code = code;
+                    reject(error);
+                }
+                else {
+                    resolve();
+                }
+            });
+        });
+    }
     /**
     * Retrieves the details of an SSH key.
     * @param key - The SSH private key as a string.

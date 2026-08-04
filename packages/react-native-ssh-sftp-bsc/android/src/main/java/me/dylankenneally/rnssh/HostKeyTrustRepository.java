@@ -48,9 +48,13 @@ final class HostKeyTrustRepository implements HostKeyRepository {
     }
     presentedFingerprint = fingerprint(key);
 
-    if (pinnedFingerprint != null && !pinnedFingerprint.equals(presentedFingerprint)) {
-      decision = DECISION_PIN_MISMATCH;
-      return CHANGED;
+    if (pinnedFingerprint != null) {
+      if (!pinnedFingerprint.equals(presentedFingerprint)) {
+        decision = DECISION_PIN_MISMATCH;
+        return CHANGED;
+      }
+      decision = DECISION_NONE;
+      return OK;
     }
 
     int result = delegate.check(requestedHost, key);
