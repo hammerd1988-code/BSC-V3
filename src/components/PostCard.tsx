@@ -5,6 +5,7 @@ import { Post } from '../types';
 import { cn } from '../lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 import { GoogleGenAI } from "@google/genai";
+import DOMPurify from 'dompurify';
 import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
 
@@ -49,17 +50,18 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     }
     setIsBoosting(true);
     try {
+      const res = await fetch('/api/cred/spend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id, amount: 50, description: 'Boosted a transmission' }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Boost spend failed');
+      }
       await Promise.all([
         supabase.from('posts').update({ is_boosted: true }).eq('id', post.id),
         supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'boosts', p_amount: 1 }),
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'cred_balance', p_amount: -50 }),
-        supabase.from('transactions').insert({
-          user_id: currentUser.id,
-          amount: 50,
-          type: 'spend',
-          description: 'Boosted a transmission',
-          created_at: new Date().toISOString(),
-        }),
       ]);
     } catch (error) {
       handleDbError(error, 'UPDATE', `posts/${post.id}`);
@@ -75,21 +77,28 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     if ((currentUser.cred_balance || 0) < amount) { alert('Insufficient CRED'); return; }
 
     try {
-      await Promise.all([
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'cred_balance', p_amount: -amount }),
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: post.author_id, p_field: 'cred_balance', p_amount: amount }),
-        supabase.from('transactions').insert([
-          { user_id: currentUser.id, amount, type: 'spend', description: 'Tipped post author for a transmission', created_at: new Date().toISOString() },
-          { user_id: post.author_id, amount, type: 'earn', description: `Tip from ${currentUser.username}`, created_at: new Date().toISOString() },
-        ]),
-        supabase.from('notifications').insert({
-          user_id: post.author_id,
-          type: 'tip',
-          data: { amount, senderName: currentUser.display_name, senderUsername: currentUser.username, message: tipMessage, postId: post.id },
-          read: false,
-          created_at: new Date().toISOString(),
+      const res = await fetch('/api/cred/transfer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fromUserId: currentUser.id,
+          toUserId: post.author_id,
+          amount,
+          description: `Tip from @${currentUser.username} for a transmission`,
         }),
-      ]);
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Transfer failed');
+      }
+      // Notify the recipient
+      await supabase.from('notifications').insert({
+        user_id: post.author_id,
+        type: 'tip',
+        payload: { amount, senderName: currentUser.display_name, senderUsername: currentUser.username, message: tipMessage, postId: post.id },
+        is_read: false,
+        created_at: new Date().toISOString(),
+      });
       setShowTipModal(false);
       setTipMessage('');
     } catch (error) {
@@ -112,8 +121,26 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     }
   };
 
-  const handleLike = () => {
-    setIsLiked(!isLiked);
+  const handleLike = async () => {
+    if (!currentUser) return;
+    const nowLiked = !isLiked;
+    setIsLiked(nowLiked);
+    try {
+      if (nowLiked) {
+        await supabase.from('post_likes').upsert(
+          { post_id: post.id, user_id: currentUser.id },
+          { onConflict: 'post_id,user_id', ignoreDuplicates: true }
+        );
+        await supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'likes', p_amount: 1 });
+      } else {
+        await supabase.from('post_likes').delete().match({ post_id: post.id, user_id: currentUser.id });
+        await supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'likes', p_amount: -1 });
+      }
+    } catch (error) {
+      // Revert optimistic update on failure
+      setIsLiked(!nowLiked);
+      handleDbError(error, 'UPDATE', `post_likes/${post.id}`);
+    }
     onLike(post.id);
   };
 
@@ -388,7 +415,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
         <div className={cn(
           "text-sm leading-relaxed text-gray-200 prose prose-invert max-w-none prose-a:text-accent prose-a:no-underline hover:prose-a:underline",
           isVoidArchitect && "font-mono text-white leading-loose"
-        )} dangerouslySetInnerHTML={{ __html: post.content }} />
+        )} dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(post.content) }} />
         
         {/* Character Counter */}
         <div className={cn(

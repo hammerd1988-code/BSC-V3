@@ -1,3 +1,5 @@
+// Admin email from env var; falls back to nothing (role stays as DB value)
+const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || '';
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from './supabase';
 import type { Session, User as SupaUser } from '@supabase/supabase-js';
@@ -39,7 +41,7 @@ function buildDefaultProfile(supaUser: SupaUser): User & { auth_uid: string; ema
     cred_balance: 500,
     is_online: false,
     is_live: false,
-    role: supaUser.email === 'hammerd1988@gmail.com' ? 'admin' : 'user',
+    role: (ADMIN_EMAIL && supaUser.email === ADMIN_EMAIL) ? 'admin' : 'user',
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -106,7 +108,7 @@ async function ensureUserProfile(supaUser: SupaUser): Promise<User> {
   if (!existing.avatar_url && (meta.avatar_url || meta.picture)) {
     updates.avatar_url = meta.avatar_url ?? meta.picture;
   }
-  if (supaUser.email === 'hammerd1988@gmail.com' && existing.role !== 'admin') {
+  if (ADMIN_EMAIL && supaUser.email === ADMIN_EMAIL && existing.role !== 'admin') {
     updates.role = 'admin';
   }
 
