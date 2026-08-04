@@ -34,6 +34,7 @@ export default function TerminalScreen({ transport, onDisconnect }: {
   const [busy, setBusy] = useState(false);
   const [ctrlMode, setCtrlMode] = useState(false);
   const [terminalSize, setTerminalSize] = useState({ width: 0, height: 0 });
+  const [pendingLine, setPendingLine] = useState('');
   const scrollRef = useRef<ScrollView>(null);
   const pendingLineRef = useRef('');
   const styleRef = useRef<AnsiStyle>({});
@@ -58,6 +59,7 @@ export default function TerminalScreen({ transport, onDisconnect }: {
       newlineIndex = input.indexOf('\n', start);
     }
     pendingLineRef.current = input.slice(start);
+    setPendingLine(pendingLineRef.current);
     if (nextLines.length) {
       setLines((current) => [...current, ...nextLines].slice(-MAX_LINES));
     }
@@ -135,6 +137,9 @@ export default function TerminalScreen({ transport, onDisconnect }: {
   };
 
   const verified = transport.capabilities.hostKeyVerification && transport.hostKeyInfo;
+  const pendingSpans = pendingLine
+    ? parseAnsiLine(pendingLine.split('\r').at(-1) ?? '', styleRef.current).spans
+    : [];
 
   return (
     <View style={styles.container}>
@@ -160,6 +165,7 @@ export default function TerminalScreen({ transport, onDisconnect }: {
         onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: false })}
       >
         {lines.map((line, index) => <StyledLine key={`${index}-${line.map((span) => span.text).join('')}`} spans={line} />)}
+        {pendingSpans.length > 0 && <StyledLine spans={pendingSpans} />}
       </ScrollView>
       {shellActive && (
         <View style={styles.keyBar}>
