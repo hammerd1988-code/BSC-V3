@@ -49,6 +49,7 @@ create or replace function public.transfer_cred(
 returns void
 language plpgsql
 security definer
+set search_path = public, pg_temp
 as $$
 begin
     -- Validate amount
@@ -115,6 +116,18 @@ begin
     returning cred_balance into v_new_balance;
 
     -- Ledger entry
+    perform pg_advisory_xact_lock(hashtext(p_user_id));
+
+    update public.users
+       set cred_balance = cred_balance - p_amount
+     where id = p_user_id
+       and cred_balance >= p_amount
+    returning cred_balance into v_new_balance;
+
+    if not found then
+        raise exception 'insufficient CRED balance';
+    end if;
+
     insert into public.transactions (user_id, amount, type, description, created_at)
     values (p_user_id, p_amount, 'spend', p_description, now());
 
