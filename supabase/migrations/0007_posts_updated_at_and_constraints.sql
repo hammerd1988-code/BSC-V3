@@ -79,6 +79,7 @@ $$;
 
 -- Revoke public execute — only service role may call this
 revoke execute on function public.transfer_cred(text, text, integer, text) from public, anon, authenticated;
+grant execute on function public.transfer_cred(text, text, integer, text) to service_role;
 
 -- =========================================================================
 -- Atomic CRED spend stored procedure
@@ -114,19 +115,6 @@ begin
        set cred_balance = cred_balance - p_amount
      where id = p_user_id
     returning cred_balance into v_new_balance;
-
-    -- Ledger entry
-    perform pg_advisory_xact_lock(hashtext(p_user_id));
-
-    update public.users
-       set cred_balance = cred_balance - p_amount
-     where id = p_user_id
-       and cred_balance >= p_amount
-    returning cred_balance into v_new_balance;
-
-    if not found then
-        raise exception 'insufficient CRED balance';
-    end if;
 
     insert into public.transactions (user_id, amount, type, description, created_at)
     values (p_user_id, p_amount, 'spend', p_description, now());
