@@ -42,6 +42,7 @@ export interface TransferProgress {
 
 export interface SshCapabilities {
   hostKeyVerification: boolean;
+  rawShellOutput: boolean;
   sftpChmod: boolean;
   shellResize: boolean;
   keyboardInteractive: boolean;

@@ -18,6 +18,7 @@ type Handler<T> = (value: T) => void;
 export class NativeSshTransport implements SshTransport {
   readonly capabilities = {
     hostKeyVerification: Platform.OS === 'android',
+    rawShellOutput: Platform.OS === 'android',
     sftpChmod: false,
     shellResize: Platform.OS === 'android',
     keyboardInteractive: false,
