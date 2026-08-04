@@ -187,8 +187,20 @@ async function startServer() {
   // -----------------------------------------------------------------------
   app.post('/api/notifications', async (req, res) => {
     if (!supabaseAdmin) return res.status(503).json({ error: 'Admin DB not available' });
+
+    const authHeader = req.headers.authorization;
+    const token = typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7)
+      : null;
+    if (!token) return res.status(401).json({ error: 'Missing Authorization bearer token' });
+
+    const { data: authData, error: authErr } = await supabaseAdmin.auth.getUser(token);
+    if (authErr || !authData?.user) {
+      return res.status(401).json({ error: 'Invalid session' });
+    }
+
     const { userId, type, payload } = req.body;
-    if (!userId || !type) {
+    if (typeof userId !== 'string' || typeof type !== 'string' || !userId || !type) {
       return res.status(400).json({ error: 'userId and type are required' });
     }
     try {
@@ -197,7 +209,6 @@ async function startServer() {
         type,
         payload: payload ?? {},
         is_read: false,
-        created_at: new Date().toISOString(),
       });
       if (error) throw error;
       res.json({ success: true });
