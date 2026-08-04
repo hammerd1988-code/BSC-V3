@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -9,17 +8,11 @@ import {
   View,
 } from 'react-native';
 import { SshTransport } from '../transport/types';
-import { AnsiSpan, parseAnsiLine, splitAnsiLines } from '../terminal/ansi';
+import { AnsiSpan, AnsiStyle, parseAnsiLine, stripTerminalControls } from '../terminal/ansi';
 
 const MAX_LINES = 500;
 
-interface TerminalScreenProps {
-  transport: SshTransport;
-  onDisconnect: () => void;
-}
-
-function StyledLine({ line }: { line: string }) {
-  const spans: AnsiSpan[] = parseAnsiLine(line);
+function StyledLine({ spans }: { spans: AnsiSpan[] }) {
   return (
     <Text selectable style={styles.termLine}>
       {spans.map((span, index) => (
@@ -31,37 +24,82 @@ function StyledLine({ line }: { line: string }) {
   );
 }
 
-export default function TerminalScreen({ transport, onDisconnect }: TerminalScreenProps) {
-  const [lines, setLines] = useState<string[]>(['// Interactive terminal ready.']);
+export default function TerminalScreen({ transport, onDisconnect }: {
+  transport: SshTransport;
+  onDisconnect: () => void;
+}) {
+  const [lines, setLines] = useState<AnsiSpan[][]>([]);
   const [command, setCommand] = useState('');
   const [shellActive, setShellActive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [ctrlMode, setCtrlMode] = useState(false);
   const [terminalSize, setTerminalSize] = useState({ width: 0, height: 0 });
   const scrollRef = useRef<ScrollView>(null);
+  const pendingLineRef = useRef('');
+  const styleRef = useRef<AnsiStyle>({});
+  const fallbackBytesRef = useRef<Uint8Array>(new Uint8Array());
+  const decoderRef = useRef<TextDecoder | null>(
+    typeof TextDecoder === 'function' ? new TextDecoder('utf-8', { fatal: false }) : null,
+  );
 
   const append = useCallback((value: string) => {
-    setLines((current) => [...current, ...splitAnsiLines(value)].slice(-MAX_LINES));
+    if (!value) return;
+    const input = stripTerminalControls(`${pendingLineRef.current}${value}`);
+    const nextLines: AnsiSpan[][] = [];
+    let start = 0;
+    let newlineIndex = input.indexOf('\n');
+    while (newlineIndex >= 0) {
+      const rawLine = input.slice(start, newlineIndex);
+      const visibleLine = rawLine.split('\r').at(-1) ?? '';
+      const parsed = parseAnsiLine(visibleLine, styleRef.current);
+      nextLines.push(parsed.spans);
+      styleRef.current = parsed.style;
+      start = newlineIndex + 1;
+      newlineIndex = input.indexOf('\n', start);
+    }
+    pendingLineRef.current = input.slice(start);
+    if (nextLines.length) {
+      setLines((current) => [...current, ...nextLines].slice(-MAX_LINES));
+    }
+  }, []);
+
+  const decodeBase64 = useCallback((value: string): string => {
+    try {
+      const binary = globalThis.atob(value);
+      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+      if (decoderRef.current) return decoderRef.current.decode(bytes, { stream: true });
+      const combined = new Uint8Array(fallbackBytesRef.current.length + bytes.length);
+      combined.set(fallbackBytesRef.current);
+      combined.set(bytes, fallbackBytesRef.current.length);
+      const [complete, remainder] = splitCompleteUtf8(combined);
+      fallbackBytesRef.current = remainder;
+      return decodeUtf8Fallback(complete);
+    } catch (error) {
+      return `\n[raw shell decode error: ${errorMessage(error)}]\n`;
+    }
   }, []);
 
   useEffect(
     () => transport.capabilities.rawShellOutput
       ? transport.onRawShellOutput((value) => append(decodeBase64(value)))
       : transport.onShellOutput(append),
-    [append, transport],
+    [append, decodeBase64, transport],
   );
 
   const startShell = async () => {
     try {
+      const useRawOutput = transport.capabilities.rawShellOutput;
       await transport.startShell({
-        rawOutput: true,
+        ...(useRawOutput ? { rawOutput: true } : {}),
         cols: Math.max(20, Math.floor(terminalSize.width / 7)),
         rows: Math.max(4, Math.floor(terminalSize.height / 18)),
       });
       setShellActive(true);
-      append('// Shell started with raw byte output.');
+      append(useRawOutput
+        ? '// Shell started with raw byte output.\n'
+        : '// Shell started with line output; terminal fidelity is limited on this platform.\n');
     } catch (error) {
-      append(`ERROR: ${errorMessage(error)}`);
+      append(`ERROR: ${errorMessage(error)}\n`);
     }
   };
 
@@ -70,11 +108,12 @@ export default function TerminalScreen({ transport, onDisconnect }: TerminalScre
     if (!value.trim() || busy) return;
     setCommand('');
     setBusy(true);
-    append(`$ ${value}`);
+    append(`$ ${value}\n`);
     try {
-      append(await transport.exec(value.trim()));
+      const output = await transport.exec(value.trim());
+      append(output.endsWith('\n') ? output : `${output}\n`);
     } catch (error) {
-      append(`ERROR: ${errorMessage(error)}`);
+      append(`ERROR: ${errorMessage(error)}\n`);
     } finally {
       setBusy(false);
     }
@@ -86,7 +125,7 @@ export default function TerminalScreen({ transport, onDisconnect }: TerminalScre
     try {
       await transport.writeShell(value);
     } catch (error) {
-      append(`ERROR: ${errorMessage(error)}`);
+      append(`ERROR: ${errorMessage(error)}\n`);
     }
   };
 
@@ -95,10 +134,16 @@ export default function TerminalScreen({ transport, onDisconnect }: TerminalScre
     onDisconnect();
   };
 
+  const verified = transport.capabilities.hostKeyVerification && transport.hostKeyInfo;
+
   return (
     <View style={styles.container}>
       <View style={styles.statusRow}>
-        <Text style={styles.unverified}>● UNVERIFIED HOST</Text>
+        <Text style={verified ? styles.verified : styles.unverified}>
+          {verified
+            ? `● VERIFIED · ${transport.hostKeyInfo?.keyType} · ${transport.hostKeyInfo?.fingerprint}`
+            : '● UNVERIFIED HOST'}
+        </Text>
         <Text style={styles.statusText}>{shellActive ? 'SHELL ACTIVE' : 'CONNECTED'}</Text>
       </View>
       <ScrollView
@@ -108,13 +153,13 @@ export default function TerminalScreen({ transport, onDisconnect }: TerminalScre
         onLayout={(event) => {
           const { width, height } = event.nativeEvent.layout;
           setTerminalSize({ width, height });
-          if (shellActive) {
+          if (shellActive && transport.capabilities.shellResize) {
             transport.setPtySize(Math.max(20, Math.floor(width / 7)), Math.max(4, Math.floor(height / 18)));
           }
         }}
         onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: false })}
       >
-        {lines.map((line, index) => <StyledLine key={`${index}-${line}`} line={line} />)}
+        {lines.map((line, index) => <StyledLine key={`${index}-${line.map((span) => span.text).join('')}`} spans={line} />)}
       </ScrollView>
       {shellActive && (
         <View style={styles.keyBar}>
@@ -180,19 +225,33 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function decodeBase64(value: string): string {
+function decodeUtf8Fallback(bytes: Uint8Array): string {
   try {
-    const binary = globalThis.atob(value);
-    const encoded = Array.from(binary, (character) => `%${character.charCodeAt(0).toString(16).padStart(2, '0')}`).join('');
+    const encoded = Array.from(bytes, (byte) => `%${byte.toString(16).padStart(2, '0')}`).join('');
     return decodeURIComponent(encoded);
   } catch {
-    return '';
+    return String.fromCharCode(...bytes);
   }
+}
+
+function splitCompleteUtf8(bytes: Uint8Array): [Uint8Array, Uint8Array] {
+  if (!bytes.length) return [bytes, bytes];
+  let end = bytes.length;
+  let continuationCount = 0;
+  for (let index = end - 1; index >= 0 && (bytes[index] & 0xc0) === 0x80; index -= 1) {
+    continuationCount += 1;
+  }
+  const lead = bytes[end - continuationCount - 1];
+  if (lead === undefined) return [bytes, new Uint8Array()];
+  const expected = lead >= 0xf0 ? 3 : lead >= 0xe0 ? 2 : lead >= 0xc0 ? 1 : 0;
+  if (expected > continuationCount) return [new Uint8Array(), bytes];
+  return [bytes.slice(0, end), bytes.slice(end)];
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#020617' },
   statusRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 8 },
+  verified: { color: '#67e8f9', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
   unverified: { color: '#fbbf24', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
   statusText: { color: '#67e8f9', fontSize: 10, fontWeight: '800', letterSpacing: 1 },
   terminal: { flex: 1, paddingHorizontal: 12 },

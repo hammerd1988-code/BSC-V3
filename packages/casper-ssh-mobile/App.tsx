@@ -5,7 +5,7 @@ import HostScreen from './src/screens/HostScreen';
 import TerminalScreen from './src/screens/TerminalScreen';
 import FileBrowserScreen from './src/screens/FileBrowserScreen';
 import TrustedHostsScreen from './src/screens/TrustedHostsScreen';
-import { createNativeTransport } from './src/transport/nativeTransport';
+import { createNativeTransport, nativeCapabilities } from './src/transport/nativeTransport';
 import { SshTransport } from './src/transport/types';
 import {
   clearCredentials,
@@ -48,7 +48,7 @@ export default function App() {
   const saveProfile = async (
     profileData: Omit<HostProfile, 'id'>,
     credentials: HostCredentials,
-  ) => {
+  ): Promise<HostProfile> => {
     const existing = selectedProfile?.id
       ? selectedProfile
       : profiles.find(
@@ -67,6 +67,7 @@ export default function App() {
     await saveHostProfiles(nextProfiles);
     if (profile.saveCredentials) await writeCredentials(profile.id, credentials);
     else await clearCredentials(profile.id);
+    return profile;
   };
 
   const deleteProfile = async (profile: HostProfile) => {
@@ -159,6 +160,7 @@ export default function App() {
             onDeleteProfile={(profile) => void deleteProfile(profile)}
             onConnect={connect}
             onSaveProfile={saveProfile}
+            hostKeyVerificationAvailable={nativeCapabilities.hostKeyVerification}
             onManageTrustedHosts={() => setScreen('hosts')}
             connecting={connecting}
           />
@@ -169,10 +171,17 @@ export default function App() {
                 <Text style={styles.connectedHost} numberOfLines={1}>
                   {connectedProfile.username}@{connectedProfile.host}:{connectedProfile.port}
                 </Text>
-                <Text style={styles.trustText}>
+                <Text
+                  style={[
+                    styles.trustText,
+                    transport.capabilities.hostKeyVerification && transport.hostKeyInfo
+                      ? styles.verifiedText
+                      : styles.unverifiedText,
+                  ]}
+                >
                   {transport.capabilities.hostKeyVerification && transport.hostKeyInfo
-                    ? `${transport.hostKeyInfo.keyType} · ${transport.hostKeyInfo.fingerprint}`
-                    : 'HOST KEY VERIFICATION UNAVAILABLE ON THIS PLATFORM'}
+                    ? `● VERIFIED · ${transport.hostKeyInfo.keyType} · ${transport.hostKeyInfo.fingerprint}`
+                    : '● UNVERIFIED · HOST KEY VERIFICATION UNAVAILABLE'}
                 </Text>
               </View>
               <TouchableOpacity style={styles.disconnectButton} onPress={disconnect}>
@@ -256,7 +265,9 @@ const styles = StyleSheet.create({
   hostBar: { alignItems: 'center', borderBottomColor: '#1e293b', borderBottomWidth: 1, flexDirection: 'row', padding: 10 },
   hostCopy: { flex: 1 },
   connectedHost: { color: '#e2e8f0', fontFamily: 'monospace', fontSize: 12 },
-  trustText: { color: '#fbbf24', fontSize: 9, fontWeight: '800', letterSpacing: 1, marginTop: 3 },
+  trustText: { fontSize: 9, fontWeight: '800', letterSpacing: 1, marginTop: 3 },
+  verifiedText: { color: '#67e8f9' },
+  unverifiedText: { color: '#fbbf24' },
   disconnectButton: { backgroundColor: '#7f1d1d', borderRadius: 7, paddingHorizontal: 12, paddingVertical: 9 },
   disconnectText: { color: '#fee2e2', fontSize: 10, fontWeight: '900' },
   tabs: { flexDirection: 'row', paddingHorizontal: 10, paddingTop: 8 },

@@ -34,7 +34,7 @@ final class HostKeyTrustRepository implements HostKeyRepository {
     this.delegate = delegate;
     this.host = host;
     this.port = port;
-    this.pinnedFingerprint = pinnedFingerprint;
+    this.pinnedFingerprint = normalizeFingerprint(pinnedFingerprint);
     this.acceptNewHostKey = acceptNewHostKey;
   }
 
@@ -129,9 +129,19 @@ final class HostKeyTrustRepository implements HostKeyRepository {
   static String fingerprint(byte[] key) {
     try {
       byte[] digest = MessageDigest.getInstance("SHA-256").digest(key);
-      return "SHA256/" + Base64.encodeToString(digest, Base64.NO_WRAP).replace("=", "");
+      return "SHA256:" + Base64.encodeToString(digest, Base64.NO_WRAP).replace("=", "");
     } catch (NoSuchAlgorithmException error) {
       throw new IllegalStateException("SHA-256 is unavailable", error);
     }
+  }
+
+  private static String normalizeFingerprint(String value) {
+    if (value == null) return null;
+    String normalized = value.trim();
+    if (normalized.startsWith("SHA256:") || normalized.startsWith("SHA256/")) {
+      normalized = normalized.substring(7);
+    }
+    normalized = normalized.replace("=", "");
+    return normalized.isEmpty() ? null : "SHA256:" + normalized;
   }
 }

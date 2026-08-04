@@ -40,15 +40,10 @@ import java.util.Properties;
 import java.util.Vector;
 
 import com.facebook.react.bridge.Promise;
-import com.facebook.react.bridge.ReactMethod;
-import com.facebook.react.bridge.WritableMap;
-import com.facebook.react.bridge.Arguments;
 
 import com.jcraft.jsch.KeyPair;
 
-import java.io.File;
 import java.io.FileWriter;
-import java.io.IOException;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import android.util.Base64;
