@@ -50,19 +50,15 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     }
     setIsBoosting(true);
     try {
-      const res = await fetch('/api/cred/spend', {
+      const res = await fetch('/api/cred/boost', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: currentUser.id, amount: 50, description: 'Boosted a transmission' }),
+        body: JSON.stringify({ userId: currentUser.id, postId: post.id }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || 'Boost spend failed');
+        throw new Error(err.error || 'Boost failed');
       }
-      await Promise.all([
-        supabase.from('posts').update({ is_boosted: true }).eq('id', post.id),
-        supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'boosts', p_amount: 1 }),
-      ]);
     } catch (error) {
       handleDbError(error, 'UPDATE', `posts/${post.id}`);
     } finally {
