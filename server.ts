@@ -117,6 +117,18 @@ async function startServer() {
   // -----------------------------------------------------------------------
   app.post('/api/cred/transfer', async (req, res) => {
     if (!supabaseAdmin) return res.status(503).json({ error: 'Admin DB not available' });
+
+    // Authenticate the caller via their Supabase JWT
+    const authHeader = req.headers['authorization'] || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!token) {
+      return res.status(401).json({ error: 'Authorization token required' });
+    }
+    const { data: { user: callerUser }, error: authError } = await supabaseAdmin.auth.getUser(token);
+    if (authError || !callerUser) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+
     const { fromUserId, toUserId, amount, description } = req.body;
     if (!fromUserId || !toUserId || !amount) {
       return res.status(400).json({ error: 'fromUserId, toUserId, and amount are required' });
@@ -124,6 +136,13 @@ async function startServer() {
     if (typeof amount !== 'number' || amount <= 0) {
       return res.status(400).json({ error: 'amount must be a positive number' });
     }
+
+    // Enforce that the caller owns the fromUserId (or is admin)
+    const isAdmin = callerUser.email === 'hammerd1988@gmail.com';
+    if (!isAdmin && callerUser.id !== fromUserId) {
+      return res.status(403).json({ error: 'Forbidden: you can only transfer your own CRED' });
+    }
+
     try {
       const { error } = await supabaseAdmin.rpc('transfer_cred', {
         p_from_user_id: fromUserId,
