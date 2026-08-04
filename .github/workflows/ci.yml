@@ -32,6 +32,9 @@ jobs:
       - name: Typecheck
         run: npm run lint
 
+      - name: Typecheck Casper SSH mobile
+        run: npm run lint:mobile
+
       - name: Test
         run: npm run test:run
 

@@ -13,6 +13,7 @@
     "preview": "vite preview",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "lint": "tsc --noEmit",
+    "lint:mobile": "npm --prefix packages/casper-ssh-mobile run lint",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
