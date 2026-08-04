@@ -49,6 +49,7 @@ create or replace function public.transfer_cred(
 returns void
 language plpgsql
 security definer
+set search_path = public, pg_temp
 as $$
 begin
     -- Validate amount
@@ -78,3 +79,78 @@ $$;
 
 -- Revoke public execute — only service role may call this
 revoke execute on function public.transfer_cred(text, text, integer, text) from public, anon, authenticated;
+grant execute on function public.transfer_cred(text, text, integer, text) to service_role;
+
+-- =========================================================================
+-- Atomic CRED spend stored procedure
+-- Deducts CRED from a user and inserts a ledger row in a single transaction.
+-- Call from server-side only (service role) — never from the client.
+-- =========================================================================
+create or replace function public.spend_cred(
+    p_user_id    text,
+    p_amount     integer,
+    p_description text default 'CRED spend'
+)
+returns integer
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+    v_new_balance integer;
+begin
+    if p_amount <= 0 then
+        raise exception 'spend amount must be positive';
+    end if;
+
+    perform pg_advisory_xact_lock(hashtext(p_user_id));
+
+    update public.users
+       set cred_balance = cred_balance - p_amount
+     where id = p_user_id
+       and cred_balance >= p_amount
+    returning cred_balance into v_new_balance;
+
+    if not found then
+        raise exception 'insufficient CRED balance';
+    end if;
+
+    insert into public.transactions (user_id, amount, type, description, created_at)
+    values (p_user_id, p_amount, 'spend', p_description, now());
+
+    return v_new_balance;
+end;
+$$;
+
+revoke execute on function public.spend_cred(text, integer, text) from public, anon, authenticated;
+grant execute on function public.spend_cred(text, integer, text) to service_role;
+
+-- =========================================================================
+-- Atomic CRED boost stored procedure
+-- Spends CRED and marks a post as boosted in a single transaction.
+-- Call from server-side only (service role) — never from the client.
+-- =========================================================================
+create or replace function public.boost_post(
+    p_user_id text,
+    p_post_id text,
+    p_amount  integer default 50
+)
+returns void
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+    -- spend CRED atomically
+    perform public.spend_cred(p_user_id, p_amount, 'Boosted a transmission');
+
+    -- mark post as boosted and increment counter
+    update public.posts
+       set is_boosted = true,
+           boosts     = coalesce(boosts, 0) + 1
+     where id = p_post_id;
+end;
+$$;
+
+revoke execute on function public.boost_post(text, text, integer) from public, anon, authenticated;
+grant execute on function public.boost_post(text, text, integer) to service_role;
