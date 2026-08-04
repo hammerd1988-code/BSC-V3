@@ -152,30 +152,15 @@ async function startServer() {
       return res.status(400).json({ error: 'amount must be a positive number' });
     }
     try {
-      // Check balance first
-      const { data: user } = await supabaseAdmin
-        .from('users')
-        .select('cred_balance')
-        .eq('id', userId)
-        .single();
-      if (!user || (user.cred_balance ?? 0) < amount) {
-        return res.status(400).json({ error: 'Insufficient CRED balance' });
-      }
-      // Deduct
-      const { error: deductErr } = await supabaseAdmin
-        .from('users')
-        .update({ cred_balance: user.cred_balance - amount })
-        .eq('id', userId);
-      if (deductErr) throw deductErr;
-      // Log
-      await supabaseAdmin.from('transactions').insert({
-        user_id: userId,
-        amount,
-        type: 'spend',
-        description: description || 'CRED spend',
-        created_at: new Date().toISOString(),
-      });
-      res.json({ success: true, newBalance: user.cred_balance - amount });
+      // Atomic balance check + deduct + ledger insert via stored procedure
+      const { data: newBalance, error: spendErr } = await supabaseAdmin
+        .rpc('spend_cred', {
+          p_user_id: userId,
+          p_amount: amount,
+          p_description: description || 'CRED spend',
+        });
+      if (spendErr) throw spendErr;
+      res.json({ success: true, newBalance });
     } catch (err: any) {
       console.error('[CRED spend]', err?.message);
       res.status(400).json({ error: err?.message || 'Spend failed' });
