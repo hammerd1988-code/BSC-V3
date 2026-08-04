@@ -203,13 +203,15 @@ async function startServer() {
       return res.status(403).json({ error: 'Forbidden: you may only spend your own CRED' });
     }
     try {
-      const { data, error } = await supabaseAdmin.rpc('spend_cred', {
-        p_user_id: userId,
-        p_amount: amount,
-        p_description: description || 'CRED spend',
-      });
-      if (error) throw error;
-      res.json({ success: true, newBalance: data });
+      // Atomic balance check + deduct + ledger insert via stored procedure
+      const { data: newBalance, error: spendErr } = await supabaseAdmin
+        .rpc('spend_cred', {
+          p_user_id: userId,
+          p_amount: amount,
+          p_description: description || 'CRED spend',
+        });
+      if (spendErr) throw spendErr;
+      res.json({ success: true, newBalance });
     } catch (err: any) {
       console.error('[CRED spend]', err?.message);
       res.status(400).json({ error: err?.message || 'Spend failed' });
