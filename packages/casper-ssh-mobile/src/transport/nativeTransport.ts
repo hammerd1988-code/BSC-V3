@@ -15,15 +15,17 @@ import {
 
 type Handler<T> = (value: T) => void;
 
+export const nativeCapabilities = {
+  hostKeyVerification: Platform.OS === 'android',
+  rawShellOutput: Platform.OS === 'android',
+  sftpChmod: false,
+  shellResize: Platform.OS === 'android',
+  keyboardInteractive: false,
+  agentForwarding: false,
+} as const;
+
 export class NativeSshTransport implements SshTransport {
-  readonly capabilities = {
-    hostKeyVerification: Platform.OS === 'android',
-    rawShellOutput: Platform.OS === 'android',
-    sftpChmod: false,
-    shellResize: Platform.OS === 'android',
-    keyboardInteractive: false,
-    agentForwarding: false,
-  } as const;
+  readonly capabilities = nativeCapabilities;
 
   private client: SSHClient | null = null;
   private readonly shellHandlers = new Set<Handler<string>>();

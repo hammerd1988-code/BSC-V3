@@ -8,9 +8,9 @@
     "ssh",
     "sftp"
   ],
-  "homepage": "https://github.com/blood-sweat-code/BSC-V3",
+  "homepage": "https://github.com/hammerd1988-code/BSC-V3",
   "bugs": {
-    "url": "https://github.com/dylankenneally/react-native-ssh-sftp/issues",
+    "url": "https://github.com/hammerd1988-code/BSC-V3/issues",
     "email": "project@hostname.com"
   },
   "author": {
@@ -44,7 +44,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/blood-sweat-code/BSC-V3.git"
+    "url": "git+https://github.com/hammerd1988-code/BSC-V3.git"
   },
   "files": [
     "android/",

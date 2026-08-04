@@ -21,7 +21,8 @@ interface HostScreenProps {
   onSaveProfile: (
     profile: Omit<HostProfile, 'id'>,
     credentials: HostCredentials,
-  ) => Promise<void>;
+  ) => Promise<HostProfile>;
+  hostKeyVerificationAvailable: boolean;
   onManageTrustedHosts: () => void;
   connecting: boolean;
 }
@@ -42,6 +43,7 @@ export default function HostScreen({
   onDeleteProfile,
   onConnect,
   onSaveProfile,
+  hostKeyVerificationAvailable,
   onManageTrustedHosts,
   connecting,
 }: HostScreenProps) {
@@ -88,8 +90,8 @@ export default function HostScreen({
       return;
     }
     const normalized = { ...profile, port, label: profile.label.trim() || profile.host.trim() };
-    await onSaveProfile(normalized, credentials);
-    onConnect({ ...normalized, id: selectedProfileId ?? '' }, credentials);
+    const savedProfile = await onSaveProfile(normalized, credentials);
+    onConnect(savedProfile, credentials);
   };
 
   return (
@@ -176,8 +178,11 @@ export default function HostScreen({
           <TouchableOpacity
             key={mode}
             onPress={() => {
+              const leavingMode = profile.authType;
               update('authType', mode);
-              setCredentials({});
+              setCredentials((current) => leavingMode === 'password'
+                ? { privateKey: current.privateKey, passphrase: current.passphrase }
+                : { password: current.password });
             }}
             style={[styles.modeButton, profile.authType === mode && styles.modeButtonActive]}
           >
@@ -233,9 +238,10 @@ export default function HostScreen({
         />
       </View>
 
-      <Text style={styles.warning}>
-        This native transport does not verify server host keys. The connection will be marked
-        UNVERIFIED after you acknowledge this risk.
+      <Text style={hostKeyVerificationAvailable ? styles.trustNotice : styles.warning}>
+        {hostKeyVerificationAvailable
+          ? 'Android verifies the server host key against the local known_hosts file.'
+          : 'This platform cannot cryptographically verify server host keys. New connections will be marked unverified.'}
       </Text>
       <TouchableOpacity
         onPress={submit}
@@ -292,6 +298,7 @@ const styles = StyleSheet.create({
   saveTitle: { color: '#e2e8f0', fontSize: 12, fontWeight: '800', letterSpacing: 1 },
   saveHint: { color: '#64748b', fontSize: 11, marginTop: 3 },
   warning: { color: '#fbbf24', fontSize: 11, lineHeight: 16, textAlign: 'center' },
+  trustNotice: { color: '#67e8f9', fontSize: 11, lineHeight: 16, textAlign: 'center' },
   primaryButton: { alignItems: 'center', backgroundColor: '#0e7490', borderRadius: 10, marginTop: 4, padding: 15 },
   disabledButton: { opacity: 0.5 },
   primaryText: { color: '#ecfeff', fontWeight: '900', letterSpacing: 1 },
