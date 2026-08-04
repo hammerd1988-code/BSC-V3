@@ -17,9 +17,10 @@ import { SftpEntry, SshTransport, TransferProgress } from '../transport/types';
 
 interface FileBrowserScreenProps {
   transport: SshTransport;
+  active?: boolean;
 }
 
-export default function FileBrowserScreen({ transport }: FileBrowserScreenProps) {
+export default function FileBrowserScreen({ transport, active = true }: FileBrowserScreenProps) {
   const [path, setPath] = useState('/');
   const [pathInput, setPathInput] = useState('/');
   const [entries, setEntries] = useState<SftpEntry[]>([]);
@@ -44,9 +45,9 @@ export default function FileBrowserScreen({ transport }: FileBrowserScreenProps)
   };
 
   useEffect(() => {
-    void browse('/');
+    if (active) void browse('/');
     return transport.onTransferProgress(setProgress);
-  }, [transport]);
+  }, [active, transport]);
 
   const parent = () => {
     if (path === '/') return;

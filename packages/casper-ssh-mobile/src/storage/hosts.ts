@@ -184,9 +184,19 @@ export async function removeTrustedHost(host: string, port: number): Promise<voi
       const filtered = lines.filter((line) => {
         if (!line.trim() || line.startsWith('#')) return true;
         const first = line.trim().split(/\s+/)[0];
+        if (first.startsWith('|1|')) {
+          throw new Error('Native host-key removal is required to revoke hashed known_hosts entries.');
+        }
         return !first.split(',').includes(canonical) && !first.split(',').includes(host);
       });
       file.write(filtered.join('\n'));
+      const remaining = (await file.text()).split(/\r?\n/);
+      if (remaining.some((line) => {
+        const first = line.trim().split(/\s+/)[0];
+        return first.split(',').includes(canonical) || first.split(',').includes(host);
+      })) {
+        throw new Error('The saved host key could not be removed from known_hosts.');
+      }
     }
   }
 

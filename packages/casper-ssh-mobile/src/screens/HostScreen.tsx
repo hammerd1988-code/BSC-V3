@@ -184,6 +184,7 @@ export default function HostScreen({
           <TouchableOpacity
             key={mode}
             onPress={() => {
+              if (profile.authType === mode) return;
               const leavingMode = profile.authType;
               update('authType', mode);
               setCredentials((current) => leavingMode === 'password'

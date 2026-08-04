@@ -211,11 +211,12 @@ export default function App() {
                 </TouchableOpacity>
               ))}
             </View>
-            {screen === 'terminal' ? (
+            <View style={{ display: screen === 'terminal' ? 'flex' : 'none', flex: 1 }}>
               <TerminalScreen transport={transport} onDisconnect={disconnect} />
-            ) : (
-              <FileBrowserScreen transport={transport} />
-            )}
+            </View>
+            <View style={{ display: screen === 'files' ? 'flex' : 'none', flex: 1 }}>
+              <FileBrowserScreen transport={transport} active={screen === 'files'} />
+            </View>
           </>
         )}
       </KeyboardAvoidingView>
