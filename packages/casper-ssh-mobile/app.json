@@ -46,7 +46,8 @@
             "enableShrinkResourcesInReleaseBuilds": true
           }
         }
-      ]
+      ],
+      "expo-sharing"
     ]
   }
 }
