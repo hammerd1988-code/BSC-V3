@@ -54,6 +54,15 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: currentUser.id, postId: post.id }),
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      const res = await fetch('/api/cred/boost', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `******{token}` } : {}),
+        },
+        body: JSON.stringify({ userId: currentUser.id, postId: post.id, amount: 50 }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -73,28 +82,34 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     if ((currentUser.cred_balance || 0) < amount) { alert('Insufficient CRED'); return; }
 
     try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
       const res = await fetch('/api/cred/transfer', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `******{token}` } : {}),
+        },
         body: JSON.stringify({
           fromUserId: currentUser.id,
           toUserId: post.author_id,
           amount,
           description: `Tip from @${currentUser.username} for a transmission`,
+          notifyRecipient: true,
+          notifyPayload: {
+            type: 'tip',
+            amount,
+            senderName: currentUser.display_name,
+            senderUsername: currentUser.username,
+            message: tipMessage,
+            postId: post.id,
+          },
         }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || 'Transfer failed');
       }
-      // Notify the recipient
-      await supabase.from('notifications').insert({
-        user_id: post.author_id,
-        type: 'tip',
-        payload: { amount, senderName: currentUser.display_name, senderUsername: currentUser.username, message: tipMessage, postId: post.id },
-        is_read: false,
-        created_at: new Date().toISOString(),
-      });
       setShowTipModal(false);
       setTipMessage('');
     } catch (error) {
@@ -123,21 +138,38 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     setIsLiked(nowLiked);
     try {
       if (nowLiked) {
-        await supabase.from('post_likes').upsert(
+        const { data, error } = await supabase.from('post_likes').upsert(
           { post_id: post.id, user_id: currentUser.id },
           { onConflict: 'post_id,user_id', ignoreDuplicates: true }
-        );
-        await supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'likes', p_amount: 1 });
+        ).select('post_id');
+        if (error) throw error;
+        // Only increment and emit when a row was actually inserted
+        if (data && data.length > 0) {
+          await supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'likes', p_amount: 1 });
+          onLike(post.id);
+        } else {
+          // Row already existed — revert the optimistic update
+          setIsLiked(!nowLiked);
+        }
       } else {
-        await supabase.from('post_likes').delete().match({ post_id: post.id, user_id: currentUser.id });
-        await supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'likes', p_amount: -1 });
+        const { count, error } = await supabase
+          .from('post_likes')
+          .delete()
+          .match({ post_id: post.id, user_id: currentUser.id });
+        if (error) throw error;
+        // Only decrement and emit when a row was actually deleted
+        if ((count ?? 0) > 0) {
+          await supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'likes', p_amount: -1 });
+          onLike(post.id);
+        } else {
+          setIsLiked(!nowLiked);
+        }
       }
     } catch (error) {
       // Revert optimistic update on failure
       setIsLiked(!nowLiked);
       handleDbError(error, 'UPDATE', `post_likes/${post.id}`);
     }
-    onLike(post.id);
   };
 
   const handleShare = async () => {
