@@ -103,19 +103,7 @@ begin
         raise exception 'spend amount must be positive';
     end if;
 
-    -- Lock the row and verify sufficient balance atomically
-    perform pg_advisory_xact_lock(hashtext(p_user_id));
-    if (select cred_balance from public.users where id = p_user_id for update) < p_amount then
-        raise exception 'insufficient CRED balance';
-    end if;
-
-    -- Debit
-    update public.users
-       set cred_balance = cred_balance - p_amount
-     where id = p_user_id
-    returning cred_balance into v_new_balance;
-
-    -- Ledger entry
+    -- Lock the row, verify sufficient balance, and debit atomically
     perform pg_advisory_xact_lock(hashtext(p_user_id));
 
     update public.users
@@ -128,6 +116,7 @@ begin
         raise exception 'insufficient CRED balance';
     end if;
 
+    -- Ledger entry
     insert into public.transactions (user_id, amount, type, description, created_at)
     values (p_user_id, p_amount, 'spend', p_description, now());
 
