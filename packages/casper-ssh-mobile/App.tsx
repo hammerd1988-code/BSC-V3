@@ -1,455 +1,202 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Alert, KeyboardAvoidingView, Platform, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import SSHClient, { PtyType } from '@dylankenneally/react-native-ssh-sftp';
+import HostScreen from './src/screens/HostScreen';
+import TerminalScreen from './src/screens/TerminalScreen';
+import FileBrowserScreen from './src/screens/FileBrowserScreen';
+import { createNativeTransport } from './src/transport/nativeTransport';
+import { SshTransport } from './src/transport/types';
+import {
+  acknowledgeHostTrust,
+  clearCredentials,
+  clearHostTrust,
+  HostCredentials,
+  HostProfile,
+  isHostTrustAcknowledged,
+  loadHostProfiles,
+  readCredentials,
+  saveHostProfiles,
+  writeCredentials,
+} from './src/storage/hosts';
 
-type AuthMode = 'password' | 'key';
-
-interface HostConfig {
-  host: string;
-  port: string;
-  username: string;
-  password: string;
-  privateKey: string;
-  passphrase: string;
-}
-
-const MAX_LINES = 500;
+type Screen = 'terminal' | 'files';
 
 export default function App() {
-  const [authMode, setAuthMode] = useState<AuthMode>('password');
-  const [config, setConfig] = useState<HostConfig>({
-    host: '',
-    port: '22',
-    username: '',
-    password: '',
-    privateKey: '',
-    passphrase: '',
-  });
-  const [command, setCommand] = useState('');
-  const [terminal, setTerminal] = useState<string[]>([
-    '// Casper Roaming Ghost SSH — ready to haunt.',
-  ]);
-  const [connected, setConnected] = useState(false);
+  const [profiles, setProfiles] = useState<HostProfile[]>([]);
+  const [selectedProfile, setSelectedProfile] = useState<HostProfile | undefined>();
+  const [transport, setTransport] = useState<SshTransport | null>(null);
+  const [connectedProfile, setConnectedProfile] = useState<HostProfile | null>(null);
+  const [screen, setScreen] = useState<Screen>('terminal');
   const [connecting, setConnecting] = useState(false);
-  const [shellActive, setShellActive] = useState(false);
-  const [sftpPath, setSftpPath] = useState('/');
-  const clientRef = useRef<SSHClient | null>(null);
-  const scrollRef = useRef<ScrollView>(null);
-
-  const log = useCallback((line: string) => {
-    setTerminal((prev) => [...prev.slice(-MAX_LINES), line]);
-  }, []);
-
-  const disconnect = useCallback(() => {
-    clientRef.current?.disconnect();
-    clientRef.current = null;
-    setConnected(false);
-    setConnecting(false);
-    setShellActive(false);
-    log('Disconnected.');
-  }, [log]);
 
   useEffect(() => {
-    return () => {
-      disconnect();
+    void loadHostProfiles().then(setProfiles);
+  }, []);
+
+  useEffect(() => () => transport?.disconnect(), [transport]);
+
+  const selectProfile = async (profile: HostProfile): Promise<HostCredentials | undefined> => {
+    if (!profile.id) {
+      setSelectedProfile(undefined);
+      return undefined;
+    }
+    setSelectedProfile(profile);
+    return profile.saveCredentials ? readCredentials(profile.id) : {};
+  };
+
+  const saveProfile = async (
+    profileData: Omit<HostProfile, 'id'>,
+    credentials: HostCredentials,
+  ) => {
+    const existing = selectedProfile?.id
+      ? selectedProfile
+      : profiles.find(
+          (profile) =>
+            profile.host === profileData.host &&
+            profile.port === profileData.port &&
+            profile.username === profileData.username,
+        );
+    const profile: HostProfile = {
+      ...profileData,
+      id: existing?.id ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     };
-  }, [disconnect]);
+    const nextProfiles = [...profiles.filter((item) => item.id !== profile.id), profile];
+    setProfiles(nextProfiles);
+    setSelectedProfile(profile);
+    await saveHostProfiles(nextProfiles);
+    if (profile.saveCredentials) await writeCredentials(profile.id, credentials);
+    else await clearCredentials(profile.id);
+  };
 
-  const updateConfig = useCallback(
-    (key: keyof HostConfig, value: string) => {
-      setConfig((prev) => ({ ...prev, [key]: value }));
-    },
-    [],
-  );
+  const deleteProfile = async (profile: HostProfile) => {
+    const nextProfiles = profiles.filter((item) => item.id !== profile.id);
+    setProfiles(nextProfiles);
+    if (selectedProfile?.id === profile.id) setSelectedProfile(undefined);
+    await saveHostProfiles(nextProfiles);
+    await clearCredentials(profile.id);
+    await clearHostTrust(profile.host, profile.port);
+  };
 
-  const connect = async () => {
-    if (connecting || connected) return;
-    setConnecting(true);
-    try {
-      const port = parseInt(config.port || '22', 10);
-      // Close any previous session before starting a new one.
-      clientRef.current?.disconnect();
-      let client: SSHClient;
-      if (authMode === 'password') {
-        client = await SSHClient.connectWithPassword(
-          config.host,
-          port,
-          config.username,
-          config.password,
+  const connect = async (profile: HostProfile, credentials: HostCredentials) => {
+    const trusted = await isHostTrustAcknowledged(profile.host, profile.port);
+    if (!trusted) {
+      const accepted = await new Promise<boolean>((resolve) => {
+        Alert.alert(
+          'Unverified host',
+          `The native SSH transport cannot verify ${profile.host}:${profile.port}. Accept this risk once to continue? The connection will remain marked UNVERIFIED.`,
+          [
+            { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+            { text: 'Accept risk', style: 'destructive', onPress: () => resolve(true) },
+          ],
         );
-      } else {
-        client = await SSHClient.connectWithKey(
-          config.host,
-          port,
-          config.username,
-          config.privateKey,
-          config.passphrase,
-        );
-      }
-      client.on('Shell', (event: unknown) => {
-        const line = typeof event === 'string' ? event : JSON.stringify(event);
-        if (line.length) log(line);
       });
-      clientRef.current = client;
-      setConnected(true);
-      log(`Connected to ${config.username}@${config.host}:${port}`);
-    } catch (err: any) {
-      const message = err?.message || String(err);
-      Alert.alert('Connection failed', message);
-      log(`ERROR: ${message}`);
+      if (!accepted) return;
+      await acknowledgeHostTrust(profile.host, profile.port);
+    }
+
+    setConnecting(true);
+    const nextTransport = createNativeTransport();
+    try {
+      await nextTransport.connect({
+        host: profile.host,
+        port: profile.port,
+        username: profile.username,
+        auth: profile.authType,
+        ...credentials,
+      });
+      setTransport(nextTransport);
+      setConnectedProfile(profile);
+      setScreen('terminal');
+    } catch (error) {
+      nextTransport.disconnect();
+      Alert.alert('Connection failed', errorMessage(error));
     } finally {
       setConnecting(false);
     }
   };
 
-  const runCommand = async () => {
-    if (!clientRef.current || !command.trim()) return;
-    const cmd = command.trim();
-    try {
-      log(`$ ${cmd}`);
-      const result = await clientRef.current.execute(cmd);
-      if (result) log(result);
-    } catch (err: any) {
-      log(`ERROR: ${err?.message || String(err)}`);
-    }
-    setCommand('');
-  };
-
-  const startShell = async () => {
-    if (!clientRef.current) return;
-    try {
-      await clientRef.current.startShell(PtyType.XTERM);
-      setShellActive(true);
-      log('// Interactive shell started (XTERM)');
-    } catch (err: any) {
-      log(`ERROR: ${err?.message || String(err)}`);
-    }
-  };
-
-  const sendToShell = async () => {
-    if (!clientRef.current || !command.trim()) return;
-    const cmd = command.trim();
-    log(`$ ${cmd}`);
-    try {
-      await clientRef.current.writeToShell(`${cmd}\n`);
-    } catch (err: any) {
-      log(`ERROR: ${err?.message || String(err)}`);
-    }
-    setCommand('');
-  };
-
-  const listSftp = async () => {
-    if (!clientRef.current) return;
-    try {
-      await clientRef.current.connectSFTP();
-      const items = await clientRef.current.sftpLs(sftpPath);
-      log(`SFTP ${sftpPath}:`);
-      items.forEach((item) => {
-        const type = item.isDirectory ? 'd' : '-';
-        const size = item.fileSize.toString().padStart(10, ' ');
-        log(`${type} ${size} ${item.filename}`);
-      });
-    } catch (err: any) {
-      log(`ERROR: ${err?.message || String(err)}`);
-    }
-  };
-
-  const renderForm = () => (
-    <View style={styles.form}>
-      <TextInput
-        style={styles.input}
-        placeholder="Host"
-        placeholderTextColor="#555"
-        value={config.host}
-        onChangeText={(t) => updateConfig('host', t)}
-        autoCapitalize="none"
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Port"
-        placeholderTextColor="#555"
-        value={config.port}
-        onChangeText={(t) => updateConfig('port', t)}
-        keyboardType="number-pad"
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Username"
-        placeholderTextColor="#555"
-        value={config.username}
-        onChangeText={(t) => updateConfig('username', t)}
-        autoCapitalize="none"
-      />
-
-      <View style={styles.modeRow}>
-        <TouchableOpacity
-          onPress={() => setAuthMode('password')}
-          style={[styles.modeBtn, authMode === 'password' && styles.modeBtnActive]}
-        >
-          <Text style={styles.modeText}>Password</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={() => setAuthMode('key')}
-          style={[styles.modeBtn, authMode === 'key' && styles.modeBtnActive]}
-        >
-          <Text style={styles.modeText}>Private Key</Text>
-        </TouchableOpacity>
-      </View>
-
-      <Text style={styles.warning}>
-        The SSH library does not yet verify server host keys. Connect only on trusted networks and prefer key-based auth.
-      </Text>
-
-      {authMode === 'password' ? (
-        <TextInput
-          style={styles.input}
-          placeholder="Password"
-          placeholderTextColor="#555"
-          value={config.password}
-          onChangeText={(t) => updateConfig('password', t)}
-          secureTextEntry
-          autoCapitalize="none"
-        />
-      ) : (
-        <>
-          <TextInput
-            style={[styles.input, styles.keyInput]}
-            placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-            placeholderTextColor="#555"
-            value={config.privateKey}
-            onChangeText={(t) => updateConfig('privateKey', t)}
-            multiline
-            textAlignVertical="top"
-            autoCapitalize="none"
-          />
-          <TextInput
-            style={styles.input}
-            placeholder="Key passphrase (optional)"
-            placeholderTextColor="#555"
-            value={config.passphrase}
-            onChangeText={(t) => updateConfig('passphrase', t)}
-            secureTextEntry
-            autoCapitalize="none"
-          />
-        </>
-      )}
-
-      <TouchableOpacity onPress={connect} style={[styles.actionBtn, connecting && styles.actionBtnDisabled]} disabled={connecting}>
-        <Text style={styles.actionText}>{connecting ? 'CONNECTING...' : 'CONNECT'}</Text>
-      </TouchableOpacity>
-    </View>
-  );
-
-  const renderTerminal = () => (
-    <>
-      <ScrollView
-        ref={scrollRef}
-        style={styles.terminal}
-        contentContainerStyle={styles.terminalContent}
-        onContentSizeChange={() =>
-          scrollRef.current?.scrollToEnd({ animated: false })
-        }
-      >
-        {terminal.map((line, i) => (
-          <Text key={i} style={styles.termLine}>
-            {line}
-          </Text>
-        ))}
-      </ScrollView>
-
-      <View style={styles.controls}>
-        {!shellActive ? (
-          <TouchableOpacity onPress={startShell} style={styles.actionBtn}>
-            <Text style={styles.actionText}>START SHELL</Text>
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity onPress={sendToShell} style={styles.actionBtn}>
-            <Text style={styles.actionText}>SEND TO SHELL</Text>
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity onPress={runCommand} style={styles.actionBtn}>
-          <Text style={styles.actionText}>EXECUTE</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={listSftp} style={styles.actionBtn}>
-          <Text style={styles.actionText}>SFTP LS</Text>
-        </TouchableOpacity>
-      </View>
-
-      <TextInput
-        style={styles.commandInput}
-        placeholder="> command"
-        placeholderTextColor="#555"
-        value={command}
-        onChangeText={setCommand}
-        onSubmitEditing={shellActive ? sendToShell : runCommand}
-        autoCapitalize="none"
-      />
-
-      <TextInput
-        style={styles.input}
-        placeholder="SFTP path"
-        placeholderTextColor="#555"
-        value={sftpPath}
-        onChangeText={setSftpPath}
-        autoCapitalize="none"
-      />
-
-      <TouchableOpacity onPress={disconnect} style={[styles.actionBtn, styles.disconnectBtn]}>
-        <Text style={styles.actionText}>DISCONNECT</Text>
-      </TouchableOpacity>
-    </>
-  );
+  const disconnect = useCallback(() => {
+    transport?.disconnect();
+    setTransport(null);
+    setConnectedProfile(null);
+    setScreen('terminal');
+  }, [transport]);
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar style="light" />
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboard}
-      >
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.keyboard}>
         <View style={styles.header}>
           <Text style={styles.title}>CASPER</Text>
-          <Text style={styles.subtitle}>Roaming Ghost SSH</Text>
+          <Text style={styles.subtitle}>ROAMING GHOST SSH</Text>
         </View>
-        {connected ? renderTerminal() : renderForm()}
+        {!transport || !connectedProfile ? (
+          <HostScreen
+            profiles={profiles}
+            selectedProfileId={selectedProfile?.id}
+            onSelectProfile={selectProfile}
+            onDeleteProfile={(profile) => void deleteProfile(profile)}
+            onConnect={connect}
+            onSaveProfile={saveProfile}
+            connecting={connecting}
+          />
+        ) : (
+          <>
+            <View style={styles.hostBar}>
+              <View style={styles.hostCopy}>
+                <Text style={styles.connectedHost} numberOfLines={1}>
+                  {connectedProfile.username}@{connectedProfile.host}:{connectedProfile.port}
+                </Text>
+                <Text style={styles.trustText}>UNVERIFIED · FINGERPRINT UNAVAILABLE</Text>
+              </View>
+              <TouchableOpacity style={styles.disconnectButton} onPress={disconnect}>
+                <Text style={styles.disconnectText}>EXIT</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.tabs}>
+              {(['terminal', 'files'] as Screen[]).map((tab) => (
+                <TouchableOpacity
+                  key={tab}
+                  style={[styles.tab, screen === tab && styles.activeTab]}
+                  onPress={() => setScreen(tab)}
+                >
+                  <Text style={[styles.tabText, screen === tab && styles.activeTabText]}>
+                    {tab === 'terminal' ? 'TERMINAL' : 'FILES'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {screen === 'terminal' ? (
+              <TerminalScreen transport={transport} onDisconnect={disconnect} />
+            ) : (
+              <FileBrowserScreen transport={transport} />
+            )}
+          </>
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0a0a0f',
-  },
-  keyboard: {
-    flex: 1,
-  },
-  header: {
-    paddingTop: 24,
-    paddingBottom: 12,
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#1f2937',
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '900',
-    color: '#22d3ee',
-    letterSpacing: 4,
-  },
-  subtitle: {
-    fontSize: 12,
-    color: '#94a3b8',
-    letterSpacing: 2,
-    marginTop: 4,
-  },
-  form: {
-    flex: 1,
-    padding: 16,
-    gap: 12,
-  },
-  input: {
-    backgroundColor: '#111827',
-    color: '#e2e8f0',
-    borderWidth: 1,
-    borderColor: '#374151',
-    borderRadius: 10,
-    padding: 12,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    fontSize: 14,
-  },
-  keyInput: {
-    height: 140,
-  },
-  modeRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  modeBtn: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#374151',
-    backgroundColor: '#111827',
-    alignItems: 'center',
-  },
-  modeBtnActive: {
-    borderColor: '#22d3ee',
-    backgroundColor: '#164e63',
-  },
-  modeText: {
-    color: '#94a3b8',
-    fontWeight: '700',
-  },
-  warning: {
-    color: '#f59e0b',
-    fontSize: 11,
-    textAlign: 'center',
-    marginTop: 4,
-  },
-  actionBtn: {
-    backgroundColor: '#0e7490',
-    padding: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  actionBtnDisabled: {
-    backgroundColor: '#155e75',
-    opacity: 0.6,
-  },
-  actionText: {
-    color: '#ecfeff',
-    fontWeight: '800',
-    letterSpacing: 1,
-  },
-  disconnectBtn: {
-    backgroundColor: '#7f1d1d',
-  },
-  terminal: {
-    flex: 1,
-    backgroundColor: '#020617',
-    padding: 12,
-  },
-  terminalContent: {
-    paddingBottom: 12,
-  },
-  termLine: {
-    color: '#22d3ee',
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  controls: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingTop: 8,
-  },
-  commandInput: {
-    backgroundColor: '#111827',
-    color: '#e2e8f0',
-    borderWidth: 1,
-    borderColor: '#22d3ee',
-    borderRadius: 10,
-    padding: 12,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    fontSize: 14,
-    marginHorizontal: 12,
-    marginTop: 8,
-  },
+  container: { backgroundColor: '#0a0a0f', flex: 1 },
+  keyboard: { flex: 1 },
+  header: { alignItems: 'center', borderBottomColor: '#1f2937', borderBottomWidth: 1, paddingBottom: 12, paddingTop: 18 },
+  title: { color: '#22d3ee', fontSize: 27, fontWeight: '900', letterSpacing: 4 },
+  subtitle: { color: '#94a3b8', fontSize: 11, letterSpacing: 2, marginTop: 3 },
+  hostBar: { alignItems: 'center', borderBottomColor: '#1e293b', borderBottomWidth: 1, flexDirection: 'row', padding: 10 },
+  hostCopy: { flex: 1 },
+  connectedHost: { color: '#e2e8f0', fontFamily: 'monospace', fontSize: 12 },
+  trustText: { color: '#fbbf24', fontSize: 9, fontWeight: '800', letterSpacing: 1, marginTop: 3 },
+  disconnectButton: { backgroundColor: '#7f1d1d', borderRadius: 7, paddingHorizontal: 12, paddingVertical: 9 },
+  disconnectText: { color: '#fee2e2', fontSize: 10, fontWeight: '900' },
+  tabs: { flexDirection: 'row', paddingHorizontal: 10, paddingTop: 8 },
+  tab: { alignItems: 'center', borderBottomColor: '#1e293b', borderBottomWidth: 2, flex: 1, padding: 10 },
+  activeTab: { borderBottomColor: '#22d3ee' },
+  tabText: { color: '#64748b', fontSize: 11, fontWeight: '900', letterSpacing: 1 },
+  activeTabText: { color: '#67e8f9' },
 });
