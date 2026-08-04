@@ -13,11 +13,16 @@
     },
     "android": {
       "package": "org.bloodsweatcode.casperssh",
-      "permissions": ["INTERNET"],
+      "permissions": [
+        "INTERNET"
+      ],
       "predictiveBackGestureEnabled": false
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-secure-store"
+    ]
   }
 }
