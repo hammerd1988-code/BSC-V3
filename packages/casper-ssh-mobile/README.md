@@ -12,7 +12,9 @@ A standalone Android SSH client for the Blood Sweat Code / Casper ecosystem. Con
 - Password and private-key SSH auth (with optional passphrase)
 - One-shot command execution
 - Interactive XTERM shell session
-- SFTP directory listing
+- SFTP browsing, upload, download, rename, delete, and directory creation
+- Secure-store-backed saved host profiles with opt-in credential persistence
+- Explicit per-host unverified-host acknowledgement
 - Casper cyberpunk dark UI
 - Android package: `org.bloodsweatcode.casperssh`
 
@@ -43,7 +45,11 @@ npm run build:apk
 
 ## Security note
 
-The underlying `@dylankenneally/react-native-ssh-sftp` library does not yet verify remote server host keys (it disables `StrictHostKeyChecking` on Android and does not pin host keys on iOS). Treat connections as safe only on trusted networks, and prefer key-based authentication over passwords where possible. Credentials are held in memory only while the app is connected and are not persisted to disk.
+The underlying `@dylankenneally/react-native-ssh-sftp` library does not verify remote server host keys: it disables `StrictHostKeyChecking` on Android and does not pin host keys on iOS. The app never fakes a fingerprint or claims cryptographic verification. On first connection to each host and port, it requires an explicit acknowledgement and permanently labels the active connection **UNVERIFIED** until a transport with real host-key support is added.
+
+Saved host metadata is stored in AsyncStorage. Secrets are only written to Expo SecureStore when **SAVE CREDENTIALS** is enabled; disabling it or deleting a host clears the SecureStore entry. Credentials are never logged. If credentials are not saved, they remain in the current screen/session memory only.
+
+The current native library also line-buffers Android shell output, so the terminal provides ANSI SGR styling and control-key input but cannot provide full raw-byte terminal fidelity, resize/window-change support, or host-key prompts yet.
 
 ## Usage
 
