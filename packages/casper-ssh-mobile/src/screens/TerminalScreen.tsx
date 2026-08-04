@@ -37,6 +37,7 @@ export default function TerminalScreen({ transport, onDisconnect }: TerminalScre
   const [shellActive, setShellActive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [ctrlMode, setCtrlMode] = useState(false);
+  const [terminalSize, setTerminalSize] = useState({ width: 0, height: 0 });
   const scrollRef = useRef<ScrollView>(null);
 
   const append = useCallback((value: string) => {
@@ -44,12 +45,17 @@ export default function TerminalScreen({ transport, onDisconnect }: TerminalScre
   }, []);
 
   useEffect(() => transport.onShellOutput(append), [append, transport]);
+  useEffect(() => transport.onRawShellOutput((value) => append(decodeBase64(value))), [append, transport]);
 
   const startShell = async () => {
     try {
-      await transport.startShell();
+      await transport.startShell({
+        rawOutput: true,
+        cols: Math.max(20, Math.floor(terminalSize.width / 7)),
+        rows: Math.max(4, Math.floor(terminalSize.height / 18)),
+      });
       setShellActive(true);
-      append('// Shell started. Output fidelity is limited by the native line-buffered stream.');
+      append('// Shell started with raw byte output.');
     } catch (error) {
       append(`ERROR: ${errorMessage(error)}`);
     }
@@ -95,6 +101,13 @@ export default function TerminalScreen({ transport, onDisconnect }: TerminalScre
         ref={scrollRef}
         style={styles.terminal}
         contentContainerStyle={styles.terminalContent}
+        onLayout={(event) => {
+          const { width, height } = event.nativeEvent.layout;
+          setTerminalSize({ width, height });
+          if (shellActive) {
+            transport.setPtySize(Math.max(20, Math.floor(width / 7)), Math.max(4, Math.floor(height / 18)));
+          }
+        }}
         onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: false })}
       >
         {lines.map((line, index) => <StyledLine key={`${index}-${line}`} line={line} />)}
@@ -161,6 +174,16 @@ export default function TerminalScreen({ transport, onDisconnect }: TerminalScre
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function decodeBase64(value: string): string {
+  try {
+    const binary = globalThis.atob(value);
+    const encoded = Array.from(binary, (character) => `%${character.charCodeAt(0).toString(16).padStart(2, '0')}`).join('');
+    return decodeURIComponent(encoded);
+  } catch {
+    return '';
+  }
 }
 
 const styles = StyleSheet.create({

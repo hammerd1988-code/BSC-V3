@@ -4,22 +4,23 @@ import { StatusBar } from 'expo-status-bar';
 import HostScreen from './src/screens/HostScreen';
 import TerminalScreen from './src/screens/TerminalScreen';
 import FileBrowserScreen from './src/screens/FileBrowserScreen';
+import TrustedHostsScreen from './src/screens/TrustedHostsScreen';
 import { createNativeTransport } from './src/transport/nativeTransport';
 import { SshTransport } from './src/transport/types';
 import {
-  acknowledgeHostTrust,
   clearCredentials,
-  clearHostTrust,
   HostCredentials,
   HostProfile,
-  isHostTrustAcknowledged,
+  knownHostsPath,
   loadHostProfiles,
+  recordTrustedHost,
+  removeTrustedHost,
   readCredentials,
   saveHostProfiles,
   writeCredentials,
 } from './src/storage/hosts';
 
-type Screen = 'terminal' | 'files';
+type Screen = 'terminal' | 'files' | 'hosts';
 
 export default function App() {
   const [profiles, setProfiles] = useState<HostProfile[]>([]);
@@ -74,42 +75,60 @@ export default function App() {
     if (selectedProfile?.id === profile.id) setSelectedProfile(undefined);
     await saveHostProfiles(nextProfiles);
     await clearCredentials(profile.id);
-    await clearHostTrust(profile.host, profile.port);
+    await removeTrustedHost(profile.host, profile.port);
   };
 
   const connect = async (profile: HostProfile, credentials: HostCredentials) => {
-    const trusted = await isHostTrustAcknowledged(profile.host, profile.port);
-    if (!trusted) {
-      const accepted = await new Promise<boolean>((resolve) => {
-        Alert.alert(
-          'Unverified host',
-          `The native SSH transport cannot verify ${profile.host}:${profile.port}. Accept this risk once to continue? The connection will remain marked UNVERIFIED.`,
-          [
-            { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-            { text: 'Accept risk', style: 'destructive', onPress: () => resolve(true) },
-          ],
-        );
-      });
-      if (!accepted) return;
-      await acknowledgeHostTrust(profile.host, profile.port);
-    }
-
     setConnecting(true);
-    const nextTransport = createNativeTransport();
+    let accepted = false;
     try {
-      await nextTransport.connect({
-        host: profile.host,
-        port: profile.port,
-        username: profile.username,
-        auth: profile.authType,
-        ...credentials,
-      });
-      setTransport(nextTransport);
-      setConnectedProfile(profile);
-      setScreen('terminal');
-    } catch (error) {
-      nextTransport.disconnect();
-      Alert.alert('Connection failed', errorMessage(error));
+      for (;;) {
+        const nextTransport = createNativeTransport();
+        try {
+          await nextTransport.connect({
+            host: profile.host,
+            port: profile.port,
+            username: profile.username,
+            auth: profile.authType,
+            knownHostsPath: knownHostsPath(),
+            acceptNewHostKey: accepted,
+            ...credentials,
+          });
+          if (nextTransport.hostKeyInfo) {
+            await recordTrustedHost({
+              host: profile.host,
+              port: profile.port,
+              keyType: nextTransport.hostKeyInfo.keyType,
+              fingerprint: nextTransport.hostKeyInfo.fingerprint,
+              acceptedAt: new Date().toISOString(),
+            });
+          }
+          setTransport(nextTransport);
+          setConnectedProfile(profile);
+          setScreen('terminal');
+          break;
+        } catch (error) {
+          nextTransport.disconnect();
+          const details = hostKeyError(error);
+          if (details?.code === 'SSH_HOST_KEY_UNKNOWN' && details.fingerprint && !accepted) {
+            const shouldAccept = await confirmHostKey(profile, details.keyType ?? 'unknown', details.fingerprint);
+            if (shouldAccept) {
+              accepted = true;
+              continue;
+            }
+          } else if (details?.code === 'SSH_HOST_KEY_CHANGED') {
+            const shouldReTrust = await confirmChangedHost(profile);
+            if (shouldReTrust) {
+              await removeTrustedHost(profile.host, profile.port);
+              accepted = false;
+              continue;
+            }
+          } else {
+            Alert.alert('Connection failed', errorMessage(error));
+          }
+          break;
+        }
+      }
     } finally {
       setConnecting(false);
     }
@@ -130,7 +149,9 @@ export default function App() {
           <Text style={styles.title}>CASPER</Text>
           <Text style={styles.subtitle}>ROAMING GHOST SSH</Text>
         </View>
-        {!transport || !connectedProfile ? (
+        {!transport || !connectedProfile ? screen === 'hosts' ? (
+          <TrustedHostsScreen onBack={() => setScreen('terminal')} />
+        ) : (
           <HostScreen
             profiles={profiles}
             selectedProfileId={selectedProfile?.id}
@@ -138,6 +159,7 @@ export default function App() {
             onDeleteProfile={(profile) => void deleteProfile(profile)}
             onConnect={connect}
             onSaveProfile={saveProfile}
+            onManageTrustedHosts={() => setScreen('hosts')}
             connecting={connecting}
           />
         ) : (
@@ -147,7 +169,11 @@ export default function App() {
                 <Text style={styles.connectedHost} numberOfLines={1}>
                   {connectedProfile.username}@{connectedProfile.host}:{connectedProfile.port}
                 </Text>
-                <Text style={styles.trustText}>UNVERIFIED · FINGERPRINT UNAVAILABLE</Text>
+                <Text style={styles.trustText}>
+                  {transport.capabilities.hostKeyVerification && transport.hostKeyInfo
+                    ? `${transport.hostKeyInfo.keyType} · ${transport.hostKeyInfo.fingerprint}`
+                    : 'HOST KEY VERIFICATION UNAVAILABLE ON THIS PLATFORM'}
+                </Text>
               </View>
               <TouchableOpacity style={styles.disconnectButton} onPress={disconnect}>
                 <Text style={styles.disconnectText}>EXIT</Text>
@@ -179,7 +205,46 @@ export default function App() {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object' && 'message' in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return String(error);
+}
+
+function hostKeyError(error: unknown): { code: string; keyType?: string; fingerprint?: string } | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const value = error as { code?: unknown; keyType?: unknown; fingerprint?: unknown };
+  return typeof value.code === 'string'
+    ? {
+        code: value.code,
+        keyType: typeof value.keyType === 'string' ? value.keyType : undefined,
+        fingerprint: typeof value.fingerprint === 'string' ? value.fingerprint : undefined,
+      }
+    : undefined;
+}
+
+function confirmHostKey(profile: HostProfile, keyType: string, fingerprint: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    Alert.alert(
+      'Verify new host key',
+      `${profile.host}:${profile.port} presented a ${keyType} key.\n\nSHA256 fingerprint:\n${fingerprint}\n\nOnly accept this if you trust this server.`,
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+        { text: 'Trust and save', style: 'destructive', onPress: () => resolve(true) },
+      ],
+    );
+  });
+}
+
+function confirmChangedHost(profile: HostProfile): Promise<boolean> {
+  return new Promise((resolve) => {
+    Alert.alert(
+      'HOST KEY CHANGED',
+      `The key for ${profile.host}:${profile.port} no longer matches the saved key. This may indicate a man-in-the-middle attack. Delete the saved key and re-trust only if you have independently verified the server.`,
+      [{ text: 'Keep blocked', style: 'cancel', onPress: () => resolve(false) }, { text: 'Delete and re-trust', style: 'destructive', onPress: () => resolve(true) }],
+    );
+  });
 }
 
 const styles = StyleSheet.create({
