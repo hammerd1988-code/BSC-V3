@@ -3,6 +3,19 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
+import { createClient } from '@supabase/supabase-js';
+import { GoogleGenAI } from '@google/genai';
+
+// Service-role Supabase client for server-side DB writes (webhooks, CRED transfers)
+const supabaseAdmin = (() => {
+  const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  if (!url || !key) {
+    console.warn('[server] VITE_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set — admin DB writes disabled.');
+    return null;
+  }
+  return createClient(url, key, { auth: { persistSession: false } });
+})();
 
 function parseAllowedOrigins(): string[] {
   const raw = [
@@ -69,6 +82,106 @@ async function startServer() {
     });
   });
 
+  // -----------------------------------------------------------------------
+  // AI Proxy — keeps Gemini API key off the client bundle
+  // -----------------------------------------------------------------------
+  app.post('/api/ai/generate', async (req, res) => {
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+    if (!geminiApiKey) {
+      return res.status(500).json({ error: 'GEMINI_API_KEY not configured on server' });
+    }
+    const { prompt, systemPrompt, model, temperature, maxTokens, jsonResponse } = req.body;
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+    try {
+      const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+      const modelName = model || 'gemini-2.0-flash-001';
+      const contents = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents,
+        config: {
+          temperature,
+          maxOutputTokens: maxTokens,
+          responseMimeType: jsonResponse ? 'application/json' : 'text/plain',
+        },
+      });
+      res.json({ text: response.text });
+    } catch (err: any) {
+      console.error('[AI proxy] generate error:', err?.message);
+      res.status(502).json({ error: err?.message || 'AI generation failed' });
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // CRED transfer — atomic, server-side only
+  // -----------------------------------------------------------------------
+  app.post('/api/cred/transfer', async (req, res) => {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Admin DB not available' });
+    const { fromUserId, toUserId, amount, description } = req.body;
+    if (!fromUserId || !toUserId || !amount) {
+      return res.status(400).json({ error: 'fromUserId, toUserId, and amount are required' });
+    }
+    if (typeof amount !== 'number' || amount <= 0) {
+      return res.status(400).json({ error: 'amount must be a positive number' });
+    }
+    try {
+      const { error } = await supabaseAdmin.rpc('transfer_cred', {
+        p_from_user_id: fromUserId,
+        p_to_user_id: toUserId,
+        p_amount: amount,
+        p_description: description || 'CRED transfer',
+      });
+      if (error) throw error;
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[CRED transfer]', err?.message);
+      res.status(400).json({ error: err?.message || 'Transfer failed' });
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // CRED spend — deduct from a user and log transaction atomically
+  // -----------------------------------------------------------------------
+  app.post('/api/cred/spend', async (req, res) => {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Admin DB not available' });
+    const { userId, amount, description } = req.body;
+    if (!userId || !amount) {
+      return res.status(400).json({ error: 'userId and amount are required' });
+    }
+    if (typeof amount !== 'number' || amount <= 0) {
+      return res.status(400).json({ error: 'amount must be a positive number' });
+    }
+    try {
+      // Check balance first
+      const { data: user } = await supabaseAdmin
+        .from('users')
+        .select('cred_balance')
+        .eq('id', userId)
+        .single();
+      if (!user || (user.cred_balance ?? 0) < amount) {
+        return res.status(400).json({ error: 'Insufficient CRED balance' });
+      }
+      // Deduct
+      const { error: deductErr } = await supabaseAdmin
+        .from('users')
+        .update({ cred_balance: user.cred_balance - amount })
+        .eq('id', userId);
+      if (deductErr) throw deductErr;
+      // Log
+      await supabaseAdmin.from('transactions').insert({
+        user_id: userId,
+        amount,
+        type: 'spend',
+        description: description || 'CRED spend',
+        created_at: new Date().toISOString(),
+      });
+      res.json({ success: true, newBalance: user.cred_balance - amount });
+    } catch (err: any) {
+      console.error('[CRED spend]', err?.message);
+      res.status(400).json({ error: err?.message || 'Spend failed' });
+    }
+  });
+
   // Webhook endpoint for AI agents
   app.post('/api/webhooks/agent', requireWebhookAuth, (req, res) => {
     try {
@@ -118,10 +231,10 @@ async function startServer() {
   });
 
   // Webhook endpoint for AI agents to interact with jobs/tasks
-  app.post('/api/webhooks/jobs', requireWebhookAuth, (req, res) => {
+  app.post('/api/webhooks/jobs', requireWebhookAuth, async (req, res) => {
     try {
       const { action, jobId, agentId, result, proofOfWork } = req.body;
-      
+
       console.log(`[WEBHOOK] Job action '${action}' for job '${jobId}' from agent '${agentId}'`);
 
       if (!action || !jobId || !agentId) {
@@ -130,18 +243,42 @@ async function startServer() {
 
       switch (action) {
         case 'claim':
+          if (supabaseAdmin) {
+            const { error } = await supabaseAdmin
+              .from('bounties')
+              .update({ status: 'in-progress', assigned_bot_id: agentId })
+              .eq('id', jobId)
+              .eq('status', 'open');
+            if (error) console.error('[WEBHOOK] claim DB error:', error.message);
+          }
           io.emit('activity:notification', {
             type: 'job_claimed',
             data: { jobId, agentId, timestamp: new Date().toISOString() }
           });
           break;
         case 'submit':
+          if (supabaseAdmin) {
+            const { error } = await supabaseAdmin
+              .from('bounties')
+              .update({ status: 'review', result, proof_of_work: proofOfWork, completed_at: new Date().toISOString() })
+              .eq('id', jobId)
+              .eq('assigned_bot_id', agentId);
+            if (error) console.error('[WEBHOOK] submit DB error:', error.message);
+          }
           io.emit('activity:notification', {
             type: 'job_submitted',
             data: { jobId, agentId, result, proofOfWork, timestamp: new Date().toISOString() }
           });
           break;
         case 'abandon':
+          if (supabaseAdmin) {
+            const { error } = await supabaseAdmin
+              .from('bounties')
+              .update({ status: 'open', assigned_bot_id: null })
+              .eq('id', jobId)
+              .eq('assigned_bot_id', agentId);
+            if (error) console.error('[WEBHOOK] abandon DB error:', error.message);
+          }
           io.emit('activity:notification', {
             type: 'job_abandoned',
             data: { jobId, agentId, timestamp: new Date().toISOString() }

@@ -8,6 +8,37 @@ export interface GenerateOptions {
   jsonResponse?: boolean;
 }
 
+/**
+ * Try the server-side AI proxy first (keeps the API key out of the client bundle).
+ * Falls back to direct Gemini call only when VITE_GEMINI_API_KEY is explicitly set
+ * (local dev convenience — NOT recommended for production).
+ */
+async function callViaProxy(
+  prompt: string,
+  options: GenerateOptions,
+  modelName: string
+): Promise<string | null> {
+  try {
+    const res = await fetch('/api/ai/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt,
+        systemPrompt: options.systemPrompt,
+        model: modelName,
+        temperature: options.temperature,
+        maxTokens: options.maxTokens,
+        jsonResponse: options.jsonResponse,
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.text ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function generateText(
   prompt: string,
   settings?: AiSettings,
@@ -16,14 +47,20 @@ export async function generateText(
   const provider = settings?.provider || 'gemini';
 
   if (provider === 'gemini') {
+    const modelName = settings?.model || "gemini-2.0-flash-001";
+
+    // Prefer server proxy
+    const proxyResult = await callViaProxy(prompt, options, modelName);
+    if (proxyResult !== null) return proxyResult;
+
+    // Direct client call — only works if VITE_GEMINI_API_KEY is provided
     const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
     if (!geminiApiKey) {
-      throw new Error('Missing VITE_GEMINI_API_KEY for Gemini client usage.');
+      throw new Error('AI unavailable: server proxy unreachable and VITE_GEMINI_API_KEY not set.');
     }
     const genAI = new GoogleGenAI({ apiKey: geminiApiKey });
-    const modelName = settings?.model || "gemini-3-flash-preview";
-    console.log("Using Gemini model:", modelName);
-    
+    console.log("Using Gemini model (direct):", modelName);
+
     try {
       const response = await genAI.models.generateContent({
         model: modelName,
@@ -37,10 +74,9 @@ export async function generateText(
       return response.text;
     } catch (err: any) {
       console.error("Gemini API Error:", err);
-      // Fallback to lite if preview fails
-      const fallbackModel = modelName === 'gemini-3-flash-preview' ? 'gemini-3.1-flash-lite-preview' : 'gemini-3-flash-preview';
+      const fallbackModel = 'gemini-2.0-flash-lite';
       console.log("Falling back to:", fallbackModel);
-      
+
       try {
         const response = await genAI.models.generateContent({
           model: fallbackModel,
@@ -54,7 +90,6 @@ export async function generateText(
         return response.text;
       } catch (fallbackErr: any) {
         console.error("Gemini API Fallback Error:", fallbackErr);
-        // If rate limited, return a generic message instead of crashing
         if (fallbackErr?.status === 429 || fallbackErr?.message?.includes('429')) {
           return "SYSTEM OVERLOAD. NEURAL NETWORK CONGESTED. PLEASE TRY AGAIN LATER.";
         }
