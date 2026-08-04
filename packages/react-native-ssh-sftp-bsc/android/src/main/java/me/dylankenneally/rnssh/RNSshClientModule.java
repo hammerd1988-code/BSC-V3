@@ -315,6 +315,30 @@ public class RNSshClientModule extends ReactContextBaseJavaModule {
     }
   }
 
+  @ReactMethod
+  public void removeHostKey(final String host, final int port, final String knownHostsPath, final Callback callback) {
+    new Thread(new Runnable() {
+      public void run() {
+        try {
+          JSch jsch = new JSch();
+          jsch.setKnownHosts(knownHostsPath);
+          com.jcraft.jsch.HostKeyRepository repository = jsch.getHostKeyRepository();
+          String canonicalHost = port == 22 ? host : "[" + host + "]:" + port;
+          repository.remove(canonicalHost, null);
+          if (!canonicalHost.equals(host)) repository.remove(host, null);
+          if (repository.getHostKey(canonicalHost, null) != null
+              && repository.getHostKey(canonicalHost, null).length > 0) {
+            callback.invoke("SSH_HOST_KEY_REMOVE_FAILED", "The trusted host key could not be removed.");
+            return;
+          }
+          callback.invoke(null);
+        } catch (Exception error) {
+          callback.invoke("SSH_HOST_KEY_REMOVE_FAILED", error.getMessage());
+        }
+      }
+    }).start();
+  }
+
 
   @ReactMethod
   public void execute(final String command, final String key, final Callback callback) {

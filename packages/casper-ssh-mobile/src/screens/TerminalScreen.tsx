@@ -182,7 +182,14 @@ export default function TerminalScreen({ transport, onDisconnect }: {
             <TouchableOpacity
               key={label}
               style={[styles.keyButton, label === 'CTRL' && ctrlMode && styles.keyButtonActive]}
-              onPress={() => (label === 'CTRL' ? setCtrlMode((active) => !active) : send(value))}
+              onPress={() => {
+                if (label === 'CTRL') {
+                  setCtrlMode((active) => !active);
+                  setCommand('');
+                } else {
+                  void send(value);
+                }
+              }}
             >
               <Text style={styles.keyText}>{label}</Text>
             </TouchableOpacity>
@@ -197,7 +204,7 @@ export default function TerminalScreen({ transport, onDisconnect }: {
           value={command}
           onChangeText={(value) => {
             if (ctrlMode && value) {
-              const code = value.toUpperCase().charCodeAt(0);
+              const code = value.toUpperCase().charCodeAt(value.length - 1);
               if (code >= 64 && code <= 95) void send(String.fromCharCode(code - 64));
               setCtrlMode(false);
               setCommand('');

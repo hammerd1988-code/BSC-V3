@@ -11,7 +11,8 @@ import {
   View,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import { File, Paths } from 'expo-file-system';
+import { Paths } from 'expo-file-system';
+import { filesystemPath, filesystemUri } from '../storage/hosts';
 import { SftpEntry, SshTransport, TransferProgress } from '../transport/types';
 
 interface FileBrowserScreenProps {
@@ -61,7 +62,7 @@ export default function FileBrowserScreen({ transport }: FileBrowserScreenProps)
     if (result.canceled || !result.assets[0]) return;
     try {
       setProgress({ direction: 'upload', percent: 0 });
-      await transport.upload(result.assets[0].uri, path);
+      await transport.upload(filesystemPath(result.assets[0].uri), path);
       await browse();
     } catch (error) {
       Alert.alert('Upload failed', errorMessage(error));
@@ -73,7 +74,7 @@ export default function FileBrowserScreen({ transport }: FileBrowserScreenProps)
   const download = async (entry: SftpEntry) => {
     try {
       setProgress({ direction: 'download', percent: 0 });
-      const localPath = await transport.download(selectedPath(entry.filename), Paths.document.uri);
+      const localPath = await transport.download(selectedPath(entry.filename), filesystemPath(Paths.document.uri));
       setLastDownload(localPath);
     } catch (error) {
       Alert.alert('Download failed', errorMessage(error));
@@ -125,6 +126,24 @@ export default function FileBrowserScreen({ transport }: FileBrowserScreenProps)
           .mkdir(selectedPath(name.trim()))
           .then(() => browse())
           .catch((error) => Alert.alert('Create directory failed', errorMessage(error)));
+      },
+    });
+  };
+
+  const chmod = (entry: SftpEntry) => {
+    setPrompt({
+      title: `Permissions for ${entry.filename}`,
+      value: '755',
+      submit: (value) => {
+        const permissions = Number.parseInt(value.trim(), 8);
+        if (!Number.isInteger(permissions) || permissions < 0 || permissions > 0o7777) {
+          Alert.alert('Invalid permissions', 'Enter an octal mode such as 755.');
+          return;
+        }
+        void transport
+          .chmod(selectedPath(entry.filename), permissions)
+          .then(() => browse())
+          .catch((error) => Alert.alert('CHMOD failed', errorMessage(error)));
       },
     });
   };
@@ -191,6 +210,11 @@ export default function FileBrowserScreen({ transport }: FileBrowserScreenProps)
               <TouchableOpacity onPress={() => rename(entry)}>
                 <Text style={styles.smallAction}>REN</Text>
               </TouchableOpacity>
+              {transport.capabilities.sftpChmod && (
+                <TouchableOpacity onPress={() => chmod(entry)}>
+                  <Text style={styles.smallAction}>MODE</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity onPress={() => remove(entry)}>
                 <Text style={styles.deleteAction}>DEL</Text>
               </TouchableOpacity>
@@ -201,7 +225,7 @@ export default function FileBrowserScreen({ transport }: FileBrowserScreenProps)
       {lastDownload && (
         <View style={styles.downloadRow}>
           <Text style={styles.downloadText} numberOfLines={1}>Saved: {lastDownload}</Text>
-          <TouchableOpacity onPress={() => void Linking.openURL(new File(lastDownload).uri)}>
+          <TouchableOpacity onPress={() => void Linking.openURL(filesystemUri(lastDownload))}>
             <Text style={styles.openText}>OPEN</Text>
           </TouchableOpacity>
         </View>

@@ -120,7 +120,12 @@ export default function App() {
           } else if (details?.code === 'SSH_HOST_KEY_CHANGED') {
             const shouldReTrust = await confirmChangedHost(profile);
             if (shouldReTrust) {
-              await removeTrustedHost(profile.host, profile.port);
+              try {
+                await removeTrustedHost(profile.host, profile.port);
+              } catch (removalError) {
+                Alert.alert('Unable to remove saved host key', errorMessage(removalError));
+                break;
+              }
               accepted = false;
               continue;
             }

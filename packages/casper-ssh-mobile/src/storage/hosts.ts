@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { File, Paths } from 'expo-file-system';
+import SSHClient from '@bloodsweatcode/react-native-ssh-sftp-bsc';
 import { AuthType } from '../transport/types';
 
 const PROFILES_KEY = 'casper-ssh.host-profiles.v1';
@@ -69,8 +70,15 @@ export function knownHostsFile(): File {
 }
 
 export function knownHostsPath(): string {
-  const uri = knownHostsFile().uri;
-  return uri.startsWith('file://') ? decodeURIComponent(uri.slice(7)) : uri;
+  return filesystemPath(knownHostsFile().uri);
+}
+
+export function filesystemPath(uriOrPath: string): string {
+  return uriOrPath.startsWith('file://') ? decodeURIComponent(uriOrPath.slice(7)) : uriOrPath;
+}
+
+export function filesystemUri(path: string): string {
+  return path.startsWith('file://') ? path : `file://${encodeURI(path)}`;
 }
 
 export async function loadTrustedHosts(): Promise<TrustedHost[]> {
@@ -99,6 +107,20 @@ export async function removeTrustedHost(host: string, port: number): Promise<voi
     TRUSTED_HOSTS_KEY,
     JSON.stringify(current.filter((item) => !(item.host === host && item.port === port))),
   );
+
+  try {
+    await SSHClient.removeHostKey(host, port, knownHostsPath());
+    return;
+  } catch (error) {
+    if (
+      !error ||
+      typeof error !== 'object' ||
+      (error as { code?: unknown }).code !== 'SSH_HOST_KEY_NATIVE_UNAVAILABLE'
+    ) {
+      throw error;
+    }
+    // Fall back to filtering plaintext entries when the native helper is unavailable.
+  }
 
   const file = knownHostsFile();
   if (!file.exists) return;
