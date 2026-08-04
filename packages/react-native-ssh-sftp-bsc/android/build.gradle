@@ -1,0 +1,30 @@
+
+apply plugin: 'com.android.library'
+
+android {
+    namespace "me.dylankenneally.rnssh"
+    compileSdkVersion rootProject.ext.has("compileSdkVersion") ? rootProject.ext.compileSdkVersion : 35
+
+    defaultConfig {
+        minSdkVersion rootProject.ext.has("minSdkVersion") ? rootProject.ext.minSdkVersion : 21
+        targetSdkVersion rootProject.ext.has("targetSdkVersion") ? rootProject.ext.targetSdkVersion : 35
+        versionCode 1
+        versionName "1.0"
+    }
+    lintOptions {
+        abortOnError false
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.bouncycastle:bcprov-jdk15on:1.70'
+
+    api 'com.facebook.react:react-native:+'
+    api 'com.github.mwiede:jsch:0.2.17'
+    api 'com.fasterxml.jackson.core:jackson-core:2.10.3'
+    api 'com.fasterxml.jackson.core:jackson-databind:2.10.3'
+}
