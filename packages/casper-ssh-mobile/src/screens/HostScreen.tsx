@@ -22,6 +22,7 @@ interface HostScreenProps {
     profile: Omit<HostProfile, 'id'>,
     credentials: HostCredentials,
   ) => Promise<void>;
+  onManageTrustedHosts: () => void;
   connecting: boolean;
 }
 
@@ -41,6 +42,7 @@ export default function HostScreen({
   onDeleteProfile,
   onConnect,
   onSaveProfile,
+  onManageTrustedHosts,
   connecting,
 }: HostScreenProps) {
   const [profile, setProfile] = useState<Omit<HostProfile, 'id'>>(emptyProfile);
@@ -129,6 +131,10 @@ export default function HostScreen({
           </TouchableOpacity>
         </View>
       )}
+
+      <TouchableOpacity style={styles.secondaryButton} onPress={onManageTrustedHosts}>
+        <Text style={styles.secondaryText}>MANAGE TRUSTED HOST KEYS</Text>
+      </TouchableOpacity>
 
       <Text style={styles.sectionTitle}>{isNew ? 'NEW CONNECTION' : 'CONNECTION'}</Text>
       <TextInput

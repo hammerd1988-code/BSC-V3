@@ -8,6 +8,20 @@ export interface SshConnection {
   password?: string;
   privateKey?: string;
   passphrase?: string;
+  knownHostsPath: string;
+  pinnedFingerprint?: string;
+  acceptNewHostKey?: boolean;
+}
+
+export interface HostKeyInfo {
+  keyType: string;
+  fingerprint: string;
+}
+
+export interface HostKeyError extends Error {
+  code: 'SSH_HOST_KEY_UNKNOWN' | 'SSH_HOST_KEY_CHANGED' | string;
+  keyType?: string;
+  fingerprint?: string;
 }
 
 export interface SftpEntry {
@@ -47,14 +61,17 @@ export class UnsupportedCapabilityError extends Error {
 export interface SshTransport {
   readonly capabilities: SshCapabilities;
   readonly verifyHostKey?: (fingerprint: string) => Promise<boolean>;
+  readonly hostKeyInfo?: HostKeyInfo;
 
   connect(connection: SshConnection): Promise<void>;
   exec(command: string): Promise<string>;
 
-  startShell(): Promise<void>;
+  startShell(options?: { rawOutput?: boolean; cols?: number; rows?: number; widthPx?: number; heightPx?: number }): Promise<void>;
   writeShell(data: string): Promise<void>;
   closeShell(): void;
   onShellOutput(handler: (output: string) => void): () => void;
+  onRawShellOutput(handler: (base64: string) => void): () => void;
+  setPtySize(cols: number, rows: number, widthPx?: number, heightPx?: number): void;
 
   connectSftp(): Promise<void>;
   list(path: string): Promise<SftpEntry[]>;

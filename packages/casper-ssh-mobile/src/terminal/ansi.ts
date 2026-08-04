@@ -104,6 +104,6 @@ export function splitAnsiLines(output: string): string[] {
     .split(/\n/)
     .map((line) => line.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, (sequence) => (
       sequence.endsWith('m') ? sequence : ''
-    )))
+    )).replace(/\u001b[()][0-2A-Z]/g, ''))
     .filter((line, index, lines) => line.length > 0 || index < lines.length - 1);
 }

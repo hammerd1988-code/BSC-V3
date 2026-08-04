@@ -1,7 +1,10 @@
 import SSHClient, {
   PtyType,
-  type LsResult,
-} from '@dylankenneally/react-native-ssh-sftp';
+  type HostKeyInfo,
+  type HostKeyOptions,
+  type ShellOptions,
+} from '@bloodsweatcode/react-native-ssh-sftp-bsc';
+import { Platform } from 'react-native';
 import {
   SshConnection,
   SshTransport,
@@ -14,25 +17,33 @@ type Handler<T> = (value: T) => void;
 
 export class NativeSshTransport implements SshTransport {
   readonly capabilities = {
-    hostKeyVerification: false,
+    hostKeyVerification: Platform.OS === 'android',
     sftpChmod: false,
-    shellResize: false,
+    shellResize: Platform.OS === 'android',
     keyboardInteractive: false,
     agentForwarding: false,
   } as const;
 
   private client: SSHClient | null = null;
   private readonly shellHandlers = new Set<Handler<string>>();
+  private readonly rawShellHandlers = new Set<Handler<string>>();
   private readonly progressHandlers = new Set<Handler<TransferProgress>>();
+  hostKeyInfo?: HostKeyInfo;
 
   async connect(connection: SshConnection): Promise<void> {
     this.disconnect();
+    const options: HostKeyOptions = {
+      knownHostsPath: connection.knownHostsPath,
+      pinnedFingerprint: connection.pinnedFingerprint,
+      acceptNewHostKey: connection.acceptNewHostKey,
+    };
     if (connection.auth === 'password') {
       this.client = await SSHClient.connectWithPassword(
         connection.host,
         connection.port,
         connection.username,
         connection.password ?? '',
+        options,
       );
     } else {
       this.client = await SSHClient.connectWithKey(
@@ -41,12 +52,18 @@ export class NativeSshTransport implements SshTransport {
         connection.username,
         connection.privateKey ?? '',
         connection.passphrase,
+        options,
       );
     }
+    this.hostKeyInfo = this.client.hostKeyInfo;
 
     this.client.on('Shell', (value: unknown) => {
       const output = typeof value === 'string' ? value : String(value ?? '');
       if (output) this.shellHandlers.forEach((handler) => handler(output));
+    });
+    this.client.on('ShellRaw', (value: unknown) => {
+      const output = typeof value === 'string' ? value : String(value ?? '');
+      if (output) this.rawShellHandlers.forEach((handler) => handler(output));
     });
     this.client.on('DownloadProgress', (value: unknown) => {
       this.emitProgress('download', value);
@@ -60,8 +77,8 @@ export class NativeSshTransport implements SshTransport {
     return this.requireClient().execute(command);
   }
 
-  async startShell(): Promise<void> {
-    await this.requireClient().startShell(PtyType.XTERM);
+  async startShell(options?: ShellOptions): Promise<void> {
+    await this.requireClient().startShell(PtyType.XTERM, options);
   }
 
   async writeShell(data: string): Promise<void> {
@@ -75,6 +92,17 @@ export class NativeSshTransport implements SshTransport {
   onShellOutput(handler: Handler<string>): () => void {
     this.shellHandlers.add(handler);
     return () => this.shellHandlers.delete(handler);
+  }
+
+  onRawShellOutput(handler: Handler<string>): () => void {
+    this.rawShellHandlers.add(handler);
+    return () => this.rawShellHandlers.delete(handler);
+  }
+
+  setPtySize(cols: number, rows: number, widthPx = 0, heightPx = 0): void {
+    if (this.capabilities.shellResize) {
+      this.client?.setPtySize(cols, rows, widthPx, heightPx);
+    }
   }
 
   async connectSftp(): Promise<void> {
@@ -133,6 +161,7 @@ export class NativeSshTransport implements SshTransport {
     this.client?.disconnect();
     this.client = null;
     this.shellHandlers.clear();
+    this.rawShellHandlers.clear();
     this.progressHandlers.clear();
   }
 
