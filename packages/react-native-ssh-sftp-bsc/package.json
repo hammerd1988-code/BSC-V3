@@ -1,0 +1,59 @@
+{
+  "name": "@bloodsweatcode/react-native-ssh-sftp-bsc",
+  "version": "1.9.0",
+  "description": "SSH and SFTP client library for React Native",
+  "main": "lib/sshclient.js",
+  "keywords": [
+    "react-native",
+    "ssh",
+    "sftp"
+  ],
+  "homepage": "https://github.com/blood-sweat-code/BSC-V3",
+  "bugs": {
+    "url": "https://github.com/dylankenneally/react-native-ssh-sftp/issues",
+    "email": "project@hostname.com"
+  },
+  "author": {
+    "name": "Dylan Kenneally",
+    "email": "github@dylankenneally.com",
+    "url": "https://github.com/dylankenneally/react-native-ssh-sftp"
+  },
+  "contributors": [
+    {
+      "name": "Emmanuel Natividad",
+      "url": "https://github.com/enatividad/react-native-ssh-sftp"
+    },
+    {
+      "name": "Gabriel Paul \"Cley Faye\" Risterucci",
+      "email": "gabriel@keeex.net",
+      "url": "https://github.com/KeeeX/react-native-ssh-sftp"
+    },
+    {
+      "name": "Bishoy Mikhae",
+      "url": "https://github.com/MrBmikhael/react-native-ssh-sftp"
+    },
+    {
+      "name": "Qian Sha",
+      "email": "x_ash@qq.com",
+      "url": "https://github.com/shaqian/react-native-ssh-sftp"
+    }
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "react-native": "*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blood-sweat-code/BSC-V3.git"
+  },
+  "files": [
+    "android/",
+    "ios/",
+    "lib/",
+    "RNSSHClient.podspec"
+  ],
+  "engines": {
+    "npm": ">=9.5.0 <=11",
+    "node": ">=18.16.0 <=24"
+  }
+}

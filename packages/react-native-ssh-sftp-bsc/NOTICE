@@ -1,0 +1,12 @@
+This package is a Blood Sweat Code fork of
+@dylankenneally/react-native-ssh-sftp 1.9.0.
+
+Project-owned changes:
+
+- OpenSSH known_hosts trust-on-first-use and pinned SHA256 host-key verification
+  on Android.
+- Structured unknown-host and changed-host errors.
+- Negotiated host-key type and SHA256 fingerprint returned on connect.
+- Opt-in base64 raw shell output events and PTY resize support on Android.
+
+The original upstream license and attribution are preserved in LICENSE.
