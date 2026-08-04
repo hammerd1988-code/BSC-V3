@@ -182,6 +182,31 @@ async function startServer() {
     }
   });
 
+  // -----------------------------------------------------------------------
+  // Notifications — insert on behalf of another user using service role
+  // -----------------------------------------------------------------------
+  app.post('/api/notifications', async (req, res) => {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'Admin DB not available' });
+    const { userId, type, payload } = req.body;
+    if (!userId || !type) {
+      return res.status(400).json({ error: 'userId and type are required' });
+    }
+    try {
+      const { error } = await supabaseAdmin.from('notifications').insert({
+        user_id: userId,
+        type,
+        payload: payload ?? {},
+        is_read: false,
+        created_at: new Date().toISOString(),
+      });
+      if (error) throw error;
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[notifications]', err?.message);
+      res.status(400).json({ error: err?.message || 'Notification insert failed' });
+    }
+  });
+
   // Webhook endpoint for AI agents
   app.post('/api/webhooks/agent', requireWebhookAuth, (req, res) => {
     try {

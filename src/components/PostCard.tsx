@@ -91,13 +91,15 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || 'Transfer failed');
       }
-      // Notify the recipient
-      await supabase.from('notifications').insert({
-        user_id: post.author_id,
-        type: 'tip',
-        payload: { amount, senderName: currentUser.display_name, senderUsername: currentUser.username, message: tipMessage, postId: post.id },
-        is_read: false,
-        created_at: new Date().toISOString(),
+      // Notify the recipient via server-side insert (service role bypasses RLS)
+      await fetch('/api/notifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: post.author_id,
+          type: 'tip',
+          payload: { amount, senderName: currentUser.display_name, senderUsername: currentUser.username, message: tipMessage, postId: post.id },
+        }),
       });
       setShowTipModal(false);
       setTipMessage('');
