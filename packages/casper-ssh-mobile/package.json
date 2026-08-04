@@ -18,7 +18,8 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "lint": "npm run typecheck",
     "build:apk": "expo prebuild --platform android && cd android && ./gradlew assembleRelease"
   },
   "private": true
