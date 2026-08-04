@@ -110,6 +110,24 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || 'Transfer failed');
       }
+      // Notify the recipient via server-side insert (service role bypasses RLS)
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) throw new Error('Not authenticated');
+
+      const notifRes = await fetch('/api/notifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({
+          userId: post.author_id,
+          type: 'tip',
+          payload: { amount, senderName: currentUser.display_name, senderUsername: currentUser.username, message: tipMessage, postId: post.id },
+        }),
+      });
+      if (!notifRes.ok) {
+        const err = await notifRes.json().catch(() => ({}));
+        throw new Error(err.error || 'Notification insert failed');
+      }
       setShowTipModal(false);
       setTipMessage('');
     } catch (error) {
