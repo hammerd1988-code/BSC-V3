@@ -71,12 +71,17 @@ export default function App() {
   };
 
   const deleteProfile = async (profile: HostProfile) => {
+    try {
+      await removeTrustedHost(profile.host, profile.port);
+    } catch (error) {
+      Alert.alert('Unable to remove saved host key', errorMessage(error));
+      return;
+    }
     const nextProfiles = profiles.filter((item) => item.id !== profile.id);
     setProfiles(nextProfiles);
     if (selectedProfile?.id === profile.id) setSelectedProfile(undefined);
     await saveHostProfiles(nextProfiles);
     await clearCredentials(profile.id);
-    await removeTrustedHost(profile.host, profile.port);
   };
 
   const connect = async (profile: HostProfile, credentials: HostCredentials) => {
@@ -247,6 +252,7 @@ function confirmHostKey(profile: HostProfile, keyType: string, fingerprint: stri
         { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
         { text: 'Trust and save', style: 'destructive', onPress: () => resolve(true) },
       ],
+      { cancelable: true, onDismiss: () => resolve(false) },
     );
   });
 }
@@ -257,6 +263,7 @@ function confirmChangedHost(profile: HostProfile): Promise<boolean> {
       'HOST KEY CHANGED',
       `The key for ${profile.host}:${profile.port} no longer matches the saved key. This may indicate a man-in-the-middle attack. Delete the saved key and re-trust only if you have independently verified the server.`,
       [{ text: 'Keep blocked', style: 'cancel', onPress: () => resolve(false) }, { text: 'Delete and re-trust', style: 'destructive', onPress: () => resolve(true) }],
+      { cancelable: true, onDismiss: () => resolve(false) },
     );
   });
 }

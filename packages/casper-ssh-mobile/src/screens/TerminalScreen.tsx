@@ -58,7 +58,10 @@ export default function TerminalScreen({ transport, onDisconnect }: {
       start = newlineIndex + 1;
       newlineIndex = input.indexOf('\n', start);
     }
-    pendingLineRef.current = input.slice(start);
+    let pending = input.slice(start);
+    const carriageReturn = pending.lastIndexOf('\r');
+    if (carriageReturn >= 0) pending = pending.slice(carriageReturn + 1);
+    pendingLineRef.current = pending;
     setPendingLine(pendingLineRef.current);
     if (nextLines.length) {
       setLines((current) => [...current, ...nextLines].slice(-MAX_LINES));
@@ -121,9 +124,9 @@ export default function TerminalScreen({ transport, onDisconnect }: {
     }
   };
 
-  const send = async (value = command) => {
+  const send = async (value = command, clearCommand = false) => {
     if (!shellActive || !value) return;
-    setCommand('');
+    if (clearCommand) setCommand('');
     try {
       await transport.writeShell(value);
     } catch (error) {
@@ -212,11 +215,11 @@ export default function TerminalScreen({ transport, onDisconnect }: {
               setCommand(value);
             }
           }}
-          onSubmitEditing={() => (shellActive ? send(`${command}\n`) : execute())}
+          onSubmitEditing={() => (shellActive ? send(`${command}\n`, true) : execute())}
           autoCapitalize="none"
           returnKeyType="send"
         />
-        <TouchableOpacity style={styles.sendButton} onPress={() => (shellActive ? send(`${command}\n`) : execute())}>
+        <TouchableOpacity style={styles.sendButton} onPress={() => (shellActive ? send(`${command}\n`, true) : execute())}>
           <Text style={styles.sendText}>SEND</Text>
         </TouchableOpacity>
       </View>

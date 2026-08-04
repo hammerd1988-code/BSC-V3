@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
   Alert,
-  Linking,
   Modal,
   ScrollView,
   StyleSheet,
@@ -12,6 +11,7 @@ import {
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { Paths } from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 import { filesystemPath, filesystemUri } from '../storage/hosts';
 import { SftpEntry, SshTransport, TransferProgress } from '../transport/types';
 
@@ -148,6 +148,20 @@ export default function FileBrowserScreen({ transport }: FileBrowserScreenProps)
     });
   };
 
+  const openDownload = async () => {
+    try {
+      if (!(await Sharing.isAvailableAsync())) {
+        Alert.alert('Sharing unavailable', 'No compatible file viewer or share target is available on this device.');
+        return;
+      }
+      await Sharing.shareAsync(filesystemUri(lastDownload ?? ''), {
+        dialogTitle: 'Open downloaded file',
+      });
+    } catch (error) {
+      Alert.alert('Unable to open file', errorMessage(error));
+    }
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.pathRow}>
@@ -225,7 +239,7 @@ export default function FileBrowserScreen({ transport }: FileBrowserScreenProps)
       {lastDownload && (
         <View style={styles.downloadRow}>
           <Text style={styles.downloadText} numberOfLines={1}>Saved: {lastDownload}</Text>
-          <TouchableOpacity onPress={() => void Linking.openURL(filesystemUri(lastDownload))}>
+          <TouchableOpacity onPress={() => void openDownload()}>
             <Text style={styles.openText}>OPEN</Text>
           </TouchableOpacity>
         </View>

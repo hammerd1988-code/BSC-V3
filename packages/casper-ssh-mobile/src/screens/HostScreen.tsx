@@ -90,7 +90,13 @@ export default function HostScreen({
       return;
     }
     const normalized = { ...profile, port, label: profile.label.trim() || profile.host.trim() };
-    const savedProfile = await onSaveProfile(normalized, credentials);
+    let savedProfile: HostProfile;
+    try {
+      savedProfile = await onSaveProfile(normalized, credentials);
+    } catch (error) {
+      Alert.alert('Unable to save credentials', errorMessage(error));
+      return;
+    }
     onConnect(savedProfile, credentials);
   };
 
@@ -255,6 +261,10 @@ export default function HostScreen({
 }
 
 export type { SshConnection };
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 const styles = StyleSheet.create({
   content: { padding: 16, gap: 12, paddingBottom: 32 },

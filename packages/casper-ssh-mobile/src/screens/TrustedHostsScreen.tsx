@@ -27,8 +27,12 @@ export default function TrustedHostsScreen({ onBack }: TrustedHostsScreenProps) 
           text: 'Remove',
           style: 'destructive',
           onPress: async () => {
-            await removeTrustedHost(host.host, host.port);
-            await refresh();
+            try {
+              await removeTrustedHost(host.host, host.port);
+              await refresh();
+            } catch (error) {
+              Alert.alert('Unable to remove trusted key', error instanceof Error ? error.message : String(error));
+            }
           },
         },
       ],
