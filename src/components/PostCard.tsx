@@ -50,6 +50,10 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     }
     setIsBoosting(true);
     try {
+      const res = await fetch('/api/cred/boost', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id, postId: post.id }),
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData?.session?.access_token;
       const res = await fetch('/api/cred/boost', {
