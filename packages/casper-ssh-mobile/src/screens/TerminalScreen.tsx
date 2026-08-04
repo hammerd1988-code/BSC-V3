@@ -44,8 +44,12 @@ export default function TerminalScreen({ transport, onDisconnect }: TerminalScre
     setLines((current) => [...current, ...splitAnsiLines(value)].slice(-MAX_LINES));
   }, []);
 
-  useEffect(() => transport.onShellOutput(append), [append, transport]);
-  useEffect(() => transport.onRawShellOutput((value) => append(decodeBase64(value))), [append, transport]);
+  useEffect(
+    () => transport.capabilities.rawShellOutput
+      ? transport.onRawShellOutput((value) => append(decodeBase64(value)))
+      : transport.onShellOutput(append),
+    [append, transport],
+  );
 
   const startShell = async () => {
     try {
