@@ -5,14 +5,17 @@ A standalone Android SSH client for the Blood Sweat Code / Casper ecosystem. Con
 ## Stack
 
 - Expo + React Native
-- `@dylankenneally/react-native-ssh-sftp` for SSH/SFTP native operations
+- `@bloodsweatcode/react-native-ssh-sftp-bsc` for SSH/SFTP native operations
 
 ## Features
 
 - Password and private-key SSH auth (with optional passphrase)
 - One-shot command execution
 - Interactive XTERM shell session
-- SFTP directory listing
+- SFTP browsing, upload, download, rename, delete, and directory creation
+- Secure-store-backed saved host profiles with opt-in credential persistence
+- Android SHA256 host-key verification with OpenSSH `known_hosts` trust-on-first-use
+- Changed-key blocking and saved trusted-host management
 - Casper cyberpunk dark UI
 - Android package: `org.bloodsweatcode.casperssh`
 
@@ -43,7 +46,20 @@ npm run build:apk
 
 ## Security note
 
-The underlying `@dylankenneally/react-native-ssh-sftp` library does not yet verify remote server host keys (it disables `StrictHostKeyChecking` on Android and does not pin host keys on iOS). Treat connections as safe only on trusted networks, and prefer key-based authentication over passwords where possible. Credentials are held in memory only while the app is connected and are not persisted to disk.
+The app-owned native fork verifies remote server host keys on Android using an
+OpenSSH-format `known_hosts` file in the app documents directory. Unknown keys
+are shown with their actual key type and SHA256 fingerprint before they can be
+accepted and appended. A changed key is blocked and requires explicit deletion
+of the saved key before re-trusting.
+
+NMSSH on iOS does not expose the SHA256 host-key material needed to implement
+the same protocol, so the iOS transport capability remains honestly disabled;
+the app does not fabricate fingerprints or claim cryptographic verification.
+
+Saved host metadata is stored in AsyncStorage. Secrets are only written to Expo SecureStore when **SAVE CREDENTIALS** is enabled; disabling it or deleting a host clears the SecureStore entry. Credentials are never logged. If credentials are not saved, they remain in the current screen/session memory only.
+
+Android shell output can use opt-in raw base64 byte events and PTY resize.
+iOS remains limited to NMSSH string shell events.
 
 ## Usage
 
