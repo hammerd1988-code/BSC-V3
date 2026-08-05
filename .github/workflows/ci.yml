@@ -29,8 +29,14 @@ jobs:
 
       - run: npm ci --include=dev
 
+      - name: Install Casper SSH mobile dependencies
+        run: npm --prefix packages/casper-ssh-mobile ci --include=dev
+
       - name: Typecheck
         run: npm run lint
+
+      - name: Typecheck Casper SSH mobile
+        run: npm run lint:mobile
 
       - name: Test
         run: npm run test:run
