@@ -26,6 +26,15 @@
 --
 -- Against the live project this is a no-op: default privileges only affect
 -- objects created afterwards.
+--
+-- Note for whoever pushes this: this file, 00231_subscriptions.sql and
+-- 00591_increment_counter_id_type.sql all sort before migrations the live project
+-- has already applied, so `supabase db push` will report them as out of order and
+-- ask for --include-all. That is safe here, and only here: this file only touches
+-- default privileges, 00591 has no statements left, and 00231 creates its trigger
+-- function only when absent. Most of the other 72 migrations are not re-appliable
+-- (bare `create policy`, publication adds), so do not reach for --include-all as
+-- a habit.
 
 do $$
 begin
