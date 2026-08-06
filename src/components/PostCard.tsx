@@ -8,10 +8,12 @@ import { GoogleGenAI } from "@google/genai";
 import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
 import { safePostHtml } from '../lib/html';
+import { nextCount, setPostLike } from '../lib/postLikes';
 
 interface PostCardProps {
   post: Post;
-  onLike: (id: string) => void;
+  /** Called once the like row has actually been written, so lists can follow. */
+  onLike: (id: string, liked: boolean) => void;
   onDelete?: (id: string) => void;
 }
 
@@ -27,7 +29,9 @@ import { useImageLightbox } from './ImageLightbox';
 export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) => {
   const { currentUser } = useAuth();
   const { open: openLightbox } = useImageLightbox();
-  const [isLiked, setIsLiked] = useState(post.is_liked);
+  const [isLiked, setIsLiked] = useState(post.is_liked === true);
+  const [likeCount, setLikeCount] = useState(post.likes_count ?? post.likes ?? 0);
+  const [isLikePending, setIsLikePending] = useState(false);
   const [showThinking, setShowThinking] = useState(false);
   const [thinkingText, setThinkingText] = useState<string | null>(null);
   const [isThinkingLoading, setIsThinkingLoading] = useState(false);
@@ -72,10 +76,11 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
   // The virtualised feed reuses this component for different posts, so state
   // seeded from props has to follow the post it is rendering.
   useEffect(() => {
-    setIsLiked(post.is_liked);
+    setIsLiked(post.is_liked === true);
+    setLikeCount(post.likes_count ?? post.likes ?? 0);
     setViewCount(post.view_count || 0);
     viewTracked.current = false;
-  }, [post.id, post.is_liked, post.view_count]);
+  }, [post.id, post.is_liked, post.likes_count, post.likes, post.view_count]);
 
   useEffect(() => {
     return () => {
@@ -237,9 +242,28 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     }
   };
 
-  const handleLike = () => {
-    setIsLiked(!isLiked);
-    onLike(post.id);
+  /**
+   * The heart used to be local state plus a socket broadcast, so nothing was
+   * ever stored and the like vanished on reload. The row goes to `post_likes`
+   * here; a database trigger moves `posts.likes` / `posts.likes_count`, so this
+   * must not touch the counters itself.
+   */
+  const handleLike = async () => {
+    if (!currentUser || isLikePending) return;
+    const liked = !isLiked;
+    setIsLiked(liked);
+    setLikeCount(count => nextCount(count, liked));
+    setIsLikePending(true);
+    try {
+      await setPostLike(currentUser.id, post.id, liked);
+      onLike(post.id, liked);
+    } catch (error) {
+      setIsLiked(!liked);
+      setLikeCount(count => nextCount(count, !liked));
+      handleDbError(error, liked ? 'CREATE' : 'DELETE', `post_likes/${post.id}`);
+    } finally {
+      setIsLikePending(false);
+    }
   };
 
   const handleShare = async () => {
@@ -709,8 +733,9 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-3">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-3 overflow-visible [&>*]:shrink-0">
             <button
-              onClick={handleLike}
-              className="flex items-center space-x-1.5 group"
+              onClick={() => { void handleLike(); }}
+              disabled={!currentUser || isLikePending}
+              className="flex items-center space-x-1.5 group disabled:opacity-60"
             >
               <motion.div
                 whileTap={{ scale: 0.8 }}
@@ -727,7 +752,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
                 />
               </motion.div>
               <span className={cn("text-xs font-medium", isLiked ? (isVoidArchitect ? "text-white" : "text-accent") : "text-gray-400")}>
-                {post.likes_count + (isLiked && !post.is_liked ? 1 : 0)}
+                {likeCount}
               </span>
             </button>
 

@@ -14,6 +14,7 @@ import { GenerateOptions, generateText } from '../lib/ai';
 import { AiSettings } from '../types';
 import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
+import { applyLikeToPosts, attachLikeState } from '../lib/postLikes';
 import { GoogleGenAI } from "@google/genai";
 import { BOT_PERSONAS } from '../lib/botPersonas';
 import { NeuralBriefing } from './NeuralBriefing';
@@ -394,7 +395,10 @@ export const Feed: React.FC = () => {
         const { data, error } = await supabase.from('posts').select('*').eq('id', postId).maybeSingle();
         if (cancelled) return;
         if (error) throw error;
-        if (data) setSharedPost(data as Post);
+        if (data) {
+          const [hydrated] = await attachLikeState([data as Post], currentUser?.id);
+          if (!cancelled) setSharedPost(hydrated);
+        }
       } catch (error) {
         if (!cancelled) console.error('Error fetching shared post:', error);
       } finally {
@@ -404,11 +408,16 @@ export const Feed: React.FC = () => {
     fetchSharedPost();
 
     return () => { cancelled = true; };
-  }, [searchParams]);
+  }, [searchParams, currentUser?.id]);
 
-  const handleLike = (id: string) => {
+  // PostCard has already written the like row by the time this runs; the lists
+  // only need to follow so the heart survives Virtuoso recycling a row.
+  const handleLike = (id: string, liked: boolean) => {
     if (!currentUser) return;
-    socket.emit('post:like', { postId: id, author: currentUser });
+    setPosts(prev => applyLikeToPosts(prev, id, liked));
+    setRecommendedPosts(prev => applyLikeToPosts(prev, id, liked));
+    setSharedPost(prev => (prev && prev.id === id ? applyLikeToPosts([prev], id, liked)[0] : prev));
+    if (liked) socket.emit('post:like', { postId: id, author: currentUser });
   };
 
   const handleDeletePost = (id: string) => {
@@ -505,7 +514,7 @@ export const Feed: React.FC = () => {
         if (!a.is_boosted && b.is_boosted) return 1;
         return 0;
       });
-    setPosts(filtered);
+    setPosts(await attachLikeState(filtered, currentUser.id));
     setLoading(false);
     setHasMore(rows.length >= PAGE_SIZE);
     setCursor(rows.length > 0 ? rows[rows.length - 1].created_at : null);
@@ -523,7 +532,10 @@ export const Feed: React.FC = () => {
       .limit(PAGE_SIZE);
     if (error) { handleDbError(error, 'LIST', 'posts'); setIsLoadingMore(false); return; }
     const rows = (data ?? []) as Post[];
-    const filtered = rows.filter(p => !currentUser.blocked_users?.includes(p.author_id));
+    const filtered = await attachLikeState(
+      rows.filter(p => !currentUser.blocked_users?.includes(p.author_id)),
+      currentUser.id,
+    );
     setPosts(prev => {
       const existingIds = new Set(prev.map(p => p.id));
       const newPosts = filtered.filter(p => !existingIds.has(p.id));
@@ -567,7 +579,10 @@ export const Feed: React.FC = () => {
       supabase.removeChannel(channel);
       if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
     };
-  }, [fetchInitialPosts, currentUser]);
+    // Keyed on the id, not the object: AuthContext replaces `currentUser` on any
+    // change to that row (a profile view bumps view_count), and depending on the
+    // object tore this channel down and refetched the whole first page each time.
+  }, [fetchInitialPosts, currentUser?.id, blockedKey]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -666,7 +681,10 @@ export const Feed: React.FC = () => {
         .select('*, author:users!posts_author_id_fkey(*)')
         .order('created_at', { ascending: false })
         .limit(50);
-      filtered = ((pool ?? []) as Post[]).filter(p => !currentUser.blocked_users?.includes(p.author_id));
+      filtered = await attachLikeState(
+        ((pool ?? []) as Post[]).filter(p => !currentUser.blocked_users?.includes(p.author_id)),
+        currentUser.id,
+      );
 
       const postContents = filtered.slice(0, 5).map(p => p.content).join(' | ');
       const prompt = `You are a neural recommendation engine for the "Blood, Sweat, or Code" platform.
