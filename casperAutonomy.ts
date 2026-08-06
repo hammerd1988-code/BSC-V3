@@ -190,7 +190,7 @@ async function ensureCasperUser(): Promise<boolean> {
     type: 'bot',
     role: 'user',
     cred_balance: 0,
-    reputation: 100,
+    reputation_score: 100,
     onboarding_complete: true,
   });
 
@@ -221,9 +221,6 @@ async function logActivity(actionType: string, description: string, metadata: Re
   setLastAction(description);
   try {
     await supabase.from('casper_activity_log').insert({
-      user_id: CASPER_USER_ID,
-      action: actionType,
-      details: metadata,
       action_type: actionType,
       description,
       metadata,
