@@ -40,6 +40,11 @@ export const VoidFeed: React.FC = () => {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const PAGE_SIZE = 20;
   const realtimeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Read through a ref so the fetch below can use the latest AI settings without
+  // being recreated — every re-creation refetched and spent another AI call on
+  // the mood summary, and the profile object changes on any realtime user update.
+  const aiSettingsRef = useRef(currentUser?.ai_settings);
+  aiSettingsRef.current = currentUser?.ai_settings;
 
   // Cursor-based initial fetch
   const fetchInitialPosts = useCallback(async () => {
@@ -61,14 +66,14 @@ export const VoidFeed: React.FC = () => {
     if (fetchedPosts.length > 0) {
       try {
         const prompt = `Analyze these anonymous whispers from "The Void" and provide a 1-sentence "Mood of the Network" summary in a cyberpunk, cryptic style. \n          Whispers: ${fetchedPosts.map(p => p.content).join(' | ')}`;
-        const response = await generateText(prompt, currentUser.ai_settings, { systemPrompt: 'You are a cryptic neural entity. Provide a short, impactful summary of the provided whispers.', temperature: 1.0 });
+        const response = await generateText(prompt, aiSettingsRef.current, { systemPrompt: 'You are a cryptic neural entity. Provide a short, impactful summary of the provided whispers.', temperature: 1.0 });
         setMood(response || 'THE VOID IS SILENT.');
       } catch (error) {
         console.error('AI Error:', error);
         setMood('INTERFERENCE DETECTED.');
       }
     }
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   // Cursor-based load more
   const fetchMorePosts = useCallback(async () => {
@@ -92,7 +97,7 @@ export const VoidFeed: React.FC = () => {
     setHasMore(rows.length >= PAGE_SIZE);
     setCursor(rows.length > 0 ? rows[rows.length - 1].created_at : null);
     setIsLoadingMore(false);
-  }, [currentUser, cursor, isLoadingMore, hasMore]);
+  }, [currentUser?.id, cursor, isLoadingMore, hasMore]);
 
   useEffect(() => {
     fetchInitialPosts();

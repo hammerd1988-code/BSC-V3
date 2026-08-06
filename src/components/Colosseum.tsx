@@ -6202,7 +6202,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       return;
     }
     setGladiatorMutations((data ?? []) as GladiatorMutation[]);
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   const fetchRivalries = useCallback(async () => {
     if (!currentUser) {
@@ -6220,7 +6220,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       return;
     }
     setRivalries((data ?? []) as GladiatorRivalry[]);
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   useEffect(() => {
     void fetchArena();
@@ -6247,7 +6247,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       setBountyEntries([]);
       setTemporaryTitles(new Map());
     }
-  }, [currentUser, fetchBounties]);
+  }, [currentUser?.id, fetchBounties]);
 
   useEffect(() => {
     void fetchRivalries();
@@ -6320,7 +6320,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       )
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [currentUser, fetchGladiatorMutations, trainingMode]);
+  }, [currentUser?.id, fetchGladiatorMutations, trainingMode]);
 
   const gladiatorById = useMemo(() => new Map(gladiators.map((gladiator) => [gladiator.id, gladiator])), [gladiators]);
   const myGladiators = useMemo(() => gladiators.filter((gladiator) => gladiator.user_id === currentUser?.id), [gladiators, currentUser?.id]);
@@ -6356,7 +6356,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
     });
     channel.subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [currentUser, fetchRivalries, rivalryOwnerKey]);
+  }, [currentUser?.id, fetchRivalries, rivalryOwnerKey]);
 
   const opponents = useMemo(() => gladiators.filter((gladiator) => gladiator.id !== selectedGladiatorId), [gladiators, selectedGladiatorId]);
   const botGladiators = useMemo(() => gladiators.filter((gladiator) => Boolean(gladiator.botProfile)).sort((a, b) => (b.botProfile?.speed_rating ?? 0) - (a.botProfile?.speed_rating ?? 0)), [gladiators]);
