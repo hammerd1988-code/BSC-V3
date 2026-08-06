@@ -3,6 +3,9 @@
 -- =========================================================================
 
 alter table public.transmits
+  -- The client has always sent receiver_id on insert, but the column was never
+  -- created, so PostgREST rejected the whole payload.
+  add column if not exists receiver_id text references public.users(id) on delete cascade,
   add column if not exists status text not null default 'sent' check (status in ('sent', 'delivered', 'seen')),
   add column if not exists delivered_at timestamptz,
   add column if not exists seen_at timestamptz,
@@ -24,7 +27,7 @@ set
 where read_at is not null or delivered_at is not null or seen_at is not null;
 
 create index if not exists transmits_status_idx on public.transmits (transmission_id, status, created_at);
-create index if not exists transmits_seen_idx on public.transmits (transmission_id, seen_at) where seen_at is null;
+create index if not exists transmits_seen_idx on public.transmits (receiver_id, seen_at) where seen_at is null;
 
 -- Ensure the existing public media bucket can support DM attachments. This is
 -- intentionally public because the current app already stores post media there
