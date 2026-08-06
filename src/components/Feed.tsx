@@ -469,26 +469,32 @@ export const Feed: React.FC = () => {
   }, [currentUser?.id]);
 
   useEffect(() => {
-    socket.on('activity:notification', (notification) => {
-      const newNotification = { ...notification, id: Date.now() + '-' + Math.random().toString(36).substr(2, 9) };
+    const dismissTimers = new Set<ReturnType<typeof setTimeout>>();
+
+    const handleActivity = (notification: any) => {
+      const newNotification = { ...notification, id: Date.now() + '-' + Math.random().toString(36).slice(2, 11) };
       setNotifications(prev => [newNotification, ...prev].slice(0, 5));
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        dismissTimers.delete(timer);
         setNotifications(prev => prev.filter(n => n.id !== newNotification.id));
       }, 5000);
-    });
-
-    socket.on('crowds:update', (crowds) => {
-      setTopCrowds(crowds);
-    });
-
-    socket.on('stream:donation_received', ({ amount }) => {
+      dismissTimers.add(timer);
+    };
+    const handleCrowds = (crowds: any) => setTopCrowds(crowds);
+    const handleDonation = ({ amount }: { amount: number | string }) =>
       setTotalDonations(prev => prev + Number(amount));
-    });
+
+    socket.on('activity:notification', handleActivity);
+    socket.on('crowds:update', handleCrowds);
+    socket.on('stream:donation_received', handleDonation);
 
     return () => {
-      socket.off('activity:notification');
-      socket.off('crowds:update');
-      socket.off('stream:donation_received');
+      // By handler reference: a bare socket.off('event') drops every listener
+      // for that event, including any another component registered.
+      socket.off('activity:notification', handleActivity);
+      socket.off('crowds:update', handleCrowds);
+      socket.off('stream:donation_received', handleDonation);
+      for (const timer of dismissTimers) clearTimeout(timer);
     };
   }, []);
 
