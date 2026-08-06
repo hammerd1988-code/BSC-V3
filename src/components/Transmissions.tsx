@@ -458,7 +458,10 @@ export const Transmissions: React.FC = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [currentUser]);
+    // Keyed on the id: the effect only needs that, and depending on the profile
+    // object refetched every thread and resubscribed the channel each time any
+    // field of the signed-in user's row changed over realtime.
+  }, [currentUser?.id]);
 
   // Fetch transmits for active transmission.
   //
