@@ -26,9 +26,19 @@ const anon =
   import.meta.env.SUPABASE_ANON_KEY ||
   defaultPublishableKey;
 
-if (!url || !anon) {
-  console.warn('[supabase] Supabase URL / publishable key not set. Data layer will be unavailable.');
-  console.warn('[supabase] Expected one of: VITE_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_URL and VITE_SUPABASE_ANON_KEY / VITE_SUPABASE_PUBLISHABLE_KEY / NEXT_PUBLIC_SUPABASE_ANON_KEY');
+// `anon` cannot be falsy — it falls back to the baked-in publishable key — so a
+// `!anon` check could never fire, and nobody was ever told that the build had
+// silently attached itself to the built-in default project instead of the one
+// they configured. Warn about the fallback that actually happens.
+if (!url || anon === defaultPublishableKey) {
+  const missing = [!url && 'URL', anon === defaultPublishableKey && 'publishable/anon key']
+    .filter(Boolean)
+    .join(' and ');
+  console.warn(
+    `[supabase] No Supabase ${missing} configured; falling back to the built-in default project. ` +
+      'Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY (or the NEXT_PUBLIC_ / ANON_KEY equivalents) ' +
+      'so this build talks to the project you intend.',
+  );
 }
 
 // Fallback to the correct production project if env vars are not set
