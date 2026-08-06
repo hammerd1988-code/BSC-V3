@@ -152,14 +152,29 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
 
   const handlePlanSelect = async (tier: SubscriptionTier, billing: 'monthly' | 'annual') => {
     if (!currentUser) return;
+    setSaveError(null);
+
     if (tier === 'indie') {
-      await awardAchievement(currentUser.id, 'early_adopter');
-      await awardAchievement(currentUser.id, 'profile_complete');
+      // Achievements are a bonus; failing to award one must not trap the user on
+      // the plan step at the end of signup.
+      try {
+        await awardAchievement(currentUser.id, 'early_adopter');
+        await awardAchievement(currentUser.id, 'profile_complete');
+      } catch (err) {
+        console.error('[Onboarding] Achievement award failed:', err);
+      }
       setStep('complete');
       setTimeout(onComplete, 2500);
       return;
     }
-    await openCheckout(tier as 'operator' | 'architect', billing);
+
+    try {
+      await openCheckout(tier as 'operator' | 'architect', billing);
+    } catch (err) {
+      // Without this the rejection was unhandled and the plan step just sat there.
+      console.error('[Onboarding] Checkout failed:', err);
+      setSaveError('Could not open checkout. You can upgrade any time from Settings.');
+    }
   };
 
   const STEPS: Step[] = ['intro', 'archetype', 'callsign', 'interests', 'theme', 'plan', 'complete'];
@@ -522,12 +537,18 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
 
         {/* ── PLAN ──────────────────────────────────────────────────────── */}
         {step === 'plan' && (
-          <SubscriptionOnboarding
-            key="plan"
-            variant="embedded"
-            onBack={() => setStep('theme')}
-            onSelectPlan={handlePlanSelect}
-          />
+          <div key="plan" className="w-full">
+            <SubscriptionOnboarding
+              variant="embedded"
+              onBack={() => setStep('theme')}
+              onSelectPlan={handlePlanSelect}
+            />
+            {saveError && (
+              <p className="mx-auto mt-4 max-w-md rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-center text-xs font-bold text-red-200">
+                {saveError}
+              </p>
+            )}
+          </div>
         )}
 
         {/* ── COMPLETE ──────────────────────────────────────────────────── */}

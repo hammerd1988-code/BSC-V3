@@ -13,10 +13,14 @@ import { BOT_GLADIATOR_PROFILES, type BotGladiatorProfileSeed } from './src/lib/
 import { FOUNDING_FACTIONS, type FactionLore } from './src/lib/factionLore.js';
 import { generateServerText, isServerAiConfigured } from './serverAi.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
+import { timingSafeStringEqual } from './serverSecurity.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const BOT_UUID_NAMESPACE = '00000000-0000-4000-8000-000000000b5c';
 const LOG_PREFIX = '[BotMayhem]';
+// Both self-calls below run inside the scheduled mayhem loop; each does paid
+// model work, and without a deadline one stalled request pins the run forever.
+const SELF_CALL_TIMEOUT_MS = 120_000;
 
 // Timing — keeps activity believable, not spammy
 const BATTLE_INTERVAL_MS = 45 * 60 * 1000;       // one battle every ~45 min
@@ -588,6 +592,7 @@ async function runBattle(
         challengerId: challenger.gladiatorId,
         defenderId: defender.gladiatorId,
       }),
+      signal: AbortSignal.timeout(SELF_CALL_TIMEOUT_MS),
     });
     const data = await resp.json();
     moves = data.moves ?? [];
@@ -602,6 +607,7 @@ async function runBattle(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ matchId, challengeType }),
+      signal: AbortSignal.timeout(SELF_CALL_TIMEOUT_MS),
     });
     const data = await resp.json();
     judge = data.judge ?? null;
@@ -653,7 +659,13 @@ async function runBattle(
   console.log(`${LOG_PREFIX} Battle complete: ${winner.username} defeated ${loser.username} (${winner.username} feels ${winnerRel.sentiment} toward ${loser.username}, ${loser.username} feels ${loserRel.sentiment} toward ${winner.username})`);
 
   await postBattleBrag(winner, loser, matchId, challengeType);
-  setTimeout(() => postBattleReaction(loser, winner, matchId, challengeType), jitter(30_000));
+  // postBattleReaction is async and does paid model work; an unhandled rejection
+  // inside a bare setTimeout callback takes the process down.
+  setTimeout(() => {
+    void postBattleReaction(loser, winner, matchId, challengeType).catch((error) => {
+      console.error(`${LOG_PREFIX} postBattleReaction failed:`, error instanceof Error ? error.message : error);
+    });
+  }, jitter(30_000));
 
   return { ok: true, matchId, winner, loser };
 }
@@ -1518,8 +1530,11 @@ export function registerBotMayhemRoutes(app: import('express').Express, supabase
     next: import('express').NextFunction
   ) => {
     const apiKey = req.headers['x-api-key'] as string | undefined;
-    const secret = process.env.AGENT_WEBHOOK_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-    if (apiKey && apiKey === secret) {
+    // Only the dedicated webhook secret opens this door. Falling back to
+    // SUPABASE_SERVICE_ROLE_KEY turned the database credential into an admin API
+    // key for these routes, and `===` on a secret leaks length/prefix timing.
+    const secret = process.env.AGENT_WEBHOOK_SECRET || '';
+    if (apiKey && secret && timingSafeStringEqual(apiKey, secret)) {
       return next();
     }
     const profile = await requireCasperAuth(req, res, supabaseClient);

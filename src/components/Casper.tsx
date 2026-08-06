@@ -13,6 +13,7 @@ import { generateText } from '../lib/ai';
 import { sendCasperCommand, type CasperCommandResponse, type CasperToolCall } from '../lib/casper';
 import { fromDb, supabase, toDb } from '../supabase';
 import { cn } from '../lib/utils';
+import { saveOwnApiKey, withoutApiKey } from '../lib/aiCredentials';
 import { casperAuthFetch } from '../lib/casperApi';
 import { formatDistanceToNow } from 'date-fns';
 import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
@@ -32,6 +33,7 @@ import {
 } from '../lib/casperIntegrations';
 import { useSubscription, type FeatureGateResult } from '../lib/subscription';
 import { UpgradePromptModal, UpgradeInlineCard } from './UpgradePrompt';
+import { authedFetch } from '../lib/authSession';
 
 interface Message {
   id: string;
@@ -782,11 +784,14 @@ export const Casper: React.FC = () => {
         delete nextSettings.max_tool_rounds;
       }
 
+      // The key never goes into users.ai_settings — every signed-in session can
+      // read that table. It lives in user_ai_credentials, owner-scoped by RLS.
       const { error } = await supabase
         .from('users')
-        .update({ ai_settings: nextSettings, context_note: aiCoreForm.contextNote.trim() || null })
+        .update({ ai_settings: withoutApiKey(nextSettings), context_note: aiCoreForm.contextNote.trim() || null })
         .eq('id', currentUser.id);
       if (error) throw error;
+      await saveOwnApiKey(currentUser.id, aiCoreForm.apiKey);
       setAiSettings(nextSettings);
       setShowAiCore(false);
     } catch (error) {
@@ -860,7 +865,7 @@ export const Casper: React.FC = () => {
     if (!routineForm.name.trim() || !routineForm.directive.trim() || !userUuid) return;
     setActionBusy(true);
     try {
-      const { error } = await supabase.from('casper_routines').insert(toDb({ name: routineForm.name.trim(), directive: routineForm.directive.trim(), frequency: routineForm.frequency, cron_expression: routineForm.frequency === 'cron' || routineForm.frequency === 'custom' ? routineForm.cron_expression : null, scheduled_time: routineForm.scheduled_time, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', enabled: true, next_run_at: nextRunAt(routineForm.frequency, routineForm.scheduled_time), created_by: userUuid, metadata: { owner_id: userUuid, source: 'user_casper_dashboard' } }));
+      const { error } = await supabase.from('casper_routines').insert(toDb({ name: routineForm.name.trim(), directive: routineForm.directive.trim(), frequency: routineForm.frequency, cron_expression: routineForm.frequency === 'cron' || routineForm.frequency === 'custom' ? routineForm.cron_expression : null, scheduled_time: routineForm.scheduled_time, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', is_enabled: true, next_run_at: nextRunAt(routineForm.frequency, routineForm.scheduled_time), created_by: userUuid, metadata: { owner_id: userUuid, source: 'user_casper_dashboard' } }));
       if (error) throw error;
       setRoutineForm({ name: '', directive: '', frequency: 'daily', scheduled_time: '09:00', cron_expression: '0 9 * * *' });
       setNotice('Routine scheduled. Casper can now act proactively.');
@@ -870,7 +875,7 @@ export const Casper: React.FC = () => {
   };
 
   const toggleRoutine = async (routine: UserCasperRoutine) => {
-    const { error } = await supabase.from('casper_routines').update(toDb({ enabled: !routine.enabled })).eq('id', routine.id);
+    const { error } = await supabase.from('casper_routines').update({ is_enabled: !routine.enabled }).eq('id', routine.id);
     if (error) setNotice(error.message); else await fetchControlCenter();
   };
 
@@ -1108,7 +1113,7 @@ export const Casper: React.FC = () => {
 
     try {
       const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
-      const response = await fetch(`${serverUrl}/api/tts`, {
+      const response = await authedFetch(`${serverUrl}/api/tts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, voice: 'onyx', speed: 1.05 }),
@@ -1285,7 +1290,7 @@ export const Casper: React.FC = () => {
         const formData = new FormData();
         formData.append('audio', audioBlob, 'recording.webm');
         const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
-        const response = await fetch(`${serverUrl}/api/transcribe`, { method: 'POST', body: formData });
+        const response = await authedFetch(`${serverUrl}/api/transcribe`, { method: 'POST', body: formData });
         if (response.ok) {
           const data = await response.json();
           transcript = (data.transcript || data.text || '').trim();

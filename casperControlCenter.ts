@@ -226,6 +226,18 @@ function clampPositiveInt(raw: unknown, ceiling: number): number | null {
  * if no userId, no row, or no `ai_settings` payload — callers always
  * fall back to the server's env-var defaults in that case.
  */
+/** Owner-scoped provider key. Read through the service role, so RLS is bypassed. */
+async function loadUserApiKey(supabase: SupabaseClient, userId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('user_ai_credentials')
+    .select('api_key')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) return null;
+  const key = (data as { api_key?: string | null } | null)?.api_key;
+  return typeof key === 'string' && key.trim() ? key.trim() : null;
+}
+
 async function loadUserAiSettings(
   supabase: SupabaseClient,
   userId?: string | null,
@@ -237,9 +249,15 @@ async function loadUserAiSettings(
       .select('ai_settings')
       .eq('id', userId)
       .maybeSingle();
-    if (error || !data?.ai_settings) return {};
+    if (error) return {};
+    // The key moved to user_ai_credentials because users is readable by every
+    // signed-in session; the ai_settings spellings stay as a fallback for rows
+    // written before that migration reached this database. It is loaded even
+    // when ai_settings is empty — the two are stored independently now.
+    const storedKey = await loadUserApiKey(supabase, userId);
+    if (!data?.ai_settings) return storedKey ? { apiKey: storedKey } : {};
     const raw = data.ai_settings as Record<string, any>;
-    const apiKey = raw.apiKey ?? raw.api_key ?? null;
+    const apiKey = storedKey ?? raw.apiKey ?? raw.api_key ?? null;
     const endpoint = raw.endpoint ?? raw.api_base_url ?? raw.apiBaseUrl ?? null;
     const model = raw.model ?? null;
     // Don't coerce null/undefined to 0 — Number(null) === 0 would silently
@@ -1257,9 +1275,6 @@ async function logActivity(supabase: SupabaseClient, input: {
   metadata?: Record<string, any>;
 }) {
   const row: Record<string, any> = {
-    user_id: input.actor_id,
-    action: input.action_type,
-    details: input.metadata ?? {},
     action_type: input.action_type,
     description: input.description,
     metadata: input.metadata ?? {},
@@ -1786,7 +1801,7 @@ async function runDueRoutines(supabase: SupabaseClient, casperMemory: any, trigg
     const { data: routines, error } = await supabase
       .from('casper_routines')
       .select('*')
-      .eq('enabled', true)
+      .eq('is_enabled', true)
       .or(`next_run_at.is.null,next_run_at.lte.${now}`)
       .order('next_run_at', { ascending: true, nullsFirst: true })
       .limit(8);
@@ -1829,7 +1844,7 @@ async function runtimeStatus(supabase: SupabaseClient) {
   const [tasks, recentActions, routines, skills, integrations] = await Promise.all([
     supabase.from('casper_tasks').select('status', { count: 'exact', head: false }).in('status', ['pending', 'running', 'completed', 'failed']),
     supabase.from('casper_activity_log').select('id', { count: 'exact', head: true }).gte('created_at', since),
-    supabase.from('casper_routines').select('id', { count: 'exact', head: true }).eq('enabled', true),
+    supabase.from('casper_routines').select('id', { count: 'exact', head: true }).eq('is_enabled', true),
     supabase.from('casper_skills').select('id', { count: 'exact', head: true }).eq('is_enabled', true),
     supabase.from('casper_integrations').select('id', { count: 'exact', head: true }).eq('enabled', true).eq('status', 'connected'),
   ]);

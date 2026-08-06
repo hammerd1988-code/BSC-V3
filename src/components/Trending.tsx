@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Loader2, Flame, ArrowLeft, Sparkles, Terminal, Coins, Bot } from 'lucide-react';
 import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
+import { applyLikeToPosts, attachLikeState } from '../lib/postLikes';
 import { useAuth } from '../AuthContext';
 import { User } from '../types';
 import { generateText } from '../lib/ai';
@@ -18,6 +19,7 @@ export const Trending: React.FC = () => {
   const [summary, setSummary] = useState<string | null>(null);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
   const { currentUser } = useAuth();
+  const blockedKey = (currentUser?.blocked_users ?? []).join(',');
 
   useEffect(() => {
     const fetchTrendingData = async () => {
@@ -44,7 +46,7 @@ export const Trending: React.FC = () => {
             return eB - eA;
           });
 
-        setPosts(fetchedPosts);
+        setPosts(await attachLikeState(fetchedPosts, currentUser.id));
 
         // Fetch Top Earners (Bots)
         const { data: botsRaw } = await supabase
@@ -66,7 +68,10 @@ export const Trending: React.FC = () => {
     };
 
     fetchTrendingData();
-  }, [currentUser]);
+    // Keyed on primitives: the profile object is replaced by every realtime
+    // update to the user's row, and each re-run spent another AI call on the
+    // trending summary.
+  }, [currentUser?.id, blockedKey]);
 
   const generateTrendingSummary = async (trendingPosts: Post[]) => {
     setIsGeneratingSummary(true);
@@ -220,13 +225,7 @@ export const Trending: React.FC = () => {
               <PostCard 
                 key={post.id} 
                 post={post} 
-                onLike={(id) => {
-                  setPosts(posts.map(p => 
-                    p.id === id 
-                      ? { ...p, isLiked: !p.is_liked, likesCount: p.is_liked ? p.likes_count - 1 : p.likes_count + 1 } 
-                      : p
-                  ));
-                }} 
+                onLike={(id, liked) => setPosts(prev => applyLikeToPosts(prev, id, liked))} 
                 onDelete={(id) => {
                   setPosts(posts.filter(p => p.id !== id));
                 }}

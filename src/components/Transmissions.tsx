@@ -147,6 +147,11 @@ export const Transmissions: React.FC = () => {
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const speechStatusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const manualSpeechStopRef = useRef(false);
+  // Effects key off the thread id so they do not restart when the row changes;
+  // the ref gives them the latest row without becoming a dependency.
+  const activeTransmissionId = activeTransmission?.id ?? null;
+  const activeTransmissionRef = useRef<Transmission | null>(null);
+  activeTransmissionRef.current = activeTransmission;
 
   const formatFileSize = (size?: number | null) => {
     if (!size || size <= 0) return 'Unknown size';
@@ -453,22 +458,36 @@ export const Transmissions: React.FC = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [currentUser]);
+    // Keyed on the id: the effect only needs that, and depending on the profile
+    // object refetched every thread and resubscribed the channel each time any
+    // field of the signed-in user's row changed over realtime.
+  }, [currentUser?.id]);
 
-  // Fetch transmits for active transmission
+  // Fetch transmits for active transmission.
+  //
+  // Keyed on the thread id rather than the object: a realtime UPDATE to the
+  // transmission row (typing status, unread counts) replaced the object and made
+  // this effect refetch every message and resubscribe the channel — several times
+  // per second while the other person typed.
   useEffect(() => {
-    if (!activeTransmission) {
+    if (!activeTransmissionId || !currentUser) {
       setTransmits([]);
       return;
     }
+
+    // Opening another thread while this fetch is in flight must not paint the old
+    // thread's messages into the new one, or mark them seen.
+    let cancelled = false;
 
     const fetchTransmits = async () => {
       try {
         const { data, error: fetchError } = await supabase
           .from('transmits')
           .select('*')
-          .eq('transmission_id', activeTransmission.id)
+          .eq('transmission_id', activeTransmissionId)
           .order('created_at', { ascending: true });
+
+        if (cancelled) return;
 
         if (fetchError) throw fetchError;
         const rows = (data || []) as Transmit[];
@@ -483,7 +502,7 @@ export const Transmissions: React.FC = () => {
         }
 
         const seenAt = new Date().toISOString();
-        const liveWithSeen = live.map(t => t.sender_id !== currentUser!.id && !t.seen_at ? {
+        const liveWithSeen = live.map(t => t.sender_id !== currentUser.id && !t.seen_at ? {
           ...t,
           delivered_at: t.delivered_at ?? seenAt,
           seen_at: seenAt,
@@ -494,7 +513,7 @@ export const Transmissions: React.FC = () => {
         void markIncomingAsSeen(live);
 
         // Decrypt encrypted messages and initialize burn countdowns
-        const key = getTransmissionKey(activeTransmission.id);
+        const key = getTransmissionKey(activeTransmissionId);
         const newDecrypted: Record<string, string> = {};
         const newCountdowns: Record<string, number> = {};
         await Promise.all(liveWithSeen.map(async (t) => {
@@ -510,17 +529,19 @@ export const Transmissions: React.FC = () => {
             if (remaining > 0) newCountdowns[t.id] = remaining;
           }
         }));
+        if (cancelled) return;
         setDecryptedCache(prev => ({ ...prev, ...newDecrypted }));
         setBurnCountdowns(prev => ({ ...prev, ...newCountdowns }));
 
         // Mark as read
-        if (activeTransmission.unread_counts?.[currentUser!.id] > 0) {
-          const newUnread = { ...activeTransmission.unread_counts };
-          newUnread[currentUser!.id] = 0;
+        const unreadCounts = activeTransmissionRef.current?.unread_counts;
+        if ((unreadCounts?.[currentUser.id] ?? 0) > 0) {
+          const newUnread = { ...unreadCounts };
+          newUnread[currentUser.id] = 0;
           await supabase
             .from('transmissions')
             .update({ unread_counts: newUnread })
-            .eq('id', activeTransmission.id);
+            .eq('id', activeTransmissionId);
         }
       } catch (err) {
         console.error('Error fetching transmits:', err);
@@ -531,12 +552,12 @@ export const Transmissions: React.FC = () => {
 
     // Subscribe to new transmits for this transmission
     const channel = supabase
-      .channel(`transmission:${activeTransmission.id}`)
-      .on('postgres_changes', { 
-        event: 'INSERT', 
-        schema: 'public', 
+      .channel(`transmission:${activeTransmissionId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
         table: 'transmits',
-        filter: `transmission_id=eq.${activeTransmission.id}`
+        filter: `transmission_id=eq.${activeTransmissionId}`
       }, (payload) => {
         const newTransmit = payload.new as Transmit;
         if (import.meta.env.DEV) console.debug('[Transmissions] transmit INSERT', newTransmit.id);
@@ -544,9 +565,9 @@ export const Transmissions: React.FC = () => {
         // Decrypt if needed, then play sound/notify
         const handleIncomingTransmit = async (t: Transmit) => {
           let displayContent = t.content;
-          if (t.encryption_key === 'aes-gcm-pbkdf2' && activeTransmission) {
+          if (t.encryption_key === 'aes-gcm-pbkdf2') {
             try {
-              displayContent = await decryptText(t.content, getTransmissionKey(activeTransmission.id));
+              displayContent = await decryptText(t.content, getTransmissionKey(activeTransmissionId));
               setDecryptedCache(prev => ({ ...prev, [t.id]: displayContent }));
             } catch {
               setDecryptedCache(prev => ({ ...prev, [t.id]: '[Encrypted message]' }));
@@ -598,7 +619,7 @@ export const Transmissions: React.FC = () => {
         event: 'UPDATE',
         schema: 'public',
         table: 'transmits',
-        filter: `transmission_id=eq.${activeTransmission.id}`
+        filter: `transmission_id=eq.${activeTransmissionId}`
       }, (payload) => {
         const updatedTransmit = payload.new as Transmit;
         setTransmits(prev => prev.map(t => t.id === updatedTransmit.id ? updatedTransmit : t));
@@ -607,20 +628,21 @@ export const Transmissions: React.FC = () => {
         event: 'UPDATE',
         schema: 'public',
         table: 'transmissions',
-        filter: `id=eq.${activeTransmission.id}`
+        filter: `id=eq.${activeTransmissionId}`
       }, (payload) => {
         const updated = payload.new as Transmission;
         if (import.meta.env.DEV) console.debug('[Transmissions] active transmission UPDATE', updated.id);
         setActiveTransmission(updated);
       })
       .subscribe((status) => {
-        if (import.meta.env.DEV) console.debug(`[Transmissions] transmit channel (${activeTransmission.id}) status:`, status);
+        if (import.meta.env.DEV) console.debug(`[Transmissions] transmit channel (${activeTransmissionId}) status:`, status);
       });
 
     return () => {
+      cancelled = true;
       supabase.removeChannel(channel);
     };
-  }, [activeTransmission, currentUser]);
+  }, [activeTransmissionId, currentUser?.id]);
 
   useEffect(() => {
     const targetUserId = searchParams.get('userId');
@@ -686,7 +708,7 @@ export const Transmissions: React.FC = () => {
 
     void openTargetTransmission();
     return () => { cancelled = true; };
-  }, [currentUser, supabaseUser, searchParams, setSearchParams]);
+  }, [currentUser?.id, supabaseUser?.id, searchParams, setSearchParams]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -1083,29 +1105,29 @@ export const Transmissions: React.FC = () => {
 
   const handleTyping = () => {
     if (!activeTransmission || !currentUser) return;
-    
-    if (!isTyping) {
-      setIsTyping(true);
-      const typingStatus = { ...(activeTransmission.typing_status ?? {}) };
-      typingStatus[currentUser.id] = true;
-      
-      supabase
+    const threadId = activeTransmission.id;
+    const writeTypingStatus = (typing: boolean) => {
+      const typingStatus = { ...(activeTransmissionRef.current?.typing_status ?? {}) };
+      typingStatus[currentUser.id] = typing;
+      void supabase
         .from('transmissions')
         .update({ typing_status: typingStatus })
-        .eq('id', activeTransmission.id);
+        .eq('id', threadId);
+    };
+
+    if (!isTyping) {
+      setIsTyping(true);
+      writeTypingStatus(true);
     }
 
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    
+
     typingTimeoutRef.current = setTimeout(() => {
       setIsTyping(false);
-      const typingStatus = { ...(activeTransmission.typing_status ?? {}) };
-      typingStatus[currentUser.id] = false;
-      
-      supabase
-        .from('transmissions')
-        .update({ typing_status: typingStatus })
-        .eq('id', activeTransmission.id);
+      // Switching threads within the 3s window used to clear the typing flag on
+      // whichever thread happened to be open when the timer fired.
+      if (activeTransmissionRef.current?.id !== threadId) return;
+      writeTypingStatus(false);
     }, 3000);
   };
 

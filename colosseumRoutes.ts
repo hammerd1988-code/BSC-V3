@@ -35,6 +35,7 @@ import {
   parseSandboxCode,
 } from './src/lib/colosseumSandbox.js';
 import { generateServerText, isServerAiConfigured } from './serverAi.js';
+import { assertPublicHttpUrl } from './outboundUrl.js';
 import { generateImage as comfyGenerateImage, generateGladiatorAvatar as comfyGenerateAvatar, isComfyUIConfigured } from './comfyuiProvider.js';
 
 const BOT_UUID_NAMESPACE = '00000000-0000-4000-8000-000000000b5c';
@@ -379,6 +380,28 @@ function normalizeCompatibleBaseUrl(value?: string | null) {
     .replace(/\/responses$/i, '');
 }
 
+/** The endpoints this deployment configured for itself, in normalized form. */
+function platformBaseUrls(): Set<string> {
+  return new Set(
+    [openaiCompatibleBaseUrl(), BOT_OPENAI_COMPATIBLE_BASE_URL, FIREWORKS_BASE_URL]
+      .filter(Boolean)
+      .map((url) => normalizeCompatibleBaseUrl(url)),
+  );
+}
+
+/**
+ * A gladiator's owner sets `api_base_url` from the Bot Forge, and this process
+ * requests it with the service role, so an unvalidated value pointed the server
+ * at its own network — cloud metadata, loopback routes that trust localhost.
+ *
+ * Endpoints this deployment configured itself are exempt: a self-hosted provider
+ * on a private address is the intended setup for those.
+ */
+async function assertGladiatorBaseUrl(baseUrl: string): Promise<void> {
+  if (platformBaseUrls().has(baseUrl)) return;
+  await assertPublicHttpUrl(baseUrl, { label: 'gladiator API base URL' });
+}
+
 function localFallbackSolution(input: { challengeType: ColosseumChallengeType; gladiator: any; opponent: any; prompt?: string }) {
   const name = input.gladiator?.name ?? 'Local Fallback';
   const opponent = input.opponent?.name ?? 'the opponent';
@@ -469,6 +492,7 @@ async function postToOpenAiCompatible(input: { apiKey?: string | null; model?: s
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
     const baseUrl = normalizeCompatibleBaseUrl(input.apiBaseUrl);
+    await assertGladiatorBaseUrl(baseUrl);
     const headers: Record<string, string> = {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
@@ -550,7 +574,13 @@ async function generateGladiatorMove(input: { matchId?: string; challengeType: C
   const { payload, solution } = await postToOpenAiCompatible({
     apiKey: resolveGladiatorApiKey(input.gladiator, hasCustomKey),
     model: input.gladiator?.model || resolveGladiatorDefaultModel(input.gladiator),
-    apiBaseUrl: input.gladiator?.api_base_url || resolveGladiatorBaseUrl(input.gladiator),
+    // The owner's endpoint is only honoured alongside the owner's own key.
+    // Otherwise `Authorization: Bearer <platform key>` went to a URL the owner
+    // chose, which hands the platform's provider credential to anyone who edits
+    // their gladiator's api_base_url.
+    apiBaseUrl: hasCustomKey
+      ? input.gladiator?.api_base_url || resolveGladiatorBaseUrl(input.gladiator)
+      : resolveGladiatorBaseUrl(input.gladiator),
     prompt,
     fallbackModel: resolveGladiatorDefaultModel(input.gladiator),
     maxTokens: input.challengeType === 'sandbox_build' ? 4096 : isSeededPlatformBot(input.gladiator) ? 1600 : 900,
@@ -1991,11 +2021,19 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
         return res.status(409).json({ success: false, error: 'Neural Whisper already used for this gladiator in this battle' });
       }
 
-      const { error: updateError } = await supabase
+      // Claim the slot conditionally: two requests that both read an empty column
+      // would otherwise both write, spending one whisper twice per battle.
+      const { data: claimed, error: updateError } = await supabase
         .from('matches')
         .update({ [whisperCol]: trimmed })
-        .eq('id', matchId);
+        .eq('id', matchId)
+        .is(whisperCol, null)
+        .select('id')
+        .maybeSingle();
       if (updateError) throw updateError;
+      if (!claimed) {
+        return res.status(409).json({ success: false, error: 'Neural Whisper already used for this gladiator in this battle' });
+      }
 
       return res.json({ success: true, side, whisper: trimmed });
     } catch (error: any) {

@@ -437,15 +437,35 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     if (!currentUser?.id) return;
     const now = new Date().toISOString();
 
-    await supabase.from('subscriptions').upsert({
-      user_id: currentUser.id,
+    // Read-then-write rather than an upsert on user_id: subscriptions has no
+    // unique constraint on that column (only the partial index for status =
+    // 'active'), so `onConflict: 'user_id'` failed with 42P10 and the row was
+    // never written — the error was discarded, leaving users.subscription_tier
+    // saying one thing and the subscriptions table another.
+    const { data: existing } = await supabase
+      .from('subscriptions')
+      .select('id')
+      .eq('user_id', currentUser.id)
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle();
+
+    const row = {
       tier: nextTier,
       status: 'active',
-      started_at: now,
       expires_at: nextTier === 'indie' ? now : null,
       stripe_customer_id: null,
       stripe_subscription_id: null,
-    }, { onConflict: 'user_id' });
+    };
+
+    const { error } = existing?.id
+      ? await supabase.from('subscriptions').update(row).eq('id', existing.id)
+      : await supabase.from('subscriptions').insert({ ...row, user_id: currentUser.id, started_at: now });
+
+    if (error) {
+      console.error('[subscription] Failed to set local tier:', error.message);
+      return;
+    }
 
     await supabase.from('users').update({ subscription_tier: nextTier }).eq('id', currentUser.id);
     await refresh();

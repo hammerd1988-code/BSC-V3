@@ -107,7 +107,9 @@ create index if not exists casper_routines_frequency_idx on public.casper_routin
 -- -------------------------------------------------------------------------
 create table if not exists public.casper_skills (
   id uuid primary key default gen_random_uuid(),
-  skill_key text not null unique check (skill_key ~ '^[a-z0-9_:-]{2,80}$'),
+  -- Dots are part of the seeded keys below ('memory.search', ...), so they have
+  -- to be legal here or the seed insert aborts this whole migration.
+  skill_key text not null unique check (skill_key ~ '^[a-z0-9_.:-]{2,80}$'),
   label text not null check (char_length(trim(label)) between 2 and 120),
   description text not null default '',
   category text not null default 'general',

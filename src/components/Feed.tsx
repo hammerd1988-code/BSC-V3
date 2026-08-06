@@ -14,6 +14,7 @@ import { GenerateOptions, generateText } from '../lib/ai';
 import { AiSettings } from '../types';
 import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
+import { applyLikeToPosts, attachLikeState } from '../lib/postLikes';
 import { GoogleGenAI } from "@google/genai";
 import { BOT_PERSONAS } from '../lib/botPersonas';
 import { NeuralBriefing } from './NeuralBriefing';
@@ -365,6 +366,10 @@ export const Feed: React.FC = () => {
   });
   const realtimeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { currentUser } = useAuth();
+  // A stable dependency for the block list. The profile object is replaced on
+  // every realtime update to the user's row (CRED, view_count, streak, ...), so
+  // depending on it reloaded the whole feed underneath the reader.
+  const blockedKey = (currentUser?.blocked_users ?? []).join(',');
 
   // Real-time state
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -375,26 +380,44 @@ export const Feed: React.FC = () => {
 
   useEffect(() => {
     const postId = searchParams.get('post');
-    if (postId) {
-      setIsSharedPostLoading(true);
-      const fetchSharedPost = async () => {
-        try {
-          const { data, error } = await supabase.from('posts').select('*').eq('id', postId).maybeSingle();
-          if (error) throw error;
-          if (data) setSharedPost(data as Post);
-        } catch (error) {
-          console.error('Error fetching shared post:', error);
-        } finally {
-          setIsSharedPostLoading(false);
-        }
-      };
-      fetchSharedPost();
+    if (!postId) {
+      // Without this the modal kept showing the last shared post after the
+      // ?post parameter was removed.
+      setSharedPost(null);
+      setIsSharedPostLoading(false);
+      return;
     }
-  }, [searchParams]);
 
-  const handleLike = (id: string) => {
+    let cancelled = false;
+    setIsSharedPostLoading(true);
+    const fetchSharedPost = async () => {
+      try {
+        const { data, error } = await supabase.from('posts').select('*').eq('id', postId).maybeSingle();
+        if (cancelled) return;
+        if (error) throw error;
+        if (data) {
+          const [hydrated] = await attachLikeState([data as Post], currentUser?.id);
+          if (!cancelled) setSharedPost(hydrated);
+        }
+      } catch (error) {
+        if (!cancelled) console.error('Error fetching shared post:', error);
+      } finally {
+        if (!cancelled) setIsSharedPostLoading(false);
+      }
+    };
+    fetchSharedPost();
+
+    return () => { cancelled = true; };
+  }, [searchParams, currentUser?.id]);
+
+  // PostCard has already written the like row by the time this runs; the lists
+  // only need to follow so the heart survives Virtuoso recycling a row.
+  const handleLike = (id: string, liked: boolean) => {
     if (!currentUser) return;
-    socket.emit('post:like', { postId: id, author: currentUser });
+    setPosts(prev => applyLikeToPosts(prev, id, liked));
+    setRecommendedPosts(prev => applyLikeToPosts(prev, id, liked));
+    setSharedPost(prev => (prev && prev.id === id ? applyLikeToPosts([prev], id, liked)[0] : prev));
+    if (liked) socket.emit('post:like', { postId: id, author: currentUser });
   };
 
   const handleDeletePost = (id: string) => {
@@ -443,29 +466,35 @@ export const Feed: React.FC = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transmissions' }, () => fetchUnread())
       .subscribe();
     return () => { supabase.removeChannel(txChannel); };
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   useEffect(() => {
-    socket.on('activity:notification', (notification) => {
-      const newNotification = { ...notification, id: Date.now() + '-' + Math.random().toString(36).substr(2, 9) };
+    const dismissTimers = new Set<ReturnType<typeof setTimeout>>();
+
+    const handleActivity = (notification: any) => {
+      const newNotification = { ...notification, id: Date.now() + '-' + Math.random().toString(36).slice(2, 11) };
       setNotifications(prev => [newNotification, ...prev].slice(0, 5));
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        dismissTimers.delete(timer);
         setNotifications(prev => prev.filter(n => n.id !== newNotification.id));
       }, 5000);
-    });
-
-    socket.on('crowds:update', (crowds) => {
-      setTopCrowds(crowds);
-    });
-
-    socket.on('stream:donation_received', ({ amount }) => {
+      dismissTimers.add(timer);
+    };
+    const handleCrowds = (crowds: any) => setTopCrowds(crowds);
+    const handleDonation = ({ amount }: { amount: number | string }) =>
       setTotalDonations(prev => prev + Number(amount));
-    });
+
+    socket.on('activity:notification', handleActivity);
+    socket.on('crowds:update', handleCrowds);
+    socket.on('stream:donation_received', handleDonation);
 
     return () => {
-      socket.off('activity:notification');
-      socket.off('crowds:update');
-      socket.off('stream:donation_received');
+      // By handler reference: a bare socket.off('event') drops every listener
+      // for that event, including any another component registered.
+      socket.off('activity:notification', handleActivity);
+      socket.off('crowds:update', handleCrowds);
+      socket.off('stream:donation_received', handleDonation);
+      for (const timer of dismissTimers) clearTimeout(timer);
     };
   }, []);
 
@@ -491,11 +520,11 @@ export const Feed: React.FC = () => {
         if (!a.is_boosted && b.is_boosted) return 1;
         return 0;
       });
-    setPosts(filtered);
+    setPosts(await attachLikeState(filtered, currentUser.id));
     setLoading(false);
     setHasMore(rows.length >= PAGE_SIZE);
     setCursor(rows.length > 0 ? rows[rows.length - 1].created_at : null);
-  }, [currentUser]);
+  }, [currentUser?.id, blockedKey]);
 
   // Cursor-based: load next page
   const fetchMorePosts = useCallback(async () => {
@@ -509,7 +538,10 @@ export const Feed: React.FC = () => {
       .limit(PAGE_SIZE);
     if (error) { handleDbError(error, 'LIST', 'posts'); setIsLoadingMore(false); return; }
     const rows = (data ?? []) as Post[];
-    const filtered = rows.filter(p => !currentUser.blocked_users?.includes(p.author_id));
+    const filtered = await attachLikeState(
+      rows.filter(p => !currentUser.blocked_users?.includes(p.author_id)),
+      currentUser.id,
+    );
     setPosts(prev => {
       const existingIds = new Set(prev.map(p => p.id));
       const newPosts = filtered.filter(p => !existingIds.has(p.id));
@@ -518,7 +550,7 @@ export const Feed: React.FC = () => {
     setHasMore(rows.length >= PAGE_SIZE);
     setCursor(rows.length > 0 ? rows[rows.length - 1].created_at : null);
     setIsLoadingMore(false);
-  }, [currentUser, cursor, isLoadingMore, hasMore]);
+  }, [currentUser?.id, blockedKey, cursor, isLoadingMore, hasMore]);
 
   useEffect(() => {
     fetchInitialPosts();
@@ -553,7 +585,10 @@ export const Feed: React.FC = () => {
       supabase.removeChannel(channel);
       if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
     };
-  }, [fetchInitialPosts, currentUser]);
+    // Keyed on the id, not the object: AuthContext replaces `currentUser` on any
+    // change to that row (a profile view bumps view_count), and depending on the
+    // object tore this channel down and refetched the whole first page each time.
+  }, [fetchInitialPosts, currentUser?.id, blockedKey]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -652,7 +687,10 @@ export const Feed: React.FC = () => {
         .select('*, author:users!posts_author_id_fkey(*)')
         .order('created_at', { ascending: false })
         .limit(50);
-      filtered = ((pool ?? []) as Post[]).filter(p => !currentUser.blocked_users?.includes(p.author_id));
+      filtered = await attachLikeState(
+        ((pool ?? []) as Post[]).filter(p => !currentUser.blocked_users?.includes(p.author_id)),
+        currentUser.id,
+      );
 
       const postContents = filtered.slice(0, 5).map(p => p.content).join(' | ');
       const prompt = `You are a neural recommendation engine for the "Blood, Sweat, or Code" platform.
@@ -697,11 +735,14 @@ export const Feed: React.FC = () => {
 
   useEffect(() => {
     // Trigger recommendations whenever the user switches to For You tab
-    // (not just when empty, so a tab switch always refreshes)
-    if (feedType === 'foryou') {
-      getRecommendations();
+    // (not just when empty, so a tab switch always refreshes).
+    // getRecommendations() bails out when no posts have loaded yet, so this also
+    // waits for the first page: opening For You during the initial load used to
+    // leave the tab permanently empty until the user switched away and back.
+    if (feedType === 'foryou' && posts.length > 0) {
+      void getRecommendations();
     }
-  }, [feedType]);
+  }, [feedType, posts.length > 0]);
 
   const [trendFilter, setTrendFilter] = useState<string | null>(null);
 
@@ -1063,7 +1104,9 @@ export const Feed: React.FC = () => {
             endReached={() => { if (feedType === 'latest') loadMorePosts(); }}
             overscan={600}
             itemContent={(index, post) => (
-              <div className="holo-card mb-4">
+              // Keyed by post so a recycled row remounts instead of showing the
+              // previous post's like state and view counter.
+              <div key={post.id} className="holo-card mb-4">
                 <PostCard post={post} onLike={handleLike} onDelete={handleDeletePost} />
               </div>
             )}

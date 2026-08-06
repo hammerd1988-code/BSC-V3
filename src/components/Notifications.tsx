@@ -92,7 +92,9 @@ export const Notifications: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [currentUser]);
+    // Only the id matters: keying on the profile object refetched the whole list
+    // every time any field of the signed-in user's row changed over realtime.
+  }, [currentUser?.id]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -116,7 +118,7 @@ export const Notifications: React.FC = () => {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [currentUser, fetchNotifications]);
+  }, [currentUser?.id, fetchNotifications]);
 
   const markNotificationRead = async (notif: AppNotification) => {
     if (notif.read || !notif.id) return;
