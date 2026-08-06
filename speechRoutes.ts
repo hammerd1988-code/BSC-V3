@@ -3,9 +3,19 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import multer from 'multer';
 import fs from 'fs';
 import { tmpdir } from 'os';
-import { execSync } from 'child_process';
+import { join } from 'path';
+import { randomUUID } from 'crypto';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+
+/** A hung provider must not hold the request (and its socket) open indefinitely. */
+const PROVIDER_TIMEOUT_MS = 60_000;
+/** ffmpeg is a best-effort optimisation; do not let it wedge a request. */
+const FFMPEG_TIMEOUT_MS = 20_000;
 
 const OPENAI_TTS_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'] as const;
 
@@ -59,6 +69,7 @@ export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler, 
 
       const response = await fetch('https://api.openai.com/v1/audio/speech', {
         method: 'POST',
+        signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
@@ -114,6 +125,7 @@ export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler, 
 
       const response = await fetch(`${baseUrl}/audio/speech`, {
         method: 'POST',
+        signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
@@ -230,12 +242,21 @@ export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler, 
       // ffmpeg is optional — the deployment image does not ship it, so the
       // conversion routinely throws. Clean up in `finally` or every request
       // that takes this path leaks its upload (up to 25 MB) onto disk.
-      const tmpIn = `${tmpdir()}/casper_in_${Date.now()}.webm`;
-      const tmpOut = `${tmpdir()}/casper_out_${Date.now()}.wav`;
+      //
+      // A random id rather than Date.now(): two uploads in the same millisecond
+      // shared both paths, so one request could transcribe another's audio. And
+      // execFile rather than execSync, because a synchronous transcode blocked
+      // the event loop — every other request and all socket traffic stalled for
+      // its duration.
+      const conversionId = randomUUID();
+      const tmpIn = join(tmpdir(), `casper_in_${conversionId}.webm`);
+      const tmpOut = join(tmpdir(), `casper_out_${conversionId}.wav`);
       try {
-        fs.writeFileSync(tmpIn, file.buffer);
-        execSync(`ffmpeg -y -i "${tmpIn}" -ar 16000 -ac 1 -f wav "${tmpOut}" 2>/dev/null`);
-        audioBuffer = fs.readFileSync(tmpOut);
+        await fs.promises.writeFile(tmpIn, file.buffer);
+        await execFileAsync('ffmpeg', ['-y', '-i', tmpIn, '-ar', '16000', '-ac', '1', '-f', 'wav', tmpOut], {
+          timeout: FFMPEG_TIMEOUT_MS,
+        });
+        audioBuffer = await fs.promises.readFile(tmpOut);
         audioMime = 'audio/wav';
         audioExt = 'wav';
         console.log(`[transcribe] Converted webm to wav (${audioBuffer.length} bytes)`);
@@ -244,7 +265,7 @@ export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler, 
       } finally {
         for (const tmp of [tmpIn, tmpOut]) {
           try {
-            fs.rmSync(tmp, { force: true });
+            await fs.promises.rm(tmp, { force: true });
           } catch (cleanupErr) {
             console.warn(`[transcribe] Failed to remove ${tmp}:`, (cleanupErr as Error).message);
           }
@@ -264,6 +285,7 @@ export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler, 
 
           const response = await fetch(provider.url, {
             method: 'POST',
+            signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
             headers: { 'Authorization': `Bearer ${provider.key}` },
             body: formData,
           });
