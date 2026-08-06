@@ -15,7 +15,16 @@
  * names an unknown column, so those updates silently discarded valid fields too.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
-import { applyMigrations, createDatabase, type MigrationFailure, type PgLiteLike } from '../scripts/migrationHarness';
+import {
+  applyMigrations,
+  createDatabase,
+  migrationFiles,
+  migrationVersion,
+  readMigration,
+  revokedPrivileges,
+  type MigrationFailure,
+  type PgLiteLike,
+} from '../scripts/migrationHarness';
 
 /** Columns the app reads or writes that no test would otherwise notice losing. */
 const REQUIRED_COLUMNS: Record<string, string[]> = {
@@ -118,5 +127,103 @@ describe('supabase migrations', () => {
       `select indexname from pg_indexes where schemaname = 'public' and tablename = 'transmits'`,
     );
     expect(rows.map((row) => row.indexname)).toContain('transmits_seen_idx');
+  });
+
+  it('enables row level security on every table, since the API roles are granted all', async () => {
+    const { rows } = await db.query<{ relname: string }>(
+      `select c.relname
+         from pg_class c
+         join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'public' and c.relkind = 'r' and not c.relrowsecurity`,
+    );
+    expect(rows.map((row) => row.relname)).toEqual([]);
+  });
+
+  /**
+   * 20260801000002_grant_public_api_roles.sql runs last and grants the API roles
+   * everything, which is how a from-scratch `db reset` gets a usable schema — and
+   * is also how the hardening in 0014-0063 gets silently reversed. Ask Postgres
+   * whether each revoke in the sources actually still holds.
+   */
+  it('leaves every deliberate revoke in force at the end of the chain', async () => {
+    const revoked = revokedPrivileges();
+    expect(revoked.length).toBeGreaterThan(20);
+
+    const stillGranted: string[] = [];
+    for (const entry of revoked) {
+      const probe =
+        entry.kind === 'function'
+          ? `select has_function_privilege($1, $2, $3) as granted`
+          : `select has_table_privilege($1, $2, $3) as granted`;
+      const { rows } = await db.query<{ granted: boolean }>(probe, [entry.role, entry.object, entry.privilege]);
+      if (rows[0]?.granted) {
+        stillGranted.push(`${entry.role} still has ${entry.privilege} on ${entry.object} (revoked by ${entry.file})`);
+      }
+    }
+    expect(stillGranted).toEqual([]);
+  });
+
+  it('gives every migration a version prefix of its own', () => {
+    const byVersion = new Map<string, string[]>();
+    for (const file of migrationFiles()) {
+      const version = migrationVersion(file);
+      byVersion.set(version, [...(byVersion.get(version) ?? []), file]);
+    }
+    const collisions = [...byVersion.entries()]
+      .filter(([, files]) => files.length > 1)
+      .map(([version, files]) => `${version}: ${files.join(', ')}`);
+    expect(collisions).toEqual([]);
+  });
+});
+
+/**
+ * 0023_subscriptions.sql and 0059_increment_counter_id_type.sql were renamed to
+ * 00231_/00591_ to break a version collision. The CLI keys applied migrations on
+ * that version, so on an already-migrated database the renamed files look pending
+ * and get re-applied out of order — after the migrations that supersede them.
+ * Re-applying them has to be a no-op.
+ */
+describe('renamed migrations re-applied out of order', () => {
+  const RENAMED = ['00231_subscriptions.sql', '00591_increment_counter_id_type.sql'];
+
+  let db: PgLiteLike;
+
+  beforeAll(async () => {
+    db = await createDatabase();
+    await applyMigrations(db);
+    for (const file of RENAMED) {
+      await db.exec(readMigration(file));
+    }
+  }, 120_000);
+
+  it('still downgrades a cancelled subscriber to the post-0040 tier vocabulary', async () => {
+    await db.query(`insert into public.users (id, username, display_name) values ('u1', 'u1', 'u1')`);
+    await db.query(
+      `insert into public.subscriptions (user_id, tier, status) values ('u1', 'architect', 'active')`,
+    );
+    const upgraded = await db.query<{ subscription_tier: string }>(
+      `select subscription_tier from public.users where id = 'u1'`,
+    );
+    expect(upgraded.rows[0]?.subscription_tier).toBe('architect');
+
+    // Pre-0040 the fallback tier was 'free', which users_subscription_tier_check
+    // no longer permits, so a reverted trigger makes this statement throw.
+    await db.query(`update public.subscriptions set status = 'cancelled' where user_id = 'u1'`);
+    const downgraded = await db.query<{ subscription_tier: string }>(
+      `select subscription_tier from public.users where id = 'u1'`,
+    );
+    expect(downgraded.rows[0]?.subscription_tier).toBe('indie');
+  });
+
+  it('still counts through the type-resolving increment_counter from 00591', async () => {
+    await db.query(
+      `insert into public.users (id, username, display_name) values ('u2', 'u2', 'u2')`,
+    );
+    await db.query(
+      `insert into public.posts (id, author_id, content) values ('p1', 'u2', 'hello')`,
+    );
+    await db.query(`select public.increment_counter('posts', 'p1', 'likes', 2)`);
+    const { rows } = await db.query<{ likes: number }>(`select likes from public.posts where id = 'p1'`);
+    expect(Number(rows[0]?.likes)).toBe(2);
   });
 });
