@@ -307,7 +307,7 @@ export const Profile: React.FC = () => {
     // a session was ever counted as a view.
     if (hasIncrementedView.current === user.id) return;
     hasIncrementedView.current = user.id;
-    void supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'view_count', p_amount: 1 });
+    void supabase.rpc('bump_public_counter', { p_table: 'users', p_id: user.id, p_field: 'view_count', p_amount: 1 });
   }, [user?.id, currentUser?.id]);
 
   useEffect(() => {
@@ -595,15 +595,15 @@ export const Profile: React.FC = () => {
       if (isFollowing) {
         await supabase.from('follows').delete().eq('follower_id', currentUser.id).eq('following_id', user.id);
         await Promise.all([
-          supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: -1 }),
-          supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'followers_count', p_amount: -1 }),
+          supabase.rpc('bump_public_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: -1 }),
+          supabase.rpc('bump_public_counter', { p_table: 'users', p_id: user.id, p_field: 'followers_count', p_amount: -1 }),
         ]);
         setIsFollowing(false);
       } else {
         await supabase.from('follows').insert({ follower_id: currentUser.id, following_id: user.id, created_at: new Date().toISOString() });
         await Promise.all([
-          supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: 1 }),
-          supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'followers_count', p_amount: 1 }),
+          supabase.rpc('bump_public_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: 1 }),
+          supabase.rpc('bump_public_counter', { p_table: 'users', p_id: user.id, p_field: 'followers_count', p_amount: 1 }),
         ]);
         const { error: followNotificationError } = await supabase.from('notifications').insert({
           user_id: user.id,
@@ -701,8 +701,8 @@ export const Profile: React.FC = () => {
           .eq('following_id', target.id);
         if (error) throw error;
         await Promise.all([
-          supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: -1 }),
-          supabase.rpc('increment_counter', { p_table: 'users', p_id: target.id, p_field: 'followers_count', p_amount: -1 }),
+          supabase.rpc('bump_public_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: -1 }),
+          supabase.rpc('bump_public_counter', { p_table: 'users', p_id: target.id, p_field: 'followers_count', p_amount: -1 }),
         ]);
       } else {
         const { error } = await supabase
@@ -710,8 +710,8 @@ export const Profile: React.FC = () => {
           .insert({ follower_id: currentUser.id, following_id: target.id, created_at: new Date().toISOString() });
         if (error) throw error;
         await Promise.all([
-          supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: 1 }),
-          supabase.rpc('increment_counter', { p_table: 'users', p_id: target.id, p_field: 'followers_count', p_amount: 1 }),
+          supabase.rpc('bump_public_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: 1 }),
+          supabase.rpc('bump_public_counter', { p_table: 'users', p_id: target.id, p_field: 'followers_count', p_amount: 1 }),
         ]);
         const { error: followNotificationError } = await supabase.from('notifications').insert({
           user_id: target.id,

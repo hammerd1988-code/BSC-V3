@@ -294,27 +294,40 @@ export const BotMarketplace: React.FC = () => {
       return;
     }
     if (ownedBotIds.has(bot.id)) { setPurchaseSuccess('You already own this bot!'); return; }
-    if (currentUser.role !== 'admin' && (currentUser.cred_balance || 0) < bot.price) {
-      setShowWallet(true);
-      return;
-    }
 
     setPurchasing(true);
     try {
+      // The debit, the creator's cut and both ledger rows move together now.
+      // Previously they were independent increment_counter calls whose errors
+      // supabase-js returns rather than throws, so a rejected debit still paid
+      // the creator and the buyer's own balance check was advisory.
+      const { error: spendError } = await supabase.rpc('spend_cred', {
+        p_amount: bot.price,
+        p_description: `Purchased bot: ${bot.name}`,
+        p_recipient_id: bot.creator_id,
+        p_recipient_amount: Math.floor(bot.price * 0.8),
+        p_recipient_description: `Bot sale: ${bot.name}`,
+      });
+      if (spendError) {
+        if (/insufficient_cred/.test(spendError.message)) {
+          setShowWallet(true);
+          return;
+        }
+        throw spendError;
+      }
+
+      const { error: purchaseError } = await supabase
+        .from('bot_purchases')
+        .insert({ buyer_id: currentUser.id, bot_id: bot.id, price_paid: bot.price });
+      if (purchaseError) throw purchaseError;
+
       await Promise.all([
-        supabase.from('bot_purchases').insert({ buyer_id: currentUser.id, bot_id: bot.id, price_paid: bot.price }),
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'cred_balance', p_amount: -bot.price }),
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: bot.creator_id, p_field: 'cred_balance', p_amount: Math.floor(bot.price * 0.8) }),
-        supabase.rpc('increment_counter', { p_table: 'bot_listings', p_id: bot.id, p_field: 'purchase_count', p_amount: 1 }),
-        supabase.from('transactions').insert([
-          { user_id: currentUser.id, amount: bot.price, type: 'spend', description: `Purchased bot: ${bot.name}`, created_at: new Date().toISOString() },
-          { user_id: bot.creator_id, amount: Math.floor(bot.price * 0.8), type: 'earn', description: `Bot sale: ${bot.name}`, created_at: new Date().toISOString() },
-        ]),
+        supabase.rpc('bump_public_counter', { p_table: 'bot_listings', p_id: bot.id, p_field: 'purchase_count', p_amount: 1 }),
         supabase.from('notifications').insert({
           user_id: bot.creator_id,
           type: 'bot_sale',
-          data: { bot_name: bot.name, buyer_id: currentUser.id, buyer_username: currentUser.username, cred_earned: Math.floor(bot.price * 0.8) },
-          read: false,
+          payload: { bot_name: bot.name, buyer_id: currentUser.id, buyer_username: currentUser.username, cred_earned: Math.floor(bot.price * 0.8) },
+          is_read: false,
         }),
       ]);
 

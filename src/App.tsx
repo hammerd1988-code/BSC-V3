@@ -129,57 +129,29 @@ export default function App() {
     const referralCode = sessionStorage.getItem('bsc_referral');
     if (referralCode) {
       sessionStorage.removeItem('bsc_referral');
-      void processReferral(currentUser.id, referralCode);
+      void processReferral(referralCode);
     }
 
     // Register this device for native push (Capacitor app only; no-op on web).
     void registerNativePush();
   }, [currentUser?.id]);
 
-  const processReferral = async (newUserId: string, referrerUsername: string) => {
-    try {
-      // Find referrer
-      const { data: referrer } = await supabase
-        .from('users')
-        .select('id, cred_balance, referral_count')
-        .eq('username', referrerUsername)
-        .maybeSingle();
-
-      if (!referrer || referrer.id === newUserId) return;
-
-      // Check if this referral was already processed
-      const { data: existing } = await supabase
-        .from('referrals')
-        .select('id')
-        .eq('referred_id', newUserId)
-        .maybeSingle();
-
-      if (existing) return; // Already processed
-
-      // Record referral
-      await supabase.from('referrals').insert({
-        referrer_id: referrer.id,
-        referred_id: newUserId,
-        referrer_username: referrerUsername,
-      });
-
-      // Award CRED to both
-      await Promise.all([
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: referrer.id, p_field: 'cred_balance', p_amount: 100 }),
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: newUserId, p_field: 'cred_balance', p_amount: 50 }),
-        supabase.from('transactions').insert([
-          { user_id: referrer.id, amount: 100, type: 'earn', description: `Referral bonus: ${newUserId} joined via your invite`, created_at: new Date().toISOString() },
-          { user_id: newUserId, amount: 50, type: 'earn', description: `Welcome bonus: joined via @${referrerUsername}'s invite`, created_at: new Date().toISOString() },
-        ]),
-        supabase.from('notifications').insert({
-          user_id: referrer.id,
-          type: 'referral_success',
-          data: { referred_id: newUserId, cred_awarded: 100 },
-          read: false,
-        }),
-      ]);
-    } catch (err) {
-      console.error('[Referral] Processing error:', err);
+  // The whole award used to be five separate browser calls — look up the
+  // referrer, check for an existing row, insert it, move both balances through
+  // increment_counter, notify — so an interrupted run could pay out without
+  // recording the referral, and the payout itself was forgeable. redeem_referral
+  // claims the (unique) referrals row and moves both balances in one statement.
+  const processReferral = async (referrerUsername: string) => {
+    const { data, error } = await supabase.rpc('redeem_referral', {
+      p_referrer_username: referrerUsername,
+    });
+    if (error) {
+      console.error('[Referral] Processing error:', error.message);
+      return;
+    }
+    const result = data as { ok?: boolean; reason?: string } | null;
+    if (result && result.ok === false) {
+      console.info('[Referral] Not applied:', result.reason);
     }
   };
 

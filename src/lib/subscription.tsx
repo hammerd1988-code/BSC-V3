@@ -78,7 +78,6 @@ interface SubscriptionContextValue {
   canAccess: (feature: PremiumFeature) => FeatureGateResult;
   recordUsage: (feature: PremiumFeature, amount?: number) => Promise<void>;
   refresh: () => Promise<void>;
-  setLocalTier: (tier: SubscriptionTier) => Promise<void>;
   usageMeters: UsageMeter[];
   openCheckout: (tier: 'operator' | 'architect', billing?: 'monthly' | 'annual') => Promise<void>;
   openPortal: () => Promise<void>;
@@ -433,23 +432,10 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     if (data) setUsage((prev) => [...prev, data as FeatureUsageRow]);
   }, [currentUser?.id, usage]);
 
-  const setLocalTier = useCallback(async (nextTier: SubscriptionTier) => {
-    if (!currentUser?.id) return;
-    const now = new Date().toISOString();
-
-    await supabase.from('subscriptions').upsert({
-      user_id: currentUser.id,
-      tier: nextTier,
-      status: 'active',
-      started_at: now,
-      expires_at: nextTier === 'indie' ? now : null,
-      stripe_customer_id: null,
-      stripe_subscription_id: null,
-    }, { onConflict: 'user_id' });
-
-    await supabase.from('users').update({ subscription_tier: nextTier }).eq('id', currentUser.id);
-    await refresh();
-  }, [currentUser?.id, refresh]);
+  // `setLocalTier` used to live here: it wrote `users.subscription_tier` from the
+  // browser, which the "users self-update" policy permits, so any account could
+  // grant itself the Architect tier. Nothing called it, and the tier is now
+  // pinned in the database (0065), so the only route to a paid tier is Stripe.
 
   const openCheckout = useCallback(async (planTier: 'operator' | 'architect', billing: 'monthly' | 'annual' = 'monthly') => {
     try {
@@ -510,11 +496,10 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     canAccess,
     recordUsage,
     refresh,
-    setLocalTier,
     usageMeters,
     openCheckout,
     openPortal,
-  }), [tier, isAdmin, subscription, usage, loading, canAccess, recordUsage, refresh, setLocalTier, usageMeters, openCheckout, openPortal]);
+  }), [tier, isAdmin, subscription, usage, loading, canAccess, recordUsage, refresh, usageMeters, openCheckout, openPortal]);
 
   return <SubscriptionContext.Provider value={value}>{children}</SubscriptionContext.Provider>;
 }

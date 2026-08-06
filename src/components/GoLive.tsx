@@ -528,11 +528,11 @@ export const GoLive: React.FC = () => {
 
   useEffect(() => {
     if (!viewerStreamId) return;
-    void supabase.rpc('increment_counter', { p_table: 'streams', p_id: viewerStreamId, p_field: 'viewer_count', p_amount: 1 });
-    void supabase.rpc('increment_counter', { p_table: 'streams', p_id: viewerStreamId, p_field: 'crowd_size', p_amount: 1 });
+    void supabase.rpc('bump_public_counter', { p_table: 'streams', p_id: viewerStreamId, p_field: 'viewer_count', p_amount: 1 });
+    void supabase.rpc('bump_public_counter', { p_table: 'streams', p_id: viewerStreamId, p_field: 'crowd_size', p_amount: 1 });
     return () => {
-      void supabase.rpc('increment_counter', { p_table: 'streams', p_id: viewerStreamId, p_field: 'viewer_count', p_amount: -1 });
-      void supabase.rpc('increment_counter', { p_table: 'streams', p_id: viewerStreamId, p_field: 'crowd_size', p_amount: -1 });
+      void supabase.rpc('bump_public_counter', { p_table: 'streams', p_id: viewerStreamId, p_field: 'viewer_count', p_amount: -1 });
+      void supabase.rpc('bump_public_counter', { p_table: 'streams', p_id: viewerStreamId, p_field: 'crowd_size', p_amount: -1 });
     };
   }, [viewerStreamId]);
 
