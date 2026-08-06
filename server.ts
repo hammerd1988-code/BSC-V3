@@ -753,10 +753,14 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
   const userToStream = new Map<string, string>();
   const connectedUsers = new Map<string, string>(); // userId -> socketId
   const workspaceStates = new Map<string, { assets: any[]; checkpoints: any[]; activity: any[] }>();
-  const workspaceKey = (data: any) => `${data?.userId || 'guest'}:${data?.projectId || 'casper-agentic-workspace'}`;
   const getWorkspaceState = (key: string) => {
     if (!workspaceStates.has(key)) workspaceStates.set(key, { assets: [], checkpoints: [], activity: [] });
     return workspaceStates.get(key)!;
+  };
+  /** Drops workspace state once the last member of its room leaves. */
+  const releaseWorkspaceState = (key: string) => {
+    if (io.sockets.adapter.rooms.get(`workspace:${key}`)?.size) return;
+    workspaceStates.delete(key);
   };
 
   // Co-browse: register Casper shared browser control events
@@ -796,9 +800,14 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       const verifiedId = String(profile?.id ?? data.user.id);
 
       connectedUsers.set(verifiedId, socket.id);
+      socket.data.userId = verifiedId;
       socket.emit('user:registered', { userId: verifiedId });
       console.log(`[socket] ${label} ${verifiedId} -> ${socket.id}`);
     };
+
+    /** The id proved by a Supabase access token, or null for an anonymous socket. */
+    const verifiedUserId = (): string | null =>
+      typeof socket.data.userId === 'string' && socket.data.userId ? socket.data.userId : null;
 
     socket.on('user:register', (_userId: string, accessToken?: unknown) => {
       void registerSocketUser('Registered user', accessToken);
@@ -816,9 +825,23 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       .slice(0, 10));
 
     // ---- Casper Studio Live Project State events ----
+    //
+    // The room is namespaced by the socket's verified id, not by the userId in the
+    // payload: any client could previously join `workspace:<someone else's id>`
+    // and receive that user's studio assets, checkpoints and activity. An
+    // unregistered socket gets a private room of its own; the client re-joins on
+    // `user:registered` to land in the shared one.
+    const joinedWorkspaceKeys = new Set<string>();
+    const workspaceKey = (data: any) => {
+      const owner = verifiedUserId() ?? `anon:${socket.id}`;
+      const project = String(data?.projectId || 'casper-agentic-workspace').slice(0, 120);
+      return `${owner}:${project}`;
+    };
+
     socket.on('workspace:join', (data) => {
       const key = workspaceKey(data);
       const room = `workspace:${key}`;
+      joinedWorkspaceKeys.add(key);
       socket.join(room);
       socket.emit('workspace:state_snapshot', getWorkspaceState(key));
     });
@@ -860,19 +883,45 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     });
 
     // ---- WebRTC Signaling Events ----
+    //
+    // The caller identity is the socket's verified id and the display fields come
+    // from the database: the payload used to carry callerId/callerName/callerAvatar,
+    // so any socket could ring a victim as anyone it liked.
     socket.on('call:initiate', (data) => {
-      const targetSocketId = connectedUsers.get(data.targetUserId);
-      if (targetSocketId) {
+      void (async () => {
+        const callerId = verifiedUserId();
+        if (!callerId) {
+          socket.emit('call:error', { error: 'Register with a Supabase session before placing a call.' });
+          return;
+        }
+
+        const targetUserId = String(data?.targetUserId ?? '');
+        const targetSocketId = targetUserId ? connectedUsers.get(targetUserId) : undefined;
+        if (!targetSocketId) {
+          // Previously the caller just kept ringing an offline user forever.
+          socket.emit('call:unavailable', { targetUserId });
+          return;
+        }
+
+        const { data: caller } = await supabase
+          .from('users')
+          .select('display_name, avatar_url')
+          .eq('id', callerId)
+          .maybeSingle();
+
         io.to(targetSocketId).emit('call:incoming', {
-          callerId: data.callerId,
-          callerName: data.callerName,
-          callerAvatar: data.callerAvatar,
-          offer: data.offer,
-          roomName: data.roomName,
-          videoEnabled: data.videoEnabled,
-          transmissionId: data.transmissionId
+          callerId,
+          callerName: caller?.display_name ?? 'Unknown caller',
+          callerAvatar: caller?.avatar_url ?? null,
+          offer: data?.offer,
+          roomName: data?.roomName,
+          videoEnabled: data?.videoEnabled,
+          transmissionId: data?.transmissionId,
         });
-      }
+      })().catch((err) => {
+        console.error('[socket] call:initiate failed:', err);
+        socket.emit('call:error', { error: 'Could not place the call.' });
+      });
     });
 
     socket.on('call:accept', (data) => {
@@ -935,9 +984,27 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     });
 
     // ---- Live Streaming events ----
-    socket.on('stream:start', (userData) => {
-      liveStreams.set(socket.id, { ...userData, crowdSize: 0 });
-      broadcastCrowds();
+    // crowds:update is broadcast to every client, so the streamer's display fields
+    // come from their own row rather than from the payload — otherwise any socket
+    // could inject an arbitrary entry into everyone's "top crowds" list.
+    socket.on('stream:start', () => {
+      void (async () => {
+        const streamerId = verifiedUserId();
+        if (!streamerId) return;
+        const { data: streamer } = await supabase
+          .from('users')
+          .select('username, display_name, avatar_url')
+          .eq('id', streamerId)
+          .maybeSingle();
+        if (!streamer) return;
+        liveStreams.set(socket.id, {
+          username: streamer.username ?? '',
+          displayName: streamer.display_name ?? '',
+          avatarUrl: streamer.avatar_url ?? '',
+          crowdSize: 0,
+        });
+        broadcastCrowds();
+      })().catch((err) => console.error('[socket] stream:start failed:', err));
     });
 
     socket.on('stream:stop', () => {
@@ -947,11 +1014,20 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
 
     socket.on('crowd:join', (streamId) => {
       const stream = liveStreams.get(streamId);
-      if (stream) {
-        stream.crowdSize++;
-        userToStream.set(socket.id, streamId);
-        broadcastCrowds();
+      if (!stream) return;
+
+      // Joining a second stream without leaving the first used to increment both
+      // and only ever decrement one, so crowd sizes drifted upwards permanently.
+      const previousStreamId = userToStream.get(socket.id);
+      if (previousStreamId === streamId) return;
+      if (previousStreamId) {
+        const previous = liveStreams.get(previousStreamId);
+        if (previous) previous.crowdSize = Math.max(0, previous.crowdSize - 1);
       }
+
+      stream.crowdSize++;
+      userToStream.set(socket.id, streamId);
+      broadcastCrowds();
     });
 
     socket.on('crowd:leave', () => {
@@ -970,6 +1046,12 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     socket.on('disconnect', () => {
       console.log(`[socket] Disconnected: ${socket.id} (total: ${io.engine.clientsCount})`);
       if (workspaceResourceTimer) clearInterval(workspaceResourceTimer);
+
+      // Socket.IO removes the socket from its rooms before this fires, so an empty
+      // room here means nobody is left to read the state. Without this the map grew
+      // by one entry per user/project for the lifetime of the process.
+      for (const key of joinedWorkspaceKeys) releaseWorkspaceState(key);
+      joinedWorkspaceKeys.clear();
 
       for (const [userId, socketId] of connectedUsers.entries()) {
         if (socketId === socket.id) {

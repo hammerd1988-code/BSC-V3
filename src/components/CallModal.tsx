@@ -293,16 +293,34 @@ export const CallModal: React.FC<CallModalProps> = ({
       setRemoteFilter(data.filter);
     };
 
+    // Without these the caller rang forever whenever the callee was not connected
+    // or the socket had no verified session to place the call with.
+    const handleUnavailable = () => {
+      setError('That user is not connected right now.');
+      setStatus(CallStatus.FAILED);
+      setTimeout(onClose, 3000);
+    };
+
+    const handleCallError = (data: any) => {
+      setError(data?.error || 'The call could not be placed.');
+      setStatus(CallStatus.FAILED);
+      setTimeout(onClose, 3000);
+    };
+
     socket.on('call:accepted', handleCallAccepted);
     socket.on('call:rejected', handleCallRejected);
     socket.on('call:ended', handleCallEnded);
     socket.on('call:filter', handleFilterChange);
+    socket.on('call:unavailable', handleUnavailable);
+    socket.on('call:error', handleCallError);
 
     return () => {
       socket.off('call:accepted', handleCallAccepted);
       socket.off('call:rejected', handleCallRejected);
       socket.off('call:ended', handleCallEnded);
       socket.off('call:filter', handleFilterChange);
+      socket.off('call:unavailable', handleUnavailable);
+      socket.off('call:error', handleCallError);
     };
   }, [onClose, currentUser?.id, videoEnabled]);
 
