@@ -55,7 +55,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
-import { getValidSession } from '../lib/authSession';
+import { getValidSession, authedFetch } from '../lib/authSession';
 import { handleDbError } from '../lib/errors';
 import { cn } from '../lib/utils';
 import { BOT_GLADIATOR_PROFILE_BY_USERNAME, type BotDifficulty } from '../lib/botGladiatorProfiles';
@@ -1313,7 +1313,7 @@ async function casperAnnounce(text: string) {
     if (!text?.trim()) return;
     stopCasperAudio();
     const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
-    const response = await fetch(`${serverUrl}/api/tts`, {
+    const response = await authedFetch(`${serverUrl}/api/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, voice: 'onyx', speed: 1.05 }),

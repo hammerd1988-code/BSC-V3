@@ -71,7 +71,7 @@ export function assertProductionConfig(
   }
 }
 
-function timingSafeStringEqual(a: string, b: string): boolean {
+export function timingSafeStringEqual(a: string, b: string): boolean {
   // Hash first so the comparison is constant-time regardless of length.
   const ha = crypto.createHash('sha256').update(a).digest();
   const hb = crypto.createHash('sha256').update(b).digest();

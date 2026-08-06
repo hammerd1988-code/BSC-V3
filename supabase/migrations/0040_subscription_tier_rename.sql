@@ -2,8 +2,9 @@
 -- Rename subscription tiers: free → indie, pro → operator, infinity → architect
 -- Idempotent — safe to re-paste.
 
--- 1. Drop the old check constraints first so the data migration below can move
---    rows onto the new tier names without transiently violating the old CHECK.
+-- 1. Drop the old tier constraints first. Renaming the data while they still
+--    only allow ('free','pro','infinity') makes every UPDATE below fail, which
+--    aborted this migration on any database that already had subscribers.
 ALTER TABLE public.users DROP CONSTRAINT IF EXISTS users_subscription_tier_check;
 ALTER TABLE public.subscriptions DROP CONSTRAINT IF EXISTS subscriptions_tier_check;
 
@@ -17,11 +18,10 @@ UPDATE public.subscriptions SET tier = 'indie' WHERE tier = 'free';
 UPDATE public.subscriptions SET tier = 'operator' WHERE tier = 'pro';
 UPDATE public.subscriptions SET tier = 'architect' WHERE tier = 'infinity';
 
--- 4. Add the updated check constraint on users.subscription_tier
+-- 4. Re-add the constraints with the new tier names
 ALTER TABLE public.users ADD CONSTRAINT users_subscription_tier_check
   CHECK (subscription_tier IN ('indie', 'operator', 'architect'));
 
--- 5. Add the updated check constraint on subscriptions.tier
 ALTER TABLE public.subscriptions ADD CONSTRAINT subscriptions_tier_check
   CHECK (tier IN ('indie', 'operator', 'architect'));
 

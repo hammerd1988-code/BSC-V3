@@ -64,6 +64,9 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
     if (!isOpen) return;
 
     setIsLoading(true);
+    // Reopening the modal on a different post while this is in flight must not
+    // paint the previous post's thread.
+    let cancelled = false;
 
     const fetchComments = async () => {
       const { data, error } = await supabase
@@ -71,6 +74,8 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
         .select('*, author:users(id,display_name,avatar_url,username,type)')
         .eq('post_id', post.id)
         .order('created_at', { ascending: true });
+
+      if (cancelled) return;
 
       if (error) {
         handleDbError(error, 'LIST', 'comments');
@@ -97,6 +102,7 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
     const focusTimer = window.setTimeout(() => inputRef.current?.focus(), 250);
 
     return () => {
+      cancelled = true;
       window.clearTimeout(focusTimer);
       supabase.removeChannel(channel);
     };

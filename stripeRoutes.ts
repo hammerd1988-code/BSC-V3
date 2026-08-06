@@ -285,6 +285,17 @@ import express from 'express';
 // Stripe event handler
 // ---------------------------------------------------------------------------
 
+/**
+ * Stripe treats a 2xx as "delivered" and never retries, so a failed write here
+ * used to lose the entitlement silently: the customer paid and stayed on the free
+ * tier. Throwing makes the route answer 500 and Stripe redeliver the event.
+ */
+function mustSucceed(step: string, result: { error: { message: string } | null }): void {
+  if (result.error) {
+    throw new Error(`${step}: ${result.error.message}`);
+  }
+}
+
 async function handleStripeEvent(
   event: Stripe.Event,
   supabase: SupabaseClient,
@@ -306,7 +317,7 @@ async function handleStripeEvent(
       }
 
       // Upsert subscription record
-      await supabase.from('subscriptions').upsert(
+      mustSucceed('checkout.session.completed subscriptions upsert', await supabase.from('subscriptions').upsert(
         {
           user_id: userId,
           tier,
@@ -317,13 +328,13 @@ async function handleStripeEvent(
           stripe_subscription_id: subscriptionId,
         },
         { onConflict: 'user_id' },
-      );
+      ));
 
       // Sync user tier
-      await supabase
+      mustSucceed('checkout.session.completed user tier sync', await supabase
         .from('users')
         .update({ subscription_tier: tier, updated_at: new Date().toISOString() })
-        .eq('id', userId);
+        .eq('id', userId));
 
       console.log(`[Stripe] User ${userId} upgraded to ${tier}`);
       break;
@@ -345,7 +356,7 @@ async function handleStripeEvent(
           ? 'past_due'
           : 'cancelled';
 
-      await supabase
+      mustSucceed('customer.subscription.updated subscriptions update', await supabase
         .from('subscriptions')
         .update({
           tier: mappedStatus === 'cancelled' ? 'indie' : tier,
@@ -356,16 +367,16 @@ async function handleStripeEvent(
             : null,
         })
         .eq('user_id', user.id)
-        .eq('stripe_customer_id', customerId);
+        .eq('stripe_customer_id', customerId));
 
       // Sync user tier
-      await supabase
+      mustSucceed('customer.subscription.updated user tier sync', await supabase
         .from('users')
         .update({
           subscription_tier: mappedStatus === 'cancelled' ? 'indie' : tier,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', user.id);
+        .eq('id', user.id));
 
       console.log(`[Stripe] Subscription updated for user ${user.id}: ${tier} (${mappedStatus})`);
       break;
@@ -378,16 +389,16 @@ async function handleStripeEvent(
       const user = await resolveUserByStripeCustomer(supabase, customerId);
       if (!user) break;
 
-      await supabase
+      mustSucceed('customer.subscription.deleted subscriptions update', await supabase
         .from('subscriptions')
         .update({ tier: 'indie', status: 'cancelled' })
         .eq('user_id', user.id)
-        .eq('stripe_customer_id', customerId);
+        .eq('stripe_customer_id', customerId));
 
-      await supabase
+      mustSucceed('customer.subscription.deleted user tier sync', await supabase
         .from('users')
         .update({ subscription_tier: 'indie', updated_at: new Date().toISOString() })
-        .eq('id', user.id);
+        .eq('id', user.id));
 
       console.log(`[Stripe] Subscription cancelled for user ${user.id}`);
       break;
@@ -400,11 +411,11 @@ async function handleStripeEvent(
       const user = await resolveUserByStripeCustomer(supabase, customerId);
       if (!user) break;
 
-      await supabase
+      mustSucceed('invoice.payment_failed subscriptions update', await supabase
         .from('subscriptions')
         .update({ status: 'past_due' })
         .eq('user_id', user.id)
-        .eq('stripe_customer_id', customerId);
+        .eq('stripe_customer_id', customerId));
 
       console.log(`[Stripe] Payment failed for user ${user.id}`);
       break;

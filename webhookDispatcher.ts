@@ -26,6 +26,8 @@ export async function dispatchWebhookEvent(eventType: string, targetUserId: stri
           headers['X-BSC-Signature'] = sub.secret; // In production, use HMAC
         }
 
+        // Bot-supplied URLs are arbitrary hosts, so a slow or hanging endpoint
+        // must not hold this dispatch open indefinitely.
         await fetch(sub.webhook_url, {
           method: 'POST',
           headers,
@@ -33,7 +35,8 @@ export async function dispatchWebhookEvent(eventType: string, targetUserId: stri
             event: eventType,
             timestamp: new Date().toISOString(),
             data: payload
-          })
+          }),
+          signal: AbortSignal.timeout(10_000)
         });
       } catch (fetchErr) {
         console.error(`[Webhook] Failed to dispatch ${eventType} to ${sub.webhook_url}:`, fetchErr);
