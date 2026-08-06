@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { AccessToken } from 'livekit-server-sdk';
+import { isCallRoomParticipant } from './callRooms.js';
 
 type LiveKitRoomType = 'stream' | 'call';
 type LiveKitRole = 'host' | 'viewer' | 'caller' | 'callee' | 'participant';
@@ -125,6 +126,12 @@ export function registerLiveKitRoutes(app: Express, supabase: SupabaseClient) {
       let role = requestedRole;
       let canPublish: boolean;
       if (roomType === 'call') {
+        // Membership comes from the signalling server, which is the only party
+        // that knows who the call is between. Relying on the room name alone let
+        // anyone who guessed it join a private call with publish rights.
+        if (!isCallRoomParticipant(roomName, identity)) {
+          return res.status(403).json({ error: 'You are not a participant in this call.' });
+        }
         canPublish = true;
       } else if (requestedRole === 'host') {
         // Callers may pass the room name instead of the resource id.
