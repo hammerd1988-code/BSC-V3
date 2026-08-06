@@ -59,6 +59,35 @@ const REQUIRED_TABLES = [
   'gladiators',
 ];
 
+/**
+ * Every `upsert(..., { onConflict })` target in the app, as `table -> columns`.
+ *
+ * PostgREST turns these into `ON CONFLICT (columns)`, which Postgres only accepts
+ * when a non-partial unique index covers exactly those columns. `subscriptions`
+ * had only the partial `(user_id) where status = 'active'`, so the Stripe webhook
+ * failed with 42P10 on every purchase. Nothing was checking, so nothing noticed.
+ */
+const UPSERT_CONFLICT_TARGETS: Array<[string, string]> = [
+  ['battle_crowd_seals', 'match_id,user_id,moment'],
+  ['bot_conversations', 'user_id,bot_id'],
+  ['bot_forge_config', 'gladiator_id'],
+  ['bot_gladiator_profiles', 'gladiator_id'],
+  ['bot_listings', 'id'],
+  ['bot_mayhem_maga_switches', 'id'],
+  ['bot_mayhem_persona_overrides', 'username'],
+  ['bot_mayhem_relationships', 'source_username,target_username'],
+  ['bot_mayhem_runs', 'id'],
+  ['casper_cli_devices', 'machine_id'],
+  ['casper_integrations', 'user_id,integration_key'],
+  ['device_push_tokens', 'token'],
+  ['faction_members', 'id'],
+  ['factions', 'id'],
+  ['gladiators', 'id'],
+  ['match_solution_artifacts', 'match_id,gladiator_id'],
+  ['push_subscriptions', 'endpoint'],
+  ['users', 'id'],
+];
+
 /** Functions called via supabase.rpc(...) somewhere in the app. */
 const REQUIRED_FUNCTIONS = [
   'increment_counter',
@@ -120,6 +149,36 @@ describe('supabase migrations', () => {
       `select indexname from pg_indexes where schemaname = 'public' and tablename = 'transmits'`,
     );
     expect(rows.map((row) => row.indexname)).toContain('transmits_seen_idx');
+  });
+
+  it('can resolve every upsert conflict target the app uses', async () => {
+    const missing: string[] = [];
+
+    for (const [table, columns] of UPSERT_CONFLICT_TARGETS) {
+      const sorted = columns.split(',').map((column) => column.trim()).sort().join(',');
+      const { rows } = await db.query<{ present: boolean }>(
+        `select exists (
+           select 1
+             from pg_index i
+             join pg_class c on c.oid = i.indrelid
+             join pg_namespace n on n.oid = c.relnamespace
+            where n.nspname = 'public'
+              and c.relname = $1
+              and i.indisunique
+              -- A partial index cannot serve as an ON CONFLICT target.
+              and i.indpred is null
+              and (
+                select array_agg(a.attname::text order by a.attname)
+                  from unnest(i.indkey) as k(attnum)
+                  join pg_attribute a on a.attrelid = c.oid and a.attnum = k.attnum
+              ) = $2::text[]
+         ) as present`,
+        [table, `{${sorted}}`],
+      );
+      if (!rows[0].present) missing.push(`${table}(${columns})`);
+    }
+
+    expect(missing).toEqual([]);
   });
 
   it('has no ON CONFLICT (user_id) target on subscriptions', async () => {
