@@ -3,6 +3,7 @@ import { supabase } from './supabase';
 import type { Session, User as SupaUser } from '@supabase/supabase-js';
 import { User } from './types';
 import { authedFetch, startVisibilityRefresh } from './lib/authSession';
+import { loadOwnApiKey, retainApiKey, withApiKey } from './lib/aiCredentials';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -198,6 +199,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (profile?.id) profileId = profile.id;
         setCurrentUser(profile);
         void ensureBots(profile);
+
+        // The provider key lives in user_ai_credentials, not on the profile
+        // row, because every signed-in session can read every users row. It is
+        // merged in here so the `generateText(prompt, currentUser.ai_settings)`
+        // call sites need no knowledge of where it is stored.
+        const apiKey = await loadOwnApiKey(profile?.id);
+        if (run === generation && apiKey) {
+          setCurrentUser((prev) => (prev ? { ...prev, ai_settings: withApiKey(prev.ai_settings, apiKey) } : prev));
+        }
       } catch (err) {
         console.error('[AuthContext] ensureUserProfile:', err);
       }
@@ -217,7 +227,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             // fields the UI depends on either.
             const next = payload.new as Partial<User> | undefined;
             if (payload.eventType === 'DELETE' || !next?.id) return;
-            setCurrentUser((prev) => (prev ? { ...prev, ...next } : (next as User)));
+            setCurrentUser((prev) => {
+              if (!prev) return next as User;
+              const merged = { ...prev, ...next } as User;
+              merged.ai_settings = retainApiKey(prev.ai_settings, merged.ai_settings) ?? null;
+              return merged;
+            });
           },
         )
         .subscribe();

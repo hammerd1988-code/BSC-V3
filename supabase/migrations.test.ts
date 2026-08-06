@@ -66,6 +66,7 @@ const REQUIRED_TABLES = [
   'device_push_tokens',
   'referrals',
   'gladiators',
+  'user_ai_credentials',
 ];
 
 /**
@@ -89,6 +90,7 @@ const UPSERT_CONFLICT_TARGETS: Array<[string, string]> = [
   ['casper_cli_devices', 'machine_id'],
   ['casper_integrations', 'user_id,integration_key'],
   ['device_push_tokens', 'token'],
+  ['user_ai_credentials', 'user_id'],
   ['faction_members', 'id'],
   ['factions', 'id'],
   ['gladiators', 'id'],
@@ -268,6 +270,42 @@ describe('supabase migrations', () => {
     );
     expect(rows[0]?.anon).toBe(false);
     expect(rows[0]?.authed).toBe(true);
+  });
+
+  /**
+   * `users readable by authed` has no column restriction and every client read
+   * is `select('*')`, so anything secret in that row is readable by every
+   * signed-in account. The provider key the user pays for therefore lives in
+   * its own owner-scoped table, and a trigger keeps it from drifting back.
+   */
+  it('keeps the per-user provider key out of the shared users row', async () => {
+    await db.query(
+      `insert into public.users (id, username, display_name, ai_settings)
+       values ('ai-key-user', 'ai_key_user', 'AI Key User', '{"model":"m","apiKey":"sk-insert"}'::jsonb)`,
+    );
+    const afterInsert = await db.query<{ settings: string }>(
+      `select ai_settings::text as settings from public.users where id = 'ai-key-user'`,
+    );
+    expect(afterInsert.rows[0]?.settings).not.toContain('sk-insert');
+
+    await db.query(
+      `update public.users set ai_settings = '{"model":"m","api_key":"sk-update"}'::jsonb where id = 'ai-key-user'`,
+    );
+    const afterUpdate = await db.query<{ settings: string }>(
+      `select ai_settings::text as settings from public.users where id = 'ai-key-user'`,
+    );
+    expect(afterUpdate.rows[0]?.settings).not.toContain('sk-update');
+  });
+
+  it('scopes user_ai_credentials to its owner and hides it from anon', async () => {
+    const { rows } = await db.query<{ anon: boolean; rls: boolean; policies: number }>(
+      `select has_table_privilege('anon', 'public.user_ai_credentials', 'select') as anon,
+              (select relrowsecurity from pg_class where oid = 'public.user_ai_credentials'::regclass) as rls,
+              (select count(*)::int from pg_policy where polrelid = 'public.user_ai_credentials'::regclass) as policies`,
+    );
+    expect(rows[0]?.anon).toBe(false);
+    expect(rows[0]?.rls).toBe(true);
+    expect(rows[0]?.policies).toBe(4);
   });
 
   it('keeps apply_increments on invoker rights', async () => {
