@@ -20,6 +20,7 @@ import type { Server as SocketServer, Socket } from 'socket.io';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { requireCasperAuth, resolveCasperAuthFromToken } from './casperControlCenter.js';
+import { socketErrorBoundary } from './serverSecurity.js';
 import type {
   CliToRelayMessage,
   RelayToCliMessage,
@@ -157,10 +158,14 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
   relayNs.on('connection', (socket) => {
     const machineId = socket.data.machineId as string;
     const userId = socket.data.userId as string;
+    // Socket.IO does not catch listener exceptions, and an async listener's
+    // rejection is fatal to the process, so daemon traffic goes through the
+    // boundary too.
+    const on = socketErrorBoundary(socket, 'relay');
 
     const sendToCli = (message: RelayToCliMessage) => socket.emit('relay:message', message);
 
-    socket.on('relay:message', async (message: CliToRelayMessage) => {
+    on('relay:message', async (message: CliToRelayMessage) => {
       if (!message || typeof message !== 'object' || typeof message.type !== 'string') return;
 
       switch (message.type) {
@@ -260,7 +265,7 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
       }
     });
 
-    socket.on('disconnect', () => {
+    on('disconnect', () => {
       const conn = machines.get(machineId);
       if (conn && conn.socket.id === socket.id) {
         machines.delete(machineId);
@@ -273,12 +278,13 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
   // ── Web client stream subscription (main namespace) ─────────────────────────
 
   io.on('connection', (socket) => {
+    const on = socketErrorBoundary(socket, 'relay');
     // Subscribing to a user's relay room exposes that user's live machine
     // operations (tool output, shell results, approval prompts). The main
     // namespace has no auth middleware, so the subscriber MUST present a valid
     // Supabase token; the room is then derived from the verified profile id so
     // a socket can only ever listen to its own operator's stream.
-    socket.on('relay:subscribe', async (data: { token?: string }) => {
+    on('relay:subscribe', async (data: { token?: string }) => {
       if (!data || typeof data.token !== 'string') {
         socket.emit('relay:subscribe_error', { error: 'A Supabase access token is required.' });
         return;
@@ -294,7 +300,7 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
       socket.join(userRoom(auth.profile.id));
       socket.emit('relay:subscribed', { userId: auth.profile.id });
     });
-    socket.on('relay:unsubscribe', () => {
+    on('relay:unsubscribe', () => {
       const userId = socket.data.relayUserId;
       if (typeof userId === 'string') socket.leave(userRoom(userId));
     });
