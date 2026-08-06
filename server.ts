@@ -179,13 +179,30 @@ async function startServer() {
 
         const payment = paymentResponse.payment;
         if (payment && payment.status === 'COMPLETED') {
-            // The card has already been charged, so a failure past this point is a
-            // reconciliation problem: log enough to credit the account by hand and
-            // never swallow it into a generic 500.
-            const { error: userError } = await supabase
-                .rpc('increment_cred_balance', { p_user_id: targetUserId, p_amount: credAmount });
+            if (!payment.id) {
+                console.error(`[square] COMPLETED payment without an id for user=${targetUserId}; refusing to grant CRED.`);
+                return res.status(502).send({
+                    success: false,
+                    message: 'Your payment succeeded but could not be reconciled. Contact support.',
+                });
+            }
+
+            // Grant and ledger row move together, keyed on the Square payment id.
+            // Square returns the original payment when an idempotency key is
+            // replayed, so crediting on "COMPLETED" alone let one charge be
+            // redeemed over and over.
+            const { data: grant, error: userError } = await supabase
+                .rpc('grant_cred_purchase', {
+                    p_user_id: targetUserId,
+                    p_amount: credAmount,
+                    p_payment_id: payment.id,
+                    p_description: `Purchased ${credAmount} CRED via Square`,
+                });
 
             if (userError) {
+                // The card has already been charged, so a failure here is a
+                // reconciliation problem: log enough to credit the account by hand
+                // and never swallow it into a generic 500.
                 console.error(
                     `[square] PAID BUT NOT CREDITED payment=${payment.id} user=${targetUserId} cred=${credAmount}:`,
                     userError.message,
@@ -197,23 +214,12 @@ async function startServer() {
                 });
             }
 
-            // Record transaction
-            const { error: transactionError } = await supabase.from('transactions').insert({
-                user_id: targetUserId,
-                amount: credAmount,
-                type: 'purchase',
-                description: `Purchased ${credAmount} CRED via Square`,
-            });
-
-            // The balance already moved; a missing ledger row must not fail the request.
-            if (transactionError) {
-                console.error(
-                    `[square] ledger row missing for payment=${payment.id} user=${targetUserId}:`,
-                    transactionError.message,
-                );
+            const granted = (grant as { granted?: boolean } | null)?.granted !== false;
+            if (!granted) {
+                console.warn(`[square] replayed payment=${payment.id} user=${targetUserId}; CRED already granted.`);
             }
 
-            res.status(200).send({ success: true, payment, credAmount });
+            res.status(200).send({ success: true, payment, credAmount, granted });
         } else {
             res.status(400).send({ success: false, message: 'Payment not completed.' });
         }
