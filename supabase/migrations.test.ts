@@ -88,6 +88,38 @@ const UPSERT_CONFLICT_TARGETS: Array<[string, string]> = [
   ['users', 'id'],
 ];
 
+/**
+ * `rpc(name, args)` call sites, as `name -> argument names`.
+ *
+ * PostgREST resolves an RPC by *argument name*, so a renamed or extra parameter
+ * is a 404 (PGRST202) at runtime, not a type error — which is how the app ended up
+ * calling functions that did not exist for months. Checking names alone (below)
+ * would not have caught it.
+ */
+const RPC_SIGNATURES: Array<[string, string[]]> = [
+  ['casper_memory_stats', ['p_user_id']],
+  ['convert_cred_to_compute', ['p_cred_amount', 'p_gladiator_id', 'p_user_id']],
+  ['draw_colosseum_arena_modifier', ['p_challenge_type', 'p_challenger_id', 'p_defender_id']],
+  ['exchange_cred_for_tokens', ['user_id', 'cred_to_deduct', 'tokens_to_add']],
+  ['get_battle_crowd_seals', ['p_match_id', 'p_viewer_user_id']],
+  ['get_casper_conversation_history', ['p_limit', 'p_user_id']],
+  ['grant_cred_purchase', ['p_user_id', 'p_amount', 'p_payment_id', 'p_description']],
+  ['increment_counter', ['p_amount', 'p_field', 'p_id', 'p_table']],
+  ['increment_cred_balance', ['p_user_id', 'p_amount']],
+  ['increment_gladiator_wins', ['gladiator_id']],
+  ['increment_memory_access', ['memory_ids']],
+  ['mutate_colosseum_gladiator', ['p_gladiator_id', 'p_mutation_mode', 'p_stat_key']],
+  ['promote_faction_captain', ['p_faction_id', 'p_member_id']],
+  ['refresh_colosseum_bounties', []],
+  ['remove_friend', ['p_friend_id']],
+  ['resolve_colosseum_match_server', ['p_actor_auth_uid', 'p_judgement', 'p_match_id', 'p_replay_data', 'p_winner_id']],
+  ['respond_friend_request', ['p_accept', 'p_from_id']],
+  ['search_casper_memories', ['p_limit', 'p_memory_types', 'p_user_id', 'query_text']],
+  ['send_friend_request', ['p_target_id']],
+  ['cancel_friend_request', ['p_target_id']],
+  ['start_due_tournaments', []],
+];
+
 /** Functions called via supabase.rpc(...) somewhere in the app. */
 const REQUIRED_FUNCTIONS = [
   'increment_counter',
@@ -149,6 +181,31 @@ describe('supabase migrations', () => {
       `select indexname from pg_indexes where schemaname = 'public' and tablename = 'transmits'`,
     );
     expect(rows.map((row) => row.indexname)).toContain('transmits_seen_idx');
+  });
+
+  it('declares every rpc with the argument names the app passes', async () => {
+    const { rows } = await db.query<{ proname: string; argnames: string[] | null; nargs: number }>(
+      `select p.proname, p.proargnames as argnames, p.pronargs as nargs
+         from pg_proc p
+         join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public'`,
+    );
+
+    const overloads = new Map<string, string[]>();
+    for (const row of rows) {
+      const declared = (row.argnames ?? []).map(String).slice(0, row.nargs).sort().join(',');
+      const list = overloads.get(row.proname) ?? [];
+      list.push(declared);
+      overloads.set(row.proname, list);
+    }
+
+    const mismatched = RPC_SIGNATURES.filter(([name, args]) => {
+      const declared = overloads.get(name);
+      if (!declared) return true;
+      return !declared.includes([...args].sort().join(','));
+    }).map(([name, args]) => `${name}(${args.join(', ')})`);
+
+    expect(mismatched).toEqual([]);
   });
 
   it('can resolve every upsert conflict target the app uses', async () => {
