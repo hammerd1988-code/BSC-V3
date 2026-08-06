@@ -38,6 +38,7 @@ import { initBotMayhemAutonomy, registerBotMayhemRoutes } from './botMayhemAuton
 import { createServerSupabaseClient } from './serverSupabase.js';
 import { registerCoBrowseSocket } from './casperCoBrowse.js';
 import { registerStripeRoutes } from './stripeRoutes.js';
+import { findCredPackageByPrice, totalCred } from './shared/credPackages.js';
 import { registerCasperRelay } from './casperRelay.js';
 import {
   assertProductionConfig,
@@ -136,11 +137,20 @@ async function startServer() {
 
   // ── Square Payment Processing ──
   app.post('/api/square/process-payment', paymentRateLimit, async (req, res) => {
-    const { sourceId, amount, userId, credAmount } = req.body;
+    const { sourceId, amount, userId, idempotencyKey } = req.body;
 
-    if (!sourceId || !amount || !userId || !credAmount) {
+    if (!sourceId || !amount || !userId) {
         return res.status(400).send({ message: 'Missing required payment details.' });
     }
+
+    // The CRED granted comes from the price table, never from the request: the
+    // body used to carry credAmount independently of the amount charged, so a
+    // caller could pay 499 cents and ask for any number of CRED.
+    const credPackage = findCredPackageByPrice(amount);
+    if (!credPackage) {
+        return res.status(400).send({ message: 'Unknown CRED package.' });
+    }
+    const credAmount = totalCred(credPackage);
 
     const profile = await requireCasperAuth(req, res, supabase);
     if (!profile) return;
@@ -156,20 +166,36 @@ async function startServer() {
         const paymentResponse = await squareClient.payments.create({
             sourceId: sourceId,
             amountMoney: {
-                amount: BigInt(amount), // amount is already in cents
+                amount: BigInt(credPackage.priceInCents),
                 currency: 'USD',
             },
             locationId: getSquareLocationId(),
-            idempotencyKey: uuidv4(),
+            // Retrying a timed-out purchase must not charge the card twice, so
+            // reuse the client's key when it supplies one.
+            idempotencyKey: typeof idempotencyKey === 'string' && idempotencyKey.length >= 8
+                ? idempotencyKey.slice(0, 45)
+                : uuidv4(),
         });
 
         const payment = paymentResponse.payment;
         if (payment && payment.status === 'COMPLETED') {
-            // Update user's CRED balance in Supabase
+            // The card has already been charged, so a failure past this point is a
+            // reconciliation problem: log enough to credit the account by hand and
+            // never swallow it into a generic 500.
             const { error: userError } = await supabase
                 .rpc('increment_cred_balance', { p_user_id: targetUserId, p_amount: credAmount });
 
-            if (userError) throw userError;
+            if (userError) {
+                console.error(
+                    `[square] PAID BUT NOT CREDITED payment=${payment.id} user=${targetUserId} cred=${credAmount}:`,
+                    userError.message,
+                );
+                return res.status(500).send({
+                    success: false,
+                    message: 'Your payment succeeded but the CRED grant failed. Contact support with this payment id.',
+                    paymentId: payment.id,
+                });
+            }
 
             // Record transaction
             const { error: transactionError } = await supabase.from('transactions').insert({
@@ -179,9 +205,15 @@ async function startServer() {
                 description: `Purchased ${credAmount} CRED via Square`,
             });
 
-            if (transactionError) throw transactionError;
+            // The balance already moved; a missing ledger row must not fail the request.
+            if (transactionError) {
+                console.error(
+                    `[square] ledger row missing for payment=${payment.id} user=${targetUserId}:`,
+                    transactionError.message,
+                );
+            }
 
-            res.status(200).send({ success: true, payment });
+            res.status(200).send({ success: true, payment, credAmount });
         } else {
             res.status(400).send({ success: false, message: 'Payment not completed.' });
         }
@@ -192,9 +224,11 @@ async function startServer() {
 });
 
 app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
-    const { userId, credAmount } = req.body;
+    const { userId } = req.body;
+    const credAmount = Number(req.body?.credAmount);
 
-    if (!userId || !credAmount || credAmount <= 0) {
+    // A non-integer or out-of-range amount used to reach the RPC as-is.
+    if (!userId || !Number.isInteger(credAmount) || credAmount <= 0 || credAmount > 1_000_000) {
         return res.status(400).send({ message: "Missing required exchange details or invalid amount." });
     }
 
@@ -207,8 +241,10 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     const targetUserId = String(userId);
 
     try {
-        // Deduct CRED and add tokens (assuming 1 CRED = 1 token for now)
-        const { data: userUpdate, error: userError } = await supabase
+        // Deduct CRED and add tokens (assuming 1 CRED = 1 token for now).
+        // The function refuses to overdraw, so a concurrent exchange cannot push
+        // the balance negative.
+        const { error: userError } = await supabase
             .rpc("exchange_cred_for_tokens", { user_id: targetUserId, cred_to_deduct: credAmount, tokens_to_add: credAmount });
 
         if (userError) throw userError;
@@ -221,7 +257,10 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
             description: `Exchanged ${credAmount} CRED for ${credAmount} tokens`,
         });
 
-        if (transactionError) throw transactionError;
+        // The exchange already happened; a missing ledger row must not report failure.
+        if (transactionError) {
+            console.error(`[cred] ledger row missing for exchange user=${targetUserId} amount=${credAmount}:`, transactionError.message);
+        }
 
         res.status(200).send({ success: true, message: "CRED exchanged successfully." });
     } catch (error) {
@@ -230,7 +269,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     }
 });
 
-  registerSpeechRoutes(app, aiRateLimit);
+  registerSpeechRoutes(app, aiRateLimit, supabase);
 
   // ── Casper Memory Endpoints ──
   app.get('/api/casper/memory', async (req, res) => {

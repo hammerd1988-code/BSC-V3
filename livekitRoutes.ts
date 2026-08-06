@@ -61,6 +61,23 @@ async function resolveProfile(supabase: SupabaseClient, authUser: any) {
   };
 }
 
+/**
+ * Whether `userId` owns the stream a token is being requested for. Stream rooms
+ * are named `stream:<streamId>`, and publishing has to be limited to the host —
+ * the role in the request body is caller-controlled, so on its own it let any
+ * signed-in account request a publish-capable token for someone else's stream.
+ */
+async function ownsStream(supabase: SupabaseClient, streamId: string | undefined, userId: string): Promise<boolean> {
+  if (!streamId) return false;
+  const { data, error } = await supabase
+    .from('streams')
+    .select('host_id, user_id')
+    .eq('id', streamId)
+    .maybeSingle();
+  if (error || !data) return false;
+  return String(data.host_id ?? '') === userId || String(data.user_id ?? '') === userId;
+}
+
 export function registerLiveKitRoutes(app: Express, supabase: SupabaseClient) {
   app.get('/api/livekit/health', (_req: Request, res: Response) => {
     const liveKitUrl = process.env.LIVEKIT_URL || process.env.VITE_LIVEKIT_URL;
@@ -99,11 +116,29 @@ export function registerLiveKitRoutes(app: Express, supabase: SupabaseClient) {
       }
 
       const roomType: LiveKitRoomType = body.roomType === 'call' ? 'call' : 'stream';
-      const role: LiveKitRole = body.role ?? (roomType === 'call' ? 'participant' : 'viewer');
+      const requestedRole: LiveKitRole = body.role ?? (roomType === 'call' ? 'participant' : 'viewer');
       const profile = await resolveProfile(supabase, authData.user);
       const identity = String(profile.id ?? authData.user.id);
       const displayName = body.displayName || profile.display_name || profile.username || authData.user.email || 'BSC User';
-      const canPublish = roomType === 'call' || role === 'host' || role === 'caller' || role === 'callee' || role === 'participant';
+
+      // Stream hosting is granted by the streams table, not by the request body.
+      let role = requestedRole;
+      let canPublish: boolean;
+      if (roomType === 'call') {
+        canPublish = true;
+      } else if (requestedRole === 'host') {
+        // Callers may pass the room name instead of the resource id.
+        const streamId = body.resourceId ?? (roomName.startsWith('stream:') ? roomName.slice('stream:'.length) : undefined);
+        const isHost = await ownsStream(supabase, streamId, identity);
+        if (!isHost) {
+          return res.status(403).json({ error: 'Only the stream host can publish to this room.' });
+        }
+        canPublish = true;
+      } else {
+        role = 'viewer';
+        canPublish = false;
+      }
+
       const metadata = JSON.stringify({
         userId: identity,
         username: profile.username ?? null,
