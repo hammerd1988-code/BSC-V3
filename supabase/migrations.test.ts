@@ -122,6 +122,27 @@ describe('supabase migrations', () => {
     expect(rows.map((row) => row.indexname)).toContain('transmits_seen_idx');
   });
 
+  it('has no ON CONFLICT (user_id) target on subscriptions', async () => {
+    // The Stripe webhook used `upsert(..., { onConflict: 'user_id' })`, but the only
+    // unique index on the column is partial (`where status = 'active'`), which
+    // Postgres refuses as a conflict target — so every purchase failed with 42P10
+    // and no subscription was ever recorded. stripeRoutes reads/updates/inserts
+    // explicitly now; this pins down why.
+    await db.query(
+      `insert into public.users (id, username, display_name)
+       values ('sub-buyer', 'sub_buyer', 'Sub Buyer')
+       on conflict (id) do nothing`,
+    );
+
+    await expect(
+      db.query(
+        `insert into public.subscriptions (user_id, tier, status)
+         values ('sub-buyer', 'operator', 'active')
+         on conflict (user_id) do update set tier = excluded.tier`,
+      ),
+    ).rejects.toThrow(/no unique or exclusion constraint/i);
+  });
+
   it('grants a CRED purchase exactly once per payment id', async () => {
     await db.query(
       `insert into public.users (id, username, display_name, cred_balance)
