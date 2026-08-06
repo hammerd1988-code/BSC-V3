@@ -185,6 +185,24 @@ describe('supabase migrations', () => {
     expect(secret.rows[0]?.ok).toBe(false);
   });
 
+  /**
+   * apply_increments executes `update public.<caller's table> set <caller's
+   * column> = ...`, so definer rights would turn it into an arbitrary
+   * row-update primitive that bypasses RLS. A hand-applied script outside the
+   * migration chain (scripts/0002_security_and_storage.sql, since removed) had
+   * done exactly that.
+   */
+  it('keeps apply_increments on invoker rights', async () => {
+    const { rows } = await db.query<{ prosecdef: boolean }>(
+      `select p.prosecdef
+         from pg_proc p
+         join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public' and p.proname = 'apply_increments'`,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.prosecdef).toBe(false);
+  });
+
   it('gives every migration a version prefix of its own', () => {
     const byVersion = new Map<string, string[]>();
     for (const file of migrationFiles()) {
