@@ -427,16 +427,6 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
 
       try {
         await supabase.from('casper_activity_log').insert({
-          user_id: profile.id,
-          action: 'terminal_execute',
-          details: {
-            mode,
-            exit_code: result.exitCode,
-            duration_ms: result.durationMs,
-            truncated: result.truncated,
-            ok: result.ok,
-            reason: result.reason ?? null,
-          },
           action_type: 'terminal_execute',
           description: `Casper terminal: ${command.slice(0, 200)}`,
           metadata: {
@@ -587,16 +577,6 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
 
       try {
         await supabase.from('casper_activity_log').insert({
-          user_id: profile.id,
-          action: 'integration_execute',
-          details: {
-            integration_key: integrationKey,
-            tool_name: toolName,
-            ok: result.ok,
-            status: result.status ?? null,
-            duration_ms: result.durationMs ?? null,
-            error: result.error ?? null,
-          },
           action_type: 'integration_execute',
           description: `Casper integration ${integrationKey}.${toolName}`,
           metadata: {

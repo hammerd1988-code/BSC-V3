@@ -179,20 +179,11 @@ export const Navigation: React.FC = () => {
     setLinkActionId(request.from_id);
     try {
       const filteredRequests = linkRequests.filter(item => item.from_id !== request.from_id);
-      const myFriends = Array.from(new Set([...(currentUser.friends ?? []), request.from_id]));
-      const { data: senderData, error: senderError } = await supabase
-        .from('users')
-        .select('friends')
-        .eq('id', request.from_id)
-        .maybeSingle();
-      if (senderError) throw senderError;
 
-      const senderFriends = Array.isArray(senderData?.friends) ? senderData.friends as string[] : [];
-      const theirFriends = Array.from(new Set([...senderFriends, currentUser.id]));
-
-      const [meUpdate, themUpdate, acceptedNotice] = await Promise.all([
-        supabase.from('users').update({ friend_requests: filteredRequests, friends: myFriends }).eq('id', currentUser.id),
-        supabase.from('users').update({ friends: theirFriends }).eq('id', request.from_id),
+      // respond_friend_request() links both rows in one transaction; the client
+      // cannot write the sender's row (self-update RLS policy).
+      const [linkResult, acceptedNotice] = await Promise.all([
+        supabase.rpc('respond_friend_request', { p_from_id: request.from_id, p_accept: true }),
         supabase.from('notifications').insert({
           user_id: request.from_id,
           type: 'friend_accepted',
@@ -209,7 +200,7 @@ export const Navigation: React.FC = () => {
         }),
       ]);
 
-      const failed = [meUpdate, themUpdate, acceptedNotice].find(result => result.error);
+      const failed = [linkResult, acceptedNotice].find(result => result.error);
       if (failed?.error) throw failed.error;
 
       setLinkRequests(filteredRequests);
@@ -227,10 +218,10 @@ export const Navigation: React.FC = () => {
     setLinkActionId(request.from_id);
     try {
       const filteredRequests = linkRequests.filter(item => item.from_id !== request.from_id);
-      const { error } = await supabase
-        .from('users')
-        .update({ friend_requests: filteredRequests })
-        .eq('id', currentUser.id);
+      const { error } = await supabase.rpc('respond_friend_request', {
+        p_from_id: request.from_id,
+        p_accept: false,
+      });
       if (error) throw error;
 
       setLinkRequests(filteredRequests);

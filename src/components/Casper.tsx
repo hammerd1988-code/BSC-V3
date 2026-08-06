@@ -860,7 +860,7 @@ export const Casper: React.FC = () => {
     if (!routineForm.name.trim() || !routineForm.directive.trim() || !userUuid) return;
     setActionBusy(true);
     try {
-      const { error } = await supabase.from('casper_routines').insert(toDb({ name: routineForm.name.trim(), directive: routineForm.directive.trim(), frequency: routineForm.frequency, cron_expression: routineForm.frequency === 'cron' || routineForm.frequency === 'custom' ? routineForm.cron_expression : null, scheduled_time: routineForm.scheduled_time, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', enabled: true, next_run_at: nextRunAt(routineForm.frequency, routineForm.scheduled_time), created_by: userUuid, metadata: { owner_id: userUuid, source: 'user_casper_dashboard' } }));
+      const { error } = await supabase.from('casper_routines').insert(toDb({ name: routineForm.name.trim(), directive: routineForm.directive.trim(), frequency: routineForm.frequency, cron_expression: routineForm.frequency === 'cron' || routineForm.frequency === 'custom' ? routineForm.cron_expression : null, scheduled_time: routineForm.scheduled_time, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', is_enabled: true, next_run_at: nextRunAt(routineForm.frequency, routineForm.scheduled_time), created_by: userUuid, metadata: { owner_id: userUuid, source: 'user_casper_dashboard' } }));
       if (error) throw error;
       setRoutineForm({ name: '', directive: '', frequency: 'daily', scheduled_time: '09:00', cron_expression: '0 9 * * *' });
       setNotice('Routine scheduled. Casper can now act proactively.');
@@ -870,7 +870,7 @@ export const Casper: React.FC = () => {
   };
 
   const toggleRoutine = async (routine: UserCasperRoutine) => {
-    const { error } = await supabase.from('casper_routines').update(toDb({ enabled: !routine.enabled })).eq('id', routine.id);
+    const { error } = await supabase.from('casper_routines').update({ is_enabled: !routine.enabled }).eq('id', routine.id);
     if (error) setNotice(error.message); else await fetchControlCenter();
   };
 

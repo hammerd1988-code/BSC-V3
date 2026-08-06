@@ -189,18 +189,10 @@ export const Profile: React.FC = () => {
     if (!currentUser || !user || currentUser.id === user.id) return;
     setIsAddingFriend(true);
     try {
-      const theirRequests: any[] = Array.isArray(user.friend_requests) ? [...user.friend_requests] : [];
-      const newRequest = {
-        from_id: currentUser.id,
-        from_username: currentUser.username,
-        from_display_name: currentUser.display_name,
-        from_avatar_url: currentUser.avatar_url,
-        sent_at: new Date().toISOString(),
-      };
-      theirRequests.push(newRequest);
-      const { error } = await supabase.from('users')
-        .update({ friend_requests: theirRequests })
-        .eq('id', user.id);
+      // Appending to the recipient's row from the client is blocked by the
+      // self-update RLS policy and loses concurrent requests, so the append
+      // happens inside send_friend_request().
+      const { error } = await supabase.rpc('send_friend_request', { p_target_id: user.id });
       if (error) throw error;
       // Create a notification for the recipient
       await supabase.from('notifications').insert({
@@ -226,29 +218,22 @@ export const Profile: React.FC = () => {
     if (!currentUser) return;
     setIsAddingFriend(true);
     try {
-      // Remove from my friend_requests
-      const myRequests: any[] = Array.isArray(currentUser.friend_requests) ? currentUser.friend_requests : [];
-      const filtered = myRequests.filter((r: any) => r.from_id !== fromId);
-      // Add to both friends arrays
-      const myFriends = [...(currentUser.friends ?? []), fromId];
-      const { data: senderData } = await supabase.from('users').select('friends').eq('id', fromId).maybeSingle();
-      const theirFriends = [...((senderData?.friends as string[]) ?? []), currentUser.id];
-      await Promise.all([
-        supabase.from('users').update({ friend_requests: filtered, friends: myFriends }).eq('id', currentUser.id),
-        supabase.from('users').update({ friends: theirFriends }).eq('id', fromId),
-        // Notify sender their request was accepted
-        supabase.from('notifications').insert({
-          user_id: fromId,
-          type: 'friend_accepted',
-          data: {
-            from_id: currentUser.id,
-            from_username: currentUser.username,
-            from_display_name: currentUser.display_name,
-            from_avatar_url: currentUser.avatar_url,
-          },
-          read: false,
-        }),
-      ]);
+      // Both sides of the link are updated in one transaction; the old
+      // client-side version could not write the sender's row at all.
+      const { error } = await supabase.rpc('respond_friend_request', { p_from_id: fromId, p_accept: true });
+      if (error) throw error;
+
+      await supabase.from('notifications').insert({
+        user_id: fromId,
+        type: 'friend_accepted',
+        data: {
+          from_id: currentUser.id,
+          from_username: currentUser.username,
+          from_display_name: currentUser.display_name,
+          from_avatar_url: currentUser.avatar_url,
+        },
+        read: false,
+      });
       setIsFriend(true);
       setIncomingRequest(false);
       fetchFriends();
@@ -262,9 +247,8 @@ export const Profile: React.FC = () => {
   const handleRejectFriendRequest = async (fromId: string) => {
     if (!currentUser) return;
     try {
-      const myRequests: any[] = Array.isArray(currentUser.friend_requests) ? currentUser.friend_requests : [];
-      const filtered = myRequests.filter((r: any) => r.from_id !== fromId);
-      await supabase.from('users').update({ friend_requests: filtered }).eq('id', currentUser.id);
+      const { error } = await supabase.rpc('respond_friend_request', { p_from_id: fromId, p_accept: false });
+      if (error) throw error;
       setIncomingRequest(false);
       setPendingRequests(prev => prev.filter(r => r.from_id !== fromId));
     } catch (error) {
@@ -276,13 +260,8 @@ export const Profile: React.FC = () => {
     if (!currentUser) return;
     setIsAddingFriend(true);
     try {
-      const myFriends = (currentUser.friends ?? []).filter(id => id !== friendId);
-      const { data: friendData } = await supabase.from('users').select('friends').eq('id', friendId).maybeSingle();
-      const theirFriends = ((friendData?.friends as string[]) ?? []).filter(id => id !== currentUser.id);
-      await Promise.all([
-        supabase.from('users').update({ friends: myFriends }).eq('id', currentUser.id),
-        supabase.from('users').update({ friends: theirFriends }).eq('id', friendId),
-      ]);
+      const { error } = await supabase.rpc('remove_friend', { p_friend_id: friendId });
+      if (error) throw error;
       setIsFriend(false);
       setFriendsList(prev => prev.filter(f => f.id !== friendId));
     } catch (error) {
@@ -835,19 +814,8 @@ export const Profile: React.FC = () => {
     if (!currentUser || !target || target.id === currentUser.id || target.handshake_sent) return;
     setProximityActionId(target.id);
     try {
-      const existingRequests: any[] = Array.isArray(target.friend_requests) ? [...target.friend_requests] : [];
-      if (!existingRequests.some(request => request?.from_id === currentUser.id)) {
-        existingRequests.push({
-          from_id: currentUser.id,
-          from_username: currentUser.username,
-          from_display_name: currentUser.display_name,
-          from_avatar_url: currentUser.avatar_url,
-          sent_at: new Date().toISOString(),
-        });
-      }
-
       const [requestUpdate, notificationInsert] = await Promise.all([
-        supabase.from('users').update({ friend_requests: existingRequests }).eq('id', target.id),
+        supabase.rpc('send_friend_request', { p_target_id: target.id }),
         supabase.from('notifications').insert({
           user_id: target.id,
           type: 'friend_request',
