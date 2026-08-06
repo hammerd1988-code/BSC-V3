@@ -708,7 +708,7 @@ export const Transmissions: React.FC = () => {
 
     void openTargetTransmission();
     return () => { cancelled = true; };
-  }, [currentUser, supabaseUser, searchParams, setSearchParams]);
+  }, [currentUser?.id, supabaseUser?.id, searchParams, setSearchParams]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
