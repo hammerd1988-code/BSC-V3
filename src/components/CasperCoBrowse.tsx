@@ -8,7 +8,7 @@ import {
 import { socket } from '../lib/socket';
 import { cn } from '../lib/utils';
 import { sendCasperCommand, type CasperToolCall } from '../lib/casper';
-import { authedFetch } from '../lib/authSession';
+import { authedFetch, getValidSession } from '../lib/authSession';
 
 interface CoBrowseFrame {
   pageId: string;
@@ -157,13 +157,22 @@ export const CasperCoBrowse: React.FC<CoBrowseProps> = ({
     };
   }, []);
 
+  // The server derives the session owner from this token, not from the userId
+  // in the payload, so a socket can only ever drive its own browser.
   const startSession = useCallback((url: string) => {
     if (!url.trim()) return;
     let fullUrl = url.trim();
     if (!/^https?:\/\//i.test(fullUrl)) fullUrl = `https://${fullUrl}`;
     setIsConnecting(true);
     setError(null);
-    socket.emit('cobrowse:start', { userId, url: fullUrl });
+    void getValidSession()
+      .then((session) => {
+        socket.emit('cobrowse:start', { userId, url: fullUrl, token: session.access_token });
+      })
+      .catch(() => {
+        setIsConnecting(false);
+        setError('Your session expired. Sign in again to open the Ghost Browser.');
+      });
   }, [userId]);
 
   const stopSession = useCallback(() => {

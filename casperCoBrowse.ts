@@ -5,12 +5,16 @@
 // Storage upload per frame). The client can send mouse/keyboard events
 // back, creating a shared-control experience.
 //
-// Security: each co-browse event is authenticated by binding the socket
-// to the userId established during `user:register`. Events with a
-// mismatched userId are silently rejected.
+// Security: the session owner is proved by a Supabase access token on
+// `cobrowse:start` and cached on the socket. The `userId` field a client
+// sends is never trusted — it used to be, and "first call wins" binding
+// meant any anonymous socket could claim another account's id and then
+// drive that user's browser and receive screenshots of their pages.
 
 import type { Server as SocketServer, Socket } from 'socket.io';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { resolveCasperAuthFromToken } from './casperControlCenter.js';
+import { socketErrorBoundary } from './serverSecurity.js';
 import {
   browserNavigate,
   browserGoBack,
@@ -60,40 +64,55 @@ async function captureAndEmit(
   }
 }
 
-// Resolve the authenticated userId for this socket. The main Socket.IO
-// handler in server.ts stores userId on `user:register`; we
-// mirror that by stashing it on socket.data.
+/**
+ * The co-browse owner for this socket.
+ *
+ * Either proved on `cobrowse:start` by a Supabase access token, or inherited
+ * from the `user:register` handshake in server.ts, which verifies the same
+ * token before stashing the resolved profile id on `socket.data.userId`.
+ */
 function getSocketUserId(socket: Socket): string | undefined {
-  return (socket.data as { cobrowseUserId?: string })?.cobrowseUserId;
+  const data = socket.data as { cobrowseUserId?: string; userId?: string };
+  return data?.cobrowseUserId || data?.userId || undefined;
 }
 
 function setSocketUserId(socket: Socket, userId: string): void {
   (socket.data as Record<string, unknown>).cobrowseUserId = userId;
 }
 
-function assertOwner(socket: Socket, claimedUserId: string): boolean {
-  const bound = getSocketUserId(socket);
-  return !!bound && bound === claimedUserId;
+/** The verified owner, or null when this socket has never proved an identity. */
+function sessionOwner(socket: Socket): string | null {
+  return getSocketUserId(socket) ?? null;
 }
 
 export function registerCoBrowseSocket(io: SocketServer, supabase: SupabaseClient): void {
   io.on('connection', (socket: Socket) => {
-    // Bind this socket to a userId on the first cobrowse:start.
-    // Subsequent events must match.
-    socket.on('cobrowse:start', async (data: { userId: string; url: string; pageId?: string }) => {
-      const { userId, url, pageId } = data;
-      if (!userId || !url) {
-        socket.emit('cobrowse:error', { error: 'userId and url are required.' });
-        return;
-      }
+    // Socket.IO does not catch listener exceptions, so an unexpected payload
+    // shape would otherwise take the process down.
+    const on = socketErrorBoundary(socket, 'cobrowse');
 
-      // Bind socket to this userId (first call wins)
-      const existingBound = getSocketUserId(socket);
-      if (existingBound && existingBound !== userId) {
-        socket.emit('cobrowse:error', { error: 'Socket already bound to a different user.' });
+    on('cobrowse:start', async (data: { userId?: string; url?: string; pageId?: string; token?: string }) => {
+      const url = data?.url;
+      if (!url) {
+        socket.emit('cobrowse:error', { error: 'url is required.' });
         return;
       }
-      if (!existingBound) setSocketUserId(socket, userId);
+      const pageId = data?.pageId;
+
+      // Identity comes from the token, or from a socket that already registered
+      // with server.ts. It never comes from data.userId.
+      let userId = sessionOwner(socket);
+      if (!userId && typeof data?.token === 'string' && data.token) {
+        const auth = await resolveCasperAuthFromToken(data.token, supabase);
+        if (auth.ok && auth.profile) {
+          userId = auth.profile.id;
+          setSocketUserId(socket, userId);
+        }
+      }
+      if (!userId) {
+        socket.emit('cobrowse:error', { error: 'Sign in again — this socket has no verified session.' });
+        return;
+      }
 
       // Clean up any existing session for this user
       const existing = activeSessions.get(userId);
@@ -144,27 +163,33 @@ export function registerCoBrowseSocket(io: SocketServer, supabase: SupabaseClien
     });
 
     // Stop streaming
-    socket.on('cobrowse:stop', (data: { userId: string }) => {
-      if (!assertOwner(socket, data.userId)) return;
-      const session = activeSessions.get(data.userId);
+    on('cobrowse:stop', () => {
+      const userId = sessionOwner(socket);
+      if (!userId) return;
+      const session = activeSessions.get(userId);
       if (session) {
         session.streaming = false;
         if (session.intervalHandle) clearInterval(session.intervalHandle);
-        activeSessions.delete(data.userId);
+        activeSessions.delete(userId);
         socket.emit('cobrowse:stopped', { pageId: session.pageId });
       }
     });
 
     // Navigate to a new URL within an active session
-    socket.on('cobrowse:navigate', async (data: { userId: string; url: string }) => {
-      if (!assertOwner(socket, data.userId)) return;
-      const session = activeSessions.get(data.userId);
+    on('cobrowse:navigate', async (data: { url?: string }) => {
+      const userId = sessionOwner(socket);
+      if (!userId) return;
+      const session = activeSessions.get(userId);
       if (!session) {
         socket.emit('cobrowse:error', { error: 'No active co-browse session.' });
         return;
       }
+      if (!data?.url) {
+        socket.emit('cobrowse:error', { error: 'url is required.' });
+        return;
+      }
       try {
-        const result = await browserNavigate(data.url, supabase, data.userId, {
+        const result = await browserNavigate(data.url, supabase, userId, {
           pageId: session.pageId,
           waitUntil: 'domcontentloaded',
           screenshot: true,
@@ -185,16 +210,21 @@ export function registerCoBrowseSocket(io: SocketServer, supabase: SupabaseClien
     });
 
     // User clicks an element by viewport coordinates
-    socket.on('cobrowse:click', async (data: { userId: string; x: number; y: number }) => {
-      if (!assertOwner(socket, data.userId)) return;
-      const session = activeSessions.get(data.userId);
+    on('cobrowse:click', async (data: { x?: number; y?: number }) => {
+      const userId = sessionOwner(socket);
+      if (!userId) return;
+      const session = activeSessions.get(userId);
       if (!session || session.controller !== 'user') return;
+      // Non-finite coordinates reach Playwright as NaN and reject the action.
+      const x = Number(data?.x);
+      const y = Number(data?.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
       try {
-        const page = getCoBrowsePage(data.userId, session.pageId);
+        const page = getCoBrowsePage(userId, session.pageId);
         if (page) {
-          await page.mouse.click(data.x, data.y);
+          await page.mouse.click(x, y);
           await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
-          socket.emit('cobrowse:action_ack', { action: 'click', x: data.x, y: data.y });
+          socket.emit('cobrowse:action_ack', { action: 'click', x, y });
         }
       } catch (err: any) {
         socket.emit('cobrowse:error', { error: err?.message || 'Click failed.' });
@@ -202,19 +232,20 @@ export function registerCoBrowseSocket(io: SocketServer, supabase: SupabaseClien
     });
 
     // User types text or presses a key
-    socket.on('cobrowse:type', async (data: { userId: string; text: string; key?: string }) => {
-      if (!assertOwner(socket, data.userId)) return;
-      const session = activeSessions.get(data.userId);
+    on('cobrowse:type', async (data: { text?: string; key?: string }) => {
+      const userId = sessionOwner(socket);
+      if (!userId) return;
+      const session = activeSessions.get(userId);
       if (!session || session.controller !== 'user') return;
       try {
-        const page = getCoBrowsePage(data.userId, session.pageId);
+        const page = getCoBrowsePage(userId, session.pageId);
         if (page) {
-          if (data.key) {
-            await page.keyboard.press(data.key);
-          } else if (data.text) {
-            await page.keyboard.type(data.text, { delay: 30 });
+          if (data?.key) {
+            await page.keyboard.press(String(data.key));
+          } else if (data?.text) {
+            await page.keyboard.type(String(data.text), { delay: 30 });
           }
-          socket.emit('cobrowse:action_ack', { action: 'type', text: data.text || data.key });
+          socket.emit('cobrowse:action_ack', { action: 'type', text: data?.text || data?.key });
         }
       } catch (err: any) {
         socket.emit('cobrowse:error', { error: err?.message || 'Type failed.' });
@@ -222,25 +253,30 @@ export function registerCoBrowseSocket(io: SocketServer, supabase: SupabaseClien
     });
 
     // Scroll
-    socket.on('cobrowse:scroll', async (data: { userId: string; deltaX: number; deltaY: number }) => {
-      if (!assertOwner(socket, data.userId)) return;
-      const session = activeSessions.get(data.userId);
+    on('cobrowse:scroll', async (data: { deltaX?: number; deltaY?: number }) => {
+      const userId = sessionOwner(socket);
+      if (!userId) return;
+      const session = activeSessions.get(userId);
       if (!session || session.controller !== 'user') return;
+      const deltaX = Number(data?.deltaX);
+      const deltaY = Number(data?.deltaY);
+      if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) return;
       try {
-        const page = getCoBrowsePage(data.userId, session.pageId);
+        const page = getCoBrowsePage(userId, session.pageId);
         if (page) {
-          await page.mouse.wheel(data.deltaX, data.deltaY);
+          await page.mouse.wheel(deltaX, deltaY);
         }
       } catch { /* best effort */ }
     });
 
     // Go back
-    socket.on('cobrowse:back', async (data: { userId: string }) => {
-      if (!assertOwner(socket, data.userId)) return;
-      const session = activeSessions.get(data.userId);
+    on('cobrowse:back', async () => {
+      const userId = sessionOwner(socket);
+      if (!userId) return;
+      const session = activeSessions.get(userId);
       if (!session) return;
       try {
-        await browserGoBack(supabase, data.userId, { pageId: session.pageId, screenshot: false });
+        await browserGoBack(supabase, userId, { pageId: session.pageId, screenshot: false });
         socket.emit('cobrowse:action_ack', { action: 'back' });
       } catch (err: any) {
         socket.emit('cobrowse:error', { error: err?.message || 'Go back failed.' });
@@ -248,20 +284,23 @@ export function registerCoBrowseSocket(io: SocketServer, supabase: SupabaseClien
     });
 
     // Hand off control between user and Casper
-    socket.on('cobrowse:handoff', (data: { userId: string; controller: 'user' | 'casper' }) => {
-      if (!assertOwner(socket, data.userId)) return;
-      const session = activeSessions.get(data.userId);
+    on('cobrowse:handoff', (data: { controller?: 'user' | 'casper' }) => {
+      const userId = sessionOwner(socket);
+      if (!userId) return;
+      const controller = data?.controller === 'casper' ? 'casper' : 'user';
+      const session = activeSessions.get(userId);
       if (session) {
-        session.controller = data.controller;
-        socket.emit('cobrowse:controller_changed', { controller: data.controller });
+        session.controller = controller;
+        socket.emit('cobrowse:controller_changed', { controller });
       }
     });
 
     // List open tabs for this user
-    socket.on('cobrowse:list_tabs', async (data: { userId: string }) => {
-      if (!assertOwner(socket, data.userId)) return;
+    on('cobrowse:list_tabs', async () => {
+      const userId = sessionOwner(socket);
+      if (!userId) return;
       try {
-        const tabs = await browserListPages(data.userId);
+        const tabs = await browserListPages(userId);
         socket.emit('cobrowse:tabs', { tabs });
       } catch (err: any) {
         socket.emit('cobrowse:error', { error: err?.message || 'Failed to list tabs.' });
@@ -269,19 +308,20 @@ export function registerCoBrowseSocket(io: SocketServer, supabase: SupabaseClien
     });
 
     // Switch to a different tab
-    socket.on('cobrowse:switch_tab', async (data: { userId: string; pageId: string }) => {
-      if (!assertOwner(socket, data.userId)) return;
-      const session = activeSessions.get(data.userId);
-      if (!session) return;
-      session.pageId = data.pageId;
+    on('cobrowse:switch_tab', async (data: { pageId?: string }) => {
+      const userId = sessionOwner(socket);
+      if (!userId) return;
+      const session = activeSessions.get(userId);
+      if (!session || !data?.pageId) return;
+      session.pageId = String(data.pageId);
       // Immediate frame via base64
-      const page = getCoBrowsePage(data.userId, data.pageId);
+      const page = getCoBrowsePage(userId, session.pageId);
       if (page) {
         try {
           const buf = await page.screenshot({ type: 'jpeg', quality: SCREENSHOT_QUALITY, fullPage: false });
           const base64 = `data:image/jpeg;base64,${(buf as Buffer).toString('base64')}`;
           socket.emit('cobrowse:frame', {
-            pageId: data.pageId,
+            pageId: session.pageId,
             url: page.url(),
             title: await page.title(),
             screenshotUrl: base64,
@@ -293,7 +333,7 @@ export function registerCoBrowseSocket(io: SocketServer, supabase: SupabaseClien
     });
 
     // Cleanup on disconnect
-    socket.on('disconnect', () => {
+    on('disconnect', () => {
       for (const [userId, session] of activeSessions) {
         if (session.socketId === socket.id) {
           session.streaming = false;
