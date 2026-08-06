@@ -43,8 +43,39 @@ echo "[start] docker is up: $(docker --version)"
 export GOOGLE_OAUTH_CLIENT_ID="${GOOGLE_OAUTH_CLIENT_ID:-placeholder}"
 export GOOGLE_OAUTH_CLIENT_SECRET="${GOOGLE_OAUTH_CLIENT_SECRET:-placeholder}"
 
+# The CLI writes runtime state under supabase/.temp; make sure the current user
+# owns it (a previous root-run boot can leave it root-owned and trigger EACCES).
+sudo chown -R "$(id -u):$(id -g)" supabase/.temp 2>/dev/null || true
+
+api_healthy() {
+  curl -sf -m 5 -o /dev/null "http://127.0.0.1:54321/rest/v1/" -H "apikey: anon" 2>/dev/null \
+    || curl -sf -m 5 -o /dev/null "http://127.0.0.1:54321/rest/v1/"
+}
+
 echo "[start] starting local Supabase stack"
-supabase start
+supabase start || true
+
+# Self-heal: booting from a snapshot can leave stale containers that fail to
+# rejoin the freshly-started dockerd network (e.g. kong/edge_runtime exit). If
+# the API gateway is not reachable, cleanly recreate the stack once. The db
+# volume is preserved across supabase stop, so applied migrations persist.
+if ! api_healthy; then
+  echo "[start] Supabase API not healthy — recreating the stack"
+  supabase stop 2>/dev/null || true
+  sudo chown -R "$(id -u):$(id -g)" supabase/.temp 2>/dev/null || true
+  supabase start
+fi
+
+for _ in $(seq 1 30); do
+  api_healthy && break
+  sleep 2
+done
 supabase status || true
+
+if api_healthy; then
+  echo "[start] Supabase API is healthy at http://127.0.0.1:54321"
+else
+  echo "[start] WARNING: Supabase API did not become healthy in time" >&2
+fi
 
 echo "[start] ready — run the app with: npx tsx --env-file=.env.local server.ts"
