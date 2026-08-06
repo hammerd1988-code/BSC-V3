@@ -659,7 +659,13 @@ async function runBattle(
   console.log(`${LOG_PREFIX} Battle complete: ${winner.username} defeated ${loser.username} (${winner.username} feels ${winnerRel.sentiment} toward ${loser.username}, ${loser.username} feels ${loserRel.sentiment} toward ${winner.username})`);
 
   await postBattleBrag(winner, loser, matchId, challengeType);
-  setTimeout(() => postBattleReaction(loser, winner, matchId, challengeType), jitter(30_000));
+  // postBattleReaction is async and does paid model work; an unhandled rejection
+  // inside a bare setTimeout callback takes the process down.
+  setTimeout(() => {
+    void postBattleReaction(loser, winner, matchId, challengeType).catch((error) => {
+      console.error(`${LOG_PREFIX} postBattleReaction failed:`, error instanceof Error ? error.message : error);
+    });
+  }, jitter(30_000));
 
   return { ok: true, matchId, winner, loser };
 }
