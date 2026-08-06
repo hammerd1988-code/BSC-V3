@@ -17,3 +17,7 @@ service-account*.json
 /ios/
 packages/casper-ssh-mobile/android/
 packages/casper-ssh-mobile/ios/
+
+# Supabase CLI local runtime state
+supabase/.temp/
+supabase/.branches/

@@ -18,6 +18,7 @@ export const Trending: React.FC = () => {
   const [summary, setSummary] = useState<string | null>(null);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
   const { currentUser } = useAuth();
+  const blockedKey = (currentUser?.blocked_users ?? []).join(',');
 
   useEffect(() => {
     const fetchTrendingData = async () => {
@@ -66,7 +67,10 @@ export const Trending: React.FC = () => {
     };
 
     fetchTrendingData();
-  }, [currentUser]);
+    // Keyed on primitives: the profile object is replaced by every realtime
+    // update to the user's row, and each re-run spent another AI call on the
+    // trending summary.
+  }, [currentUser?.id, blockedKey]);
 
   const generateTrendingSummary = async (trendingPosts: Post[]) => {
     setIsGeneratingSummary(true);

@@ -4,38 +4,55 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 // - VITE_SUPABASE_*            (standard Vite)
 // - NEXT_PUBLIC_SUPABASE_*     (v0 Supabase integration default)
 // - VITE_SUPABASE_PUBLISHABLE_KEY / SUPABASE_PUBLISHABLE_KEY (new `sb_publishable_*` keys)
-const defaultUrl = 'https://kxfhxrdrlvnvtzdeuvwb.supabase.co';
-const defaultPublishableKey = 'sb_publishable_xCCZOJtesOfHR_EOvBCjHA_gWy-Sb9A';
+const productionUrl = 'https://kxfhxrdrlvnvtzdeuvwb.supabase.co';
+const productionPublishableKey = 'sb_publishable_xCCZOJtesOfHR_EOvBCjHA_gWy-Sb9A';
 
-const url =
+// Port the Supabase CLI serves the local API on when config.toml declares no
+// [api] section, which is what `supabase start` gives this repo. The key is the
+// CLI's fixed demo anon token: it is public, identical on every machine, and
+// only valid against a local instance using the default JWT secret.
+const localUrl = 'http://127.0.0.1:54321';
+const localAnonKey =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9' +
+  '.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9' +
+  '.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0';
+
+const configuredUrl =
   import.meta.env.VITE_SUPABASE_URL ||
   import.meta.env.NEXT_PUBLIC_SUPABASE_URL ||
   import.meta.env.SUPABASE_URL ||
   import.meta.env.SUPABASE_PROJECT_URL;
 
-const publishable =
+const configuredKey =
   import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
   import.meta.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-  import.meta.env.SUPABASE_PERISHABLE_KEY ||
-  import.meta.env.SUPABASE_PUBLISHABLE_KEY;
-
-const anon =
-  publishable ||
+  import.meta.env.SUPABASE_PUBLISHABLE_KEY ||
   import.meta.env.VITE_SUPABASE_ANON_KEY ||
   import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  import.meta.env.SUPABASE_ANON_KEY ||
-  defaultPublishableKey;
+  import.meta.env.SUPABASE_ANON_KEY;
 
-if (!url || !anon) {
-  console.warn('[supabase] Supabase URL / publishable key not set. Data layer will be unavailable.');
-  console.warn('[supabase] Expected one of: VITE_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_URL and VITE_SUPABASE_ANON_KEY / VITE_SUPABASE_PUBLISHABLE_KEY / NEXT_PUBLIC_SUPABASE_ANON_KEY');
+// Deployed builds keep falling back to the production project, because the
+// hosting platforms do not all set the env vars. `npm run dev` must not: an
+// unconfigured checkout silently reading and writing production data is how a
+// local experiment becomes a live one. Vite inlines PROD at build time, so this
+// only changes the dev server.
+const usingFallback = !configuredUrl || !configuredKey;
+const url = configuredUrl || (import.meta.env.PROD ? productionUrl : localUrl);
+const key = configuredKey || (import.meta.env.PROD ? productionPublishableKey : localAnonKey);
+
+if (usingFallback && !import.meta.env.PROD) {
+  console.error(
+    '[supabase] No Supabase URL / publishable key configured, so requests are going to the local ' +
+      `Supabase at ${localUrl} instead of the production project. Copy .env.example to .env.local ` +
+      'and set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (run `supabase start` for local values).',
+  );
+} else if (usingFallback) {
+  console.warn('[supabase] Falling back to the built-in production project; set VITE_SUPABASE_URL.');
 }
 
-// Fallback to the correct production project if env vars are not set
-// (Railway must also set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY)
 export const supabase: SupabaseClient = createClient(
-  url ?? defaultUrl,
-  anon,
+  url,
+  key,
   {
     auth: {
       persistSession: true,

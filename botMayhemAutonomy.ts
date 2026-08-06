@@ -13,6 +13,7 @@ import { BOT_GLADIATOR_PROFILES, type BotGladiatorProfileSeed } from './src/lib/
 import { FOUNDING_FACTIONS, type FactionLore } from './src/lib/factionLore.js';
 import { generateServerText, isServerAiConfigured } from './serverAi.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
+import { timingSafeStringEqual } from './serverSecurity.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const BOT_UUID_NAMESPACE = '00000000-0000-4000-8000-000000000b5c';
@@ -1518,8 +1519,11 @@ export function registerBotMayhemRoutes(app: import('express').Express, supabase
     next: import('express').NextFunction
   ) => {
     const apiKey = req.headers['x-api-key'] as string | undefined;
-    const secret = process.env.AGENT_WEBHOOK_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-    if (apiKey && apiKey === secret) {
+    // Only the dedicated webhook secret opens this door. Falling back to
+    // SUPABASE_SERVICE_ROLE_KEY turned the database credential into an admin API
+    // key for these routes, and `===` on a secret leaks length/prefix timing.
+    const secret = process.env.AGENT_WEBHOOK_SECRET || '';
+    if (apiKey && secret && timingSafeStringEqual(apiKey, secret)) {
       return next();
     }
     const profile = await requireCasperAuth(req, res, supabaseClient);

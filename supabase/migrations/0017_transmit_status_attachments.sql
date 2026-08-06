@@ -3,6 +3,9 @@
 -- =========================================================================
 
 alter table public.transmits
+  -- The client has always sent receiver_id on insert, but the column was never
+  -- created, so PostgREST rejected the whole payload.
+  add column if not exists receiver_id text references public.users(id) on delete cascade,
   add column if not exists status text not null default 'sent' check (status in ('sent', 'delivered', 'seen')),
   add column if not exists delivered_at timestamptz,
   add column if not exists seen_at timestamptz,

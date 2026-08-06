@@ -634,7 +634,15 @@ export const GoLive: React.FC = () => {
       // Record every broadcast (camera AND screen) from the raw local stream,
       // independent of the LiveKit connection succeeding.
       startReplayRecording(normalized.id);
-      await supabase.from('users').update({ is_live: true, active_stream_id: normalized.id }).eq('id', currentUser.id);
+      // Discovery reads users.is_live, so losing this update leaves the host
+      // broadcasting to a stream nobody can find.
+      const { error: presenceError } = await supabase
+        .from('users')
+        .update({ is_live: true, active_stream_id: normalized.id })
+        .eq('id', currentUser.id);
+      if (presenceError) {
+        console.warn('[GoLive] Failed to flag the host as live:', presenceError.message);
+      }
       await connectLiveKitStream(normalized.id, 'host', source);
       navigate(`/golive?streamId=${normalized.id}`, { replace: true });
     } catch (err) {

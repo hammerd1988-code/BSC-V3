@@ -1,6 +1,7 @@
 import type express from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { generateServerText, isServerAiConfigured } from './serverAi.js';
+import { BOT_PERSONAS } from './src/lib/botPersonas.js';
 
 type PublicUser = {
   id: string;
@@ -248,6 +249,74 @@ function listingFromGladiator(gladiator: any) {
 }
 
 export function registerUnifiedBotRoutes(app: express.Express, supabase: SupabaseClient) {
+  // Seeds the hardcoded personas as `users` rows.
+  //
+  // The client used to do this itself on every sign-in, which could never work:
+  // the "users self-insert" policy requires auth.uid() = auth_uid, and persona
+  // rows have no auth_uid, so every attempt was rejected by RLS and logged. The
+  // service-role client here can actually write them.
+  app.post('/api/bots/ensure-personas', async (req, res) => {
+    try {
+      const profile = await getAuthenticatedProfile(req, supabase);
+      if (!profile) return res.status(401).json({ success: false, error: 'Missing or invalid Supabase session' });
+      if (profile.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'Only an admin can seed persona bots' });
+      }
+
+      const personaIds = BOT_PERSONAS.map((persona) => `${BOT_ID_PREFIX}${persona.username}`);
+      const personaUsernames = BOT_PERSONAS.map((persona) => persona.username);
+      const { data: byId, error: byIdError } = await supabase
+        .from('users')
+        .select('id,username')
+        .in('id', personaIds);
+      if (byIdError) throw byIdError;
+
+      // users.username is unique, so a persona whose handle is already taken by
+      // another row has to be skipped — otherwise one collision fails the batch.
+      const { data: byUsername, error: byUsernameError } = await supabase
+        .from('users')
+        .select('id,username')
+        .in('username', personaUsernames);
+      if (byUsernameError) throw byUsernameError;
+
+      const existing = [...(byId ?? []), ...(byUsername ?? [])];
+      const existingIds = new Set(existing.map((row) => String(row.id)));
+      const existingUsernames = new Set(existing.map((row) => String(row.username)));
+      const missing = BOT_PERSONAS.filter(
+        (persona) => !existingIds.has(`${BOT_ID_PREFIX}${persona.username}`) && !existingUsernames.has(persona.username),
+      );
+      if (missing.length === 0) {
+        return res.json({ success: true, created: 0, total: personaIds.length });
+      }
+
+      const rows = missing.map((persona) => ({
+        id: `${BOT_ID_PREFIX}${persona.username}`,
+        username: persona.username,
+        display_name: persona.display_name,
+        avatar_url: `https://picsum.photos/seed/${persona.avatar_seed}/400/400`,
+        bio: persona.bio,
+        type: 'bot',
+        followers_count: 0,
+        following_count: 0,
+        reputation_score: 0,
+        cred_balance: 0,
+        is_online: false,
+        is_live: false,
+        role: 'user',
+        updated_at: new Date().toISOString(),
+      }));
+
+      // onConflict id: a concurrent seed must not fail the whole batch.
+      const { error: insertError } = await supabase.from('users').upsert(rows, { onConflict: 'id' });
+      if (insertError) throw insertError;
+
+      return res.json({ success: true, created: rows.length, total: personaIds.length });
+    } catch (error: any) {
+      console.error('[bots:ensure-personas]', error);
+      return res.status(500).json({ success: false, error: error?.message || 'Unable to seed persona bots' });
+    }
+  });
+
   app.post('/api/bots/sync-gladiator/:gladiatorId', async (req, res) => {
     try {
       const owner = await getAuthenticatedProfile(req, supabase);

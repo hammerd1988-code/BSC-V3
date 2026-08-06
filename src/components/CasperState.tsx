@@ -5,6 +5,7 @@ import { supabase } from '../supabase';
 import { generateText } from '../lib/ai';
 import { useAuth } from '../AuthContext';
 import { cn } from '../lib/utils';
+import { authedFetch } from '../lib/authSession';
 
 interface CasperStateProps {
   context?: 'feed' | 'profile';
@@ -117,7 +118,7 @@ export const CasperState: React.FC<CasperStateProps> = ({ context = 'feed', prof
 
     try {
       const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
-      const response = await fetch(`${serverUrl}/api/tts`, {
+      const response = await authedFetch(`${serverUrl}/api/tts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, speed: 1.05 }),
