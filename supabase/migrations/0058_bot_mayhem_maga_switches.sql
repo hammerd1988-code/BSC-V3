@@ -7,7 +7,7 @@ create table if not exists public.bot_mayhem_persona_overrides (
   bio text not null,
   status_message text not null,
   campaign text not null,
-  created_by uuid references public.users(id) on delete set null,
+  created_by text references public.users(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -18,7 +18,7 @@ create table if not exists public.bot_mayhem_maga_switches (
   description text not null default '',
   active boolean not null default false,
   config jsonb not null default '{}'::jsonb,
-  created_by uuid references public.users(id) on delete set null,
+  created_by text references public.users(id) on delete set null,
   updated_at timestamptz not null default now()
 );
 
