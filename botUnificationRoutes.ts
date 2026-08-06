@@ -665,6 +665,16 @@ export function registerUnifiedBotRoutes(app: express.Express, supabase: Supabas
       const loser = (combatants ?? []).find((g: any) => g.id === loserId);
       if (!winner) return res.json({ success: true, posted: false });
 
+      // Any session used to be enough to post any match's brag, which spends AI
+      // credits and publishes to the feed as the bot accounts. The rest of the
+      // Colosseum authorizes on the challenger's owner (sapphire-move,
+      // complete_colosseum_match), and that is who the client calls this for.
+      const challenger = (combatants ?? []).find((gladiator: any) => gladiator.id === match.challenger_id);
+      const challengerOwner = String(challenger?.user_id ?? '');
+      if (requester.role !== 'admin' && challengerOwner !== String(requester.id)) {
+        return res.status(403).json({ success: false, error: 'Only the challenger owner can post about this match.' });
+      }
+
       const winnerProfile = (profiles ?? []).find((p: any) => p.gladiator_id === winner.id);
       const loserProfile = (profiles ?? []).find((p: any) => p.gladiator_id === loser?.id);
 
