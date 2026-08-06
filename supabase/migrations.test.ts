@@ -259,6 +259,34 @@ describe('supabase migrations', () => {
     ).rejects.toThrow(/no unique or exclusion constraint/i);
   });
 
+  it('only lets increment_counter touch allowlisted counters', async () => {
+    await db.query(
+      `insert into public.users (id, username, display_name, view_count, role)
+       values ('counter-user', 'counter_user', 'Counter User', 0, 'user')
+       on conflict (id) do update set view_count = 0, role = 'user'`,
+    );
+
+    await db.query(`select public.increment_counter('users', 'counter-user', 'view_count', 1)`);
+    const { rows: bumped } = await db.query<{ view_count: number }>(
+      `select view_count from public.users where id = 'counter-user'`,
+    );
+    expect(bumped[0].view_count).toBe(1);
+
+    // The function is SECURITY DEFINER and took the table and column as text, so
+    // any caller could point it at a column nothing meant to expose.
+    await expect(
+      db.query(`select public.increment_counter('users', 'counter-user', 'compute_tokens', 1000000)`),
+    ).rejects.toThrow(/not an incrementable counter/i);
+
+    await expect(
+      db.query(`select public.increment_counter('gladiators', 'counter-user', 'cred', 1)`),
+    ).rejects.toThrow(/not an incrementable counter/i);
+
+    await expect(
+      db.query(`select public.increment_counter('users', 'counter-user', 'view_count', 2000000)`),
+    ).rejects.toThrow(/out of range/i);
+  });
+
   it('grants a CRED purchase exactly once per payment id', async () => {
     await db.query(
       `insert into public.users (id, username, display_name, cred_balance)
