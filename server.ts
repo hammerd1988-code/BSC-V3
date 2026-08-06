@@ -36,6 +36,7 @@ import { registerServerAiRoutes } from './serverAi.js';
 import { registerColosseumRoutes } from './colosseumRoutes.js';
 import { initBotMayhemAutonomy, registerBotMayhemRoutes } from './botMayhemAutonomy.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
+import { registerCallRoom, releaseCallRoom } from './callRooms.js';
 import { registerCoBrowseSocket } from './casperCoBrowse.js';
 import { registerStripeRoutes } from './stripeRoutes.js';
 import { findCredPackageByPrice, totalCred } from './shared/credPackages.js';
@@ -909,6 +910,11 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
           .eq('id', callerId)
           .maybeSingle();
 
+        // Record who the room belongs to so /api/livekit/token can refuse a
+        // publish token to anyone else who learns or guesses the name.
+        const roomName = typeof data?.roomName === 'string' ? data.roomName : '';
+        if (roomName) registerCallRoom(roomName, [callerId, targetUserId]);
+
         io.to(targetSocketId).emit('call:incoming', {
           callerId,
           callerName: caller?.display_name ?? 'Unknown caller',
@@ -953,6 +959,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     });
 
     socket.on('call:end', (data) => {
+      if (typeof data?.roomName === 'string' && data.roomName) releaseCallRoom(data.roomName);
       const targetSocketId = connectedUsers.get(data.targetUserId);
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:ended');
