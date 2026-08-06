@@ -101,8 +101,11 @@ export default function App() {
     if (!currentUser) return;
 
     // Show onboarding for recently created accounts that have not completed it.
+    // Treat null/undefined as "not complete" so databases that predate the
+    // onboarding_complete column (or in-memory fallback profiles) still get
+    // the wizard for fresh accounts.
     const createdRecently = currentUser.created_at && (Date.now() - new Date(currentUser.created_at).getTime()) < 24 * 60 * 60 * 1000;
-    const isNewUser = currentUser.onboarding_complete === false &&
+    const isNewUser = currentUser.onboarding_complete !== true &&
       createdRecently &&
       !localStorage.getItem(`bsc_onboarding_dismissed_${currentUser.id}`);
     if (isNewUser) {
