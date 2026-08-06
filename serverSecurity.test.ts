@@ -3,12 +3,15 @@ import type { Request, Response } from 'express';
 import {
   ProductionConfigError,
   assertProductionConfig,
+  asyncRoute,
   createRateLimiter,
   createSquareClient,
   createWebhookAuthMiddleware,
   getSquareLocationId,
+  hardenAsyncRoutes,
   parseAllowedOrigins,
   resolveSocketCorsOrigin,
+  socketErrorBoundary,
 } from './serverSecurity.js';
 
 function mockRes() {
@@ -181,6 +184,217 @@ describe('createRateLimiter', () => {
 
     expect(a).toHaveBeenCalled();
     expect(b).toHaveBeenCalled();
+  });
+});
+
+describe('asyncRoute', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('answers 500 instead of leaving a rejected handler unhandled', async () => {
+    const res = mockRes();
+    const handler = asyncRoute(async () => {
+      throw new Error('supabase unreachable');
+    });
+
+    handler(mockReq({ method: 'POST', url: '/api/thing' } as Partial<Request>), res, vi.fn());
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(res.statusCode).toBe(500);
+    expect(res.body).toEqual({ success: false, error: 'Internal server error.' });
+  });
+
+  it('catches a synchronous throw as well', () => {
+    const res = mockRes();
+    const handler = asyncRoute(() => {
+      throw new Error('boom');
+    });
+
+    handler(mockReq(), res, vi.fn());
+
+    expect(res.statusCode).toBe(500);
+  });
+
+  it('leaves a successful handler untouched', async () => {
+    const res = mockRes();
+    const handler = asyncRoute(async (_req, response) => {
+      response.status(201).json({ ok: true });
+    });
+
+    handler(mockReq(), res, vi.fn());
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(res.statusCode).toBe(201);
+    expect(res.body).toEqual({ ok: true });
+  });
+});
+
+describe('hardenAsyncRoutes', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('wraps handlers registered after it, including middleware chains', async () => {
+    const registered: Array<(...args: any[]) => unknown> = [];
+    const app: Record<string, any> = {
+      post(_path: string, ...handlers: Array<(...args: any[]) => unknown>) {
+        registered.push(...handlers);
+        return this;
+      },
+      get() {
+        return this;
+      },
+      put() {
+        return this;
+      },
+      patch() {
+        return this;
+      },
+      delete() {
+        return this;
+      },
+      all() {
+        return this;
+      },
+    };
+
+    hardenAsyncRoutes(app);
+    const rateLimit = vi.fn((_req: unknown, _res: unknown, next: () => void) => next());
+    app.post('/api/pay', rateLimit, async () => {
+      throw new Error('auth lookup failed');
+    });
+
+    expect(registered).toHaveLength(2);
+
+    const limiterRes = mockRes();
+    const next = vi.fn();
+    registered[0](mockReq(), limiterRes, next);
+    expect(next).toHaveBeenCalled();
+
+    const res = mockRes();
+    registered[1](mockReq(), res, vi.fn());
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(res.statusCode).toBe(500);
+  });
+
+  it('does not disturb Express error middleware arity', () => {
+    const registered: Array<(...args: any[]) => unknown> = [];
+    const app: Record<string, any> = {
+      get(_path: string, handler: (...args: any[]) => unknown) {
+        registered.push(handler);
+        return this;
+      },
+      post() {
+        return this;
+      },
+      put() {
+        return this;
+      },
+      patch() {
+        return this;
+      },
+      delete() {
+        return this;
+      },
+      all() {
+        return this;
+      },
+    };
+
+    hardenAsyncRoutes(app);
+    const errorMiddleware = (_err: unknown, _req: unknown, _res: unknown, _next: unknown) => {};
+    app.get('/x', errorMiddleware);
+
+    expect(registered[0]).toBe(errorMiddleware);
+  });
+
+  it('is idempotent so a double call does not stack wrappers', () => {
+    const app: Record<string, any> = {
+      get() {
+        return this;
+      },
+      post() {
+        return this;
+      },
+      put() {
+        return this;
+      },
+      patch() {
+        return this;
+      },
+      delete() {
+        return this;
+      },
+      all() {
+        return this;
+      },
+    };
+
+    hardenAsyncRoutes(app);
+    const patched = app.get;
+    hardenAsyncRoutes(app);
+
+    expect(app.get).toBe(patched);
+  });
+});
+
+describe('socketErrorBoundary', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  function mockSocket() {
+    const listeners = new Map<string, (...args: any[]) => void>();
+    return {
+      id: 'socket-1',
+      on(event: string, listener: (...args: any[]) => void) {
+        listeners.set(event, listener);
+      },
+      fire(event: string, ...args: any[]) {
+        listeners.get(event)?.(...args);
+      },
+    };
+  }
+
+  it('contains a synchronous throw from a malformed payload', () => {
+    const socket = mockSocket();
+    const on = socketErrorBoundary(socket);
+
+    on('user:follow', (data: any) => {
+      // The shape server.ts used to assume unconditionally.
+      return data.follower.displayName;
+    });
+
+    expect(() => socket.fire('user:follow', {})).not.toThrow();
+  });
+
+  it('contains a rejected async handler', async () => {
+    const socket = mockSocket();
+    const on = socketErrorBoundary(socket);
+    const errors: unknown[] = [];
+    vi.mocked(console.error).mockImplementation((...args: unknown[]) => {
+      errors.push(args);
+    });
+
+    on('call:initiate', async () => {
+      throw new Error('supabase unreachable');
+    });
+    socket.fire('call:initiate', {});
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(errors).toHaveLength(1);
+  });
+
+  it('passes every argument through to the handler', () => {
+    const socket = mockSocket();
+    const on = socketErrorBoundary(socket);
+    const handler = vi.fn();
+
+    on('user:register', handler);
+    socket.fire('user:register', 'user-1', 'token-abc');
+
+    expect(handler).toHaveBeenCalledWith('user-1', 'token-abc');
   });
 });
 

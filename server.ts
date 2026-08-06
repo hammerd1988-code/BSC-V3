@@ -46,8 +46,10 @@ import {
   createSquareClient,
   createWebhookAuthMiddleware,
   getSquareLocationId,
+  hardenAsyncRoutes,
   parseAllowedOrigins,
   resolveSocketCorsOrigin,
+  socketErrorBoundary,
 } from './serverSecurity.js';
 
 const supabase = createServerSupabaseClient();
@@ -67,6 +69,11 @@ const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
+  // Before any route is registered: Express 4 turns a rejected handler into an
+  // unhandled rejection, which Node treats as fatal, so one failed Supabase
+  // call inside an auth check used to drop every socket, stream and call on the
+  // box.
+  hardenAsyncRoutes(app);
   const isProd = process.env.NODE_ENV === 'production';
   // Trust the first proxy hop (Railway) so req.ip reflects the real client IP.
   app.set('trust proxy', 1);
@@ -773,6 +780,11 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     console.log(`[socket] Connected: ${socket.id} (total: ${io.engine.clientsCount})`);
     let workspaceResourceTimer: ReturnType<typeof setInterval> | null = null;
 
+    // Every payload below arrives from an untrusted client. Socket.IO does not
+    // catch listener exceptions, so registering through the boundary keeps a
+    // malformed event from taking the process down with it.
+    const on = socketErrorBoundary(socket, 'socket');
+
     // ---- User registration (matches client CallContext.tsx `user:register`) ----
     //
     // The identity comes from the Supabase access token, not from the argument:
@@ -809,12 +821,12 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     const verifiedUserId = (): string | null =>
       typeof socket.data.userId === 'string' && socket.data.userId ? socket.data.userId : null;
 
-    socket.on('user:register', (_userId: string, accessToken?: unknown) => {
+    on('user:register', (_userId: string, accessToken?: unknown) => {
       void registerSocketUser('Registered user', accessToken);
     });
 
     // Legacy alias — keep backward compatibility
-    socket.on('user:online', (_userId: string, accessToken?: unknown) => {
+    on('user:online', (_userId: string, accessToken?: unknown) => {
       void registerSocketUser('User online', accessToken);
     });
 
@@ -838,7 +850,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       return `${owner}:${project}`;
     };
 
-    socket.on('workspace:join', (data) => {
+    on('workspace:join', (data) => {
       const key = workspaceKey(data);
       const room = `workspace:${key}`;
       joinedWorkspaceKeys.add(key);
@@ -846,35 +858,35 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       socket.emit('workspace:state_snapshot', getWorkspaceState(key));
     });
 
-    socket.on('workspace:asset:create', (data) => {
+    on('workspace:asset:create', (data) => {
       const key = workspaceKey(data);
       const state = getWorkspaceState(key);
       state.assets = [data.asset, ...state.assets.filter((asset) => asset?.id !== data.asset?.id)].slice(0, 40);
       socket.to(`workspace:${key}`).emit('workspace:asset_created', data.asset);
     });
 
-    socket.on('workspace:checkpoint:create', (data) => {
+    on('workspace:checkpoint:create', (data) => {
       const key = workspaceKey(data);
       const state = getWorkspaceState(key);
       state.checkpoints = [data.checkpoint, ...state.checkpoints.filter((checkpoint) => checkpoint?.id !== data.checkpoint?.id)].slice(0, 30);
       socket.to(`workspace:${key}`).emit('workspace:checkpoint_created', data.checkpoint);
     });
 
-    socket.on('workspace:checkpoint:resolve', (data) => {
+    on('workspace:checkpoint:resolve', (data) => {
       const key = workspaceKey(data);
       const state = getWorkspaceState(key);
       state.checkpoints = state.checkpoints.map((checkpoint) => checkpoint?.id === data.checkpointId ? { ...checkpoint, status: data.status } : checkpoint);
       io.to(`workspace:${key}`).emit('workspace:checkpoint_resolved', { checkpointId: data.checkpointId, status: data.status });
     });
 
-    socket.on('workspace:activity', (data) => {
+    on('workspace:activity', (data) => {
       const key = workspaceKey(data);
       const state = getWorkspaceState(key);
       state.activity = [data.activity, ...state.activity.filter((item) => item?.id !== data.activity?.id)].slice(0, 40);
       socket.to(`workspace:${key}`).emit('workspace:activity', data.activity);
     });
 
-    socket.on('workspace:resources:subscribe', () => {
+    on('workspace:resources:subscribe', () => {
       if (workspaceResourceTimer) clearInterval(workspaceResourceTimer);
       socket.emit('workspace:resources', readWorkspaceResourceSnapshot());
       workspaceResourceTimer = setInterval(() => {
@@ -887,7 +899,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     // The caller identity is the socket's verified id and the display fields come
     // from the database: the payload used to carry callerId/callerName/callerAvatar,
     // so any socket could ring a victim as anyone it liked.
-    socket.on('call:initiate', (data) => {
+    on('call:initiate', (data) => {
       void (async () => {
         const callerId = verifiedUserId();
         if (!callerId) {
@@ -924,62 +936,83 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       });
     });
 
-    socket.on('call:accept', (data) => {
-      const targetSocketId = connectedUsers.get(data.callerId);
+    // The remaining call events only relay to a peer, but an anonymous socket
+    // could previously hang up or answer on behalf of any account by naming it
+    // in the payload. Registration is required, and the peer is told which
+    // verified id the signal came from.
+    const peerSocketId = (id: unknown): string | undefined => {
+      if (!verifiedUserId()) return undefined;
+      const peerId = String(id ?? '');
+      return peerId ? connectedUsers.get(peerId) : undefined;
+    };
+
+    on('call:accept', (data) => {
+      const targetSocketId = peerSocketId(data?.callerId);
       if (targetSocketId) {
-        io.to(targetSocketId).emit('call:accepted', { answer: data.answer, roomName: data.roomName });
+        io.to(targetSocketId).emit('call:accepted', {
+          answer: data?.answer,
+          roomName: data?.roomName,
+          fromUserId: verifiedUserId(),
+        });
       }
     });
 
-    socket.on('call:reject', (data) => {
-      const targetSocketId = connectedUsers.get(data.callerId);
+    on('call:reject', (data) => {
+      const targetSocketId = peerSocketId(data?.callerId);
       if (targetSocketId) {
-        io.to(targetSocketId).emit('call:rejected');
+        io.to(targetSocketId).emit('call:rejected', { fromUserId: verifiedUserId() });
       }
     });
 
-    socket.on('call:ice-candidate', (data) => {
-      const targetSocketId = connectedUsers.get(data.targetUserId);
+    on('call:ice-candidate', (data) => {
+      const targetSocketId = peerSocketId(data?.targetUserId);
       if (targetSocketId) {
-        io.to(targetSocketId).emit('call:ice-candidate', { candidate: data.candidate });
+        io.to(targetSocketId).emit('call:ice-candidate', {
+          candidate: data?.candidate,
+          fromUserId: verifiedUserId(),
+        });
       }
     });
 
-    socket.on('call:filter', (data) => {
-      const targetSocketId = connectedUsers.get(data.targetUserId);
+    on('call:filter', (data) => {
+      const targetSocketId = peerSocketId(data?.targetUserId);
       if (targetSocketId) {
-        io.to(targetSocketId).emit('call:filter', { filter: data.filter });
+        io.to(targetSocketId).emit('call:filter', { filter: data?.filter, fromUserId: verifiedUserId() });
       }
     });
 
-    socket.on('call:end', (data) => {
-      const targetSocketId = connectedUsers.get(data.targetUserId);
+    on('call:end', (data) => {
+      const targetSocketId = peerSocketId(data?.targetUserId);
       if (targetSocketId) {
-        io.to(targetSocketId).emit('call:ended');
+        io.to(targetSocketId).emit('call:ended', { fromUserId: verifiedUserId() });
       }
     });
 
     // ---- Post/Like/Comment events ----
-    socket.on('post:create', (post) => {
+    on('post:create', (post) => {
       socket.broadcast.emit('activity:notification', { type: 'post', data: post });
     });
 
-    socket.on('post:like', (likeData) => {
+    on('post:like', (likeData) => {
       socket.broadcast.emit('activity:notification', { type: 'like', data: likeData });
     });
 
-    socket.on('post:comment', (commentData) => {
+    on('post:comment', (commentData) => {
       socket.broadcast.emit('activity:notification', { type: 'comment', data: commentData });
     });
 
-    socket.on('user:follow', (data) => {
+    // `currentUser` rows carry snake_case fields with camelCase aliases that are
+    // only populated on some paths, so reading `displayName` alone broadcast
+    // "undefined" as the follower's name for every real follow.
+    on('user:follow', (data) => {
+      const nameOf = (user: any) => user?.displayName ?? user?.display_name ?? user?.username ?? 'Someone';
       socket.broadcast.emit('activity:notification', {
         type: 'follow',
         data: {
-          displayName: data.follower.displayName,
-          targetName: data.following.displayName,
-          avatarUrl: data.follower.avatarUrl
-        }
+          displayName: nameOf(data?.follower),
+          targetName: nameOf(data?.following),
+          avatarUrl: data?.follower?.avatarUrl ?? data?.follower?.avatar_url ?? null,
+        },
       });
     });
 
@@ -987,7 +1020,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     // crowds:update is broadcast to every client, so the streamer's display fields
     // come from their own row rather than from the payload — otherwise any socket
     // could inject an arbitrary entry into everyone's "top crowds" list.
-    socket.on('stream:start', () => {
+    on('stream:start', () => {
       void (async () => {
         const streamerId = verifiedUserId();
         if (!streamerId) return;
@@ -1007,12 +1040,12 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       })().catch((err) => console.error('[socket] stream:start failed:', err));
     });
 
-    socket.on('stream:stop', () => {
+    on('stream:stop', () => {
       liveStreams.delete(socket.id);
       broadcastCrowds();
     });
 
-    socket.on('crowd:join', (streamId) => {
+    on('crowd:join', (streamId) => {
       const stream = liveStreams.get(streamId);
       if (!stream) return;
 
@@ -1030,7 +1063,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       broadcastCrowds();
     });
 
-    socket.on('crowd:leave', () => {
+    on('crowd:leave', () => {
       const streamId = userToStream.get(socket.id);
       if (streamId) {
         const stream = liveStreams.get(streamId);
@@ -1043,7 +1076,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     });
 
     // ---- Disconnect cleanup ----
-    socket.on('disconnect', () => {
+    on('disconnect', () => {
       console.log(`[socket] Disconnected: ${socket.id} (total: ${io.engine.clientsCount})`);
       if (workspaceResourceTimer) clearInterval(workspaceResourceTimer);
 

@@ -179,6 +179,119 @@ export function createRateLimiter(options: RateLimitOptions): RequestHandler {
   };
 }
 
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return typeof (value as PromiseLike<unknown> | null)?.then === 'function';
+}
+
+/**
+ * Wraps an async Express handler so a rejection becomes a 500 instead of
+ * killing the process.
+ *
+ * Express 4 does not forward rejected promises to error middleware, and Node
+ * treats an unhandled rejection as fatal, so a single transient Supabase
+ * failure inside `await requireCasperAuth(...)` took down every socket, live
+ * stream and call on the box. Wrapping also guarantees the caller gets a
+ * response rather than a request that hangs until the client times out.
+ */
+export function asyncRoute(
+  handler: (req: Request, res: Response, next: NextFunction) => unknown,
+): RequestHandler {
+  return (req, res, next) => {
+    const fail = (error: unknown) => {
+      console.error(`[route] Unhandled failure in ${req.method} ${req.originalUrl || req.url}:`, error);
+      if (res.headersSent) {
+        // A partially written response cannot carry a status; close it so the
+        // client stops waiting.
+        res.end();
+        return;
+      }
+      res.status(500).json({ success: false, error: 'Internal server error.' });
+    };
+
+    try {
+      const result = handler(req, res, next);
+      if (isPromiseLike(result)) Promise.resolve(result).catch(fail);
+    } catch (error) {
+      fail(error);
+    }
+  };
+}
+
+/** Route-registration methods that take handlers we want wrapped. */
+const ROUTE_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'all'] as const;
+
+const WRAPPED = Symbol('asyncRouteWrapped');
+
+/**
+ * Applies `asyncRoute` to every handler registered on `app` afterwards.
+ *
+ * Wrapping at registration time rather than at each call site means a route
+ * added later cannot reintroduce the crash, and the 18 handlers that already
+ * awaited their auth check outside a try block are all covered at once. Only
+ * the routing verbs are patched: `use` also receives four-argument Express
+ * error middleware, whose arity must survive.
+ *
+ * Call this before registering any route.
+ */
+export function hardenAsyncRoutes(app: Record<string, any>): void {
+  for (const method of ROUTE_METHODS) {
+    const original = app[method];
+    if (typeof original !== 'function' || (original as any)[WRAPPED]) continue;
+
+    const patched = function (this: unknown, ...args: unknown[]) {
+      return original.apply(
+        app,
+        args.map((arg) => {
+          if (typeof arg === 'function') return wrapOnce(arg as any);
+          if (Array.isArray(arg)) return arg.map((entry) => (typeof entry === 'function' ? wrapOnce(entry) : entry));
+          return arg;
+        }),
+      );
+    };
+    (patched as any)[WRAPPED] = true;
+    app[method] = patched;
+  }
+}
+
+function wrapOnce(handler: (...args: any[]) => unknown): (...args: any[]) => unknown {
+  // Express identifies error middleware by arity; leave those alone.
+  if ((handler as any)[WRAPPED] || handler.length === 4) return handler;
+  const wrapped = asyncRoute(handler as any);
+  (wrapped as any)[WRAPPED] = true;
+  return wrapped;
+}
+
+interface SocketLike {
+  id?: string;
+  on(event: string, listener: (...args: any[]) => void): unknown;
+}
+
+/**
+ * Returns a `socket.on` replacement that contains handler failures.
+ *
+ * Socket.IO invokes listeners straight from the transport's message callback
+ * with no try/catch of its own, so a handler that reads `data.follower.name`
+ * out of an unexpected payload raises an uncaught exception and Node exits.
+ * Every event is client-supplied, which made that a one-line denial of service
+ * against the whole deployment. Handler failures are now logged and the socket
+ * is told the event failed, while the process keeps serving.
+ */
+export function socketErrorBoundary(socket: SocketLike, label = 'socket') {
+  return (event: string, handler: (...args: any[]) => unknown): void => {
+    socket.on(event, (...args: any[]) => {
+      const fail = (error: unknown) => {
+        console.error(`[${label}] handler for '${event}' failed (socket ${socket.id ?? 'unknown'}):`, error);
+      };
+      try {
+        const result = handler(...args);
+        if (isPromiseLike(result)) Promise.resolve(result).catch(fail);
+      } catch (error) {
+        fail(error);
+      }
+    });
+  };
+}
+
 /**
  * Square client for CRED purchases. Throws when unconfigured so a missing
  * environment variable surfaces as a 500 instead of silently charging against
