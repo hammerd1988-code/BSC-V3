@@ -8,7 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm run dev           # Vite dev server only (port 3000)
 npm run dev:full      # Express (port 3001) + Vite (port 5173) together — use this for full-stack work
 npm run build         # Production build
-npm run start         # Production server (node --experimental-strip-types server.ts)
+npm run start         # Production server (tsx server.ts)
+npm run test:run      # Vitest suite, including the SQL migration chain
 npm run lint          # TypeScript type-check (no emit)
 npm run db:push       # Push Supabase schema migrations
 npm run db:reset      # Reset Supabase database

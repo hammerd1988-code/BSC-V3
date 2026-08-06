@@ -226,12 +226,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(false);
     };
 
-    // Initialise from current session
-    supabase.auth.getSession().then(({ data }) => handleSession(data.session));
+    // Initialise from current session. A rejection here used to leave `loading`
+    // true forever, and App renders nothing but the loading screen while it is —
+    // so one failed call at boot looked like a dead app.
+    supabase.auth
+      .getSession()
+      .then(({ data }) => handleSession(data.session))
+      .catch((err) => {
+        console.error('[AuthContext] getSession failed:', err);
+        setLoading(false);
+      });
 
     // Subscribe to future auth changes
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      void handleSession(session);
+      handleSession(session).catch((err) => {
+        console.error('[AuthContext] auth state change failed:', err);
+        setLoading(false);
+      });
     });
 
     const stopVisibility = startVisibilityRefresh();
