@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { socket } from './lib/socket';
+import { getValidSession } from './lib/authSession';
 import { useAuth } from './AuthContext';
 import { User } from './types';
 import { CallModal } from './components/CallModal';
@@ -35,9 +36,23 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     if (!currentUserId) return;
 
-    // Connect and register user with socket server
+    // Connect and register user with socket server. The server derives the
+    // identity from this token rather than from the id, so call signalling cannot
+    // be redirected by claiming someone else's id.
+    let cancelled = false;
+    const register = () => {
+      void getValidSession()
+        .then((session) => {
+          if (!cancelled) socket.emit('user:register', currentUserId, session.access_token);
+        })
+        .catch((err) => console.error('[CallContext] socket registration failed:', err));
+    };
+
+    // Server-side registration is keyed by socket id, so a dropped transport has
+    // to re-register or incoming calls stop arriving after a reconnect.
+    socket.on('connect', register);
     socket.connect();
-    socket.emit('user:register', currentUserId);
+    if (socket.connected) register();
 
     const handleIncomingCall = (data: any) => {
       setIncomingCall(data);
@@ -58,6 +73,8 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     socket.on('call:ended', handleEnded);
 
     return () => {
+      cancelled = true;
+      socket.off('connect', register);
       // Removing by handler reference: a bare socket.off('call:accepted') also
       // dropped CallModal's listeners for the same events.
       socket.off('call:incoming', handleIncomingCall);

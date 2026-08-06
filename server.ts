@@ -764,15 +764,43 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     let workspaceResourceTimer: ReturnType<typeof setInterval> | null = null;
 
     // ---- User registration (matches client CallContext.tsx `user:register`) ----
-    socket.on('user:register', (userId: string) => {
-      connectedUsers.set(userId, socket.id);
-      console.log(`[socket] Registered user ${userId} -> ${socket.id}`);
+    //
+    // The identity comes from the Supabase access token, not from the argument:
+    // call signalling is routed through connectedUsers, so accepting a
+    // client-supplied id let anyone register as another account and receive that
+    // account's incoming calls.
+    const registerSocketUser = async (label: string, accessToken: unknown) => {
+      const token = typeof accessToken === 'string' ? accessToken.trim() : '';
+      if (!token) {
+        socket.emit('user:register_error', { error: 'A Supabase access token is required to register.' });
+        return;
+      }
+
+      const { data, error } = await supabase.auth.getUser(token);
+      if (error || !data.user) {
+        socket.emit('user:register_error', { error: 'Invalid or expired Supabase session.' });
+        return;
+      }
+
+      const { data: profile } = await supabase
+        .from('users')
+        .select('id')
+        .eq('auth_uid', data.user.id)
+        .maybeSingle();
+      const verifiedId = String(profile?.id ?? data.user.id);
+
+      connectedUsers.set(verifiedId, socket.id);
+      socket.emit('user:registered', { userId: verifiedId });
+      console.log(`[socket] ${label} ${verifiedId} -> ${socket.id}`);
+    };
+
+    socket.on('user:register', (_userId: string, accessToken?: unknown) => {
+      void registerSocketUser('Registered user', accessToken);
     });
 
     // Legacy alias — keep backward compatibility
-    socket.on('user:online', (userId: string) => {
-      connectedUsers.set(userId, socket.id);
-      console.log(`[socket] User online ${userId} -> ${socket.id}`);
+    socket.on('user:online', (_userId: string, accessToken?: unknown) => {
+      void registerSocketUser('User online', accessToken);
     });
 
     // Initial sync
