@@ -27,42 +27,45 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [incomingCall, setIncomingCall] = useState<any>(null);
   const [outgoingCall, setOutgoingCall] = useState<{ targetUser: User; videoEnabled: boolean } | null>(null);
 
+  const currentUserId = currentUser?.id;
+
+  // Keyed on the user id, not the profile object: any realtime update to the
+  // user's row (CRED, online flag, ...) produced a new object, and re-running
+  // this effect disconnected the socket in the middle of a call.
   useEffect(() => {
-    if (currentUser) {
-      // Connect and register user with socket server
-      socket.connect();
-      socket.emit('user:register', currentUser.id);
+    if (!currentUserId) return;
 
-      const handleIncomingCall = (data: any) => {
-        setIncomingCall(data);
-        // Show browser push notification (works even when app is in background)
-        notifyIncomingCall(
-          data.callerName || 'Unknown',
-          data.callerAvatar
-        );
-      };
+    // Connect and register user with socket server
+    socket.connect();
+    socket.emit('user:register', currentUserId);
 
-      socket.on('call:incoming', handleIncomingCall);
-      socket.on('call:accepted', () => {
-        // Handled in CallModal
-      });
-      socket.on('call:rejected', () => {
-        setOutgoingCall(null);
-      });
-      socket.on('call:ended', () => {
-        setIncomingCall(null);
-        setOutgoingCall(null);
-      });
+    const handleIncomingCall = (data: any) => {
+      setIncomingCall(data);
+      // Show browser push notification (works even when app is in background)
+      notifyIncomingCall(
+        data.callerName || 'Unknown',
+        data.callerAvatar
+      );
+    };
+    const handleRejected = () => setOutgoingCall(null);
+    const handleEnded = () => {
+      setIncomingCall(null);
+      setOutgoingCall(null);
+    };
 
-      return () => {
-        socket.off('call:incoming', handleIncomingCall);
-        socket.off('call:accepted');
-        socket.off('call:rejected');
-        socket.off('call:ended');
-        socket.disconnect();
-      };
-    }
-  }, [currentUser]);
+    socket.on('call:incoming', handleIncomingCall);
+    socket.on('call:rejected', handleRejected);
+    socket.on('call:ended', handleEnded);
+
+    return () => {
+      // Removing by handler reference: a bare socket.off('call:accepted') also
+      // dropped CallModal's listeners for the same events.
+      socket.off('call:incoming', handleIncomingCall);
+      socket.off('call:rejected', handleRejected);
+      socket.off('call:ended', handleEnded);
+      socket.disconnect();
+    };
+  }, [currentUserId]);
 
   const initiateCall = (targetUser: User, videoEnabled: boolean = true) => {
     setOutgoingCall({ targetUser, videoEnabled });

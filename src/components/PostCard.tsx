@@ -69,6 +69,14 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     setCommentCount(post.comments_count ?? 0);
   }, [post.comments_count]);
 
+  // The virtualised feed reuses this component for different posts, so state
+  // seeded from props has to follow the post it is rendering.
+  useEffect(() => {
+    setIsLiked(post.is_liked);
+    setViewCount(post.view_count || 0);
+    viewTracked.current = false;
+  }, [post.id, post.is_liked, post.view_count]);
+
   useEffect(() => {
     return () => {
       if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
@@ -119,19 +127,34 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     const hasIt = myReactions.has(reactionKey);
     const newMine = new Set(myReactions);
     const newCounts = { ...reactionCounts };
+
+    // Show the reaction immediately, then undo it if the write is rejected —
+    // previously a failure left the click with no visible effect and no error.
     if (hasIt) {
       newMine.delete(reactionKey);
       newCounts[reactionKey] = Math.max(0, (newCounts[reactionKey] || 1) - 1);
-      await supabase.from('post_reactions').delete()
-        .eq('post_id', post.id).eq('user_id', currentUser.id).eq('reaction', reactionKey);
     } else {
       newMine.add(reactionKey);
       newCounts[reactionKey] = (newCounts[reactionKey] || 0) + 1;
-      await supabase.from('post_reactions').upsert({ post_id: post.id, user_id: currentUser.id, reaction: reactionKey });
     }
+    const previousMine = myReactions;
+    const previousCounts = reactionCounts;
     setMyReactions(newMine);
     setReactionCounts(newCounts);
     setShowReactions(false);
+
+    try {
+      const { error } = hasIt
+        ? await supabase.from('post_reactions').delete()
+            .eq('post_id', post.id).eq('user_id', currentUser.id).eq('reaction', reactionKey)
+        : await supabase.from('post_reactions').upsert({ post_id: post.id, user_id: currentUser.id, reaction: reactionKey });
+      if (error) throw error;
+    } catch (error) {
+      setMyReactions(previousMine);
+      setReactionCounts(previousCounts);
+      showNotice('Could not save that reaction. Check your connection.');
+      console.error('[PostCard] reaction failed:', error);
+    }
   };
 
   const showNotice = (message: string) => {

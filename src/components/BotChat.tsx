@@ -562,6 +562,8 @@ export function BotChat() {
   // State
   const [bots, setBots] = useState<GladiatorRow[]>([]);
   const [selectedBot, setSelectedBot] = useState<GladiatorRow | null>(null);
+  // Latest requested bot, so async loads can tell whether they are still wanted.
+  const selectedBotIdRef = useRef<string | null>(null);
   const [forgeConfig, setForgeConfig] = useState<ForgeConfig | null>(null);
   const [botProfile, setBotProfile] = useState<BotProfile | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -851,6 +853,10 @@ export function BotChat() {
 
   // Select a bot and load its config
   const selectBot = useCallback(async (bot: GladiatorRow, profileMapArg?: Map<string, BotProfile>) => {
+    // Picking another bot before these lookups finish must not apply the previous
+    // bot's forge config, battle memory or persona to the new conversation.
+    selectedBotIdRef.current = bot.id;
+    const isCurrent = () => selectedBotIdRef.current === bot.id;
     setSelectedBot(bot);
     setBotProfile(null);
     setForgeConfig(null);
@@ -877,6 +883,7 @@ export function BotChat() {
         supabase.from('bot_forge_config').select('*').eq('gladiator_id', bot.id).maybeSingle(),
         authedFetch(`/api/battle-memories/${bot.id}?limit=8`).then(r => r.ok ? r.json() : { memories: [] }).catch(() => ({ memories: [] })),
       ]);
+      if (!isCurrent()) return;
       if (configRes.data) setForgeConfig(configRes.data);
 
       // Build battle memory context string
@@ -900,10 +907,10 @@ export function BotChat() {
           .select('gladiator_id,persona_username,display_name,gladiator_class,expertise,battle_style,signature_moves,pre_battle_lines,victory_lines,defeat_lines,ai_prompt_style,ability_profile,personality_style,avatar_prompt,emotional_hook')
           .eq('gladiator_id', bot.id)
           .maybeSingle();
-        if (profileData) setBotProfile(profileData);
+        if (isCurrent() && profileData) setBotProfile(profileData);
       }
     } finally {
-      setBotConfigLoaded(true);
+      if (isCurrent()) setBotConfigLoaded(true);
     }
   }, []);
 
