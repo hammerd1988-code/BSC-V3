@@ -18,6 +18,9 @@ import { timingSafeStringEqual } from './serverSecurity.js';
 // ── Constants ────────────────────────────────────────────────────────────────
 const BOT_UUID_NAMESPACE = '00000000-0000-4000-8000-000000000b5c';
 const LOG_PREFIX = '[BotMayhem]';
+// Both self-calls below run inside the scheduled mayhem loop; each does paid
+// model work, and without a deadline one stalled request pins the run forever.
+const SELF_CALL_TIMEOUT_MS = 120_000;
 
 // Timing — keeps activity believable, not spammy
 const BATTLE_INTERVAL_MS = 45 * 60 * 1000;       // one battle every ~45 min
@@ -589,6 +592,7 @@ async function runBattle(
         challengerId: challenger.gladiatorId,
         defenderId: defender.gladiatorId,
       }),
+      signal: AbortSignal.timeout(SELF_CALL_TIMEOUT_MS),
     });
     const data = await resp.json();
     moves = data.moves ?? [];
@@ -603,6 +607,7 @@ async function runBattle(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ matchId, challengeType }),
+      signal: AbortSignal.timeout(SELF_CALL_TIMEOUT_MS),
     });
     const data = await resp.json();
     judge = data.judge ?? null;

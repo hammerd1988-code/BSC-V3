@@ -2,6 +2,7 @@ import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { deflateSync } from 'node:zlib';
 import { generateImage as comfyGenerateImage, isComfyUIConfigured, comfyuiHealthCheck } from './comfyuiProvider.js';
+import { assertPublicHttpUrl } from './outboundUrl.js';
 
 type RunwayGenerationType = 'image' | 'video';
 type RunwayVideoDuration = 4 | 5 | 10;
@@ -152,12 +153,12 @@ async function loadAssetBody(assetUrl: string, allowedHttpHosts: ReadonlySet<str
   const dataUrl = dataUrlToBuffer(assetUrl);
   if (dataUrl) return dataUrl;
 
-  const parsed = new URL(assetUrl);
-  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && allowedHttpHosts.has(parsed.host))) {
-    throw new Error('Studio assets must be HTTPS URLs or local Studio data URLs.');
-  }
+  // Any https URL used to be accepted, so a caller could have the server fetch an
+  // internal service — or a public hostname pointed at a private address — and
+  // then publish the response to storage. Resolution happens inside the guard.
+  const parsed = await assertPublicHttpUrl(assetUrl, { allowedHttpHosts, label: 'Studio asset URL' });
 
-  const response = await fetch(parsed, { signal: AbortSignal.timeout(60000) });
+  const response = await fetch(parsed, { redirect: 'error', signal: AbortSignal.timeout(60000) });
   if (!response.ok) throw new Error(`Unable to fetch Studio asset (${response.status}).`);
   const contentType = response.headers.get('content-type') || 'application/octet-stream';
   const buffer = Buffer.from(await response.arrayBuffer());
