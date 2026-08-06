@@ -420,6 +420,22 @@ function bearerToken(req: Request) {
   return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
 }
 
+/**
+ * These two routes bill the platform's provider key, and `maxTokens` and the
+ * prompt were both passed straight through from the request body. A signed-in
+ * caller could therefore ask for an arbitrarily large completion, which the
+ * 30-per-minute rate limit does nothing about — it counts requests, not spend.
+ */
+export const MAX_REQUESTED_MAX_TOKENS = 8192;
+const MAX_PROMPT_CHARS = 100_000;
+
+export function clampRequestedMaxTokens(requested: unknown): number | undefined {
+  if (typeof requested !== 'number' || !Number.isFinite(requested)) return undefined;
+  const floored = Math.floor(requested);
+  if (floored < 1) return undefined;
+  return Math.min(floored, MAX_REQUESTED_MAX_TOKENS);
+}
+
 async function requireSupabaseUser(req: Request, res: Response, supabase: SupabaseClient) {
   const token = bearerToken(req);
   if (!token) {
@@ -439,6 +455,7 @@ async function requireSupabaseUser(req: Request, res: Response, supabase: Supaba
 export function registerServerAiRoutes(app: Express, supabase: SupabaseClient) {
   const aiRateLimit = createRateLimiter({ name: 'AI generation', windowMs: 60_000, max: 30 });
 
+
   app.post('/api/ai/generate-text', aiRateLimit, async (req, res) => {
     try {
       const authorized = await requireSupabaseUser(req, res, supabase);
@@ -457,11 +474,15 @@ export function registerServerAiRoutes(app: Express, supabase: SupabaseClient) {
         res.status(400).json({ success: false, error: 'Prompt is required.' });
         return;
       }
+      if (prompt.length > MAX_PROMPT_CHARS) {
+        res.status(413).json({ success: false, error: 'Prompt is too long.' });
+        return;
+      }
 
       const result = await generateServerText(prompt, {
         systemPrompt: typeof body.systemPrompt === 'string' ? body.systemPrompt : undefined,
         temperature: typeof body.temperature === 'number' ? body.temperature : undefined,
-        maxTokens: typeof body.maxTokens === 'number' ? body.maxTokens : undefined,
+        maxTokens: clampRequestedMaxTokens(body.maxTokens),
         jsonResponse: Boolean(body.jsonResponse),
       });
 

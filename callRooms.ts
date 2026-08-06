@@ -56,6 +56,54 @@ export function releaseCallRoom(roomName: string): void {
   callRooms.delete(roomName);
 }
 
+/**
+ * Who is in a call with whom, independent of the LiveKit room name.
+ *
+ * `call:initiate` derives the caller from the socket's verified session, but the
+ * events that follow it — accept, reject, ICE, filter, end — took the peer id
+ * straight from the payload. Any connected socket could therefore answer someone
+ * else's call with its own SDP, feed ICE candidates into a conversation it was
+ * not part of, or hang up a stranger's call. Recording the pair when the call is
+ * placed gives those handlers something to check.
+ */
+const callPeers = new Map<string, Map<string, number>>();
+
+function prunePeers(now = Date.now()): void {
+  for (const [userId, peers] of callPeers) {
+    for (const [peerId, expiresAt] of peers) {
+      if (expiresAt <= now) peers.delete(peerId);
+    }
+    if (peers.size === 0) callPeers.delete(userId);
+  }
+}
+
+function link(from: string, to: string, expiresAt: number): void {
+  const peers = callPeers.get(from) ?? new Map<string, number>();
+  peers.set(to, expiresAt);
+  callPeers.set(from, peers);
+}
+
+/** Records that these two accounts are in (or ringing) a call together. */
+export function registerCallPeers(a: string, b: string): void {
+  prunePeers();
+  if (!a || !b || a === b) return;
+  const expiresAt = Date.now() + CALL_ROOM_TTL_MS;
+  link(String(a), String(b), expiresAt);
+  link(String(b), String(a), expiresAt);
+}
+
+export function areCallPeers(a: string, b: string): boolean {
+  prunePeers();
+  if (!a || !b) return false;
+  return callPeers.get(String(a))?.has(String(b)) ?? false;
+}
+
+export function releaseCallPeers(a: string, b: string): void {
+  callPeers.get(String(a))?.delete(String(b));
+  callPeers.get(String(b))?.delete(String(a));
+  prunePeers();
+}
+
 /** Test seam. */
 export function callRoomCount(): number {
   prune();
