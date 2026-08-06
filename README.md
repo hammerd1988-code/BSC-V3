@@ -44,6 +44,11 @@ This repo uses **Vitest** + **React Testing Library** for fast unit/UI tests.
 - Run in watch mode: `npm test`
 - Run once (CI-style): `npm run test:run`
 - Run with coverage: `npm run test:coverage` (also writes `coverage/` HTML report)
+- Run the Casper SSH mobile package's tests: `npm --prefix packages/casper-ssh-mobile ci --include=dev` once, then `npm run test:mobile`
+
+`npm run test:run` deliberately covers the root app only (`src/`, `shared/`, `supabase/` and root-level
+`*.test.ts`). Each `packages/*` workspace is a separate install with its own tsconfig and runtime, so its
+tests run under their own command — the same split as `npm run lint` vs `npm run lint:mobile`.
 
 Current coverage starts with high-risk primitives:
 - `src/supabase.ts` — `toDb()` / `fromDb()` mapping and timestamp formatting helpers

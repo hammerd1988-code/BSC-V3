@@ -16,6 +16,7 @@
     "lint:mobile": "npm --prefix packages/casper-ssh-mobile run lint",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:mobile": "vitest run --config packages/casper-ssh-mobile/vitest.config.ts",
     "test:coverage": "vitest run --coverage",
     "verify:auth": "npx tsx scripts/verify-auth-flow.ts",
     "db:push": "npx supabase db push",
