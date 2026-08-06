@@ -45,6 +45,7 @@ const REQUIRED_COLUMNS: Record<string, string[]> = {
   posts: ['likes_count', 'view_count', 'updated_at', 'poll_data'],
   casper_routines: ['is_enabled', 'next_run_at', 'last_run_at'],
   casper_activity_log: ['action_type', 'description', 'metadata', 'actor_id'],
+  transactions: ['external_id'],
 };
 
 /** Tables whose creating migration used to abort, so they were absent at runtime. */
@@ -63,6 +64,7 @@ const REQUIRED_FUNCTIONS = [
   'increment_counter',
   'increment_cred_balance',
   'exchange_cred_for_tokens',
+  'grant_cred_purchase',
   'increment_gladiator_wins',
   'send_friend_request',
   'cancel_friend_request',
@@ -118,5 +120,46 @@ describe('supabase migrations', () => {
       `select indexname from pg_indexes where schemaname = 'public' and tablename = 'transmits'`,
     );
     expect(rows.map((row) => row.indexname)).toContain('transmits_seen_idx');
+  });
+
+  it('grants a CRED purchase exactly once per payment id', async () => {
+    await db.query(
+      `insert into public.users (id, username, display_name, cred_balance)
+       values ('cred-buyer', 'cred_buyer', 'CRED Buyer', 0)
+       on conflict (id) do update set cred_balance = 0`,
+    );
+
+    const first = await db.query<{ result: { granted: boolean; cred_balance?: number } }>(
+      `select public.grant_cred_purchase('cred-buyer', 100, 'sq-payment-1', 'first') as result`,
+    );
+    expect(first.rows[0].result.granted).toBe(true);
+
+    // Square returns the original payment when an idempotency key is replayed,
+    // so the second call must be a no-op rather than a second grant.
+    const replay = await db.query<{ result: { granted: boolean } }>(
+      `select public.grant_cred_purchase('cred-buyer', 100, 'sq-payment-1', 'replay') as result`,
+    );
+    expect(replay.rows[0].result.granted).toBe(false);
+
+    const balance = await db.query<{ cred_balance: number }>(
+      `select cred_balance from public.users where id = 'cred-buyer'`,
+    );
+    expect(balance.rows[0].cred_balance).toBe(100);
+
+    const ledger = await db.query<{ count: string }>(
+      `select count(*)::text as count from public.transactions where external_id = 'sq-payment-1'`,
+    );
+    expect(ledger.rows[0].count).toBe('1');
+  });
+
+  it('rolls the ledger row back when the buyer does not exist', async () => {
+    await expect(
+      db.query(`select public.grant_cred_purchase('no-such-user', 100, 'sq-payment-2', null)`),
+    ).rejects.toThrow();
+
+    const ledger = await db.query<{ count: string }>(
+      `select count(*)::text as count from public.transactions where external_id = 'sq-payment-2'`,
+    );
+    expect(ledger.rows[0].count).toBe('0');
   });
 });
