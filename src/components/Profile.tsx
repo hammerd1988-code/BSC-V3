@@ -169,7 +169,7 @@ export const Profile: React.FC = () => {
   const [proximityNodes, setProximityNodes] = useState<ProximityNode[]>([]);
   const [loadingProximityNodes, setLoadingProximityNodes] = useState(false);
   const [proximityActionId, setProximityActionId] = useState<string | null>(null);
-  const hasIncrementedView = useRef(false);
+  const hasIncrementedView = useRef<string | null>(null);
   const [fullSizeImage, setFullSizeImage] = useState<string | null>(null);
 
   // Derive friend/request state from DB data
@@ -302,40 +302,49 @@ export const Profile: React.FC = () => {
   }, [activeTab, user?.friends]);
 
   useEffect(() => {
-    if (user && currentUser && user.id !== currentUser.id && !hasIncrementedView.current) {
-      hasIncrementedView.current = true;
-      supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'view_count', p_amount: 1 }).then();
-    }
+    if (!user || !currentUser || user.id === currentUser.id) return;
+    // The ref used to be set once per mount, so only the first profile visited in
+    // a session was ever counted as a view.
+    if (hasIncrementedView.current === user.id) return;
+    hasIncrementedView.current = user.id;
+    void supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'view_count', p_amount: 1 });
   }, [user?.id, currentUser?.id]);
 
   useEffect(() => {
     if (!currentUser || !user || currentUser.id === user.id) return;
+    const viewedUserId = user.id;
+    // Navigating between profiles let a slower lookup for the previous profile
+    // land last and show its follow/block state on this one.
+    let cancelled = false;
 
     const checkFollow = async () => {
       const { data } = await supabase
         .from('follows')
         .select('follower_id')
         .eq('follower_id', currentUser.id)
-        .eq('following_id', user.id)
+        .eq('following_id', viewedUserId)
         .maybeSingle();
-      setIsFollowing(!!data);
+      if (!cancelled) setIsFollowing(!!data);
     };
     checkFollow();
 
     const checkBlock = async () => {
       const { data } = await supabase.from('users').select('blocked_users').eq('id', currentUser.id).maybeSingle();
-      setIsBlocked((data?.blocked_users ?? []).includes(user.id));
+      if (!cancelled) setIsBlocked((data?.blocked_users ?? []).includes(viewedUserId));
     };
     checkBlock();
 
     const channel = supabase
-      .channel(`profile-follow-${currentUser.id}-${user.id}`)
+      .channel(`profile-follow-${currentUser.id}-${viewedUserId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'follows', filter: `follower_id=eq.${currentUser.id}` }, () => checkFollow())
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'users', filter: `id=eq.${currentUser.id}` }, () => checkBlock())
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
-  }, [currentUser, user?.id]);
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+    };
+  }, [currentUser?.id, user?.id]);
 
   const handleBlock = async () => {
     if (!currentUser || !user || currentUser.id === user.id) return;
@@ -894,6 +903,9 @@ export const Profile: React.FC = () => {
 
   useEffect(() => {
     if (!username || !currentUser) return;
+    // Fast navigation between profiles could let the previous username's lookup
+    // resolve last and render that profile under this URL.
+    let cancelled = false;
 
     const fetchUser = async () => {
       const { data, error } = await supabase
@@ -901,6 +913,7 @@ export const Profile: React.FC = () => {
         .select('*')
         .eq('username', username)
         .maybeSingle();
+      if (cancelled) return;
       if (error) { handleDbError(error, 'LIST', 'users'); return; }
       if (data) {
         setUser(data as User);
@@ -923,8 +936,11 @@ export const Profile: React.FC = () => {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'users', filter: `username=eq.${username}` }, () => fetchUser())
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
-  }, [username, currentUser]);
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+    };
+  }, [username, currentUser?.id]);
 
   const profileColor = user?.custom_accent || '#FF0000';
 

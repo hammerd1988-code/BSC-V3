@@ -67,17 +67,24 @@ export const Search: React.FC = () => {
   };
 
   useEffect(() => {
+    // The debounce only delays the request; a slower earlier query could still
+    // resolve last and replace the current query's results.
+    let cancelled = false;
     const timer = setTimeout(async () => {
       if (searchQuery) {
         setIsSearching(true);
         const filtered = await performSearch(searchQuery);
+        if (cancelled) return;
         setResults(filtered);
         setIsSearching(false);
       } else {
         setResults([]);
       }
     }, 300);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [searchQuery]);
 
   const handleSelect = (result: SearchResult) => {
