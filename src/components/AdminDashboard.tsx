@@ -125,7 +125,10 @@ export const AdminDashboard: React.FC = () => {
     fetchStats();
 
     return () => { supabase.removeChannel(channel); };
-  }, [currentUser, navigate]);
+    // Keyed on the fields this actually reads. AuthContext hands back a new
+    // `currentUser` object for any change to that row, and depending on the
+    // object re-ran all four fetches and rebuilt the realtime channel each time.
+  }, [currentUser?.id, currentUser?.role, navigate]);
 
   const handleUpdateUser = async (e: React.FormEvent) => {
     e.preventDefault();

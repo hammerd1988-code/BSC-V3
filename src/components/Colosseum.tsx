@@ -6294,7 +6294,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiator_temporary_titles' }, () => void fetchBounties())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [currentUser, fetchBounties]);
+  }, [currentUser?.id, fetchBounties]);
 
   useEffect(() => {
     const channel = supabase
