@@ -11,7 +11,7 @@
  * 4. Storage bucket exists
  */
 
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
 const supabaseServiceKeyRaw = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
@@ -36,6 +36,29 @@ if (!apiKey) {
 }
 
 const supabase = createClient(supabaseUrl, apiKey);
+
+/**
+ * A second, deliberately unprivileged client. The RLS probe needs to ask the
+ * database what an anonymous visitor can read, which the service-role client
+ * can never answer because it bypasses RLS entirely.
+ */
+const anonClient: SupabaseClient | null = supabaseAnonKey
+  ? createClient(supabaseUrl, supabaseAnonKey)
+  : null;
+
+/** PostgREST reports an unknown relation differently across versions. */
+function isMissingRelation(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  if (error.code === '42P01' || error.code === 'PGRST205' || error.code === 'PGRST204') return true;
+  return /could not find the table|does not exist/i.test(error.message ?? '');
+}
+
+/** Refused by a GRANT or by a policy, as opposed to "there is no such table". */
+function isAccessDenied(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  if (error.code === '42501') return true;
+  return /permission denied|row-level security/i.test(error.message ?? '');
+}
 
 const REQUIRED_TABLES = [
   // Core social graph and feed
@@ -100,70 +123,116 @@ const REQUIRED_TABLES = [
 
 async function verifyConnection(): Promise<boolean> {
   console.log('\n[1/4] Verifying database connection...');
-  try {
-    const { error } = await supabase.from('users').select('id').limit(1);
-    if (error && !error.message.includes('0 rows')) {
-      throw error;
-    }
-    console.log('  ✓ Database connection successful');
-    return true;
-  } catch (error) {
-    console.error('  ✗ Database connection failed:', error);
+  const { error } = await supabase.from('users').select('id').limit(1);
+  if (error) {
+    console.error(`  ✗ Database connection failed: ${error.message}`);
     return false;
   }
+  console.log('  ✓ Database connection successful');
+  return true;
 }
 
-async function verifyTables(): Promise<{ found: string[]; missing: string[] }> {
+async function verifyTables(): Promise<{ found: string[]; missing: string[]; denied: string[] }> {
   console.log('\n[2/4] Verifying required tables...');
   const found: string[] = [];
   const missing: string[] = [];
+  const denied: string[] = [];
 
   for (const table of REQUIRED_TABLES) {
-    try {
-      const { error } = await supabase.from(table).select('*').limit(0);
-      if (error) {
-        missing.push(table);
-        console.log(`  ✗ ${table} - NOT FOUND or access denied`);
-      } else {
-        found.push(table);
-        console.log(`  ✓ ${table}`);
-      }
-    } catch {
+    const { error } = await supabase.from(table).select('*').limit(0);
+    if (!error) {
+      found.push(table);
+      console.log(`  ✓ ${table}`);
+    } else if (isAccessDenied(error)) {
+      // The table is there; this key just cannot read it. Reporting it as
+      // missing sent people off to re-run migrations that were already applied.
+      denied.push(table);
+      console.log(`  ⚠ ${table} - exists but this key is not allowed to read it`);
+    } else if (isMissingRelation(error)) {
       missing.push(table);
-      console.log(`  ✗ ${table} - ERROR`);
+      console.log(`  ✗ ${table} - NOT FOUND`);
+    } else {
+      missing.push(table);
+      console.log(`  ✗ ${table} - ${error.message}`);
     }
   }
 
-  return { found, missing };
+  return { found, missing, denied };
 }
 
+/**
+ * Tables an anonymous visitor must never be able to read a row out of. Read-only
+ * on purpose: probing with a write would put junk in whatever database this is
+ * pointed at, and production is a realistic target for this script.
+ */
+const ANON_MUST_NOT_READ = [
+  'transactions',
+  'notifications',
+  'transmits',
+  'casper_activity_log',
+  'bot_api_keys',
+];
+
+/**
+ * Asks the database what anonymous callers can actually read, rather than
+ * asserting something about a migration file.
+ *
+ * A leak is conclusive on its own. "No rows returned" only proves something when
+ * the table is not simply empty, so the privileged client counts the rows first
+ * and an empty table is reported as inconclusive instead of as a pass.
+ */
 async function verifyRLS(): Promise<boolean> {
-  console.log('\n[3/4] Verifying RLS policies...');
-  
-  if (!hasUsableServiceKey) {
-    console.log('  ⚠ Skipping RLS verification (requires service role key)');
+  console.log('\n[3/4] Verifying RLS on tables that must stay private...');
+
+  if (!anonClient) {
+    console.log('  ⚠ Cannot verify: no anon/publishable key available to probe with');
     return true;
   }
 
-  try {
-    // Query pg_tables to check RLS status
-    const { data, error } = await supabase.rpc('get_tables_with_rls_status').select('*');
-    
+  let leaked = false;
+  let conclusive = 0;
+
+  for (const table of ANON_MUST_NOT_READ) {
+    const { data, error } = await anonClient.from(table).select('*').limit(1);
+
+    if (isMissingRelation(error)) {
+      console.log(`  ⚠ ${table} - table not present, skipped`);
+      continue;
+    }
+    if (isAccessDenied(error)) {
+      console.log(`  ✓ ${table} - anon access refused`);
+      conclusive++;
+      continue;
+    }
     if (error) {
-      // If the function doesn't exist, we'll check another way
-      console.log('  ⚠ RLS status check not available via RPC');
-      console.log('  ✓ RLS is enabled in migration file (0001_init.sql)');
-      return true;
+      console.log(`  ⚠ ${table} - probe failed: ${error.message}`);
+      continue;
     }
-    
-    if (data) {
-      console.log('  ✓ RLS verification complete');
+    if ((data?.length ?? 0) > 0) {
+      console.log(`  ✗ ${table} - LEAK: anonymous callers can read rows`);
+      leaked = true;
+      continue;
     }
-    return true;
-  } catch {
-    console.log('  ✓ RLS is configured in migration file');
-    return true;
+
+    // Empty result. Distinguish "RLS filtered every row" from "table is empty".
+    if (!hasUsableServiceKey) {
+      console.log(`  ⚠ ${table} - anon read returned no rows (inconclusive without a service role key)`);
+      continue;
+    }
+    const { count } = await supabase.from(table).select('*', { count: 'exact', head: true });
+    if ((count ?? 0) > 0) {
+      console.log(`  ✓ ${table} - ${count} row(s) present, none visible to anon`);
+      conclusive++;
+    } else {
+      console.log(`  ⚠ ${table} - table is empty, cannot tell RLS from emptiness`);
+    }
   }
+
+  if (leaked) return false;
+  if (conclusive === 0) {
+    console.log('  ⚠ RLS could not be confirmed for any table (nothing to read)');
+  }
+  return true;
 }
 
 async function verifyStorage(): Promise<boolean> {
@@ -214,17 +283,17 @@ async function main() {
     process.exit(1);
   }
 
-  const { found, missing } = await verifyTables();
-  await verifyRLS();
-  await verifyStorage();
+  const { found, missing, denied } = await verifyTables();
+  const rlsOk = await verifyRLS();
+  const storageOk = await verifyStorage();
 
   console.log('\n═══════════════════════════════════════════════════════════');
   console.log('  Summary');
   console.log('═══════════════════════════════════════════════════════════');
-  console.log(`\nTables: ${found.length}/${REQUIRED_TABLES.length} found`);
-  
+  console.log(`\nTables: ${found.length}/${REQUIRED_TABLES.length} readable, ${denied.length} present but unreadable, ${missing.length} missing`);
+
   if (missing.length > 0) {
-    console.log(`\n⚠ Missing tables: ${missing.join(', ')}`);
+    console.log(`\n✗ Missing tables: ${missing.join(', ')}`);
     console.log('\nTo create missing tables, run the migration:');
     console.log('  npx supabase db push');
     console.log('  OR apply the full supabase/migrations directory in order, including the latest complete feature schema migration.');
@@ -232,7 +301,23 @@ async function main() {
     console.log('\n✓ All required tables are present');
   }
 
+  if (denied.length > 0) {
+    console.log(`\n⚠ Not readable with this key (expected when running with the anon key): ${denied.join(', ')}`);
+  }
+
   console.log('\n═══════════════════════════════════════════════════════════\n');
+
+  // Exit non-zero so callers and CI can act on the result. Previously every
+  // check returned true and the process always exited 0, which meant a database
+  // with missing tables or a public `transactions` table still "passed".
+  if (missing.length > 0 || !rlsOk || !storageOk) {
+    console.log('❌ Database verification failed\n');
+    process.exit(1);
+  }
+  console.log('✅ Database verification passed\n');
 }
 
-main().catch(console.error);
+main().catch((error) => {
+  console.error('\n❌ Database verification crashed:', error);
+  process.exit(1);
+});
