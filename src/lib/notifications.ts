@@ -151,27 +151,58 @@ export async function subscribeCurrentUserToPush(userId: string): Promise<{ succ
     return { success: false, reason: 'Your session expired. Please sign in again.' };
   }
 
-  const existing = await registration.pushManager.getSubscription();
-  const subscription = existing ?? await registration.pushManager.subscribe({
-    userVisibleOnly: true,
-    applicationServerKey: urlBase64ToUint8Array(publicKey),
-  });
+  const applicationServerKey = urlBase64ToUint8Array(publicKey);
 
-  const response = await fetch('/api/push/subscribe', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ userId, subscription: subscription.toJSON() }),
-  });
+  // pushManager.subscribe() and fetch() both reject on failure. Everything else
+  // in this function reports back through `reason`, so letting those escape left
+  // the caller with an unhandled rejection and the user with no explanation.
+  try {
+    const existing = await registration.pushManager.getSubscription();
 
-  if (!response.ok) {
-    const message = await response.text();
-    return { success: false, reason: message || 'Server rejected the push subscription.' };
+    // A subscription is bound to the VAPID key it was created with. Reusing one
+    // that predates a key rotation gives the server an endpoint it can never
+    // deliver to, and nothing about it looks broken from here.
+    let subscription = existing;
+    if (subscription && !usesApplicationServerKey(subscription, applicationServerKey)) {
+      await subscription.unsubscribe();
+      subscription = null;
+    }
+    subscription ??= await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey,
+    });
+
+    const response = await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ userId, subscription: subscription.toJSON() }),
+    });
+
+    if (!response.ok) {
+      const message = await response.text();
+      return { success: false, reason: message || 'Server rejected the push subscription.' };
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.warn('[Notifications] Push subscription failed:', error);
+    const reason = error instanceof Error ? error.message : 'Could not subscribe to push notifications.';
+    return { success: false, reason };
   }
+}
 
-  return { success: true };
+function usesApplicationServerKey(subscription: PushSubscription, expected: Uint8Array): boolean {
+  const current = subscription.options?.applicationServerKey;
+  // Older implementations do not expose `options`; assume it still matches
+  // rather than churning a working subscription on every call.
+  if (!current) return true;
+
+  const bytes = new Uint8Array(current);
+  if (bytes.length !== expected.length) return false;
+  return bytes.every((byte, index) => byte === expected[index]);
 }
 
 export async function sendPushEvent(input: PushEventInput): Promise<void> {
