@@ -90,7 +90,7 @@ The cloud VM runs a fully local, self-contained stack: local Supabase (Docker) +
 3. **Backend** — `npx tsx --env-file=.env.local server.ts` (port 3001). `server.ts` does NOT load dotenv itself, so plain `npm run dev:full` will crash without env vars in the process environment — always use `--env-file=.env.local`.
 4. **Frontend** — `npm run dev` (Vite, port 3000; proxies `/api` and `/socket.io` to 3001). Browse the app at `http://localhost:3000` (this origin matches the local auth redirect allowlist; port 3001 does not).
 
-`.env.local` (gitignored, present on the VM) points at the local Supabase stack. Health check: `GET http://localhost:3000/api/health`.
+`.env.local` (gitignored, present on the VM) points at the local Supabase stack. If it is missing (e.g. after a fresh checkout), restore it with `cp ~/bsc-env-local-backup /workspace/.env.local`. Health check: `GET http://localhost:3000/api/health`.
 
 ### Local auth / test login (no Google OAuth needed locally)
 
