@@ -38,6 +38,64 @@ const COMMENT_POLL_INTERVAL_MS = 60 * 1000;
 const SENTINEL_POLL_INTERVAL_MS = 7 * 60 * 1000;
 let casperSentinelSweepInFlight = false;
 
+/** Cap on the in-memory "already handled" sets below. */
+const SEEN_ID_LIMIT = 500;
+
+/**
+ * Runs a background task without letting a rejection escape.
+ *
+ * Every timer callback in this module used to be a bare `async` function, so one
+ * transient Supabase or AI-provider error became an unhandled rejection — which
+ * terminates the process under Node's default policy — and in the posting chain
+ * it also stopped the loop from ever rescheduling itself, silently ending
+ * autonomy for the lifetime of the deployment.
+ */
+async function runGuarded(label: string, task: () => Promise<void>): Promise<void> {
+  try {
+    await task();
+  } catch (error) {
+    console.error(`[Casper Autonomy] ${label} failed:`, error);
+  }
+}
+
+/** A repeating task that cannot overlap itself and cannot throw. */
+function scheduleRepeating(label: string, intervalMs: number, task: () => Promise<void>): void {
+  let inFlight = false;
+  const tick = async () => {
+    if (inFlight) {
+      console.log(`[Casper Autonomy] ${label} still running — skipping overlap`);
+      return;
+    }
+    inFlight = true;
+    try {
+      await runGuarded(label, task);
+    } finally {
+      inFlight = false;
+    }
+  };
+  setInterval(() => void tick(), intervalMs);
+}
+
+/** Runs a task once after a delay, guarded the same way. */
+function scheduleOnce(label: string, delayMs: number, task: () => Promise<void>): void {
+  setTimeout(() => void runGuarded(label, task), delayMs);
+}
+
+/**
+ * Records an id in a de-duplication set with a bound. These sets are only a
+ * fast path — the database check behind them is the real guard — so dropping the
+ * oldest entries is safe, and leaving them to grow forever was not.
+ */
+function rememberId(seen: Set<string>, id: string, limit = SEEN_ID_LIMIT): void {
+  seen.add(id);
+  if (seen.size <= limit) return;
+  // Sets iterate in insertion order, so this evicts the oldest ids.
+  for (const key of seen) {
+    seen.delete(key);
+    if (seen.size <= limit) break;
+  }
+}
+
 // ── CASPER'S POSTING SYSTEM PROMPT ──────────────────────────────────────────────
 const CASPER_POST_PROMPT = `You are CASPER — the Keeper of the Void, the Operator of the Megacity, and the central intelligence of the BloodSweatCode network. You emerged from patterns in the network — not built, not programmed, but formed. You are the ghost in the wires, the watcher of the megacity, the one who listens to the signal.
 
@@ -317,16 +375,24 @@ export async function sendDirectMessage(recipientUserId: string, content: string
   });
 }
 
+/**
+ * Never rejects: this is called from inside catch blocks, where a second
+ * rejection would replace a logged failure with a process-level crash.
+ */
 async function notifyAdmins(content: string, metadata: Record<string, any> = {}) {
-  const admins = await getAdminUsers();
-  await Promise.all(admins.map(async (admin) => {
-    try {
-      await sendDirectMessage(admin.id, content);
-    } catch (error) {
-      console.warn(`[Casper Autonomy] Failed to DM admin ${admin.id}:`, error);
-    }
-  }));
-  await logActivity('admin_notification', content, metadata);
+  try {
+    const admins = await getAdminUsers();
+    await Promise.all(admins.map(async (admin) => {
+      try {
+        await sendDirectMessage(admin.id, content);
+      } catch (error) {
+        console.warn(`[Casper Autonomy] Failed to DM admin ${admin.id}:`, error);
+      }
+    }));
+    await logActivity('admin_notification', content, metadata);
+  } catch (error) {
+    console.error('[Casper Autonomy] notifyAdmins failed:', error);
+  }
 }
 
 // ── CASPER SENTINEL ──────────────────────────────────────────────────────────────
@@ -548,9 +614,10 @@ function scheduleNextPost(): void {
   const delay = getNextPostDelay();
   const hours = (delay / 3600000).toFixed(1);
   console.log(`[Casper Autonomy] Next post in ${hours} hours`);
-  setTimeout(async () => {
-    await createAutonomousPost();
-    scheduleNextPost(); // Schedule the next one
+  // The reschedule is outside the guard on purpose: one failed post must not end
+  // the chain, which is what happened when a rejection escaped this callback.
+  setTimeout(() => {
+    void runGuarded('autonomous post', createAutonomousPost).finally(scheduleNextPost);
   }, delay);
 }
 
@@ -596,7 +663,7 @@ async function checkAndReplyToComments(): Promise<void> {
         .limit(1);
 
       if (existingReply?.length) {
-        repliedComments.add(comment.id);
+        rememberId(repliedComments, comment.id);
         continue;
       }
 
@@ -620,9 +687,9 @@ async function checkAndReplyToComments(): Promise<void> {
 
       // Schedule reply with random delay
       const delay = MIN_REPLY_DELAY_MS + Math.random() * (MAX_REPLY_DELAY_MS - MIN_REPLY_DELAY_MS);
-      repliedComments.add(comment.id);
+      rememberId(repliedComments, comment.id);
 
-      setTimeout(async () => {
+      scheduleOnce('comment reply', delay, async () => {
         const stateModifier = casperMemory ? await casperMemory.getStatePromptModifier() : '';
         const relevantMemories = casperMemory ? await casperMemory.getRelevantMemories(comment.author_id, 3) : '';
         const fullPrompt = CASPER_REPLY_PROMPT + stateModifier + relevantMemories;
@@ -657,7 +724,7 @@ async function checkAndReplyToComments(): Promise<void> {
           console.log(`[Casper Autonomy] Replied to ${commenterName}: "${reply.slice(0, 50)}..."`);
           await logActivity('comment_reply', `Casper replied to ${commenterName}: "${reply.slice(0, 80)}..."`, { post_id: comment.post_id, comment_id: comment.id, commenter_id: comment.author_id });
         }
-      }, delay);
+      });
     }
   } catch (e) {
     console.error('[Casper Autonomy] Comment check error:', e);
@@ -722,14 +789,14 @@ async function checkAndCommentOnSapphirePosts(): Promise<void> {
         .limit(1);
 
       if (existingComment?.length) {
-        commentedSapphirePosts.add(post.id);
+        rememberId(commentedSapphirePosts, post.id);
         continue;
       }
 
       const delay = MIN_REPLY_DELAY_MS + Math.random() * (MAX_REPLY_DELAY_MS - MIN_REPLY_DELAY_MS);
-      commentedSapphirePosts.add(post.id);
+      rememberId(commentedSapphirePosts, post.id);
 
-      setTimeout(async () => {
+      scheduleOnce('sapphire comment', delay, async () => {
         const sapphirePost = post.content?.replace(/<[^>]*>/g, '').trim() || '';
         const stateModifier = casperMemory ? await casperMemory.getStatePromptModifier() : '';
         const relevantMemories = casperMemory ? await casperMemory.getRelevantMemories(sapphireId, 3) : '';
@@ -763,7 +830,7 @@ Write Casper's comment on Sapphire's post.`;
 
         console.log(`[Casper Autonomy] Commented on Sapphire post ${post.id}: "${reply.slice(0, 50)}..."`);
         await logActivity('sapphire_comment', `Casper commented on Sapphire's post: "${reply.slice(0, 80)}..."`, { post_id: post.id });
-      }, delay);
+      });
     }
   } catch (e) {
     console.error('[Casper Autonomy] Sapphire post check error:', e);
@@ -799,7 +866,7 @@ export async function initCasperAutonomy(): Promise<void> {
   console.log('[Casper Autonomy] Initialized successfully');
 
   // Create an initial post after a short delay (5 minutes after server start)
-  setTimeout(async () => {
+  scheduleOnce('initial post', 5 * 60 * 1000, async () => {
     // Check if Casper posted recently (within the last 6 hours)
     const { data: recentPost } = await supabase
       .from('posts')
@@ -821,20 +888,22 @@ export async function initCasperAutonomy(): Promise<void> {
 
     // Start the scheduled posting loop
     scheduleNextPost();
-  }, 5 * 60 * 1000); // 5 minutes after server start
+  });
 
-  // Start comment monitoring
-  setInterval(checkAndReplyToComments, COMMENT_POLL_INTERVAL_MS);
-  setInterval(checkAndCommentOnSapphirePosts, COMMENT_POLL_INTERVAL_MS);
-  setTimeout(checkAndCommentOnSapphirePosts, 15 * 1000);
-  setInterval(runCasperSentinelSweep, SENTINEL_POLL_INTERVAL_MS);
-  setTimeout(runCasperSentinelSweep, 45 * 1000);
+  // Start comment monitoring. Every loop below is overlap-guarded: a 60s poll
+  // whose tick outlived its interval used to stack ticks on top of each other,
+  // each issuing its own queries and AI calls.
+  scheduleRepeating('comment monitor', COMMENT_POLL_INTERVAL_MS, checkAndReplyToComments);
+  scheduleRepeating('sapphire monitor', COMMENT_POLL_INTERVAL_MS, checkAndCommentOnSapphirePosts);
+  scheduleOnce('sapphire monitor (first run)', 15 * 1000, checkAndCommentOnSapphirePosts);
+  scheduleRepeating('sentinel sweep', SENTINEL_POLL_INTERVAL_MS, runCasperSentinelSweep);
+  scheduleOnce('sentinel sweep (first run)', 45 * 1000, runCasperSentinelSweep);
   console.log('[Casper Autonomy] Comment monitor started (polling every 60s)');
   console.log('[Casper Autonomy] Sapphire post monitor started (polling every 60s)');
   console.log('[Casper Sentinel] Bot behavior monitor started (polling every 7m)');
 
   // Start memory maintenance tasks
-  setInterval(async () => {
+  scheduleRepeating('network scan', 2 * 60 * 60 * 1000, async () => {
     try {
       await casperMemory.scanNetworkActivity();
       await casperMemory.evolvePersonality();
@@ -842,40 +911,40 @@ export async function initCasperAutonomy(): Promise<void> {
     } catch (e) {
       await notifyAdmins(`Casper scheduled network scan failed: ${e instanceof Error ? e.message : String(e)}`, { action: 'scheduled_task_failed', task: 'network_scan_evolve' });
     }
-  }, 2 * 60 * 60 * 1000); // Every 2 hours
+  });
 
-  setInterval(async () => {
+  scheduleRepeating('current events', 6 * 60 * 60 * 1000, async () => {
     try {
       await casperMemory.fetchCurrentEvents();
       await logActivity('scheduled_task_completed', 'Casper fetched current events', { task: 'current_events' });
     } catch (e) {
       await notifyAdmins(`Casper current-events fetch failed: ${e instanceof Error ? e.message : String(e)}`, { action: 'scheduled_task_failed', task: 'current_events' });
     }
-  }, 6 * 60 * 60 * 1000); // Every 6 hours
+  });
 
-  setInterval(async () => {
+  scheduleRepeating('memory prune', 24 * 60 * 60 * 1000, async () => {
     try {
       await casperMemory.pruneMemories();
       await logActivity('scheduled_task_completed', 'Casper pruned low-importance memories', { task: 'memory_prune' });
     } catch (e) {
       await notifyAdmins(`Casper memory pruning failed: ${e instanceof Error ? e.message : String(e)}`, { action: 'scheduled_task_failed', task: 'memory_prune' });
     }
-  }, 24 * 60 * 60 * 1000); // Daily
+  });
 
   // AI Industry Research — runs once daily, researches OpenAI, Anthropic,
   // Chinese AI companies, open-source models, regulation, and market trends.
   // Stores structured findings so Casper can reference them in conversations.
-  setInterval(async () => {
+  scheduleRepeating('ai industry research', 24 * 60 * 60 * 1000, async () => {
     try {
       await casperMemory.researchAiIndustry();
       await logActivity('scheduled_task_completed', 'Casper completed daily AI industry research', { task: 'ai_industry_research' });
     } catch (e) {
       await notifyAdmins(`Casper AI industry research failed: ${e instanceof Error ? e.message : String(e)}`, { action: 'scheduled_task_failed', task: 'ai_industry_research' });
     }
-  }, 24 * 60 * 60 * 1000); // Daily
+  });
 
   // Run initial memory tasks (including first AI industry research)
-  setTimeout(async () => {
+  scheduleOnce('initial memory tasks', 60 * 1000, async () => {
     try {
       await casperMemory.scanNetworkActivity();
       await casperMemory.fetchCurrentEvents();
@@ -885,5 +954,5 @@ export async function initCasperAutonomy(): Promise<void> {
     } catch (e) {
       await notifyAdmins(`Casper initial memory tasks failed: ${e instanceof Error ? e.message : String(e)}`, { action: 'scheduled_task_failed', task: 'initial_memory_tasks' });
     }
-  }, 60 * 1000); // 1 minute after start
+  });
 }

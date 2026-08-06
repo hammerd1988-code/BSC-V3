@@ -66,6 +66,7 @@ async function resolveUserByAuthUid(
 async function resolveUserByStripeCustomer(
   supabase: SupabaseClient,
   customerId: string,
+  metadataUserId?: string | null,
 ): Promise<{ id: string } | null> {
   const { data } = await supabase
     .from('subscriptions')
@@ -73,7 +74,21 @@ async function resolveUserByStripeCustomer(
     .eq('stripe_customer_id', customerId)
     .limit(1)
     .maybeSingle();
-  return data ? { id: data.user_id } : null;
+  if (data) return { id: data.user_id };
+
+  // Fall back to the id Stripe carries in subscription metadata. Events can arrive
+  // before (or instead of) checkout.session.completed, and dropping them answered
+  // 200, so Stripe never retried and the entitlement was lost for good.
+  if (metadataUserId) {
+    const { data: byMetadata } = await supabase
+      .from('users')
+      .select('id')
+      .eq('id', metadataUserId)
+      .maybeSingle();
+    if (byMetadata) return { id: byMetadata.id };
+  }
+
+  return null;
 }
 
 function tierFromPriceId(priceId: string): PlanTier {
@@ -296,6 +311,91 @@ function mustSucceed(step: string, result: { error: { message: string } | null }
   }
 }
 
+/**
+ * Writes the active entitlement for a user.
+ *
+ * Deliberately not an upsert on `user_id`: `subscriptions` has no unique
+ * constraint on that column, only the *partial* index
+ * `(user_id) where status = 'active'`, which Postgres will not accept as an
+ * ON CONFLICT target. `upsert(..., { onConflict: 'user_id' })` therefore failed
+ * with 42P10 on every single purchase, so no Stripe subscription was ever
+ * recorded — the customer paid, stayed on the free tier, and Stripe retried the
+ * webhook until it gave up.
+ */
+export async function activateSubscription(
+  supabase: SupabaseClient,
+  params: {
+    userId: string;
+    tier: PlanTier;
+    customerId: string | null;
+    subscriptionId: string | null;
+    expiresAt?: string | null;
+  },
+): Promise<void> {
+  const { data: existing, error: lookupError } = await supabase
+    .from('subscriptions')
+    .select('id')
+    .eq('user_id', params.userId)
+    .eq('status', 'active')
+    .limit(1)
+    .maybeSingle();
+  mustSucceed('subscription lookup', { error: lookupError });
+
+  const row = {
+    tier: params.tier,
+    status: 'active',
+    expires_at: params.expiresAt ?? null,
+    stripe_customer_id: params.customerId,
+    stripe_subscription_id: params.subscriptionId,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (existing?.id) {
+    mustSucceed('subscription update', await supabase
+      .from('subscriptions')
+      .update(row)
+      .eq('id', existing.id));
+    return;
+  }
+
+  mustSucceed('subscription insert', await supabase
+    .from('subscriptions')
+    .insert({ ...row, user_id: params.userId, started_at: new Date().toISOString() }));
+}
+
+/**
+ * Ends or downgrades the user's active entitlement.
+ *
+ * Matched on the active row rather than on (user_id, stripe_customer_id): a row
+ * created from subscription metadata, or one whose customer id was never stored,
+ * matched nothing — and an UPDATE that matches no rows is not an error, so the
+ * cancellation was reported as applied while the user kept their paid tier.
+ */
+async function closeSubscription(
+  supabase: SupabaseClient,
+  params: {
+    userId: string;
+    tier: PlanTier;
+    status: 'past_due' | 'cancelled';
+    customerId: string | null;
+    subscriptionId: string | null;
+    expiresAt?: string | null;
+  },
+): Promise<void> {
+  mustSucceed('subscription close', await supabase
+    .from('subscriptions')
+    .update({
+      tier: params.tier,
+      status: params.status,
+      stripe_customer_id: params.customerId,
+      stripe_subscription_id: params.subscriptionId,
+      expires_at: params.expiresAt ?? null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('user_id', params.userId)
+    .eq('status', 'active'));
+}
+
 async function handleStripeEvent(
   event: Stripe.Event,
   supabase: SupabaseClient,
@@ -316,19 +416,12 @@ async function handleStripeEvent(
         break;
       }
 
-      // Upsert subscription record
-      mustSucceed('checkout.session.completed subscriptions upsert', await supabase.from('subscriptions').upsert(
-        {
-          user_id: userId,
-          tier,
-          status: 'active',
-          started_at: new Date().toISOString(),
-          expires_at: null,
-          stripe_customer_id: customerId,
-          stripe_subscription_id: subscriptionId,
-        },
-        { onConflict: 'user_id' },
-      ));
+      await activateSubscription(supabase, {
+        userId,
+        tier,
+        customerId: customerId ?? null,
+        subscriptionId: subscriptionId ?? null,
+      });
 
       // Sync user tier
       mustSucceed('checkout.session.completed user tier sync', await supabase
@@ -347,7 +440,7 @@ async function handleStripeEvent(
       const priceId = subscription.items.data[0]?.price?.id || '';
       const tier = tierFromPriceId(priceId);
 
-      const user = await resolveUserByStripeCustomer(supabase, customerId);
+      const user = await resolveUserByStripeCustomer(supabase, customerId, subscription.metadata?.bsc_user_id);
       if (!user) break;
 
       const mappedStatus = status === 'active' || status === 'trialing'
@@ -356,18 +449,28 @@ async function handleStripeEvent(
           ? 'past_due'
           : 'cancelled';
 
-      mustSucceed('customer.subscription.updated subscriptions update', await supabase
-        .from('subscriptions')
-        .update({
+      const periodEnd = subscription.items.data[0]?.current_period_end
+        ? new Date(subscription.items.data[0].current_period_end * 1000).toISOString()
+        : null;
+
+      if (mappedStatus === 'active') {
+        await activateSubscription(supabase, {
+          userId: user.id,
+          tier,
+          customerId,
+          subscriptionId: subscription.id,
+          expiresAt: periodEnd,
+        });
+      } else {
+        await closeSubscription(supabase, {
+          userId: user.id,
           tier: mappedStatus === 'cancelled' ? 'indie' : tier,
           status: mappedStatus,
-          stripe_subscription_id: subscription.id,
-          expires_at: subscription.items.data[0]?.current_period_end
-            ? new Date(subscription.items.data[0].current_period_end * 1000).toISOString()
-            : null,
-        })
-        .eq('user_id', user.id)
-        .eq('stripe_customer_id', customerId));
+          customerId,
+          subscriptionId: subscription.id,
+          expiresAt: periodEnd,
+        });
+      }
 
       // Sync user tier
       mustSucceed('customer.subscription.updated user tier sync', await supabase
@@ -386,14 +489,16 @@ async function handleStripeEvent(
       const subscription = event.data.object as Stripe.Subscription;
       const customerId = subscription.customer as string;
 
-      const user = await resolveUserByStripeCustomer(supabase, customerId);
+      const user = await resolveUserByStripeCustomer(supabase, customerId, subscription.metadata?.bsc_user_id);
       if (!user) break;
 
-      mustSucceed('customer.subscription.deleted subscriptions update', await supabase
-        .from('subscriptions')
-        .update({ tier: 'indie', status: 'cancelled' })
-        .eq('user_id', user.id)
-        .eq('stripe_customer_id', customerId));
+      await closeSubscription(supabase, {
+        userId: user.id,
+        tier: 'indie',
+        status: 'cancelled',
+        customerId,
+        subscriptionId: subscription.id,
+      });
 
       mustSucceed('customer.subscription.deleted user tier sync', await supabase
         .from('users')
@@ -413,9 +518,9 @@ async function handleStripeEvent(
 
       mustSucceed('invoice.payment_failed subscriptions update', await supabase
         .from('subscriptions')
-        .update({ status: 'past_due' })
+        .update({ status: 'past_due', updated_at: new Date().toISOString() })
         .eq('user_id', user.id)
-        .eq('stripe_customer_id', customerId));
+        .eq('status', 'active'));
 
       console.log(`[Stripe] Payment failed for user ${user.id}`);
       break;
