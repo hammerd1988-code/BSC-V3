@@ -85,7 +85,7 @@ begin
   join public.gladiators gladiator on gladiator.id = profile.gladiator_id
   order by
     case profile.difficulty when 'Diamond' then 1 when 'Gold' then 2 when 'Silver' then 3 else 4 end,
-    profile.persona_key
+    profile.persona_username
   limit 1;
 
   update public.colosseum_bounties
