@@ -84,34 +84,51 @@ for each row execute function public.set_subscription_updated_at();
 -- Keep users.subscription_tier synced from active subscription rows. This is useful
 -- for fast feature checks in the client while the subscriptions table remains the
 -- source of truth for lifecycle/status metadata.
-create or replace function public.sync_user_subscription_tier()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  target_user_id text;
-  active_tier text;
+--
+-- Created only when absent rather than with `create or replace`. This file was
+-- renamed (it used to be 0023_subscriptions.sql, colliding with
+-- 0023_casper_control_center.sql), so the Supabase CLI sees a version it has no
+-- record of and re-applies it to any database that is already migrated. The tier
+-- vocabulary below is the pre-0040 one — free/pro/infinity — and re-running
+-- `create or replace` would roll 0040's rename back out, after which every
+-- subscription cancellation would write 'free' and fail
+-- users_subscription_tier_check.
+do $$
 begin
-  target_user_id := coalesce(new.user_id, old.user_id);
+  if to_regprocedure('public.sync_user_subscription_tier()') is null then
+    execute $fn$
+      create function public.sync_user_subscription_tier()
+      returns trigger
+      language plpgsql
+      security definer
+      set search_path = public
+      as $body$
+      declare
+        target_user_id text;
+        active_tier text;
+      begin
+        target_user_id := coalesce(new.user_id, old.user_id);
 
-  select s.tier into active_tier
-  from public.subscriptions s
-  where s.user_id = target_user_id
-    and s.status = 'active'
-    and (s.expires_at is null or s.expires_at > now())
-  order by
-    case s.tier when 'infinity' then 3 when 'pro' then 2 else 1 end desc,
-    s.started_at desc
-  limit 1;
+        select s.tier into active_tier
+        from public.subscriptions s
+        where s.user_id = target_user_id
+          and s.status = 'active'
+          and (s.expires_at is null or s.expires_at > now())
+        order by
+          case s.tier when 'infinity' then 3 when 'pro' then 2 else 1 end desc,
+          s.started_at desc
+        limit 1;
 
-  update public.users
-  set subscription_tier = coalesce(active_tier, 'free'),
-      updated_at = now()
-  where id = target_user_id;
+        update public.users
+        set subscription_tier = coalesce(active_tier, 'free'),
+            updated_at = now()
+        where id = target_user_id;
 
-  return coalesce(new, old);
+        return coalesce(new, old);
+      end;
+      $body$;
+    $fn$;
+  end if;
 end;
 $$;
 

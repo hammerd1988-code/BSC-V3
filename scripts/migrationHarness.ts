@@ -111,6 +111,128 @@ export function migrationFiles(): string[] {
     .sort();
 }
 
+export function readMigration(file: string): string {
+  return stripUnsupportedStatements(readFileSync(join(MIGRATIONS_DIR, file), 'utf8'));
+}
+
+/**
+ * The version the Supabase CLI records for a migration, i.e. the digits before
+ * the first underscore. Two files that share one are ambiguous: the CLI keys
+ * `supabase_migrations.schema_migrations` on it, so only one of them is ever
+ * marked applied.
+ */
+export function migrationVersion(file: string): string {
+  return file.split('_')[0];
+}
+
+export interface RevokedPrivilege {
+  file: string;
+  /** 'table' or 'function' — which has_*_privilege() to ask. */
+  kind: 'table' | 'function';
+  /** Object identity as Postgres accepts it, e.g. `public.f(text, integer)`. */
+  object: string;
+  privilege: string;
+  role: string;
+}
+
+const TABLE_PRIVILEGES = ['select', 'insert', 'update', 'delete'];
+
+interface PrivilegeStatement {
+  file: string;
+  granting: boolean;
+  kind: 'table' | 'function';
+  object: string;
+  privileges: string[];
+  roles: string[];
+}
+
+const PRIVILEGE_STATEMENT =
+  /\b(revoke|grant)\s+([\s\S]+?)\s+on\s+(?:(function|table)\s+)?([\s\S]+?)\s+(?:from|to)\s+([\s\S]+?);/gi;
+
+function privilegeStatements(): PrivilegeStatement[] {
+  const statements: PrivilegeStatement[] = [];
+
+  for (const file of migrationFiles()) {
+    const sql = readFileSync(join(MIGRATIONS_DIR, file), 'utf8');
+    for (const match of sql.matchAll(PRIVILEGE_STATEMENT)) {
+      const [, verb, rawPrivileges, rawKind, rawObject, rawRoles] = match;
+      const object = rawObject.replace(/\s+/g, ' ').trim();
+      // Skips column definitions that happen to contain the word (`revoked
+      // boolean not null`) and the bulk `... on all tables in schema public`
+      // form, which is never how a privileged object should become reachable.
+      if (!object.startsWith('public.')) continue;
+
+      const kind: 'table' | 'function' =
+        rawKind?.toLowerCase() === 'function' || object.includes('(') ? 'function' : 'table';
+      // `grant update (col, col) on t` narrows to named columns and leaves the
+      // table-level privilege alone, so it says nothing either way here.
+      if (kind === 'table' && rawPrivileges.includes('(')) continue;
+
+      const privileges = /\ball\b/i.test(rawPrivileges)
+        ? kind === 'function'
+          ? ['execute']
+          : TABLE_PRIVILEGES
+        : rawPrivileges
+            .split(',')
+            .map((privilege) => privilege.trim().toLowerCase())
+            .filter((privilege) => privilege.length > 0);
+
+      statements.push({
+        file,
+        granting: verb.toLowerCase() === 'grant',
+        kind,
+        object,
+        privileges,
+        roles: rawRoles.split(',').map((role) => role.trim().toLowerCase()),
+      });
+    }
+  }
+
+  return statements;
+}
+
+/**
+ * Replays the `grant`/`revoke` statements in the migration sources, in the order
+ * the CLI applies them, and reports the privileges that should end up withheld
+ * from anon and authenticated.
+ *
+ * Roughly a third of this schema's tables and SECURITY DEFINER functions are
+ * deliberately unreachable from those roles — gladiator API keys, CRED
+ * transfers, match resolution, tournament brackets. Nothing but the revoke
+ * statement itself expresses that, and a single
+ * `grant all on all tables in schema public` late in the chain silently undoes
+ * every one of them, so the test suite re-derives the list from here rather than
+ * from a hand-maintained copy. Bulk `on all tables in schema` grants are not
+ * treated as re-grants for the same reason.
+ *
+ * PUBLIC is skipped: `has_table_privilege()` takes a concrete role, and any
+ * privilege PUBLIC still carries shows up through anon and authenticated anyway.
+ */
+export function revokedPrivileges(): RevokedPrivilege[] {
+  const outcome = new Map<string, RevokedPrivilege & { granting: boolean }>();
+
+  for (const statement of privilegeStatements()) {
+    for (const role of statement.roles) {
+      if (role !== 'anon' && role !== 'authenticated') continue;
+      for (const privilege of statement.privileges) {
+        const key = `${statement.kind}|${statement.object}|${privilege}|${role}`;
+        outcome.set(key, {
+          file: statement.file,
+          granting: statement.granting,
+          kind: statement.kind,
+          object: statement.object,
+          privilege,
+          role,
+        });
+      }
+    }
+  }
+
+  return [...outcome.values()]
+    .filter((entry) => !entry.granting)
+    .map(({ granting: _granting, ...entry }) => entry);
+}
+
 export interface MigrationFailure {
   file: string;
   message: string;
@@ -141,7 +263,7 @@ export async function applyMigrations(
   const failures: MigrationFailure[] = [];
 
   for (const file of migrationFiles()) {
-    const sql = stripUnsupportedStatements(readFileSync(join(MIGRATIONS_DIR, file), 'utf8'));
+    const sql = readMigration(file);
     try {
       await db.exec(sql);
       onResult?.(file, null);
