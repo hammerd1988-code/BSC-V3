@@ -1,21 +1,17 @@
 /*
-  Lightweight auth-flow smoke tests for callback and next-route safety.
+  Auth-flow smoke test for callback and next-route safety.
   Run with: npm run verify:auth
+
+  This exercises the *shipping* implementation in src/lib/authRedirect.ts. It
+  used to define its own, weaker copy of normalizeNext (no origin check, no
+  OAuth-param stripping) and assert against that, so it passed no matter what
+  the app actually did. The exhaustive cases live in
+  src/lib/authRedirect.test.ts; this stays as a dependency-free command.
 */
 
-function normalizeNext(value: string | null | undefined): string {
-  if (!value) return '/';
-  if (!value.startsWith('/')) return '/';
-  if (value.startsWith('//')) return '/';
-  if (value.startsWith('/auth/callback')) return '/';
-  return value;
-}
+import { buildAuthReturnUrl, normalizeNextPath } from '../src/lib/authRedirect';
 
-function buildCallbackUrl(origin: string, next: string): string {
-  const callbackUrl = new URL('/', origin);
-  callbackUrl.searchParams.set('next', normalizeNext(next));
-  return callbackUrl.toString();
-}
+const ORIGIN = 'http://localhost:3000';
 
 function assertEqual(name: string, actual: string, expected: string): void {
   if (actual !== expected) {
@@ -31,24 +27,25 @@ function run(): void {
     ['external absolute url blocked', 'https://evil.example/steal', '/'],
     ['javascript scheme blocked', 'javascript:alert(1)', '/'],
     ['protocol-relative blocked', '//evil.example/steal', '/'],
+    ['backslash host blocked', '/\\evil.example/steal', '/'],
     ['callback loop blocked', '/auth/callback?next=/marketplace', '/'],
+    ['traversal into callback blocked', '/feed/../auth/callback', '/'],
+    ['oauth params stripped', '/feed?code=abc123', '/'],
   ];
 
   for (const [name, input, expected] of tests) {
-    assertEqual(name, normalizeNext(input), expected);
+    assertEqual(name, normalizeNextPath(input, ORIGIN), expected);
   }
 
-  const callback = buildCallbackUrl('http://localhost:3000', '/marketplace');
   assertEqual(
-    'callback url with safe next',
-    callback,
+    'return url with safe next',
+    buildAuthReturnUrl(ORIGIN, '/marketplace'),
     'http://localhost:3000/?next=%2Fmarketplace',
   );
 
-  const callbackBlocked = buildCallbackUrl('http://localhost:3000', 'https://evil.example');
   assertEqual(
-    'callback url with blocked next',
-    callbackBlocked,
+    'return url with blocked next',
+    buildAuthReturnUrl(ORIGIN, 'https://evil.example'),
     'http://localhost:3000/?next=%2F',
   );
 

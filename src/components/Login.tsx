@@ -3,6 +3,7 @@ import { supabase } from '../supabase';
 import type { Session, AuthError } from '@supabase/supabase-js';
 import { Loader2, Mail, CheckCircle2, ArrowRight, Activity, Lock, Swords, Radio, Coins } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { buildAuthReturnUrl, normalizeNextPath } from '../lib/authRedirect';
 
 function mapAuthErrorMessage(message: string): string {
   if (/provider is not enabled|unsupported provider/i.test(message)) {
@@ -71,28 +72,10 @@ export const Login: React.FC = () => {
   const [emailSent, setEmailSent] = React.useState(false);
   const [emailError, setEmailError] = React.useState<string | null>(null);
 
-  const normalizeNext = React.useCallback((value: string | null | undefined): string => {
-    if (!value) return '/';
-    if (!value.startsWith('/')) return '/';
-    if (value.startsWith('//')) return '/';
-    if (value.startsWith('/auth/callback')) return '/';
-
-    try {
-      const parsed = new URL(value, window.location.origin);
-      if (parsed.origin !== window.location.origin) return '/';
-
-      // Never carry OAuth protocol params into in-app next routes.
-      const oauthParams = ['code', 'state', 'error', 'error_code', 'error_description'];
-      if (oauthParams.some((k) => parsed.searchParams.has(k))) {
-        return '/';
-      }
-
-      const query = parsed.searchParams.toString();
-      return `${parsed.pathname}${query ? `?${query}` : ''}`;
-    } catch {
-      return '/';
-    }
-  }, []);
+  const normalizeNext = React.useCallback(
+    (value: string | null | undefined): string => normalizeNextPath(value, window.location.origin),
+    [],
+  );
 
   React.useEffect(() => {
     const queryParams = new URLSearchParams(window.location.search);
@@ -198,16 +181,14 @@ export const Login: React.FC = () => {
     setIsLoggingIn(true);
     setAuthAction(mode);
     try {
-      const destination = normalizeNext(nextTargetRef.current);
       // Use root as OAuth return path so deployments without SPA rewrites
       // still complete auth and can finalize from the OAuth code query param.
-      const callbackUrl = new URL('/', window.location.origin);
-      callbackUrl.searchParams.set('next', destination);
+      const callbackUrl = buildAuthReturnUrl(window.location.origin, nextTargetRef.current);
 
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: callbackUrl.toString(),
+          redirectTo: callbackUrl,
           scopes: 'openid email profile',
           queryParams: {
             prompt: mode === 'signup' ? 'consent select_account' : 'select_account',
@@ -245,14 +226,12 @@ export const Login: React.FC = () => {
     setAuthAction('magic');
 
     try {
-      const destination = normalizeNext(nextTargetRef.current);
-      const redirectTo = new URL('/', window.location.origin);
-      redirectTo.searchParams.set('next', destination);
+      const redirectTo = buildAuthReturnUrl(window.location.origin, nextTargetRef.current);
 
       const { error } = await supabase.auth.signInWithOtp({
         email: email.trim(),
         options: {
-          emailRedirectTo: redirectTo.toString(),
+          emailRedirectTo: redirectTo,
           shouldCreateUser: true,
         },
       });
