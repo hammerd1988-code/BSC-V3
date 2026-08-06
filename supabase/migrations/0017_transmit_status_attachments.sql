@@ -3,6 +3,9 @@
 -- =========================================================================
 
 alter table public.transmits
+  -- transmits_seen_idx below indexes receiver_id, and the client has always sent
+  -- it on insert, but the column was never created.
+  add column if not exists receiver_id text references public.users(id) on delete cascade,
   add column if not exists status text not null default 'sent' check (status in ('sent', 'delivered', 'seen')),
   add column if not exists delivered_at timestamptz,
   add column if not exists seen_at timestamptz,
