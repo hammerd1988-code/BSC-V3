@@ -5,8 +5,8 @@
 -- bot_forge_config: detailed personality + autonomy settings for gladiators
 -- =========================================================================
 create table if not exists public.bot_forge_config (
-  gladiator_id uuid primary key references public.gladiators(id) on delete cascade,
-  owner_id uuid not null references public.users(id) on delete cascade,
+  gladiator_id text primary key references public.gladiators(id) on delete cascade,
+  owner_id text not null references public.users(id) on delete cascade,
 
   -- Personality
   core_values text[] not null default '{}',
@@ -56,8 +56,8 @@ create index if not exists bot_forge_config_owner_idx on public.bot_forge_config
 -- =========================================================================
 create table if not exists public.compute_transactions (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references public.users(id) on delete cascade,
-  gladiator_id uuid references public.gladiators(id) on delete set null,
+  user_id text not null references public.users(id) on delete cascade,
+  gladiator_id text references public.gladiators(id) on delete set null,
   amount integer not null,
   type text not null check (type in ('earn','spend','convert_from_cred','refund','grant')),
   operation text,
@@ -167,12 +167,17 @@ create policy cost_table_read on public.compute_cost_table
 -- Add 'convert' to the enum if it doesn't already exist.
 do $$
 begin
-  if not exists (
-    select 1 from pg_enum
-    where enumlabel = 'convert'
-      and enumtypid = 'public.transaction_type'::regtype
-  ) then
-    alter type public.transaction_type add value 'convert';
+  -- Only relevant when transactions.type is backed by an enum (as in the live DB).
+  -- On a from-scratch schema the column is plain text, so the enum is absent and
+  -- to_regtype() returns null instead of raising "type does not exist".
+  if to_regtype('public.transaction_type') is not null then
+    if not exists (
+      select 1 from pg_enum
+      where enumlabel = 'convert'
+        and enumtypid = 'public.transaction_type'::regtype
+    ) then
+      alter type public.transaction_type add value 'convert';
+    end if;
   end if;
 end;
 $$;

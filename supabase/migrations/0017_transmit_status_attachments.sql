@@ -24,7 +24,7 @@ set
 where read_at is not null or delivered_at is not null or seen_at is not null;
 
 create index if not exists transmits_status_idx on public.transmits (transmission_id, status, created_at);
-create index if not exists transmits_seen_idx on public.transmits (receiver_id, seen_at) where seen_at is null;
+create index if not exists transmits_seen_idx on public.transmits (transmission_id, seen_at) where seen_at is null;
 
 -- Ensure the existing public media bucket can support DM attachments. This is
 -- intentionally public because the current app already stores post media there
