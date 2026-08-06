@@ -1006,19 +1006,28 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     });
 
     // ---- Post/Like/Comment events ----
+    //
+    // These fan out to every connected client as toasts. They carry no authority
+    // and touch no data, but an unregistered socket could previously spray the
+    // whole platform with invented activity, so they need a verified session
+    // behind them at least.
     socket.on('post:create', (post) => {
+      if (!verifiedUserId()) return;
       socket.broadcast.emit('activity:notification', { type: 'post', data: post });
     });
 
     socket.on('post:like', (likeData) => {
+      if (!verifiedUserId()) return;
       socket.broadcast.emit('activity:notification', { type: 'like', data: likeData });
     });
 
     socket.on('post:comment', (commentData) => {
+      if (!verifiedUserId()) return;
       socket.broadcast.emit('activity:notification', { type: 'comment', data: commentData });
     });
 
     socket.on('user:follow', (data) => {
+      if (!verifiedUserId()) return;
       socket.broadcast.emit('activity:notification', {
         type: 'follow',
         data: {
