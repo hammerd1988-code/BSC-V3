@@ -41,5 +41,8 @@ jobs:
       - name: Test
         run: npm run test:run
 
+      - name: Test Casper SSH mobile
+        run: npm run test:mobile
+
       - name: Build
         run: npm run build

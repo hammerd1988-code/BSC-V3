@@ -108,7 +108,7 @@ The cloud VM runs a fully local, self-contained stack: local Supabase (Docker) +
 ### Lint / test / build
 
 - `npm run lint` (tsc), `npm run test:run` (Vitest), `npm run build` — see README/CLAUDE.md for the full command list.
-- Known pre-existing failure: `packages/casper-ssh-mobile/src/storage/hosts.test.ts` fails to load (its tsconfig extends `expo/tsconfig.base`, and that package's deps are not installed at the root). All other suites pass.
+- `npm run test:run` covers the root app only (`src/`, `shared/`, `supabase/`, root `*.test.ts`). Tests inside `packages/*` are separate installs: run `npm --prefix packages/casper-ssh-mobile ci --include=dev` once, then `npm run test:mobile`. Same split as `npm run lint` vs `npm run lint:mobile`.
 - Server-side AI, LiveKit, Square/Stripe, and push features degrade gracefully without keys; the backend logs which providers are disabled at boot.
 
 ## Custom Agents
