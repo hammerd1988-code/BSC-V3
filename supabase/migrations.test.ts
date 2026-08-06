@@ -163,6 +163,28 @@ describe('supabase migrations', () => {
     expect(stillGranted).toEqual([]);
   });
 
+  /**
+   * Postgres checks the column grant before it evaluates RLS, so 0038's
+   * `for select to anon using (true)` policy on gladiators did nothing until anon
+   * was granted the same non-secret columns authenticated has. Both halves have
+   * to stay true: the display columns readable, api_key not.
+   */
+  it.each(['anon', 'authenticated'])('lets %s read gladiator display columns but not api_key', async (role) => {
+    const readable = await db.query<{ ok: boolean }>(
+      `select bool_and(has_column_privilege($1, 'public.gladiators', column_name, 'select')) as ok
+         from unnest(array['id','user_id','name','avatar_url','personality','stats','glow_color',
+                           'wins','losses','cred','created_at','model','api_base_url']) as column_name`,
+      [role],
+    );
+    expect(readable.rows[0]?.ok).toBe(true);
+
+    const secret = await db.query<{ ok: boolean }>(
+      `select has_column_privilege($1, 'public.gladiators', 'api_key', 'select') as ok`,
+      [role],
+    );
+    expect(secret.rows[0]?.ok).toBe(false);
+  });
+
   it('gives every migration a version prefix of its own', () => {
     const byVersion = new Map<string, string[]>();
     for (const file of migrationFiles()) {
