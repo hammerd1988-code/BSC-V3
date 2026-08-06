@@ -1,33 +1,13 @@
 // @vitest-environment node
+/**
+ * The address-range checks themselves live in outboundUrl.test.ts, which covers
+ * the shared guard. What matters here is that the dispatcher still routes
+ * through it, and with the settings webhooks need: plain http to a public host
+ * stays allowed, because subscribers registered those endpoints before the
+ * guard existed.
+ */
 import { describe, expect, it } from 'vitest';
-import { assertDispatchableWebhookUrl, isPrivateAddress } from './webhookDispatcher';
-
-describe('isPrivateAddress', () => {
-  it('recognises the ranges a webhook must not reach', () => {
-    for (const address of [
-      '127.0.0.1',
-      '0.0.0.0',
-      '10.1.2.3',
-      '172.16.0.1',
-      '172.31.255.255',
-      '192.168.1.1',
-      '169.254.169.254', // cloud instance metadata
-      '100.64.0.1',
-      '::1',
-      'fe80::1',
-      'fd00::1',
-      '::ffff:127.0.0.1',
-    ]) {
-      expect(isPrivateAddress(address), address).toBe(true);
-    }
-  });
-
-  it('leaves public addresses alone', () => {
-    for (const address of ['1.1.1.1', '8.8.8.8', '172.32.0.1', '192.169.0.1', '2606:4700::1111']) {
-      expect(isPrivateAddress(address), address).toBe(false);
-    }
-  });
-});
+import { assertDispatchableWebhookUrl } from './webhookDispatcher';
 
 describe('assertDispatchableWebhookUrl', () => {
   it('rejects a literal private address', async () => {
@@ -45,11 +25,12 @@ describe('assertDispatchableWebhookUrl', () => {
   });
 
   it('rejects schemes that are not http(s)', async () => {
-    await expect(assertDispatchableWebhookUrl('file:///etc/passwd')).rejects.toThrow(/unsupported webhook scheme/i);
+    await expect(assertDispatchableWebhookUrl('file:///etc/passwd')).rejects.toThrow(/unsupported webhook URL scheme/i);
     await expect(assertDispatchableWebhookUrl('not a url')).rejects.toThrow(/invalid webhook URL/i);
   });
 
-  it('allows a public literal address', async () => {
+  it('keeps plain http to a public host working', async () => {
+    await expect(assertDispatchableWebhookUrl('http://1.1.1.1/hook')).resolves.toBeInstanceOf(URL);
     await expect(assertDispatchableWebhookUrl('https://1.1.1.1/hook')).resolves.toBeInstanceOf(URL);
   });
 });
