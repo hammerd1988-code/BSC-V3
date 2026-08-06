@@ -859,6 +859,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     });
 
     on('workspace:asset:create', (data) => {
+      if (!data?.asset) return;
       const key = workspaceKey(data);
       const state = getWorkspaceState(key);
       state.assets = [data.asset, ...state.assets.filter((asset) => asset?.id !== data.asset?.id)].slice(0, 40);
@@ -866,6 +867,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     });
 
     on('workspace:checkpoint:create', (data) => {
+      if (!data?.checkpoint) return;
       const key = workspaceKey(data);
       const state = getWorkspaceState(key);
       state.checkpoints = [data.checkpoint, ...state.checkpoints.filter((checkpoint) => checkpoint?.id !== data.checkpoint?.id)].slice(0, 30);
@@ -873,6 +875,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     });
 
     on('workspace:checkpoint:resolve', (data) => {
+      if (!data?.checkpointId) return;
       const key = workspaceKey(data);
       const state = getWorkspaceState(key);
       state.checkpoints = state.checkpoints.map((checkpoint) => checkpoint?.id === data.checkpointId ? { ...checkpoint, status: data.status } : checkpoint);
@@ -880,6 +883,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     });
 
     on('workspace:activity', (data) => {
+      if (!data?.activity) return;
       const key = workspaceKey(data);
       const state = getWorkspaceState(key);
       state.activity = [data.activity, ...state.activity.filter((item) => item?.id !== data.activity?.id)].slice(0, 40);

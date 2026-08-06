@@ -654,7 +654,13 @@ async function runBattle(
   console.log(`${LOG_PREFIX} Battle complete: ${winner.username} defeated ${loser.username} (${winner.username} feels ${winnerRel.sentiment} toward ${loser.username}, ${loser.username} feels ${loserRel.sentiment} toward ${winner.username})`);
 
   await postBattleBrag(winner, loser, matchId, challengeType);
-  setTimeout(() => postBattleReaction(loser, winner, matchId, challengeType), jitter(30_000));
+  // Nothing awaits this callback, so a failed AI call or insert 30 seconds after
+  // a battle would surface as an unhandled rejection and end the process.
+  setTimeout(() => {
+    postBattleReaction(loser, winner, matchId, challengeType).catch((e) =>
+      console.warn(`${LOG_PREFIX} delayed battle reaction failed:`, e),
+    );
+  }, jitter(30_000));
 
   return { ok: true, matchId, winner, loser };
 }
