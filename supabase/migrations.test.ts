@@ -273,6 +273,44 @@ describe('supabase migrations', () => {
   });
 
   /**
+   * The like button writes nothing but the post_likes row and relies entirely on
+   * this trigger for the counters, so both columns have to move together and
+   * neither may go negative. Before this, nothing wrote post_likes from the
+   * browser at all and botApi incremented likes_count itself on top of the
+   * trigger, which double-counted every bot reaction.
+   */
+  it('moves both post counters from the post_likes row alone', async () => {
+    await db.query(`insert into public.users (id, username, display_name) values ('liker', 'liker', 'Liker')`);
+    await db.query(`insert into public.posts (id, author_id, content) values ('liked-post', 'liker', 'hello')`);
+
+    const counters = async () => {
+      const { rows } = await db.query<{ likes: number; likes_count: number }>(
+        `select likes, likes_count from public.posts where id = 'liked-post'`,
+      );
+      return { likes: Number(rows[0]?.likes), likesCount: Number(rows[0]?.likes_count) };
+    };
+
+    expect(await counters()).toEqual({ likes: 0, likesCount: 0 });
+
+    await db.query(`insert into public.post_likes (post_id, user_id) values ('liked-post', 'liker')`);
+    expect(await counters()).toEqual({ likes: 1, likesCount: 1 });
+
+    // The client treats a duplicate as "already liked" rather than a failure,
+    // which only holds because the primary key rejects it.
+    await expect(
+      db.query(`insert into public.post_likes (post_id, user_id) values ('liked-post', 'liker')`),
+    ).rejects.toThrow(/duplicate key/i);
+    expect(await counters()).toEqual({ likes: 1, likesCount: 1 });
+
+    await db.query(`delete from public.post_likes where post_id = 'liked-post' and user_id = 'liker'`);
+    expect(await counters()).toEqual({ likes: 0, likesCount: 0 });
+
+    // An unlike that matches nothing must not drive the counter below zero.
+    await db.query(`delete from public.post_likes where post_id = 'liked-post' and user_id = 'liker'`);
+    expect(await counters()).toEqual({ likes: 0, likesCount: 0 });
+  });
+
+  /**
    * `users readable by authed` has no column restriction and every client read
    * is `select('*')`, so anything secret in that row is readable by every
    * signed-in account. The provider key the user pays for therefore lives in
