@@ -78,6 +78,50 @@ return () => { supabase.removeChannel(channel); };
 - **DO NOT** use camelCase in SQL or database field names
 - **DO NOT** forget to handle RLS policy errors gracefully
 
+## Cloud / container dev environment
+
+The repo carries two scripts that bring up a fully local, self-contained stack (local
+Supabase in Docker + Express + Vite). No external secrets are needed for core development.
+
+| Script | Phase | What it does |
+|--------|-------|--------------|
+| `scripts/cloud-agent-install.sh` | one-time | Installs Docker + the Supabase CLI, `npm ci` at the root and in `packages/casper-ssh-mobile`, and seeds `.env.local` from `scripts/cloud-agent.env.local`. |
+| `scripts/cloud-agent-start.sh` | every boot | Starts `dockerd`, brings up `supabase start`, and waits for the API gateway to answer. Recreates the stack once if a snapshot left stale containers behind. |
+
+Local endpoints once `cloud-agent-start.sh` returns: API `http://127.0.0.1:54321`,
+Postgres `127.0.0.1:5432` (postgres/postgres), Studio `127.0.0.1:54323`,
+Mailpit `http://127.0.0.1:54324`.
+
+- `server.ts` does not load dotenv itself, so run it as
+  `npx tsx --env-file=.env.local server.ts`.
+- Browse the app at `http://localhost:3000`; that origin is in the local auth redirect
+  allowlist and `:3001` is not.
+- Sign in locally with the **magic link** form and read the mail in Mailpit. GoTrue falls
+  back to `site_url`, so rewrite the link's `redirect_to` to
+  `http://localhost:3000/auth/callback` and open it in the browser that requested it (the
+  PKCE verifier is in that browser's localStorage).
+- `npm run db:reset` replays `supabase/migrations/` from scratch and works — the chain is
+  covered by `supabase/migrations.test.ts`, which applies it to PGlite in CI. `npm run
+  db:push` targets the linked **remote** project; don't run it unless you mean to migrate
+  production.
+- Do not commit `supabase/.branches/` or `supabase/.temp/` (both are gitignored).
+
+## Verification
+
+`.github/workflows/ci.yml` runs exactly these, and all four pass on a clean checkout:
+
+```bash
+npm ci --include=dev
+npm --prefix packages/casper-ssh-mobile ci --include=dev   # required before test:run
+npm run lint          # tsc --noEmit
+npm run lint:mobile
+npm run test:run      # vitest, includes the PGlite migration chain test
+npm run build
+```
+
+`packages/casper-cli` and `packages/desktop` have their own tsconfigs and are **not**
+covered by `npm run lint`.
+
 ## Custom Agents
 
 - [.agent.md](.agent.md) - Specialized Supabase development agent
