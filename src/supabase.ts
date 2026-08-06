@@ -8,8 +8,14 @@ const productionUrl = 'https://kxfhxrdrlvnvtzdeuvwb.supabase.co';
 const productionPublishableKey = 'sb_publishable_xCCZOJtesOfHR_EOvBCjHA_gWy-Sb9A';
 
 // Port the Supabase CLI serves the local API on when config.toml declares no
-// [api] section, which is what `supabase start` gives this repo.
+// [api] section, which is what `supabase start` gives this repo. The key is the
+// CLI's fixed demo anon token: it is public, identical on every machine, and
+// only valid against a local instance using the default JWT secret.
 const localUrl = 'http://127.0.0.1:54321';
+const localAnonKey =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9' +
+  '.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9' +
+  '.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0';
 
 const configuredUrl =
   import.meta.env.VITE_SUPABASE_URL ||
@@ -32,7 +38,7 @@ const configuredKey =
 // only changes the dev server.
 const usingFallback = !configuredUrl || !configuredKey;
 const url = configuredUrl || (import.meta.env.PROD ? productionUrl : localUrl);
-const key = configuredKey || (import.meta.env.PROD ? productionPublishableKey : '');
+const key = configuredKey || (import.meta.env.PROD ? productionPublishableKey : localAnonKey);
 
 if (usingFallback && !import.meta.env.PROD) {
   console.error(
