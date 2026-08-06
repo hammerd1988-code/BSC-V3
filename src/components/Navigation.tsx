@@ -104,7 +104,9 @@ export const Navigation: React.FC = () => {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [currentUser]);
+    // Only the id is read here; depending on the whole profile tore this channel
+    // down and refetched on every realtime update to the user's row.
+  }, [currentUser?.id]);
 
   useEffect(() => {
     const requests = Array.isArray(currentUser?.friend_requests) ? currentUser.friend_requests : [];
@@ -161,7 +163,7 @@ export const Navigation: React.FC = () => {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   const markAllNotificationsRead = async () => {
     if (!currentUser || notifUnread === 0) return;

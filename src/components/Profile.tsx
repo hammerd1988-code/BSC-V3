@@ -593,14 +593,28 @@ export const Profile: React.FC = () => {
     if (!user || !currentUser || user.id === currentUser.id) return;
     try {
       if (isFollowing) {
-        await supabase.from('follows').delete().eq('follower_id', currentUser.id).eq('following_id', user.id);
+        // The counters only move when the edge actually moved. Supabase returns
+        // errors rather than throwing, so an ignored result meant a rejected write
+        // still bumped followers_count — the counts drifted away from the graph,
+        // and a double-click inflated them twice over the primary key conflict.
+        const { error: unfollowError } = await supabase
+          .from('follows')
+          .delete()
+          .eq('follower_id', currentUser.id)
+          .eq('following_id', user.id);
+        if (unfollowError) throw unfollowError;
+
         await Promise.all([
           supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: -1 }),
           supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'followers_count', p_amount: -1 }),
         ]);
         setIsFollowing(false);
       } else {
-        await supabase.from('follows').insert({ follower_id: currentUser.id, following_id: user.id, created_at: new Date().toISOString() });
+        const { error: followError } = await supabase
+          .from('follows')
+          .insert({ follower_id: currentUser.id, following_id: user.id, created_at: new Date().toISOString() });
+        if (followError) throw followError;
+
         await Promise.all([
           supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: 1 }),
           supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'followers_count', p_amount: 1 }),

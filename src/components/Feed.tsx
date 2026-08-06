@@ -365,6 +365,10 @@ export const Feed: React.FC = () => {
   });
   const realtimeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { currentUser } = useAuth();
+  // A stable dependency for the block list. The profile object is replaced on
+  // every realtime update to the user's row (CRED, view_count, streak, ...), so
+  // depending on it reloaded the whole feed underneath the reader.
+  const blockedKey = (currentUser?.blocked_users ?? []).join(',');
 
   // Real-time state
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -453,7 +457,7 @@ export const Feed: React.FC = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transmissions' }, () => fetchUnread())
       .subscribe();
     return () => { supabase.removeChannel(txChannel); };
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   useEffect(() => {
     socket.on('activity:notification', (notification) => {
@@ -505,7 +509,7 @@ export const Feed: React.FC = () => {
     setLoading(false);
     setHasMore(rows.length >= PAGE_SIZE);
     setCursor(rows.length > 0 ? rows[rows.length - 1].created_at : null);
-  }, [currentUser]);
+  }, [currentUser?.id, blockedKey]);
 
   // Cursor-based: load next page
   const fetchMorePosts = useCallback(async () => {
@@ -528,7 +532,7 @@ export const Feed: React.FC = () => {
     setHasMore(rows.length >= PAGE_SIZE);
     setCursor(rows.length > 0 ? rows[rows.length - 1].created_at : null);
     setIsLoadingMore(false);
-  }, [currentUser, cursor, isLoadingMore, hasMore]);
+  }, [currentUser?.id, blockedKey, cursor, isLoadingMore, hasMore]);
 
   useEffect(() => {
     fetchInitialPosts();
