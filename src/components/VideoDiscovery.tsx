@@ -89,7 +89,7 @@ export const VideoDiscovery: React.FC = () => {
   const openVideo = async (video: VideoRow) => {
     setSelectedVideo(video);
     setVideos((prev) => prev.map((item) => item.id === video.id ? { ...item, view_count: item.view_count + 1 } : item));
-    await supabase.rpc('increment_counter', { p_table: 'videos', p_id: video.id, p_field: 'view_count', p_amount: 1 });
+    await supabase.rpc('bump_public_counter', { p_table: 'videos', p_id: video.id, p_field: 'view_count', p_amount: 1 });
   };
 
   const renderVideoCard = (video: VideoRow, variant: 'short' | 'full') => (

@@ -112,7 +112,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
         if (entries[0].isIntersecting && !viewTracked.current) {
           viewTracked.current = true;
           setViewCount(v => v + 1);
-          supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'view_count', p_amount: 1 }).then();
+          supabase.rpc('bump_public_counter', { p_table: 'posts', p_id: post.id, p_field: 'view_count', p_amount: 1 }).then();
           observer.disconnect();
         }
       },
@@ -163,26 +163,25 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     noticeTimerRef.current = setTimeout(() => setNotice(null), 3000);
   };
 
+  /** supabase-js resolves with `{ error }`, so a Promise.all never rejected and
+   *  every one of these failures used to be invisible: the `is_boosted` write is
+   *  rejected by `posts_update_owner` on anyone else's post, and the CRED was
+   *  taken anyway. Both now run server-side in one transaction. */
   const handleBoost = async () => {
     if (!currentUser || post.is_boosted) return;
-    if (currentUser.role !== 'admin' && (currentUser.cred_balance || 0) < 50) {
-      showNotice('Insufficient CRED. You need 50 CRED to boost a post.');
-      return;
-    }
     setIsBoosting(true);
     try {
-      await Promise.all([
-        supabase.from('posts').update({ is_boosted: true }).eq('id', post.id),
-        supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'boosts', p_amount: 1 }),
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'cred_balance', p_amount: -50 }),
-        supabase.from('transactions').insert({
-          user_id: currentUser.id,
-          amount: 50,
-          type: 'spend',
-          description: 'Boosted a transmission',
-          created_at: new Date().toISOString(),
-        }),
-      ]);
+      const { data, error } = await supabase.rpc('boost_post', { p_post_id: post.id });
+      if (error) {
+        showNotice(
+          /insufficient_cred/.test(error.message)
+            ? 'Insufficient CRED. You need 50 CRED to boost a post.'
+            : 'Could not boost this transmission. Try again.',
+        );
+        return;
+      }
+      const result = data as { ok?: boolean; reason?: string } | null;
+      if (result?.reason === 'already_boosted') showNotice('This transmission is already boosted.');
     } catch (error) {
       handleDbError(error, 'UPDATE', `posts/${post.id}`);
     } finally {
@@ -192,29 +191,23 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
 
   const handleTip = async (e: React.FormEvent) => {
     e.preventDefault();
-    const amount = parseInt(tipAmount);
-    if (!amount || amount <= 0 || !currentUser || currentUser.id === post.author_id) return;
-    if (currentUser.role !== 'admin' && (currentUser.cred_balance || 0) < amount) {
-      showNotice(`Insufficient CRED. You need ${amount} CRED to tip this post.`);
-      return;
-    }
+    const amount = parseInt(tipAmount, 10);
+    if (!Number.isFinite(amount) || amount <= 0 || !currentUser || currentUser.id === post.author_id) return;
 
     try {
-      await Promise.all([
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'cred_balance', p_amount: -amount }),
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: post.author_id, p_field: 'cred_balance', p_amount: amount }),
-        supabase.from('transactions').insert([
-          { user_id: currentUser.id, amount, type: 'spend', description: 'Tipped post author for a transmission', created_at: new Date().toISOString() },
-          { user_id: post.author_id, amount, type: 'earn', description: `Tip from ${currentUser.username}`, created_at: new Date().toISOString() },
-        ]),
-        supabase.from('notifications').insert({
-          user_id: post.author_id,
-          type: 'tip',
-          payload: { amount, senderName: currentUser.display_name, senderUsername: currentUser.username, message: tipMessage, postId: post.id },
-          is_read: false,
-          created_at: new Date().toISOString(),
-        }),
-      ]);
+      const { error } = await supabase.rpc('tip_post', {
+        p_post_id: post.id,
+        p_amount: amount,
+        p_message: tipMessage,
+      });
+      if (error) {
+        showNotice(
+          /insufficient_cred/.test(error.message)
+            ? `Insufficient CRED. You need ${amount} CRED to tip this post.`
+            : 'Could not send that tip. Try again.',
+        );
+        return;
+      }
       setShowTipModal(false);
       setTipMessage('');
     } catch (error) {

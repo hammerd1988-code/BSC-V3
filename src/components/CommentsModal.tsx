@@ -143,7 +143,7 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
       onCommentCountChange?.(prev => prev + 1);
 
       // Increment comment count on the post
-      await supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'comments_count', p_amount: 1 });
+      await supabase.rpc('bump_public_counter', { p_table: 'posts', p_id: post.id, p_field: 'comments_count', p_amount: 1 });
 
       const senderName = currentUser.display_name || currentUser.username || 'Someone';
       const mentionedUsernames = extractMentionedUsernames(commentContent);
