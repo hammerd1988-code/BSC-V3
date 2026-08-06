@@ -750,7 +750,7 @@ export function BotChat() {
       const ttsUrl = isOpenAI ? '/api/tts' : '/api/tts/mimo';
       const ttsSpeed = isCasperVoice ? 1.05 : voiceMods.speed;
       setSpeaking(true);
-      fetch(ttsUrl, {
+      authedFetch(ttsUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: text.slice(0, 4096), voice: providerVoice, speed: ttsSpeed }),

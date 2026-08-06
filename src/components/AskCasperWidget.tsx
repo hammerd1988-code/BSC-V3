@@ -44,6 +44,7 @@ import { sendCasperCommand, type CasperSurface, type CasperToolCall } from '../l
 import { useAuth } from '../AuthContext';
 import { cn } from '../lib/utils';
 import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
+import { authedFetch } from '../lib/authSession';
 import {
   type CasperSurfaceContext,
   type CasperSurfaceAction,
@@ -390,7 +391,7 @@ export const AskCasperWidget: React.FC<AskCasperWidgetProps> = ({ open, onClose,
     stopTts();
     try {
       const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
-      const res = await fetch(`${serverUrl}/api/tts`, {
+      const res = await authedFetch(`${serverUrl}/api/tts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: text.slice(0, 4096), speed: 1.05 }),

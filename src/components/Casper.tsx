@@ -32,6 +32,7 @@ import {
 } from '../lib/casperIntegrations';
 import { useSubscription, type FeatureGateResult } from '../lib/subscription';
 import { UpgradePromptModal, UpgradeInlineCard } from './UpgradePrompt';
+import { authedFetch } from '../lib/authSession';
 
 interface Message {
   id: string;
@@ -1108,7 +1109,7 @@ export const Casper: React.FC = () => {
 
     try {
       const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
-      const response = await fetch(`${serverUrl}/api/tts`, {
+      const response = await authedFetch(`${serverUrl}/api/tts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, voice: 'onyx', speed: 1.05 }),
@@ -1285,7 +1286,7 @@ export const Casper: React.FC = () => {
         const formData = new FormData();
         formData.append('audio', audioBlob, 'recording.webm');
         const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
-        const response = await fetch(`${serverUrl}/api/transcribe`, { method: 'POST', body: formData });
+        const response = await authedFetch(`${serverUrl}/api/transcribe`, { method: 'POST', body: formData });
         if (response.ok) {
           const data = await response.json();
           transcript = (data.transcript || data.text || '').trim();

@@ -1,4 +1,5 @@
-import type { Express, RequestHandler } from 'express';
+import type { Express, Request, RequestHandler, Response } from 'express';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import multer from 'multer';
 import fs from 'fs';
 import { tmpdir } from 'os';
@@ -10,12 +11,36 @@ const OPENAI_TTS_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', '
 
 type WhisperProvider = { name: string; url: string; key: string; model: string };
 
+/**
+ * These routes spend money with OpenAI/Mimo/Whisper on every call, so they need a
+ * real Supabase session; the per-IP rate limiter alone left them open to anyone
+ * who could reach the host.
+ */
+async function requireSupabaseUser(req: Request, res: Response, supabase: SupabaseClient): Promise<boolean> {
+  const header = req.headers.authorization;
+  const token = typeof header === 'string' ? header.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() : null;
+  if (!token) {
+    res.status(401).json({ error: 'Missing Supabase session bearer token.' });
+    return false;
+  }
+
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data.user) {
+    res.status(401).json({ error: 'Invalid or expired Supabase session.' });
+    return false;
+  }
+
+  return true;
+}
+
 // Speech synthesis and transcription. Extracted from the server entrypoints so
 // the OpenAI, Mimo, and Whisper routes exist exactly once.
-export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler) {
+export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler, supabase: SupabaseClient) {
   // ── Text-to-Speech (OpenAI) ──
   app.post('/api/tts', aiRateLimit, async (req, res) => {
     try {
+      if (!(await requireSupabaseUser(req, res, supabase))) return;
+
       const { text, voice, speed } = req.body;
 
       if (!text || typeof text !== 'string') {
@@ -67,6 +92,8 @@ export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler) 
   // ── Text-to-Speech (Mimo) ──
   app.post('/api/tts/mimo', aiRateLimit, async (req, res) => {
     try {
+      if (!(await requireSupabaseUser(req, res, supabase))) return;
+
       const { text, voice, speed } = req.body;
 
       if (!text || typeof text !== 'string') {
@@ -153,6 +180,8 @@ export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler) 
   // ── Audio Transcription (Whisper) ──
   app.post('/api/transcribe', aiRateLimit, upload.single('audio'), async (req, res) => {
     try {
+      if (!(await requireSupabaseUser(req, res, supabase))) return;
+
       const file = req.file;
       if (!file) return res.status(400).json({ error: 'No audio file provided' });
 

@@ -18,12 +18,18 @@ export function initWebhookListener() {
   // Listen for new Comments (which might be replies to a bot's post)
   supabase.channel('bot-webhooks-comments')
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'comments' }, async (payload) => {
-      const comment = payload.new;
-      
-      // Get the post to see who the author is
-      const { data: post } = await supabase.from('posts').select('author_id').eq('id', comment.post_id).single();
-      if (post && post.author_id !== comment.author_id) {
-        dispatchWebhookEvent('comment', post.author_id, { comment, post_id: comment.post_id });
+      // Realtime callbacks have no caller to catch a rejection, so a transient
+      // query failure here would surface as an unhandled rejection.
+      try {
+        const comment = payload.new;
+
+        // Get the post to see who the author is
+        const { data: post } = await supabase.from('posts').select('author_id').eq('id', comment.post_id).maybeSingle();
+        if (post && post.author_id !== comment.author_id) {
+          await dispatchWebhookEvent('comment', post.author_id, { comment, post_id: comment.post_id });
+        }
+      } catch (error) {
+        console.error('[WebhookListener] comment dispatch failed:', error);
       }
     })
     .subscribe();
