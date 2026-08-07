@@ -30,6 +30,7 @@ export class NativeSshTransport implements SshTransport {
   private client: SSHClient | null = null;
   private readonly shellHandlers = new Set<Handler<string>>();
   private readonly rawShellHandlers = new Set<Handler<string>>();
+  private readonly shellErrorHandlers = new Set<Handler<string>>();
   private readonly progressHandlers = new Set<Handler<TransferProgress>>();
   hostKeyInfo?: HostKeyInfo;
 
@@ -68,6 +69,10 @@ export class NativeSshTransport implements SshTransport {
       const output = typeof value === 'string' ? value : String(value ?? '');
       if (output) this.rawShellHandlers.forEach((handler) => handler(output));
     });
+    this.client.on('ShellError', (value: unknown) => {
+      const error = typeof value === 'string' ? value : String(value ?? 'Shell output failed');
+      this.shellErrorHandlers.forEach((handler) => handler(error));
+    });
     this.client.on('DownloadProgress', (value: unknown) => {
       this.emitProgress('download', value);
     });
@@ -100,6 +105,11 @@ export class NativeSshTransport implements SshTransport {
   onRawShellOutput(handler: Handler<string>): () => void {
     this.rawShellHandlers.add(handler);
     return () => this.rawShellHandlers.delete(handler);
+  }
+
+  onShellError(handler: Handler<string>): () => void {
+    this.shellErrorHandlers.add(handler);
+    return () => this.shellErrorHandlers.delete(handler);
   }
 
   setPtySize(cols: number, rows: number, widthPx = 0, heightPx = 0): void {
