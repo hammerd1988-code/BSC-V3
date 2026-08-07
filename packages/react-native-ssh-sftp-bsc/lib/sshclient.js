@@ -181,13 +181,14 @@ export default class SSHClient {
      * @param event The native event to handle.
      */
     handleEvent(event) {
+        if (this._key !== event.key) return;
         if (event.name === NATIVE_EVENT_SHELL_ERROR) {
             this._activeStream.shell = false;
             this.unregisterNativeListener(NATIVE_EVENT_SHELL);
             this.unregisterNativeListener(NATIVE_EVENT_SHELL_RAW);
             this.unregisterNativeListener(NATIVE_EVENT_SHELL_ERROR);
         }
-        if (this._handlers[event.name] && this._key === event.key) {
+        if (this._handlers[event.name]) {
             this._handlers[event.name](event.value);
         }
     }
