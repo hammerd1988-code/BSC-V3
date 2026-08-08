@@ -3,6 +3,7 @@ const { RNSSHClient } = NativeModules;
 const RNSSHClientEmitter = new NativeEventEmitter(RNSSHClient);
 const NATIVE_EVENT_SHELL = 'Shell';
 const NATIVE_EVENT_SHELL_RAW = 'ShellRaw';
+const NATIVE_EVENT_SHELL_ERROR = 'ShellError';
 const NATIVE_EVENT_DOWNLOAD_PROGRESS = 'DownloadProgress';
 const NATIVE_EVENT_UPLOAD_PROGRESS = 'UploadProgress';
 /**
@@ -180,7 +181,14 @@ export default class SSHClient {
      * @param event The native event to handle.
      */
     handleEvent(event) {
-        if (this._handlers[event.name] && this._key === event.key) {
+        if (this._key !== event.key) return;
+        if (event.name === NATIVE_EVENT_SHELL_ERROR) {
+            this._activeStream.shell = false;
+            this.unregisterNativeListener(NATIVE_EVENT_SHELL);
+            this.unregisterNativeListener(NATIVE_EVENT_SHELL_RAW);
+            this.unregisterNativeListener(NATIVE_EVENT_SHELL_ERROR);
+        }
+        if (this._handlers[event.name]) {
             this._handlers[event.name](event.value);
         }
     }
@@ -280,6 +288,7 @@ export default class SSHClient {
         }
         return new Promise((resolve, reject) => {
             this.registerNativeListener(NATIVE_EVENT_SHELL);
+            this.registerNativeListener(NATIVE_EVENT_SHELL_ERROR);
             if (options?.rawOutput) this.registerNativeListener(NATIVE_EVENT_SHELL_RAW);
             const nativeCallback = (error, response) => {
                 if (shellCallback) {
@@ -340,6 +349,7 @@ export default class SSHClient {
     closeShell() {
         this.unregisterNativeListener(NATIVE_EVENT_SHELL);
         this.unregisterNativeListener(NATIVE_EVENT_SHELL_RAW);
+        this.unregisterNativeListener(NATIVE_EVENT_SHELL_ERROR);
         // TODO this should use a callback too
         RNSSHClient.closeShell(this._key);
         this._activeStream.shell = false;

@@ -370,7 +370,8 @@ export const Transmissions: React.FC = () => {
           .from('transmissions')
           .select('*')
           .contains('participant_ids', [currentUser.id])
-          .order('updated_at', { ascending: false });
+          .order('updated_at', { ascending: false })
+          .limit(50);
 
         if (fetchError) throw fetchError;
         
@@ -485,12 +486,13 @@ export const Transmissions: React.FC = () => {
           .from('transmits')
           .select('*')
           .eq('transmission_id', activeTransmissionId)
-          .order('created_at', { ascending: true });
+          .order('created_at', { ascending: false })
+          .limit(100);
 
         if (cancelled) return;
 
         if (fetchError) throw fetchError;
-        const rows = (data || []) as Transmit[];
+        const rows = ([...(data || [])] as Transmit[]).reverse();
 
         // Filter out already-expired burn messages
         const now = Date.now();
