@@ -359,5 +359,24 @@ end;
 $$;
 
 -- The CRED functions move money; keep them off the end-user roles.
+--
+-- anon and authenticated are named explicitly, not just covered by PUBLIC:
+-- Supabase's default privileges grant EXECUTE on new routines to both roles
+-- directly, and revoking only from PUBLIC leaves those direct grants in place.
+-- Every other privileged function in this schema (0047-0055) revokes from all
+-- three for that reason.
 revoke all on function public.increment_cred_balance(text, integer) from public;
 revoke all on function public.exchange_cred_for_tokens(text, integer, integer) from public;
+
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    revoke all on function public.increment_cred_balance(text, integer) from anon;
+    revoke all on function public.exchange_cred_for_tokens(text, integer, integer) from anon;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'authenticated') then
+    revoke all on function public.increment_cred_balance(text, integer) from authenticated;
+    revoke all on function public.exchange_cred_for_tokens(text, integer, integer) from authenticated;
+  end if;
+end;
+$$;
