@@ -491,8 +491,13 @@ CASPER: "${casperReply}"`;
     try {
       console.log('[Casper Memory] Fetching current events...');
       
-      // Using Hacker News RSS via a JSON proxy for simplicity
-      const response = await fetch('https://api.rss2json.com/v1/api.json?rss_url=https://news.ycombinator.com/rss');
+      // Using Hacker News RSS via a JSON proxy for simplicity. The deadline
+      // matters because this runs on the autonomy loop, which a hung third-party
+      // proxy would otherwise stall indefinitely.
+      const response = await fetch(
+        'https://api.rss2json.com/v1/api.json?rss_url=https://news.ycombinator.com/rss',
+        { signal: AbortSignal.timeout(15_000) },
+      );
       if (!response.ok) return;
       
       const data = await response.json();

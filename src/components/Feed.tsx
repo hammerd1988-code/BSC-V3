@@ -14,6 +14,7 @@ import { GenerateOptions, generateText } from '../lib/ai';
 import { AiSettings } from '../types';
 import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
+import { applyLikeToPosts, attachLikeState } from '../lib/postLikes';
 import { GoogleGenAI } from "@google/genai";
 import { BOT_PERSONAS } from '../lib/botPersonas';
 import { NeuralBriefing } from './NeuralBriefing';
@@ -394,7 +395,10 @@ export const Feed: React.FC = () => {
         const { data, error } = await supabase.from('posts').select('*').eq('id', postId).maybeSingle();
         if (cancelled) return;
         if (error) throw error;
-        if (data) setSharedPost(data as Post);
+        if (data) {
+          const [hydrated] = await attachLikeState([data as Post], currentUser?.id);
+          if (!cancelled) setSharedPost(hydrated);
+        }
       } catch (error) {
         if (!cancelled) console.error('Error fetching shared post:', error);
       } finally {
@@ -404,18 +408,22 @@ export const Feed: React.FC = () => {
     fetchSharedPost();
 
     return () => { cancelled = true; };
-  }, [searchParams]);
+  }, [searchParams, currentUser?.id]);
 
-  const handleLike = (id: string) => {
+  // PostCard has already written the like row by the time this runs; the lists
+  // only need to follow so the heart survives Virtuoso recycling a row.
+  const handleLike = (id: string, liked: boolean) => {
     if (!currentUser) return;
     const post = posts.find((p) => p.id === id)
       ?? recommendedPosts.find((p) => p.id === id)
       ?? (sharedPost?.id === id ? sharedPost : null);
-    socket.emit('post:like', {
-      postId: id,
-      author: currentUser,
-      postAuthorId: post?.author_id ?? null,
-    });
+
+    setPosts(prev => applyLikeToPosts(prev, id, liked));
+    setRecommendedPosts(prev => applyLikeToPosts(prev, id, liked));
+    setSharedPost(prev => (prev && prev.id === id ? applyLikeToPosts([prev], id, liked)[0] : prev));
+    // The server targets the notification at the post's author, so it has to be
+    // told who that is — without postAuthorId there is nobody to deliver to.
+    if (liked) socket.emit('post:like', { postId: id, author: currentUser, postAuthorId: post?.author_id ?? null });
   };
 
   const handleDeletePost = (id: string) => {
@@ -467,26 +475,32 @@ export const Feed: React.FC = () => {
   }, [currentUser?.id]);
 
   useEffect(() => {
-    socket.on('activity:notification', (notification) => {
-      const newNotification = { ...notification, id: Date.now() + '-' + Math.random().toString(36).substr(2, 9) };
+    const dismissTimers = new Set<ReturnType<typeof setTimeout>>();
+
+    const handleActivity = (notification: any) => {
+      const newNotification = { ...notification, id: Date.now() + '-' + Math.random().toString(36).slice(2, 11) };
       setNotifications(prev => [newNotification, ...prev].slice(0, 5));
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        dismissTimers.delete(timer);
         setNotifications(prev => prev.filter(n => n.id !== newNotification.id));
       }, 5000);
-    });
-
-    socket.on('crowds:update', (crowds) => {
-      setTopCrowds(crowds);
-    });
-
-    socket.on('stream:donation_received', ({ amount }) => {
+      dismissTimers.add(timer);
+    };
+    const handleCrowds = (crowds: any) => setTopCrowds(crowds);
+    const handleDonation = ({ amount }: { amount: number | string }) =>
       setTotalDonations(prev => prev + Number(amount));
-    });
+
+    socket.on('activity:notification', handleActivity);
+    socket.on('crowds:update', handleCrowds);
+    socket.on('stream:donation_received', handleDonation);
 
     return () => {
-      socket.off('activity:notification');
-      socket.off('crowds:update');
-      socket.off('stream:donation_received');
+      // By handler reference: a bare socket.off('event') drops every listener
+      // for that event, including any another component registered.
+      socket.off('activity:notification', handleActivity);
+      socket.off('crowds:update', handleCrowds);
+      socket.off('stream:donation_received', handleDonation);
+      for (const timer of dismissTimers) clearTimeout(timer);
     };
   }, []);
 
@@ -512,7 +526,7 @@ export const Feed: React.FC = () => {
         if (!a.is_boosted && b.is_boosted) return 1;
         return 0;
       });
-    setPosts(filtered);
+    setPosts(await attachLikeState(filtered, currentUser.id));
     setLoading(false);
     setHasMore(rows.length >= PAGE_SIZE);
     setCursor(rows.length > 0 ? rows[rows.length - 1].created_at : null);
@@ -530,7 +544,10 @@ export const Feed: React.FC = () => {
       .limit(PAGE_SIZE);
     if (error) { handleDbError(error, 'LIST', 'posts'); setIsLoadingMore(false); return; }
     const rows = (data ?? []) as Post[];
-    const filtered = rows.filter(p => !currentUser.blocked_users?.includes(p.author_id));
+    const filtered = await attachLikeState(
+      rows.filter(p => !currentUser.blocked_users?.includes(p.author_id)),
+      currentUser.id,
+    );
     setPosts(prev => {
       const existingIds = new Set(prev.map(p => p.id));
       const newPosts = filtered.filter(p => !existingIds.has(p.id));
@@ -574,7 +591,10 @@ export const Feed: React.FC = () => {
       supabase.removeChannel(channel);
       if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
     };
-  }, [fetchInitialPosts, currentUser]);
+    // Keyed on the id, not the object: AuthContext replaces `currentUser` on any
+    // change to that row (a profile view bumps view_count), and depending on the
+    // object tore this channel down and refetched the whole first page each time.
+  }, [fetchInitialPosts, currentUser?.id, blockedKey]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -673,7 +693,10 @@ export const Feed: React.FC = () => {
         .select('*, author:users!posts_author_id_fkey(*)')
         .order('created_at', { ascending: false })
         .limit(50);
-      filtered = ((pool ?? []) as Post[]).filter(p => !currentUser.blocked_users?.includes(p.author_id));
+      filtered = await attachLikeState(
+        ((pool ?? []) as Post[]).filter(p => !currentUser.blocked_users?.includes(p.author_id)),
+        currentUser.id,
+      );
 
       const postContents = filtered.slice(0, 5).map(p => p.content).join(' | ');
       const prompt = `You are a neural recommendation engine for the "Blood, Sweat, or Code" platform.

@@ -51,6 +51,7 @@ import { BOT_GLADIATOR_PROFILE_BY_USERNAME } from '../lib/botGladiatorProfiles';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
+import { applyLikeToPosts, attachLikeState } from '../lib/postLikes';
 import { v4 as uuidv4 } from 'uuid';
 
 import { EditProfileModal } from './EditProfileModal';
@@ -519,7 +520,7 @@ export const Profile: React.FC = () => {
         .eq('author_id', user.id)
         .order('created_at', { ascending: false });
       if (error) { handleDbError(error, 'LIST', 'posts'); return; }
-      setPosts((data ?? []) as Post[]);
+      setPosts(await attachLikeState((data ?? []) as Post[], currentUser?.id));
     };
     fetchPosts();
 
@@ -529,7 +530,7 @@ export const Profile: React.FC = () => {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [user?.id]);
+  }, [user?.id, currentUser?.id]);
 
   // Ended broadcasts (replays) hosted by this profile.
   useEffect(() => {
@@ -1873,7 +1874,7 @@ export const Profile: React.FC = () => {
                       <PostCard 
                         key={post.id} 
                         post={post} 
-                        onLike={() => {}} 
+                        onLike={(id, liked) => setPosts(prev => applyLikeToPosts(prev, id, liked))}
                         onDelete={(id) => setPosts(posts.filter(p => p.id !== id))}
                       />
                     ))}

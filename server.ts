@@ -37,7 +37,14 @@ import { registerServerAiRoutes } from './serverAi.js';
 import { registerColosseumRoutes } from './colosseumRoutes.js';
 import { initBotMayhemAutonomy, registerBotMayhemRoutes } from './botMayhemAutonomy.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
-import { registerCallRoom, releaseCallRoom } from './callRooms.js';
+import {
+  areCallPeers,
+  isCallRoomParticipant,
+  registerCallPeers,
+  registerCallRoom,
+  releaseCallPeers,
+  releaseCallRoom,
+} from './callRooms.js';
 import { registerCoBrowseSocket } from './casperCoBrowse.js';
 import { registerStripeRoutes } from './stripeRoutes.js';
 import { findCredPackageByPrice, totalCred } from './shared/credPackages.js';
@@ -1027,6 +1034,9 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
         // publish token to anyone else who learns or guesses the name.
         const roomName = typeof data?.roomName === 'string' ? data.roomName : '';
         if (roomName) registerCallRoom(roomName, [callerId, targetUserId]);
+        // Also recorded without the room name, because the signalling events
+        // that follow do not all carry one.
+        registerCallPeers(callerId, targetUserId);
 
         io.to(targetSocketId).emit('call:incoming', {
           callerId,
@@ -1043,54 +1053,79 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       });
     });
 
+    /**
+     * The peer id in these payloads is client-supplied, so on its own it let any
+     * socket answer someone else's call with its own SDP, push ICE candidates
+     * into a conversation it was not part of, or hang up a stranger's call.
+     * Resolve the socket's own verified id and require the two to be paired by a
+     * `call:initiate` that actually happened.
+     */
+    const callPeerSocket = (peerId: unknown): string | undefined => {
+      const selfId = verifiedUserId();
+      const otherId = typeof peerId === 'string' ? peerId : '';
+      if (!selfId || !otherId || !areCallPeers(selfId, otherId)) return undefined;
+      return connectedUsers.get(otherId);
+    };
+
     socket.on('call:accept', (data) => {
-      const targetSocketId = connectedUsers.get(data.callerId);
+      const targetSocketId = callPeerSocket(data?.callerId);
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:accepted', { answer: data.answer, roomName: data.roomName });
       }
     });
 
     socket.on('call:reject', (data) => {
-      const targetSocketId = connectedUsers.get(data.callerId);
+      const targetSocketId = callPeerSocket(data?.callerId);
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:rejected');
       }
+      const selfId = verifiedUserId();
+      if (selfId && typeof data?.callerId === 'string') releaseCallPeers(selfId, data.callerId);
     });
 
     socket.on('call:ice-candidate', (data) => {
-      const targetSocketId = connectedUsers.get(data.targetUserId);
+      const targetSocketId = callPeerSocket(data?.targetUserId);
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:ice-candidate', { candidate: data.candidate });
       }
     });
 
     socket.on('call:filter', (data) => {
-      const targetSocketId = connectedUsers.get(data.targetUserId);
+      const targetSocketId = callPeerSocket(data?.targetUserId);
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:filter', { filter: data.filter });
       }
     });
 
     socket.on('call:end', (data) => {
-      if (typeof data?.roomName === 'string' && data.roomName) releaseCallRoom(data.roomName);
-      const targetSocketId = connectedUsers.get(data.targetUserId);
+      const selfId = verifiedUserId();
+      const targetSocketId = callPeerSocket(data?.targetUserId);
+      // Releasing the room is what stops LiveKit minting more publish tokens for
+      // it, so only a participant may do it.
+      if (selfId && typeof data?.roomName === 'string' && data.roomName
+          && isCallRoomParticipant(data.roomName, selfId)) {
+        releaseCallRoom(data.roomName);
+      }
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:ended');
       }
+      if (selfId && typeof data?.targetUserId === 'string') releaseCallPeers(selfId, data.targetUserId);
     });
 
     // ---- Post/Like/Comment events ----
-    // Feed freshness comes from Supabase Realtime. Global socket.broadcast for
-    // every like/comment turns a viral post into an O(N sockets) event storm.
-    // Keep toast notifications targeted at the content owner / follow target.
+    //
+    // Feed freshness comes from Supabase Realtime, so these exist only to raise a
+    // toast. Broadcasting each one turned a viral post into an O(N sockets) event
+    // storm, and an unregistered socket could spray the whole platform with
+    // invented activity — so each is now delivered to the one account it concerns
+    // and requires a verified session behind it.
+    //
     // `post:create` has no single recipient, so there is nobody to target.
     // Echoing it back to the sender only toasts the author about their own post,
-    // and the feed already shows it via postgres_changes — so the event is
-    // deliberately not handled until there is a follower fan-out to send it to.
-    // Clients may keep emitting it; Socket.IO drops unhandled events.
+    // and the feed already shows it via postgres_changes, so the event is
+    // deliberately left unhandled until there is a follower fan-out to send it
+    // to. Clients may keep emitting it; Socket.IO drops unhandled events.
 
-    // Every remaining emitter requires a registered session: an unauthenticated
-    // socket must not be able to push invented activity at a chosen account.
     socket.on('post:like', (likeData) => {
       const actorId = verifiedUserId();
       if (!actorId) return;
