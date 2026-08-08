@@ -55,7 +55,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
-import { getValidSession } from '../lib/authSession';
+import { getValidSession, authedFetch } from '../lib/authSession';
 import { handleDbError } from '../lib/errors';
 import { cn } from '../lib/utils';
 import { BOT_GLADIATOR_PROFILE_BY_USERNAME, type BotDifficulty } from '../lib/botGladiatorProfiles';
@@ -1313,7 +1313,7 @@ async function casperAnnounce(text: string) {
     if (!text?.trim()) return;
     stopCasperAudio();
     const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
-    const response = await fetch(`${serverUrl}/api/tts`, {
+    const response = await authedFetch(`${serverUrl}/api/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, voice: 'onyx', speed: 1.05 }),
@@ -6202,7 +6202,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       return;
     }
     setGladiatorMutations((data ?? []) as GladiatorMutation[]);
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   const fetchRivalries = useCallback(async () => {
     if (!currentUser) {
@@ -6220,7 +6220,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       return;
     }
     setRivalries((data ?? []) as GladiatorRivalry[]);
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   useEffect(() => {
     void fetchArena();
@@ -6247,7 +6247,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       setBountyEntries([]);
       setTemporaryTitles(new Map());
     }
-  }, [currentUser, fetchBounties]);
+  }, [currentUser?.id, fetchBounties]);
 
   useEffect(() => {
     void fetchRivalries();
@@ -6267,12 +6267,22 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
 
   useEffect(() => {
     if (!currentUser) return undefined;
+    let arenaReloadTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleArenaReload = () => {
+      if (arenaReloadTimer) clearTimeout(arenaReloadTimer);
+      arenaReloadTimer = setTimeout(() => {
+        void fetchArena();
+      }, 750);
+    };
     const channel = supabase
       .channel('colosseum-arena')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiators' }, () => void fetchArena())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'matches' }, () => void fetchArena())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiators' }, scheduleArenaReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'matches' }, scheduleArenaReload)
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    return () => {
+      if (arenaReloadTimer) clearTimeout(arenaReloadTimer);
+      supabase.removeChannel(channel);
+    };
   }, [fetchArena]);
 
   useEffect(() => {
@@ -6320,7 +6330,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
       )
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [currentUser, fetchGladiatorMutations, trainingMode]);
+  }, [currentUser?.id, fetchGladiatorMutations, trainingMode]);
 
   const gladiatorById = useMemo(() => new Map(gladiators.map((gladiator) => [gladiator.id, gladiator])), [gladiators]);
   const myGladiators = useMemo(() => gladiators.filter((gladiator) => gladiator.user_id === currentUser?.id), [gladiators, currentUser?.id]);
@@ -6356,7 +6366,7 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
     });
     channel.subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [currentUser, fetchRivalries, rivalryOwnerKey]);
+  }, [currentUser?.id, fetchRivalries, rivalryOwnerKey]);
 
   const opponents = useMemo(() => gladiators.filter((gladiator) => gladiator.id !== selectedGladiatorId), [gladiators, selectedGladiatorId]);
   const botGladiators = useMemo(() => gladiators.filter((gladiator) => Boolean(gladiator.botProfile)).sort((a, b) => (b.botProfile?.speed_rating ?? 0) - (a.botProfile?.speed_rating ?? 0)), [gladiators]);

@@ -44,11 +44,21 @@ export const AdminDashboard: React.FC = () => {
     }
 
     const fetchUsers = async () => {
-      const { data, error } = await supabase.from('users').select('*');
+      const [{ data, error }, { count, error: countError }] = await Promise.all([
+        supabase
+          .from('users')
+          .select('id,username,display_name,avatar_url,role,type,email,created_at,followers_count,reputation_score,cred_balance,is_live,bio')
+          .order('created_at', { ascending: false })
+          .limit(200),
+        supabase.from('users').select('id', { count: 'exact', head: true }),
+      ]);
       if (error) { handleDbError(error, 'LIST', 'users'); setLoading(false); return; }
+      if (countError) {
+        console.warn('[AdminDashboard] User count unavailable', countError.message);
+      }
       const fetchedUsers = (data ?? []) as User[];
       setUsers(fetchedUsers);
-      setStats(prev => ({ ...prev, totalUsers: fetchedUsers.length }));
+      setStats(prev => ({ ...prev, totalUsers: count ?? fetchedUsers.length }));
       setLoading(false);
     };
 

@@ -1,0 +1,21 @@
+-- Superseded by 0065_increment_counter_allowlist.sql. Intentionally does nothing.
+--
+-- This file used to `create or replace function public.increment_counter(...)` to
+-- fix the original 0004 definition, which compared a text p_id directly against
+-- the target table's id column and so failed with `operator does not exist:
+-- uuid = text` for every uuid-keyed table (posts, videos, comments). 0065 carries
+-- that same id-type resolution and adds the (table, column) allowlist and the
+-- amount cap that keep a SECURITY DEFINER function from being an
+-- update-any-row-any-column primitive.
+--
+-- The body had to go, rather than just being left behind, because this file was
+-- renamed: it was 0059_increment_counter_id_type.sql, colliding with
+-- 0059_comments_owner_policies.sql. The Supabase CLI keys applied migrations on
+-- the version prefix, so 00591 is a version no existing database has a record of
+-- and it gets re-applied. Re-running a `create or replace` for a function that a
+-- later migration hardened silently reinstates the unrestricted version, which
+-- for this particular function means handing back the ability to write any
+-- numeric column of any row with RLS bypassed.
+--
+-- Leaving 0004's definition in place between here and 0065 is harmless: nothing
+-- calls increment_counter during a migration run.

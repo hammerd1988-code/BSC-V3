@@ -1991,11 +1991,19 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
         return res.status(409).json({ success: false, error: 'Neural Whisper already used for this gladiator in this battle' });
       }
 
-      const { error: updateError } = await supabase
+      // Claim the slot conditionally: two requests that both read an empty column
+      // would otherwise both write, spending one whisper twice per battle.
+      const { data: claimed, error: updateError } = await supabase
         .from('matches')
         .update({ [whisperCol]: trimmed })
-        .eq('id', matchId);
+        .eq('id', matchId)
+        .is(whisperCol, null)
+        .select('id')
+        .maybeSingle();
       if (updateError) throw updateError;
+      if (!claimed) {
+        return res.status(409).json({ success: false, error: 'Neural Whisper already used for this gladiator in this battle' });
+      }
 
       return res.json({ success: true, side, whisper: trimmed });
     } catch (error: any) {

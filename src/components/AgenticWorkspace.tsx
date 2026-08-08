@@ -482,6 +482,10 @@ export const AgenticWorkspace: React.FC<AgenticWorkspaceProps> = ({
 
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
+    // The server namespaces the workspace room by the socket's verified id, which
+    // only exists once registration completes — so join again when it does, or a
+    // socket that connected first would sit in an anonymous room of its own.
+    socket.on('user:registered', handleConnect);
     socket.on('workspace:state_snapshot', handleSnapshot);
     socket.on('workspace:asset_created', handleAsset);
     socket.on('workspace:checkpoint_created', handleCheckpoint);
@@ -494,6 +498,7 @@ export const AgenticWorkspace: React.FC<AgenticWorkspaceProps> = ({
     return () => {
       socket.off('connect', handleConnect);
       socket.off('disconnect', handleDisconnect);
+      socket.off('user:registered', handleConnect);
       socket.off('workspace:state_snapshot', handleSnapshot);
       socket.off('workspace:asset_created', handleAsset);
       socket.off('workspace:checkpoint_created', handleCheckpoint);

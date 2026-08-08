@@ -171,14 +171,11 @@ export const CallModal: React.FC<CallModalProps> = ({
     };
   }, [status]);
 
-  const normalizeRoomNamePart = (value: string) => value.replace(/[^A-Za-z0-9_-]/g, '-').replace(/-+/g, '-').slice(0, 48);
-
-  const createCallRoomName = () => {
-    const left = normalizeRoomNamePart(currentUser?.id || 'caller');
-    const right = normalizeRoomNamePart(targetUserId || incomingData?.callerId || 'callee');
-    const nonce = Date.now().toString(36);
-    return `call:${left}-${right}-${nonce}`;
-  };
+  // Random rather than `<callerId>-<calleeId>-<Date.now()>`: both ids are public
+  // and a millisecond timestamp is guessable, and the server checks the room name
+  // against the pair it recorded for the call, so a predictable name was the one
+  // thing standing between a stranger and a private call.
+  const createCallRoomName = () => `call:${crypto.randomUUID()}`;
 
   const detachRemoteAudio = () => {
     remoteAudioElementsRef.current.forEach((element) => {
@@ -293,16 +290,34 @@ export const CallModal: React.FC<CallModalProps> = ({
       setRemoteFilter(data.filter);
     };
 
+    // Without these the caller rang forever whenever the callee was not connected
+    // or the socket had no verified session to place the call with.
+    const handleUnavailable = () => {
+      setError('That user is not connected right now.');
+      setStatus(CallStatus.FAILED);
+      setTimeout(onClose, 3000);
+    };
+
+    const handleCallError = (data: any) => {
+      setError(data?.error || 'The call could not be placed.');
+      setStatus(CallStatus.FAILED);
+      setTimeout(onClose, 3000);
+    };
+
     socket.on('call:accepted', handleCallAccepted);
     socket.on('call:rejected', handleCallRejected);
     socket.on('call:ended', handleCallEnded);
     socket.on('call:filter', handleFilterChange);
+    socket.on('call:unavailable', handleUnavailable);
+    socket.on('call:error', handleCallError);
 
     return () => {
       socket.off('call:accepted', handleCallAccepted);
       socket.off('call:rejected', handleCallRejected);
       socket.off('call:ended', handleCallEnded);
       socket.off('call:filter', handleFilterChange);
+      socket.off('call:unavailable', handleUnavailable);
+      socket.off('call:error', handleCallError);
     };
   }, [onClose, currentUser?.id, videoEnabled]);
 
@@ -359,7 +374,8 @@ export const CallModal: React.FC<CallModalProps> = ({
 
   const endCall = () => {
     socket.emit('call:end', {
-      targetUserId: isIncoming ? incomingData?.callerId : targetUserId
+      targetUserId: isIncoming ? incomingData?.callerId : targetUserId,
+      roomName: callRoomNameRef.current,
     });
     setStatus(CallStatus.ENDED);
     cleanupCall();
