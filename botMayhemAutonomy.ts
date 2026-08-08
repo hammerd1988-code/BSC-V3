@@ -1727,6 +1727,14 @@ export function registerBotMayhemRoutes(app: import('express').Express, supabase
 
 // ── Init ───────────────────────────────────────────────────────────────────────
 export async function initBotMayhemAutonomy(): Promise<void> {
+  // Kill-switch for production traffic spikes. Set BOT_MAYHEM_ENABLED=false on
+  // Railway to stop autonomous bot posting/battles from competing with real
+  // users for the Node event loop and AI quota. Default remains enabled.
+  if (process.env.BOT_MAYHEM_ENABLED === 'false') {
+    console.warn(`${LOG_PREFIX} Disabled via BOT_MAYHEM_ENABLED=false`);
+    return;
+  }
+
   if (!(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL) || !(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY)) {
     console.warn(`${LOG_PREFIX} Missing Supabase credentials — Bot Mayhem disabled`);
     return;
