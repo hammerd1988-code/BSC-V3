@@ -502,9 +502,6 @@ export function registerCasperRelay(io: SocketServer, app: Express, supabase: Su
     supabase
       .from('casper_activity_log')
       .insert({
-        user_id: profile.id,
-        action: 'relay_directive',
-        details: { machine_id: conn.machine.machineId, source: directiveSource },
         action_type: 'relay_directive',
         description: `Remote directive → ${conn.machine.machineName}: ${command.slice(0, 200)}`,
         metadata: { machine_id: conn.machine.machineId, directive_id: directiveId, source: directiveSource },

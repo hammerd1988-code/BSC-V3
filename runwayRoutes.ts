@@ -2,6 +2,7 @@ import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { deflateSync } from 'node:zlib';
 import { generateImage as comfyGenerateImage, isComfyUIConfigured, comfyuiHealthCheck } from './comfyuiProvider.js';
+import { assertPublicHttpUrl } from './outboundUrl.js';
 
 type RunwayGenerationType = 'image' | 'video';
 type RunwayVideoDuration = 4 | 5 | 10;
@@ -152,12 +153,12 @@ async function loadAssetBody(assetUrl: string, allowedHttpHosts: ReadonlySet<str
   const dataUrl = dataUrlToBuffer(assetUrl);
   if (dataUrl) return dataUrl;
 
-  const parsed = new URL(assetUrl);
-  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && allowedHttpHosts.has(parsed.host))) {
-    throw new Error('Studio assets must be HTTPS URLs or local Studio data URLs.');
-  }
+  // Any https URL used to be accepted, so a caller could have the server fetch an
+  // internal service — or a public hostname pointed at a private address — and
+  // then publish the response to storage. Resolution happens inside the guard.
+  const parsed = await assertPublicHttpUrl(assetUrl, { allowedHttpHosts, label: 'Studio asset URL' });
 
-  const response = await fetch(parsed, { signal: AbortSignal.timeout(60000) });
+  const response = await fetch(parsed, { redirect: 'error', signal: AbortSignal.timeout(60000) });
   if (!response.ok) throw new Error(`Unable to fetch Studio asset (${response.status}).`);
   const contentType = response.headers.get('content-type') || 'application/octet-stream';
   const buffer = Buffer.from(await response.arrayBuffer());
@@ -306,6 +307,25 @@ async function resolveProfile(supabase: SupabaseClient, authUser: any) {
   return { id: authUser.id, subscription_tier: 'indie', role: 'user' };
 }
 
+/**
+ * Decides whether a generation fits in the plan's monthly allowance.
+ *
+ * checkFeatureAccess() used to hard-code `allowed: true`, which made the quota
+ * check on /api/runway/generate dead code: every tier had unlimited generations.
+ *
+ * A limit of null/undefined means unlimited; 0 means the tier does not include
+ * the feature at all, which the caller answers with 402 rather than 429.
+ */
+export function evaluateFeatureQuota(
+  used: number,
+  limit: number | null | undefined,
+): { allowed: boolean; reason: 'tier' | 'limit' | null } {
+  if (limit === null || limit === undefined) return { allowed: true, reason: null };
+  const usedCount = Number.isFinite(used) ? Math.max(0, used) : 0;
+  if (usedCount < limit) return { allowed: true, reason: null };
+  return { allowed: false, reason: limit === 0 ? 'tier' : 'limit' };
+}
+
 async function checkFeatureAccess(supabase: SupabaseClient, authUser: any, feature: PremiumRunwayFeature): Promise<FeatureAccess> {
   const profile = await resolveProfile(supabase, authUser);
   const userId = String(profile.id ?? authUser.id);
@@ -352,6 +372,7 @@ async function checkFeatureAccess(supabase: SupabaseClient, authUser: any, featu
   const config = RUNWAY_FEATURES[feature];
   const used = Number(usageRes.data?.usage_count ?? 0);
   const limit = config.limits[resolvedTier];
+  const quota = evaluateFeatureQuota(used, limit);
 
   return {
     userId,
@@ -362,8 +383,8 @@ async function checkFeatureAccess(supabase: SupabaseClient, authUser: any, featu
     periodStart: start,
     periodEnd: end,
     usageId: usageRes.data?.id ? String(usageRes.data.id) : null,
-    allowed: true,
-    reason: null,
+    allowed: quota.allowed,
+    reason: quota.reason,
     adminBypass: false,
   };
 }
@@ -372,7 +393,18 @@ async function recordFeatureUsage(supabase: SupabaseClient, access: FeatureAcces
   if (access.adminBypass) return access.used;
 
   if (access.usageId) {
-    await supabase.from('feature_usage').update({ usage_count: access.used + 1 }).eq('id', access.usageId);
+    // Atomic so two concurrent generations cannot both write used + 1 and give
+    // away a free slot every time they overlap.
+    const { error } = await supabase.rpc('increment_counter', {
+      p_table: 'feature_usage',
+      p_id: access.usageId,
+      p_field: 'usage_count',
+      p_amount: 1,
+    });
+    if (error) {
+      console.error('[Runway] feature usage increment failed:', error);
+      await supabase.from('feature_usage').update({ usage_count: access.used + 1 }).eq('id', access.usageId);
+    }
     return access.used + 1;
   }
 
@@ -645,7 +677,9 @@ export function registerRunwayRoutes(app: Express, supabase: SupabaseClient) {
       const access = await checkFeatureAccess(supabase, authUser, feature);
       if (!access.allowed) {
         return res.status(access.reason === 'tier' ? 402 : 429).json({
-          error: 'Visual Forge access is temporarily unavailable.',
+          error: access.reason === 'tier'
+            ? 'Visual Forge is not included in your plan. Upgrade to generate.'
+            : `You have used all ${access.limit} ${feature} generations included this month.`,
           feature,
           tier: access.tier,
           used: access.used,

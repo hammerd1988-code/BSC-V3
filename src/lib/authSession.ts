@@ -53,6 +53,11 @@ export async function authedFetch(
   init: RequestInit = {},
 ): Promise<Response> {
   const headers = await authHeaders();
+  // multipart bodies must keep the boundary the browser generates, so the JSON
+  // content type from authHeaders() cannot be applied to them.
+  if (typeof FormData !== 'undefined' && init.body instanceof FormData) {
+    delete headers['Content-Type'];
+  }
   const merged: RequestInit = {
     ...init,
     headers: { ...headers, ...(init.headers as Record<string, string> ?? {}) },
