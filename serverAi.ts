@@ -1,7 +1,15 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { maxTokensParam } from './src/lib/modelParams.js';
-import { createRateLimiter } from './serverSecurity.js';
+import { createConcurrencyGate, createRateLimiter } from './serverSecurity.js';
+
+/** Cap concurrent provider calls so a traffic spike cannot saturate the event loop. */
+const AI_MAX_IN_FLIGHT = Math.max(1, Number(process.env.AI_MAX_IN_FLIGHT || 5) || 5);
+const aiConcurrencyGate = createConcurrencyGate({
+  max: AI_MAX_IN_FLIGHT,
+  queueTimeoutMs: 8_000,
+  name: 'AI generation',
+});
 
 const GEMINI_API_KEY = () => process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-3.6-flash';
@@ -159,6 +167,26 @@ export async function generateServerAIText(
 }
 
 export async function generateServerText(
+  prompt: string,
+  options: ServerAIOptions = {},
+): Promise<ServerAIResult> {
+  try {
+    return await aiConcurrencyGate.run(() => generateServerTextUnlocked(prompt, options));
+  } catch (err: any) {
+    const message = String(err?.message ?? err ?? 'AI generation is at capacity');
+    if (message.includes('at capacity')) {
+      return {
+        provider: 'openai-compatible',
+        model: openAiModel(options.preferredModel),
+        text: '',
+        lastError: message,
+      };
+    }
+    throw err;
+  }
+}
+
+async function generateServerTextUnlocked(
   prompt: string,
   options: ServerAIOptions = {},
 ): Promise<ServerAIResult> {

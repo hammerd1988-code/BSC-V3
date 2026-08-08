@@ -87,3 +87,30 @@ return () => { supabase.removeChannel(channel); };
 - Original app: https://ai.studio/apps/8b4535cd-ac06-4134-b563-47ea1678cce7
 - Supabase docs: https://supabase.com/docs
 - Project README: [README.md](README.md)
+
+## Cursor Cloud specific instructions
+
+The Cloud Agent environment runs the whole stack locally with **no external
+secrets** by standing up the Supabase CLI local stack (Postgres + Auth + Storage
++ Realtime) inside the VM via nested Docker.
+
+- Bootstrap (one-time, idempotent): `scripts/cloud-agent-install.sh` — installs
+  Docker + the Supabase CLI, runs `npm ci` for the root app and
+  `packages/casper-ssh-mobile`, and writes `.env.local` from
+  `scripts/cloud-agent.env.local` (wired to the local Supabase stack with the
+  well-known CLI demo keys — not real secrets).
+- Per-boot services: `scripts/cloud-agent-start.sh` — clears a stale
+  legacy-iptables `FORWARD DROP` (otherwise Docker's bridge network silently
+  drops container-to-container traffic and `supabase start` hangs on the realtime
+  container), starts `dockerd` with the `fuse-overlayfs` storage driver, then
+  runs `supabase start`.
+- Run the app: `npx tsx --env-file=.env.local server.ts` — one process serves the
+  frontend (Vite middleware), the REST/Socket.io API, on `http://localhost:3001`.
+- Supabase URLs: API `http://127.0.0.1:54321`, Studio `http://127.0.0.1:54323`,
+  Mailpit (captured emails) `http://127.0.0.1:54324`.
+- The numbered SQL migrations are validated to apply cleanly from scratch via
+  `supabase db reset`; keep them that way (unique numeric version prefixes, no
+  phantom columns, `text` FKs to `users.id`/`gladiators.id`).
+- Google OAuth sign-in needs real Google credentials, so it can't complete in the
+  local stack. Everything up to the auth boundary runs end-to-end; the passwordless
+  email magic-link flow can be exercised via Mailpit if a login is needed.

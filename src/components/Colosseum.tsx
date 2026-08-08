@@ -6267,12 +6267,22 @@ export const Colosseum: React.FC<{ mode?: 'ranked' | 'training' }> = ({ mode = '
 
   useEffect(() => {
     if (!currentUser) return undefined;
+    let arenaReloadTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleArenaReload = () => {
+      if (arenaReloadTimer) clearTimeout(arenaReloadTimer);
+      arenaReloadTimer = setTimeout(() => {
+        void fetchArena();
+      }, 750);
+    };
     const channel = supabase
       .channel('colosseum-arena')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiators' }, () => void fetchArena())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'matches' }, () => void fetchArena())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gladiators' }, scheduleArenaReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'matches' }, scheduleArenaReload)
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    return () => {
+      if (arenaReloadTimer) clearTimeout(arenaReloadTimer);
+      supabase.removeChannel(channel);
+    };
   }, [fetchArena]);
 
   useEffect(() => {

@@ -41,7 +41,6 @@ export async function dispatchWebhookEvent(eventType: string, targetUserId: stri
       try {
         await assertDispatchableWebhookUrl(sub.webhook_url);
 
-
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
           'User-Agent': 'BSC-Webhook-Dispatcher/1.0'

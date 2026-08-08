@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import {
   ProductionConfigError,
   assertProductionConfig,
+  createConcurrencyGate,
   createRateLimiter,
   createSquareClient,
   createWebhookAuthMiddleware,
@@ -181,6 +182,31 @@ describe('createRateLimiter', () => {
 
     expect(a).toHaveBeenCalled();
     expect(b).toHaveBeenCalled();
+  });
+});
+
+describe('createConcurrencyGate', () => {
+  it('limits overlapping work to max slots', async () => {
+    const gate = createConcurrencyGate({ max: 2, queueTimeoutMs: 2_000, name: 'test' });
+    let active = 0;
+    let peak = 0;
+
+    const job = async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((r) => setTimeout(r, 40));
+      active -= 1;
+    };
+
+    await Promise.all([gate.run(job), gate.run(job), gate.run(job), gate.run(job)]);
+    expect(peak).toBeLessThanOrEqual(2);
+  });
+
+  it('times out waiters when the queue is saturated', async () => {
+    const gate = createConcurrencyGate({ max: 1, queueTimeoutMs: 30, name: 'test' });
+    const blocker = gate.run(() => new Promise((r) => setTimeout(r, 200)));
+    await expect(gate.run(async () => 'ok')).rejects.toThrow(/at capacity/i);
+    await blocker;
   });
 });
 
