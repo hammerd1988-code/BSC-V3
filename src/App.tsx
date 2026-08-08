@@ -13,6 +13,7 @@ import { DesktopControlCenter } from './components/DesktopControlCenter';
 import { AskCasperProvider } from './components/AskCasperWidget';
 import { ImageLightboxProvider } from './components/ImageLightbox';
 import { updateDailyStreak } from './lib/achievements';
+import { isRecentlyCreatedAccount, shouldShowOnboarding } from './lib/onboarding';
 import { registerNativePush } from './lib/mobile';
 import { supabase } from './supabase';
 import { useSubscription } from './lib/subscription';
@@ -101,13 +102,12 @@ export default function App() {
     if (!currentUser) return;
 
     // Show onboarding for recently created accounts that have not completed it.
-    // Treat null/undefined as "not complete" so databases that predate the
-    // onboarding_complete column (or in-memory fallback profiles) still get
-    // the wizard for fresh accounts.
-    const createdRecently = currentUser.created_at && (Date.now() - new Date(currentUser.created_at).getTime()) < 24 * 60 * 60 * 1000;
-    const isNewUser = currentUser.onboarding_complete !== true &&
-      createdRecently &&
-      !localStorage.getItem(`bsc_onboarding_dismissed_${currentUser.id}`);
+    const createdRecently = isRecentlyCreatedAccount(currentUser.created_at);
+    const isNewUser = shouldShowOnboarding({
+      onboardingComplete: currentUser.onboarding_complete,
+      createdAt: currentUser.created_at,
+      dismissedMarker: localStorage.getItem(`bsc_onboarding_dismissed_${currentUser.id}`),
+    });
     if (isNewUser) {
       setShowOnboarding(true);
     } else {
