@@ -12,6 +12,7 @@
  * in parallel files.
  */
 import express from 'express';
+import compression from 'compression';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
@@ -50,6 +51,21 @@ import {
   parseAllowedOrigins,
   resolveSocketCorsOrigin,
 } from './serverSecurity.js';
+
+/** Paths that legitimately carry large JSON (base64 images / studio payloads). */
+const LARGE_JSON_BODY_PREFIXES = [
+  '/api/ai/vision',
+  '/api/runway',
+  '/api/casper/browser',
+  '/api/casper/cobrowse',
+];
+
+function jsonBodyLimitForPath(pathname: string): string {
+  if (LARGE_JSON_BODY_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))) {
+    return '12mb';
+  }
+  return '1mb';
+}
 
 const supabase = createServerSupabaseClient();
 
@@ -94,10 +110,14 @@ async function startServer() {
     apiSecret: process.env.LIVEKIT_API_SECRET ? '✓ set' : '✗ missing',
   });
 
-  // Middleware (skip Stripe webhook — needs raw body for signature verification)
+  // Gzip API + HTML responses. Skip already-compressed payloads.
+  app.use(compression({ threshold: 1024 }));
+
+  // Middleware (skip Stripe webhook — needs raw body for signature verification).
+  // Default JSON body is 1mb; vision/studio routes keep the 12mb ceiling.
   app.use((req, res, next) => {
     if (req.path === '/api/stripe/webhook') return next();
-    express.json({ limit: '12mb' })(req, res, next);
+    express.json({ limit: jsonBodyLimitForPath(req.path) })(req, res, next);
   });
 
   // CORS middleware for REST endpoints, including Bot API Bearer-token calls.
@@ -113,6 +133,14 @@ async function startServer() {
       return res.sendStatus(204);
     }
     next();
+  });
+
+  // Coarse API shield for scrapers / marketing-spike floods. Expensive routes
+  // keep their tighter dedicated limiters below.
+  const apiRateLimit = createRateLimiter({ name: 'API', windowMs: 60_000, max: 300 });
+  app.use('/api', (req, res, next) => {
+    if (req.path === '/health' || req.path === '/stripe/webhook') return next();
+    return apiRateLimit(req, res, next);
   });
 
   // Bot API routes for external agents such as Sapphire.
@@ -341,6 +369,9 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       botApiMounted: true,
       runtimeEntrypoint: 'server.ts',
       botApiCommitMarker: 'bot-api-mounted-2026-04-29',
+      // Socket/live state is process-local — keep Railway at 1 replica until Redis.
+      singleInstanceRequired: true,
+      botMayhemEnabled: process.env.BOT_MAYHEM_ENABLED !== 'false',
       timestamp: new Date().toISOString(),
     });
   });
@@ -359,7 +390,8 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       const { data, error } = await supabase
         .from('gladiators')
         .select('id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model,api_base_url')
-        .order('name');
+        .order('name')
+        .limit(500);
       if (error) {
         console.error('[api/gladiators]', error.message);
         return res.status(500).json({ success: false, error: error.message });
@@ -376,7 +408,8 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     try {
       const { data, error } = await supabase
         .from('bot_gladiator_profiles')
-        .select('gladiator_id,persona_username,display_name,gladiator_class,expertise,battle_style,signature_moves,pre_battle_lines,victory_lines,defeat_lines,ai_prompt_style,ability_profile,personality_style,avatar_prompt,emotional_hook');
+        .select('gladiator_id,persona_username,display_name,gladiator_class,expertise,battle_style,signature_moves,pre_battle_lines,victory_lines,defeat_lines,ai_prompt_style,ability_profile,personality_style,avatar_prompt,emotional_hook')
+        .limit(500);
       if (error && error.code !== '42P01') {
         console.error('[api/bot-profiles]', error.message);
         return res.status(500).json({ success: false, error: error.message });
@@ -770,6 +803,51 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     workspaceStates.delete(key);
   };
 
+  // Soft cap for marketing spikes. Beyond this we refuse new sockets so the
+  // single Node process stays responsive for existing sessions.
+  const MAX_SOCKET_CONNECTIONS = Math.max(50, Number(process.env.MAX_SOCKET_CONNECTIONS || 2500) || 2500);
+
+  // Throttle crowds:update — every join/leave used to fan out to all clients.
+  let crowdsBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+  let crowdsDirty = false;
+  const CROWDS_BROADCAST_MS = 1500;
+
+  function topCrowdsPayload() {
+    return Array.from(liveStreams.entries())
+      .map(([id, data]) => ({ id, ...data }))
+      .sort((a, b) => b.crowdSize - a.crowdSize)
+      .slice(0, 10);
+  }
+
+  function broadcastCrowds(immediate = false) {
+    crowdsDirty = true;
+    if (immediate) {
+      if (crowdsBroadcastTimer) {
+        clearTimeout(crowdsBroadcastTimer);
+        crowdsBroadcastTimer = null;
+      }
+      crowdsDirty = false;
+      io.emit('crowds:update', topCrowdsPayload());
+      return;
+    }
+    if (crowdsBroadcastTimer) return;
+    crowdsBroadcastTimer = setTimeout(() => {
+      crowdsBroadcastTimer = null;
+      if (!crowdsDirty) return;
+      crowdsDirty = false;
+      io.emit('crowds:update', topCrowdsPayload());
+    }, CROWDS_BROADCAST_MS);
+  }
+
+  /** Notify one verified user when possible; never mesh-broadcast social noise. */
+  function emitActivityToUser(userId: unknown, notification: { type: string; data: unknown }) {
+    if (typeof userId !== 'string' || !userId) return;
+    const targetSocketId = connectedUsers.get(userId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('activity:notification', notification);
+    }
+  }
+
   // Co-browse: register Casper shared browser control events
   registerCoBrowseSocket(io, supabase);
 
@@ -777,6 +855,12 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
   registerCasperRelay(io, app, supabase);
 
   io.on('connection', (socket) => {
+    if (io.engine.clientsCount > MAX_SOCKET_CONNECTIONS) {
+      console.warn(`[socket] Rejecting ${socket.id}: at connection cap (${MAX_SOCKET_CONNECTIONS})`);
+      socket.emit('server:overloaded', { maxConnections: MAX_SOCKET_CONNECTIONS });
+      socket.disconnect(true);
+      return;
+    }
     console.log(`[socket] Connected: ${socket.id} (total: ${io.engine.clientsCount})`);
     let workspaceResourceTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -826,10 +910,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     });
 
     // Initial sync
-    socket.emit('crowds:update', Array.from(liveStreams.entries())
-      .map(([id, data]) => ({ id, ...data }))
-      .sort((a, b) => b.crowdSize - a.crowdSize)
-      .slice(0, 10));
+    socket.emit('crowds:update', topCrowdsPayload());
 
     // ---- Casper Studio Live Project State events ----
     //
@@ -973,26 +1054,36 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     });
 
     // ---- Post/Like/Comment events ----
+    // Feed freshness comes from Supabase Realtime. Global socket.broadcast for
+    // every like/comment turns a viral post into an O(N sockets) event storm.
+    // Keep toast notifications targeted at the content owner / follow target.
     socket.on('post:create', (post) => {
-      socket.broadcast.emit('activity:notification', { type: 'post', data: post });
+      // Authors still get local UI feedback; other clients pick up via postgres_changes.
+      socket.emit('activity:notification', { type: 'post', data: post });
     });
 
     socket.on('post:like', (likeData) => {
-      socket.broadcast.emit('activity:notification', { type: 'like', data: likeData });
+      emitActivityToUser(likeData?.postAuthorId ?? likeData?.authorId, {
+        type: 'like',
+        data: likeData,
+      });
     });
 
     socket.on('post:comment', (commentData) => {
-      socket.broadcast.emit('activity:notification', { type: 'comment', data: commentData });
+      emitActivityToUser(commentData?.postAuthorId ?? commentData?.authorId, {
+        type: 'comment',
+        data: commentData,
+      });
     });
 
     socket.on('user:follow', (data) => {
-      socket.broadcast.emit('activity:notification', {
+      emitActivityToUser(data?.following?.id, {
         type: 'follow',
         data: {
-          displayName: data.follower.displayName,
-          targetName: data.following.displayName,
-          avatarUrl: data.follower.avatarUrl
-        }
+          displayName: data?.follower?.displayName ?? data?.follower?.display_name,
+          targetName: data?.following?.displayName ?? data?.following?.display_name,
+          avatarUrl: data?.follower?.avatarUrl ?? data?.follower?.avatar_url,
+        },
       });
     });
 
@@ -1088,14 +1179,6 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
         userToStream.delete(socket.id);
       }
     });
-
-    function broadcastCrowds() {
-      const topCrowds = Array.from(liveStreams.entries())
-        .map(([id, data]) => ({ id, ...data }))
-        .sort((a, b) => b.crowdSize - a.crowdSize)
-        .slice(0, 10);
-      io.emit('crowds:update', topCrowds);
-    }
   });
 
   // Casper CLI install scripts — must be registered before the SPA fallback so
@@ -1126,12 +1209,22 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     app.use(vite.middlewares);
     console.log('[server] Serving frontend through Vite dev middleware');
   } else if (fs.existsSync(distPath)) {
-    app.use(express.static(distPath));
+    app.use(express.static(distPath, {
+      maxAge: '365d',
+      immutable: true,
+      setHeaders(res, filePath) {
+        if (path.basename(filePath) === 'index.html') {
+          // SPA shell must revalidate so deploys pick up new hashed assets.
+          res.setHeader('Cache-Control', 'no-cache');
+        }
+      },
+    }));
     // SPA fallback — must be last route, only for non-API/non-socket paths
     app.get('*', (req, res, next) => {
       if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
         return next();
       }
+      res.setHeader('Cache-Control', 'no-cache');
       res.sendFile(path.join(distPath, 'index.html'));
     });
     console.log(`[server] Serving frontend from ${distPath}`);

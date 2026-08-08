@@ -408,7 +408,14 @@ export const Feed: React.FC = () => {
 
   const handleLike = (id: string) => {
     if (!currentUser) return;
-    socket.emit('post:like', { postId: id, author: currentUser });
+    const post = posts.find((p) => p.id === id)
+      ?? recommendedPosts.find((p) => p.id === id)
+      ?? (sharedPost?.id === id ? sharedPost : null);
+    socket.emit('post:like', {
+      postId: id,
+      author: currentUser,
+      postAuthorId: post?.author_id ?? null,
+    });
   };
 
   const handleDeletePost = (id: string) => {
