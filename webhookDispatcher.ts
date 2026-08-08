@@ -24,6 +24,7 @@ export async function assertDispatchableWebhookUrl(rawUrl: string): Promise<URL>
   return assertPublicHttpUrl(rawUrl, { label: 'webhook URL', allowHttp: true });
 }
 
+
 export async function dispatchWebhookEvent(eventType: string, targetUserId: string, payload: any) {
   try {
     // Find active subscriptions for this user and event type
