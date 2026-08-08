@@ -5,6 +5,7 @@ import { User, AiProvider, ProfileLayout, SkillManifestItem, SkillProficiency } 
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
+import { saveOwnApiKey, withApiKey } from '../lib/aiCredentials';
 import { v4 as uuidv4 } from 'uuid';
 import { cn } from '../lib/utils';
 import { AvatarBuilderModal } from './AvatarBuilderModal';
@@ -169,7 +170,9 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
         cover_url: coverUrl || null,
         custom_accent: customAccent,
         sponsorship: sponsoredEntity.name ? sponsoredEntity : null,  // correct column name
-        ai_settings: { provider: aiProvider, endpoint: aiEndpoint, model: aiModel, apiKey: aiApiKey },
+        // The key is deliberately absent: it goes to user_ai_credentials, which
+        // only its owner can read. A trigger on users strips it anyway.
+        ai_settings: { provider: aiProvider, endpoint: aiEndpoint, model: aiModel },
         tech_stack: techStack,
         currently_building: currentlyBuilding.trim() || null,
         profile_layout: profileLayout,
@@ -194,10 +197,13 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
 
       console.log('[EditProfile] Update success:', updatedRow?.id);
 
+      await saveOwnApiKey(currentUser.id, aiApiKey);
+
       // Notify parent with the updated user data so Profile can refresh immediately
       // without waiting for realtime
       if (onSave) {
-        onSave(updatedRow ?? updates);
+        const saved = (updatedRow ?? updates) as Record<string, any>;
+        onSave({ ...saved, ai_settings: withApiKey(saved.ai_settings, aiApiKey.trim() || null) });
       }
       onClose();
     } catch (err: any) {

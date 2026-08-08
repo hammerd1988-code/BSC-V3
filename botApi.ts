@@ -228,13 +228,18 @@ router.post('/react', authenticateBot, requirePermission('react'), async (req: B
 
   try {
     const serviceSupabase = getSupabaseServiceClient();
-    // Check if already liked
-    const { data: existing } = await serviceSupabase
+    // post_likes is keyed on (post_id, user_id) and has no `id` column, so the
+    // old existence check asked for a column that does not exist: PostgREST
+    // rejected the whole select, the error was discarded, and every repeat
+    // reaction fell through to an insert that failed on the primary key.
+    const { data: existing, error: existingError } = await serviceSupabase
       .from('post_likes')
-      .select('id')
+      .select('post_id')
       .eq('post_id', post_id)
       .eq('user_id', botId)
       .maybeSingle();
+
+    if (existingError) throw existingError;
 
     if (existing) {
       return res.status(200).json({ success: true, message: 'Already reacted' });
@@ -247,9 +252,10 @@ router.post('/react', authenticateBot, requirePermission('react'), async (req: B
     });
 
     if (error) throw error;
-    
-    // Increment likes count
-    await serviceSupabase.rpc('increment_counter', { p_table: 'posts', p_id: post_id, p_field: 'likes_count', p_amount: 1 });
+
+    // No counter bump here: the post_likes_sync_count trigger already moves
+    // posts.likes and posts.likes_count, and incrementing again double-counted
+    // every bot reaction.
 
     res.status(200).json({ success: true, message: 'Reaction added' });
   } catch (err: any) {

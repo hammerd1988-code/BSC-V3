@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Request, Response } from 'express';
 import {
+  CapacityError,
   ProductionConfigError,
   assertProductionConfig,
   createConcurrencyGate,
   createRateLimiter,
+  isCapacityError,
   createSquareClient,
   createWebhookAuthMiddleware,
   getSquareLocationId,
@@ -207,6 +209,39 @@ describe('createConcurrencyGate', () => {
     const blocker = gate.run(() => new Promise((r) => setTimeout(r, 200)));
     await expect(gate.run(async () => 'ok')).rejects.toThrow(/at capacity/i);
     await blocker;
+  });
+
+  /**
+   * Callers have to distinguish "we were too busy to start" from "the provider
+   * rejected the call", and they cannot do that by matching the message: a
+   * provider is free to put the words "at capacity" in its own error body, and
+   * treating that as a queue timeout silently converts a real upstream failure
+   * into an empty result with the cause dropped.
+   */
+  it('reports a queue timeout as a CapacityError and leaves other failures alone', async () => {
+    const gate = createConcurrencyGate({ max: 1, queueTimeoutMs: 20, name: 'AI generation' });
+
+    const blocker = gate.run(() => new Promise((r) => setTimeout(r, 150)));
+    const rejection = await gate.run(async () => 'ok').catch((err) => err);
+    expect(isCapacityError(rejection)).toBe(true);
+    expect(rejection).toBeInstanceOf(CapacityError);
+    await blocker;
+
+    const providerError = new Error('Upstream 503: model is at capacity, retry later');
+    const passedThrough = await gate
+      .run(async () => {
+        throw providerError;
+      })
+      .catch((err) => err);
+    expect(passedThrough).toBe(providerError);
+    expect(isCapacityError(passedThrough)).toBe(false);
+  });
+
+  it('frees the slot again after the work throws', async () => {
+    const gate = createConcurrencyGate({ max: 1, queueTimeoutMs: 500, name: 'test' });
+    await expect(gate.run(async () => { throw new Error('boom'); })).rejects.toThrow('boom');
+    expect(gate.stats.inFlight).toBe(0);
+    await expect(gate.run(async () => 'recovered')).resolves.toBe('recovered');
   });
 });
 

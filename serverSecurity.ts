@@ -189,6 +189,26 @@ export interface ConcurrencyGateOptions {
 }
 
 /**
+ * Raised when a waiter gives up before a gate slot frees. Callers must be able
+ * to tell "we were too busy to start" from "the provider rejected the call" —
+ * matching on the message text conflates the two the moment a provider happens
+ * to say "at capacity" in its own error body.
+ */
+export class CapacityError extends Error {
+  readonly resource: string;
+
+  constructor(resource: string) {
+    super(`${resource} is at capacity. Try again shortly.`);
+    this.name = 'CapacityError';
+    this.resource = resource;
+  }
+}
+
+export function isCapacityError(err: unknown): err is CapacityError {
+  return err instanceof CapacityError;
+}
+
+/**
  * Process-local semaphore for expensive work (AI generation, shell exec).
  * Caps in-flight concurrency so a marketing spike cannot open dozens of
  * 45–60s provider calls on the same Node event loop.
@@ -226,7 +246,7 @@ export function createConcurrencyGate(options: ConcurrencyGateOptions) {
         timer: setTimeout(() => {
           const idx = waiters.indexOf(entry);
           if (idx >= 0) waiters.splice(idx, 1);
-          reject(new Error(`${name} is at capacity. Try again shortly.`));
+          reject(new CapacityError(name));
         }, queueTimeoutMs),
       };
       waiters.push(entry);

@@ -1,7 +1,8 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { maxTokensParam } from './src/lib/modelParams.js';
-import { createConcurrencyGate, createRateLimiter } from './serverSecurity.js';
+import { assertPublicHttpUrl } from './outboundUrl.js';
+import { createConcurrencyGate, createRateLimiter, isCapacityError } from './serverSecurity.js';
 
 /** Cap concurrent provider calls so a traffic spike cannot saturate the event loop. */
 const AI_MAX_IN_FLIGHT = Math.max(1, Number(process.env.AI_MAX_IN_FLIGHT || 5) || 5);
@@ -155,6 +156,59 @@ export function isServerAIConfigured(): boolean {
   return Boolean(GEMINI_API_KEY()) || Boolean(OPENAI_API_KEY());
 }
 
+/**
+ * Decide which OpenAI-compatible endpoint and credential a request may use.
+ *
+ * Two rules, both learned the hard way:
+ *
+ * 1. **A caller-supplied endpoint may only ever receive a caller-supplied
+ *    credential.** `apiKeyOverride || OPENAI_API_KEY()` broke that: a user who
+ *    set `ai_settings.endpoint` but no key of their own had the *platform's*
+ *    provider key posted to their URL as a bearer token. That got easier to hit,
+ *    not harder, once the per-user key moved to `user_ai_credentials` and
+ *    `apiKeyOverride` started arriving null for more users.
+ * 2. A caller-supplied endpoint is an outbound URL like any other, so it goes
+ *    through `assertPublicHttpUrl`. `isLocalEndpoint()` in casperControlCenter
+ *    only recognises loopback and RFC1918 ranges — it does not stop
+ *    169.254.169.254, so cloud metadata was reachable through this path.
+ *
+ * Returns `null` when no usable pair exists, with the reason for the caller's
+ * error list.
+ */
+export interface OpenAiTarget {
+  /** Empty when no usable endpoint/credential pair exists; `reason` says why. */
+  key: string;
+  baseUrl: string;
+  reason: string;
+}
+
+export async function resolveOpenAiTarget(
+  apiKeyOverride: string,
+  baseUrlOverride: string,
+): Promise<OpenAiTarget> {
+  const unusable = (reason: string): OpenAiTarget => ({ key: '', baseUrl: '', reason });
+
+  if (baseUrlOverride) {
+    if (!apiKeyOverride) {
+      return unusable(
+        'openai: a custom endpoint was configured without its own API key, and the platform key is never sent to a user-supplied endpoint',
+      );
+    }
+    try {
+      await assertPublicHttpUrl(baseUrlOverride, { label: 'AI endpoint' });
+    } catch (err: any) {
+      return unusable(`openai: ${String(err?.message ?? err ?? 'endpoint rejected').slice(0, 200)}`);
+    }
+    return { key: apiKeyOverride, baseUrl: baseUrlOverride.replace(/\/$/, ''), reason: '' };
+  }
+
+  const platformKey = OPENAI_API_KEY();
+  if (!platformKey) {
+    return unusable('openai: OPENROUTER_API_KEY/OPENAI_API_KEY/VITE_AI_API_KEY not set');
+  }
+  return { key: platformKey, baseUrl: OPENAI_BASE_URL(), reason: '' };
+}
+
 export const isServerAiConfigured = isServerAIConfigured;
 
 export async function generateServerAIText(
@@ -172,14 +226,17 @@ export async function generateServerText(
 ): Promise<ServerAIResult> {
   try {
     return await aiConcurrencyGate.run(() => generateServerTextUnlocked(prompt, options));
-  } catch (err: any) {
-    const message = String(err?.message ?? err ?? 'AI generation is at capacity');
-    if (message.includes('at capacity')) {
+  } catch (err) {
+    // Only a gate timeout degrades to an empty result. A provider error has to
+    // keep propagating, otherwise every upstream failure is reported to callers
+    // as "no text generated" and the real cause never reaches the logs.
+    if (isCapacityError(err)) {
+      const usesGemini = !options.apiKeyOverride && Boolean(GEMINI_API_KEY());
       return {
-        provider: 'openai-compatible',
-        model: openAiModel(options.preferredModel),
+        provider: usesGemini ? 'gemini' : 'openai-compatible',
+        model: usesGemini ? geminiModel(options.preferredModel) : openAiModel(options.preferredModel),
         text: '',
-        lastError: message,
+        lastError: err.message,
       };
     }
     throw err;
@@ -227,14 +284,11 @@ async function generateServerTextUnlocked(
     errors.push('gemini: GEMINI_API_KEY not set');
   }
 
-  const openaiKey = apiKeyOverride || OPENAI_API_KEY();
-  const openaiBaseUrl = baseUrlOverride
-    ? baseUrlOverride.replace(/\/$/, '')
-    : OPENAI_BASE_URL();
-  if (openaiKey) {
+  const target = await resolveOpenAiTarget(apiKeyOverride, baseUrlOverride);
+  if (target.key) {
     const model = openAiModel(options.preferredModel);
     try {
-      const text = await callOpenAICompatible(openaiKey, openaiBaseUrl, model, prompt, systemPrompt, temperature, maxTokens, Boolean(options.jsonResponse));
+      const text = await callOpenAICompatible(target.key, target.baseUrl, model, prompt, systemPrompt, temperature, maxTokens, Boolean(options.jsonResponse));
       if (text) return { provider: 'openai-compatible', model, text };
       errors.push(`openai(${model}): empty response`);
     } catch (err: any) {
@@ -243,9 +297,7 @@ async function generateServerTextUnlocked(
       console.warn('[serverAi] OpenAI-compatible call failed:', msg);
     }
   } else {
-    errors.push(skipGemini
-      ? 'openai: per-user apiKeyOverride was empty after trim'
-      : 'openai: OPENROUTER_API_KEY/OPENAI_API_KEY/VITE_AI_API_KEY not set');
+    errors.push(target.reason);
   }
 
   const lastError = errors.join(' | ');
@@ -282,20 +334,17 @@ export async function generateServerToolTurn(
   const errors: string[] = [];
 
   const skipGemini = Boolean(apiKeyOverride);
-  const openaiKey = apiKeyOverride || OPENAI_API_KEY();
-  const openaiBaseUrl = baseUrlOverride
-    ? baseUrlOverride.replace(/\/$/, '')
-    : OPENAI_BASE_URL();
+  const target = await resolveOpenAiTarget(apiKeyOverride, baseUrlOverride);
 
   // Tool-calling requires the OpenAI-compatible path. If that's
   // available, prefer it. Otherwise fall back to a text-only Gemini
   // call (no tool_calls returned, caller's loop terminates).
-  if (openaiKey) {
+  if (target.key) {
     const model = openAiModel(options.preferredModel);
     try {
       const result = await callOpenAICompatibleWithTools({
-        apiKey: openaiKey,
-        baseUrl: openaiBaseUrl,
+        apiKey: target.key,
+        baseUrl: target.baseUrl,
         model,
         messages,
         tools: options.tools ?? [],
@@ -310,9 +359,7 @@ export async function generateServerToolTurn(
       console.warn('[serverAi:tools] OpenAI-compatible call failed:', msg);
     }
   } else {
-    errors.push(skipGemini
-      ? 'openai: per-user apiKeyOverride was empty after trim'
-      : 'openai: OPENROUTER_API_KEY/OPENAI_API_KEY/VITE_AI_API_KEY not set');
+    errors.push(target.reason);
   }
 
   const geminiKey = skipGemini ? '' : GEMINI_API_KEY();
@@ -341,8 +388,8 @@ export async function generateServerToolTurn(
   const lastError = errors.join(' | ');
   console.warn('[serverAi:tools] All providers failed, returning empty text. Errors:', lastError);
   return {
-    provider: openaiKey ? 'openai-compatible' : 'gemini',
-    model: openaiKey ? openAiModel(options.preferredModel) : geminiModel(options.preferredModel),
+    provider: target.key ? 'openai-compatible' : 'gemini',
+    model: target.key ? openAiModel(options.preferredModel) : geminiModel(options.preferredModel),
     text: '',
     toolCalls: [],
     lastError,
@@ -448,6 +495,22 @@ function bearerToken(req: Request) {
   return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
 }
 
+/**
+ * These two routes bill the platform's provider key, and `maxTokens` and the
+ * prompt were both passed straight through from the request body. A signed-in
+ * caller could therefore ask for an arbitrarily large completion, which the
+ * 30-per-minute rate limit does nothing about — it counts requests, not spend.
+ */
+export const MAX_REQUESTED_MAX_TOKENS = 8192;
+const MAX_PROMPT_CHARS = 100_000;
+
+export function clampRequestedMaxTokens(requested: unknown): number | undefined {
+  if (typeof requested !== 'number' || !Number.isFinite(requested)) return undefined;
+  const floored = Math.floor(requested);
+  if (floored < 1) return undefined;
+  return Math.min(floored, MAX_REQUESTED_MAX_TOKENS);
+}
+
 async function requireSupabaseUser(req: Request, res: Response, supabase: SupabaseClient) {
   const token = bearerToken(req);
   if (!token) {
@@ -467,6 +530,7 @@ async function requireSupabaseUser(req: Request, res: Response, supabase: Supaba
 export function registerServerAiRoutes(app: Express, supabase: SupabaseClient) {
   const aiRateLimit = createRateLimiter({ name: 'AI generation', windowMs: 60_000, max: 30 });
 
+
   app.post('/api/ai/generate-text', aiRateLimit, async (req, res) => {
     try {
       const authorized = await requireSupabaseUser(req, res, supabase);
@@ -485,11 +549,15 @@ export function registerServerAiRoutes(app: Express, supabase: SupabaseClient) {
         res.status(400).json({ success: false, error: 'Prompt is required.' });
         return;
       }
+      if (prompt.length > MAX_PROMPT_CHARS) {
+        res.status(413).json({ success: false, error: 'Prompt is too long.' });
+        return;
+      }
 
       const result = await generateServerText(prompt, {
         systemPrompt: typeof body.systemPrompt === 'string' ? body.systemPrompt : undefined,
         temperature: typeof body.temperature === 'number' ? body.temperature : undefined,
-        maxTokens: typeof body.maxTokens === 'number' ? body.maxTokens : undefined,
+        maxTokens: clampRequestedMaxTokens(body.maxTokens),
         jsonResponse: Boolean(body.jsonResponse),
       });
 
@@ -549,13 +617,32 @@ export function registerServerAiRoutes(app: Express, supabase: SupabaseClient) {
       res.json({ success: true, text: result });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Vision analysis failed.';
+      if (isCapacityError(error)) {
+        res.setHeader('Retry-After', '5');
+        res.status(503).json({ success: false, error: message });
+        return;
+      }
       console.error('[serverAi] vision route error:', message);
       res.status(502).json({ success: false, error: message });
     }
   });
 }
 
+/**
+ * Vision is the most expensive provider call in the app — a multi-megabyte
+ * upload plus a 45s ceiling — so it shares the text path's concurrency budget
+ * rather than running unbounded alongside it.
+ */
 async function generateVisionText(
+  imageBase64: string,
+  prompt: string,
+  mimeType: string,
+  systemPrompt?: string,
+): Promise<string> {
+  return aiConcurrencyGate.run(() => generateVisionTextUnlocked(imageBase64, prompt, mimeType, systemPrompt));
+}
+
+async function generateVisionTextUnlocked(
   imageBase64: string,
   prompt: string,
   mimeType: string,
