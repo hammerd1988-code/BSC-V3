@@ -1114,6 +1114,40 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
 
     // ---- Post/Like/Comment events ----
     //
+    // Feed freshness comes from Supabase Realtime. Global socket.broadcast for
+    // every like/comment turns a viral post into an O(N sockets) event storm.
+    // Keep toast notifications targeted at the content owner / follow target,
+    // and require a verified session so anonymous sockets cannot spray toasts.
+    socket.on('post:create', (post) => {
+      if (!verifiedUserId()) return;
+      // Authors still get local UI feedback; other clients pick up via postgres_changes.
+      socket.emit('activity:notification', { type: 'post', data: post });
+    });
+
+    socket.on('post:like', (likeData) => {
+      if (!verifiedUserId()) return;
+      emitActivityToUser(likeData?.postAuthorId ?? likeData?.authorId, {
+        type: 'like',
+        data: likeData,
+      });
+    });
+
+    socket.on('post:comment', (commentData) => {
+      if (!verifiedUserId()) return;
+      emitActivityToUser(commentData?.postAuthorId ?? commentData?.authorId, {
+        type: 'comment',
+        data: commentData,
+      });
+    });
+
+    socket.on('user:follow', (data) => {
+      if (!verifiedUserId()) return;
+      emitActivityToUser(data?.following?.id, {
+        type: 'follow',
+        data: {
+          displayName: data?.follower?.displayName ?? data?.follower?.display_name,
+          targetName: data?.following?.displayName ?? data?.following?.display_name,
+          avatarUrl: data?.follower?.avatarUrl ?? data?.follower?.avatar_url,
     // Feed freshness comes from Supabase Realtime, so these exist only to raise a
     // toast. Broadcasting each one turned a viral post into an O(N sockets) event
     // storm, and an unregistered socket could spray the whole platform with

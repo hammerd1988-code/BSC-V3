@@ -417,6 +417,16 @@ export const Feed: React.FC = () => {
     setPosts(prev => applyLikeToPosts(prev, id, liked));
     setRecommendedPosts(prev => applyLikeToPosts(prev, id, liked));
     setSharedPost(prev => (prev && prev.id === id ? applyLikeToPosts([prev], id, liked)[0] : prev));
+    if (liked) {
+      const post = posts.find((p) => p.id === id)
+        ?? recommendedPosts.find((p) => p.id === id)
+        ?? (sharedPost?.id === id ? sharedPost : null);
+      socket.emit('post:like', {
+        postId: id,
+        author: currentUser,
+        postAuthorId: post?.author_id ?? null,
+      });
+    }
     // No postAuthorId: the server resolves the recipient from the post row, so
     // that a client cannot choose who gets told about a like.
     if (liked) socket.emit('post:like', { postId: id, author: currentUser });
