@@ -1126,16 +1126,43 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     // deliberately left unhandled until there is a follower fan-out to send it
     // to. Clients may keep emitting it; Socket.IO drops unhandled events.
 
+    /**
+     * The recipient is resolved from the post row, never from the payload. A
+     * client-supplied `postAuthorId` is a request to deliver a notification to
+     * an account of the sender's choosing, so trusting it turns these into a
+     * notification-spoofing primitive: any registered socket could tell any user
+     * that their post was liked.
+     */
+    const notifyPostAuthor = async (
+      type: 'like' | 'comment',
+      postId: unknown,
+      data: unknown,
+      actorId: string,
+    ) => {
+      if (typeof postId !== 'string' || !postId) return;
+      const { data: post, error } = await supabase
+        .from('posts')
+        .select('author_id')
+        .eq('id', postId)
+        .maybeSingle();
+      if (error || !post?.author_id) return;
+      emitActivityToUser(post.author_id, { type, data }, actorId);
+    };
+
     socket.on('post:like', (likeData) => {
       const actorId = verifiedUserId();
       if (!actorId) return;
-      emitActivityToUser(likeData?.postAuthorId ?? likeData?.authorId, { type: 'like', data: likeData }, actorId);
+      void notifyPostAuthor('like', likeData?.postId, likeData, actorId).catch((err) =>
+        console.warn('[socket] post:like notification failed:', err),
+      );
     });
 
     socket.on('post:comment', (commentData) => {
       const actorId = verifiedUserId();
       if (!actorId) return;
-      emitActivityToUser(commentData?.postAuthorId ?? commentData?.authorId, { type: 'comment', data: commentData }, actorId);
+      void notifyPostAuthor('comment', commentData?.postId, commentData, actorId).catch((err) =>
+        console.warn('[socket] post:comment notification failed:', err),
+      );
     });
 
     socket.on('user:follow', (data) => {
