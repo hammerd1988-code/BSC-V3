@@ -348,11 +348,17 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
   // Public gladiators list — used by BotChat and other pages that need the
   // full gladiator roster. Uses service-role to bypass RLS so it works
   // regardless of the caller's auth state (expired JWT, anon, etc.).
+  //
+  // Explicit columns, never `*`: gladiators.api_key holds an owner-provided LLM
+  // key, and 0014 revokes column-level SELECT on it from anon and authenticated
+  // for exactly that reason. Reading through the service role and returning the
+  // row verbatim handed every one of those keys to any unauthenticated caller.
+  // Same column list the Colosseum and unified-bot routes use.
   app.get('/api/gladiators', async (_req, res) => {
     try {
       const { data, error } = await supabase
         .from('gladiators')
-        .select('*')
+        .select('id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model,api_base_url')
         .order('name');
       if (error) {
         console.error('[api/gladiators]', error.message);
