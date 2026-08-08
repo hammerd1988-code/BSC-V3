@@ -91,6 +91,14 @@ export default function TerminalScreen({ transport, onDisconnect }: {
     [append, decodeBase64, transport],
   );
 
+  useEffect(
+    () => transport.onShellError((error) => {
+      append(`ERROR: Shell output stopped: ${error}\n`);
+      setShellActive(false);
+    }),
+    [append, transport],
+  );
+
   const startShell = async () => {
     try {
       const useRawOutput = transport.capabilities.rawShellOutput;

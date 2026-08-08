@@ -35,6 +35,14 @@ export const NetworkMap: React.FC = () => {
   useEffect(() => {
     let usersChannel: ReturnType<typeof supabase.channel>;
     let followsChannel: ReturnType<typeof supabase.channel>;
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleReload = () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(() => {
+        void loadData();
+      }, 750);
+    };
 
     const loadData = async () => {
       setLoading(true);
@@ -77,14 +85,15 @@ export const NetworkMap: React.FC = () => {
     loadData();
 
     usersChannel = supabase.channel('network-users')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, scheduleReload)
       .subscribe();
 
     followsChannel = supabase.channel('network-follows')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'follows' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'follows' }, scheduleReload)
       .subscribe();
 
     return () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
       supabase.removeChannel(usersChannel);
       supabase.removeChannel(followsChannel);
     };

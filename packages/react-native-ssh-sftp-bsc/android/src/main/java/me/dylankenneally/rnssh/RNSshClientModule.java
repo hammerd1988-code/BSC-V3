@@ -45,7 +45,6 @@ import com.jcraft.jsch.KeyPair;
 
 import java.io.FileWriter;
 import java.io.ByteArrayOutputStream;
-import java.nio.charset.StandardCharsets;
 import android.util.Base64;
 
 public class RNSshClientModule extends ReactContextBaseJavaModule {
@@ -55,7 +54,8 @@ public class RNSshClientModule extends ReactContextBaseJavaModule {
     BufferedReader _bufferedReader;
     InputStream _shellInputStream;
     DataOutputStream _dataOutputStream;
-    Channel _channel = null;
+    volatile Channel _channel = null;
+    volatile boolean _shellClosing = false;
     boolean _rawShellOutput = false;
     ChannelSftp _sftpSession = null;
     Boolean _downloadContinue = false;
@@ -384,8 +384,10 @@ public class RNSshClientModule extends ReactContextBaseJavaModule {
                                     final Callback callback) {
     new Thread(new Runnable()  {
       public void run() {
+        SSHClient client = null;
+        boolean started = false;
         try {
-          SSHClient client = clientPool.get(key);
+          client = clientPool.get(key);
           if (client == null) {
               throw new Exception("client is null");
           }
@@ -399,6 +401,7 @@ public class RNSshClientModule extends ReactContextBaseJavaModule {
           InputStream in = channel.getInputStream();
           client._channel = channel;
           client._shellInputStream = in;
+          client._shellClosing = false;
           client._rawShellOutput = options != null && options.hasKey("rawOutput")
               && !options.isNull("rawOutput") && options.getBoolean("rawOutput");
           if (options != null && options.hasKey("cols") && options.hasKey("rows")) {
@@ -412,20 +415,7 @@ public class RNSshClientModule extends ReactContextBaseJavaModule {
           client._dataOutputStream = new DataOutputStream(channel.getOutputStream());
 
           callback.invoke();
-
-          if (client._rawShellOutput) {
-            readRawShellOutput(client, key);
-          } else {
-            String line;
-            while (client._bufferedReader != null && (line = client._bufferedReader.readLine()) != null) {
-              WritableMap map = Arguments.createMap();
-              map.putString("name", "Shell");
-              map.putString("key", key);
-              map.putString("value", line + '\n');
-              sendEvent(reactContext, "Shell", map);
-            }
-          }
-
+          started = true;
         } catch (JSchException error) {
           Log.e(LOGTAG, "Error starting shell: " + error.getMessage());
           callback.invoke(error.getMessage());
@@ -433,8 +423,38 @@ public class RNSshClientModule extends ReactContextBaseJavaModule {
           Log.e(LOGTAG, "Error starting shell: " + error.getMessage());
           callback.invoke(error.getMessage());
         } catch (Exception error) {
-          Log.e(LOGTAG, "Error sarting shell: " + error.getMessage());
+          Log.e(LOGTAG, "Error starting shell: " + error.getMessage());
           callback.invoke(error.getMessage());
+        }
+
+        if (!started || client == null) return;
+        try {
+          if (client._rawShellOutput) {
+            readRawShellOutput(client, key);
+          } else {
+            BufferedReader reader = client._bufferedReader;
+            String line;
+            while (!client._shellClosing && reader != null && (line = reader.readLine()) != null) {
+              WritableMap map = Arguments.createMap();
+              map.putString("name", "Shell");
+              map.putString("key", key);
+              map.putString("value", line + '\n');
+              sendEvent(reactContext, "Shell", map);
+            }
+          }
+        } catch (IOException error) {
+          if (!client._shellClosing) {
+            Log.e(LOGTAG, "Shell output ended with an error: " + error.getMessage());
+            WritableMap map = Arguments.createMap();
+            map.putString("name", "ShellError");
+            map.putString("key", key);
+            map.putString("value", error.getMessage() == null ? "Shell output failed" : error.getMessage());
+            sendEvent(reactContext, "ShellError", map);
+          }
+        } catch (Exception error) {
+          if (!client._shellClosing) {
+            Log.e(LOGTAG, "Shell output ended with an error: " + error.getMessage());
+          }
         }
       }
     }).start();
@@ -442,9 +462,9 @@ public class RNSshClientModule extends ReactContextBaseJavaModule {
 
   private void readRawShellOutput(SSHClient client, String key) throws IOException {
     byte[] buffer = new byte[8192];
-    ByteArrayOutputStream lineBuffer = new ByteArrayOutputStream();
     int count;
-    while (client._shellInputStream != null && (count = client._shellInputStream.read(buffer)) != -1) {
+    InputStream input = client._shellInputStream;
+    while (!client._shellClosing && input != null && (count = input.read(buffer)) != -1) {
       byte[] chunk = new byte[count];
       System.arraycopy(buffer, 0, chunk, 0, count);
       WritableMap raw = Arguments.createMap();
@@ -452,25 +472,6 @@ public class RNSshClientModule extends ReactContextBaseJavaModule {
       raw.putString("key", key);
       raw.putString("value", Base64.encodeToString(chunk, Base64.NO_WRAP));
       sendEvent(reactContext, "ShellRaw", raw);
-
-      for (byte value : chunk) {
-        lineBuffer.write(value);
-        if (value == '\n') {
-          WritableMap line = Arguments.createMap();
-          line.putString("name", "Shell");
-          line.putString("key", key);
-          line.putString("value", new String(lineBuffer.toByteArray(), StandardCharsets.UTF_8));
-          sendEvent(reactContext, "Shell", line);
-          lineBuffer.reset();
-        }
-      }
-    }
-    if (lineBuffer.size() > 0) {
-      WritableMap line = Arguments.createMap();
-      line.putString("name", "Shell");
-      line.putString("key", key);
-      line.putString("value", new String(lineBuffer.toByteArray(), StandardCharsets.UTF_8));
-      sendEvent(reactContext, "Shell", line);
     }
   }
 
@@ -515,6 +516,7 @@ public class RNSshClientModule extends ReactContextBaseJavaModule {
           if (client == null) {
               throw new Exception("client is null");
           }
+          client._shellClosing = true;
           if (client._channel != null) {
               client._channel.disconnect();
           }

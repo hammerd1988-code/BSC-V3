@@ -12,6 +12,7 @@
  * in parallel files.
  */
 import express from 'express';
+import compression from 'compression';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
@@ -36,8 +37,10 @@ import { registerServerAiRoutes } from './serverAi.js';
 import { registerColosseumRoutes } from './colosseumRoutes.js';
 import { initBotMayhemAutonomy, registerBotMayhemRoutes } from './botMayhemAutonomy.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
+import { registerCallRoom, releaseCallRoom } from './callRooms.js';
 import { registerCoBrowseSocket } from './casperCoBrowse.js';
 import { registerStripeRoutes } from './stripeRoutes.js';
+import { findCredPackageByPrice, totalCred } from './shared/credPackages.js';
 import { registerCasperRelay } from './casperRelay.js';
 import {
   assertProductionConfig,
@@ -48,6 +51,21 @@ import {
   parseAllowedOrigins,
   resolveSocketCorsOrigin,
 } from './serverSecurity.js';
+
+/** Paths that legitimately carry large JSON (base64 images / studio payloads). */
+const LARGE_JSON_BODY_PREFIXES = [
+  '/api/ai/vision',
+  '/api/runway',
+  '/api/casper/browser',
+  '/api/casper/cobrowse',
+];
+
+function jsonBodyLimitForPath(pathname: string): string {
+  if (LARGE_JSON_BODY_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))) {
+    return '12mb';
+  }
+  return '1mb';
+}
 
 const supabase = createServerSupabaseClient();
 
@@ -92,10 +110,14 @@ async function startServer() {
     apiSecret: process.env.LIVEKIT_API_SECRET ? '✓ set' : '✗ missing',
   });
 
-  // Middleware (skip Stripe webhook — needs raw body for signature verification)
+  // Gzip API + HTML responses. Skip already-compressed payloads.
+  app.use(compression({ threshold: 1024 }));
+
+  // Middleware (skip Stripe webhook — needs raw body for signature verification).
+  // Default JSON body is 1mb; vision/studio routes keep the 12mb ceiling.
   app.use((req, res, next) => {
     if (req.path === '/api/stripe/webhook') return next();
-    express.json({ limit: '12mb' })(req, res, next);
+    express.json({ limit: jsonBodyLimitForPath(req.path) })(req, res, next);
   });
 
   // CORS middleware for REST endpoints, including Bot API Bearer-token calls.
@@ -111,6 +133,14 @@ async function startServer() {
       return res.sendStatus(204);
     }
     next();
+  });
+
+  // Coarse API shield for scrapers / marketing-spike floods. Expensive routes
+  // keep their tighter dedicated limiters below.
+  const apiRateLimit = createRateLimiter({ name: 'API', windowMs: 60_000, max: 300 });
+  app.use('/api', (req, res, next) => {
+    if (req.path === '/health' || req.path === '/stripe/webhook') return next();
+    return apiRateLimit(req, res, next);
   });
 
   // Bot API routes for external agents such as Sapphire.
@@ -136,11 +166,20 @@ async function startServer() {
 
   // ── Square Payment Processing ──
   app.post('/api/square/process-payment', paymentRateLimit, async (req, res) => {
-    const { sourceId, amount, userId, credAmount } = req.body;
+    const { sourceId, amount, userId, idempotencyKey } = req.body;
 
-    if (!sourceId || !amount || !userId || !credAmount) {
+    if (!sourceId || !amount || !userId) {
         return res.status(400).send({ message: 'Missing required payment details.' });
     }
+
+    // The CRED granted comes from the price table, never from the request: the
+    // body used to carry credAmount independently of the amount charged, so a
+    // caller could pay 499 cents and ask for any number of CRED.
+    const credPackage = findCredPackageByPrice(amount);
+    if (!credPackage) {
+        return res.status(400).send({ message: 'Unknown CRED package.' });
+    }
+    const credAmount = totalCred(credPackage);
 
     const profile = await requireCasperAuth(req, res, supabase);
     if (!profile) return;
@@ -156,32 +195,60 @@ async function startServer() {
         const paymentResponse = await squareClient.payments.create({
             sourceId: sourceId,
             amountMoney: {
-                amount: BigInt(amount), // amount is already in cents
+                amount: BigInt(credPackage.priceInCents),
                 currency: 'USD',
             },
             locationId: getSquareLocationId(),
-            idempotencyKey: uuidv4(),
+            // Retrying a timed-out purchase must not charge the card twice, so
+            // reuse the client's key when it supplies one.
+            idempotencyKey: typeof idempotencyKey === 'string' && idempotencyKey.length >= 8
+                ? idempotencyKey.slice(0, 45)
+                : uuidv4(),
         });
 
         const payment = paymentResponse.payment;
         if (payment && payment.status === 'COMPLETED') {
-            // Update user's CRED balance in Supabase
-            const { error: userError } = await supabase
-                .rpc('increment_cred_balance', { p_user_id: targetUserId, p_amount: credAmount });
+            if (!payment.id) {
+                console.error(`[square] COMPLETED payment without an id for user=${targetUserId}; refusing to grant CRED.`);
+                return res.status(502).send({
+                    success: false,
+                    message: 'Your payment succeeded but could not be reconciled. Contact support.',
+                });
+            }
 
-            if (userError) throw userError;
+            // Grant and ledger row move together, keyed on the Square payment id.
+            // Square returns the original payment when an idempotency key is
+            // replayed, so crediting on "COMPLETED" alone let one charge be
+            // redeemed over and over.
+            const { data: grant, error: userError } = await supabase
+                .rpc('grant_cred_purchase', {
+                    p_user_id: targetUserId,
+                    p_amount: credAmount,
+                    p_payment_id: payment.id,
+                    p_description: `Purchased ${credAmount} CRED via Square`,
+                });
 
-            // Record transaction
-            const { error: transactionError } = await supabase.from('transactions').insert({
-                user_id: targetUserId,
-                amount: credAmount,
-                type: 'purchase',
-                description: `Purchased ${credAmount} CRED via Square`,
-            });
+            if (userError) {
+                // The card has already been charged, so a failure here is a
+                // reconciliation problem: log enough to credit the account by hand
+                // and never swallow it into a generic 500.
+                console.error(
+                    `[square] PAID BUT NOT CREDITED payment=${payment.id} user=${targetUserId} cred=${credAmount}:`,
+                    userError.message,
+                );
+                return res.status(500).send({
+                    success: false,
+                    message: 'Your payment succeeded but the CRED grant failed. Contact support with this payment id.',
+                    paymentId: payment.id,
+                });
+            }
 
-            if (transactionError) throw transactionError;
+            const granted = (grant as { granted?: boolean } | null)?.granted !== false;
+            if (!granted) {
+                console.warn(`[square] replayed payment=${payment.id} user=${targetUserId}; CRED already granted.`);
+            }
 
-            res.status(200).send({ success: true, payment });
+            res.status(200).send({ success: true, payment, credAmount, granted });
         } else {
             res.status(400).send({ success: false, message: 'Payment not completed.' });
         }
@@ -192,9 +259,11 @@ async function startServer() {
 });
 
 app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
-    const { userId, credAmount } = req.body;
+    const { userId } = req.body;
+    const credAmount = Number(req.body?.credAmount);
 
-    if (!userId || !credAmount || credAmount <= 0) {
+    // A non-integer or out-of-range amount used to reach the RPC as-is.
+    if (!userId || !Number.isInteger(credAmount) || credAmount <= 0 || credAmount > 1_000_000) {
         return res.status(400).send({ message: "Missing required exchange details or invalid amount." });
     }
 
@@ -207,8 +276,10 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     const targetUserId = String(userId);
 
     try {
-        // Deduct CRED and add tokens (assuming 1 CRED = 1 token for now)
-        const { data: userUpdate, error: userError } = await supabase
+        // Deduct CRED and add tokens (assuming 1 CRED = 1 token for now).
+        // The function refuses to overdraw, so a concurrent exchange cannot push
+        // the balance negative.
+        const { error: userError } = await supabase
             .rpc("exchange_cred_for_tokens", { user_id: targetUserId, cred_to_deduct: credAmount, tokens_to_add: credAmount });
 
         if (userError) throw userError;
@@ -221,7 +292,10 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
             description: `Exchanged ${credAmount} CRED for ${credAmount} tokens`,
         });
 
-        if (transactionError) throw transactionError;
+        // The exchange already happened; a missing ledger row must not report failure.
+        if (transactionError) {
+            console.error(`[cred] ledger row missing for exchange user=${targetUserId} amount=${credAmount}:`, transactionError.message);
+        }
 
         res.status(200).send({ success: true, message: "CRED exchanged successfully." });
     } catch (error) {
@@ -230,7 +304,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     }
 });
 
-  registerSpeechRoutes(app, aiRateLimit);
+  registerSpeechRoutes(app, aiRateLimit, supabase);
 
   // ── Casper Memory Endpoints ──
   app.get('/api/casper/memory', async (req, res) => {
@@ -295,6 +369,9 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       botApiMounted: true,
       runtimeEntrypoint: 'server.ts',
       botApiCommitMarker: 'bot-api-mounted-2026-04-29',
+      // Socket/live state is process-local — keep Railway at 1 replica until Redis.
+      singleInstanceRequired: true,
+      botMayhemEnabled: process.env.BOT_MAYHEM_ENABLED !== 'false',
       timestamp: new Date().toISOString(),
     });
   });
@@ -302,12 +379,19 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
   // Public gladiators list — used by BotChat and other pages that need the
   // full gladiator roster. Uses service-role to bypass RLS so it works
   // regardless of the caller's auth state (expired JWT, anon, etc.).
+  //
+  // Explicit columns, never `*`: gladiators.api_key holds an owner-provided LLM
+  // key, and 0014 revokes column-level SELECT on it from anon and authenticated
+  // for exactly that reason. Reading through the service role and returning the
+  // row verbatim handed every one of those keys to any unauthenticated caller.
+  // Same column list the Colosseum and unified-bot routes use.
   app.get('/api/gladiators', async (_req, res) => {
     try {
       const { data, error } = await supabase
         .from('gladiators')
-        .select('*')
-        .order('name');
+        .select('id,user_id,name,avatar_url,personality,stats,glow_color,wins,losses,cred,created_at,model,api_base_url')
+        .order('name')
+        .limit(500);
       if (error) {
         console.error('[api/gladiators]', error.message);
         return res.status(500).json({ success: false, error: error.message });
@@ -324,7 +408,8 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     try {
       const { data, error } = await supabase
         .from('bot_gladiator_profiles')
-        .select('gladiator_id,persona_username,display_name,gladiator_class,expertise,battle_style,signature_moves,pre_battle_lines,victory_lines,defeat_lines,ai_prompt_style,ability_profile,personality_style,avatar_prompt,emotional_hook');
+        .select('gladiator_id,persona_username,display_name,gladiator_class,expertise,battle_style,signature_moves,pre_battle_lines,victory_lines,defeat_lines,ai_prompt_style,ability_profile,personality_style,avatar_prompt,emotional_hook')
+        .limit(500);
       if (error && error.code !== '42P01') {
         console.error('[api/bot-profiles]', error.message);
         return res.status(500).json({ success: false, error: error.message });
@@ -427,16 +512,6 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
 
       try {
         await supabase.from('casper_activity_log').insert({
-          user_id: profile.id,
-          action: 'terminal_execute',
-          details: {
-            mode,
-            exit_code: result.exitCode,
-            duration_ms: result.durationMs,
-            truncated: result.truncated,
-            ok: result.ok,
-            reason: result.reason ?? null,
-          },
           action_type: 'terminal_execute',
           description: `Casper terminal: ${command.slice(0, 200)}`,
           metadata: {
@@ -587,16 +662,6 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
 
       try {
         await supabase.from('casper_activity_log').insert({
-          user_id: profile.id,
-          action: 'integration_execute',
-          details: {
-            integration_key: integrationKey,
-            tool_name: toolName,
-            ok: result.ok,
-            status: result.status ?? null,
-            duration_ms: result.durationMs ?? null,
-            error: result.error ?? null,
-          },
           action_type: 'integration_execute',
           description: `Casper integration ${integrationKey}.${toolName}`,
           metadata: {
@@ -728,11 +793,60 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
   const userToStream = new Map<string, string>();
   const connectedUsers = new Map<string, string>(); // userId -> socketId
   const workspaceStates = new Map<string, { assets: any[]; checkpoints: any[]; activity: any[] }>();
-  const workspaceKey = (data: any) => `${data?.userId || 'guest'}:${data?.projectId || 'casper-agentic-workspace'}`;
   const getWorkspaceState = (key: string) => {
     if (!workspaceStates.has(key)) workspaceStates.set(key, { assets: [], checkpoints: [], activity: [] });
     return workspaceStates.get(key)!;
   };
+  /** Drops workspace state once the last member of its room leaves. */
+  const releaseWorkspaceState = (key: string) => {
+    if (io.sockets.adapter.rooms.get(`workspace:${key}`)?.size) return;
+    workspaceStates.delete(key);
+  };
+
+  // Soft cap for marketing spikes. Beyond this we refuse new sockets so the
+  // single Node process stays responsive for existing sessions.
+  const MAX_SOCKET_CONNECTIONS = Math.max(50, Number(process.env.MAX_SOCKET_CONNECTIONS || 2500) || 2500);
+
+  // Throttle crowds:update — every join/leave used to fan out to all clients.
+  let crowdsBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+  let crowdsDirty = false;
+  const CROWDS_BROADCAST_MS = 1500;
+
+  function topCrowdsPayload() {
+    return Array.from(liveStreams.entries())
+      .map(([id, data]) => ({ id, ...data }))
+      .sort((a, b) => b.crowdSize - a.crowdSize)
+      .slice(0, 10);
+  }
+
+  function broadcastCrowds(immediate = false) {
+    crowdsDirty = true;
+    if (immediate) {
+      if (crowdsBroadcastTimer) {
+        clearTimeout(crowdsBroadcastTimer);
+        crowdsBroadcastTimer = null;
+      }
+      crowdsDirty = false;
+      io.emit('crowds:update', topCrowdsPayload());
+      return;
+    }
+    if (crowdsBroadcastTimer) return;
+    crowdsBroadcastTimer = setTimeout(() => {
+      crowdsBroadcastTimer = null;
+      if (!crowdsDirty) return;
+      crowdsDirty = false;
+      io.emit('crowds:update', topCrowdsPayload());
+    }, CROWDS_BROADCAST_MS);
+  }
+
+  /** Notify one verified user when possible; never mesh-broadcast social noise. */
+  function emitActivityToUser(userId: unknown, notification: { type: string; data: unknown }) {
+    if (typeof userId !== 'string' || !userId) return;
+    const targetSocketId = connectedUsers.get(userId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('activity:notification', notification);
+    }
+  }
 
   // Co-browse: register Casper shared browser control events
   registerCoBrowseSocket(io, supabase);
@@ -741,31 +855,81 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
   registerCasperRelay(io, app, supabase);
 
   io.on('connection', (socket) => {
+    if (io.engine.clientsCount > MAX_SOCKET_CONNECTIONS) {
+      console.warn(`[socket] Rejecting ${socket.id}: at connection cap (${MAX_SOCKET_CONNECTIONS})`);
+      socket.emit('server:overloaded', { maxConnections: MAX_SOCKET_CONNECTIONS });
+      socket.disconnect(true);
+      return;
+    }
     console.log(`[socket] Connected: ${socket.id} (total: ${io.engine.clientsCount})`);
     let workspaceResourceTimer: ReturnType<typeof setInterval> | null = null;
 
     // ---- User registration (matches client CallContext.tsx `user:register`) ----
-    socket.on('user:register', (userId: string) => {
-      connectedUsers.set(userId, socket.id);
-      console.log(`[socket] Registered user ${userId} -> ${socket.id}`);
+    //
+    // The identity comes from the Supabase access token, not from the argument:
+    // call signalling is routed through connectedUsers, so accepting a
+    // client-supplied id let anyone register as another account and receive that
+    // account's incoming calls.
+    const registerSocketUser = async (label: string, accessToken: unknown) => {
+      const token = typeof accessToken === 'string' ? accessToken.trim() : '';
+      if (!token) {
+        socket.emit('user:register_error', { error: 'A Supabase access token is required to register.' });
+        return;
+      }
+
+      const { data, error } = await supabase.auth.getUser(token);
+      if (error || !data.user) {
+        socket.emit('user:register_error', { error: 'Invalid or expired Supabase session.' });
+        return;
+      }
+
+      const { data: profile } = await supabase
+        .from('users')
+        .select('id')
+        .eq('auth_uid', data.user.id)
+        .maybeSingle();
+      const verifiedId = String(profile?.id ?? data.user.id);
+
+      connectedUsers.set(verifiedId, socket.id);
+      socket.data.userId = verifiedId;
+      socket.emit('user:registered', { userId: verifiedId });
+      console.log(`[socket] ${label} ${verifiedId} -> ${socket.id}`);
+    };
+
+    /** The id proved by a Supabase access token, or null for an anonymous socket. */
+    const verifiedUserId = (): string | null =>
+      typeof socket.data.userId === 'string' && socket.data.userId ? socket.data.userId : null;
+
+    socket.on('user:register', (_userId: string, accessToken?: unknown) => {
+      void registerSocketUser('Registered user', accessToken);
     });
 
     // Legacy alias — keep backward compatibility
-    socket.on('user:online', (userId: string) => {
-      connectedUsers.set(userId, socket.id);
-      console.log(`[socket] User online ${userId} -> ${socket.id}`);
+    socket.on('user:online', (_userId: string, accessToken?: unknown) => {
+      void registerSocketUser('User online', accessToken);
     });
 
     // Initial sync
-    socket.emit('crowds:update', Array.from(liveStreams.entries())
-      .map(([id, data]) => ({ id, ...data }))
-      .sort((a, b) => b.crowdSize - a.crowdSize)
-      .slice(0, 10));
+    socket.emit('crowds:update', topCrowdsPayload());
 
     // ---- Casper Studio Live Project State events ----
+    //
+    // The room is namespaced by the socket's verified id, not by the userId in the
+    // payload: any client could previously join `workspace:<someone else's id>`
+    // and receive that user's studio assets, checkpoints and activity. An
+    // unregistered socket gets a private room of its own; the client re-joins on
+    // `user:registered` to land in the shared one.
+    const joinedWorkspaceKeys = new Set<string>();
+    const workspaceKey = (data: any) => {
+      const owner = verifiedUserId() ?? `anon:${socket.id}`;
+      const project = String(data?.projectId || 'casper-agentic-workspace').slice(0, 120);
+      return `${owner}:${project}`;
+    };
+
     socket.on('workspace:join', (data) => {
       const key = workspaceKey(data);
       const room = `workspace:${key}`;
+      joinedWorkspaceKeys.add(key);
       socket.join(room);
       socket.emit('workspace:state_snapshot', getWorkspaceState(key));
     });
@@ -807,19 +971,50 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     });
 
     // ---- WebRTC Signaling Events ----
+    //
+    // The caller identity is the socket's verified id and the display fields come
+    // from the database: the payload used to carry callerId/callerName/callerAvatar,
+    // so any socket could ring a victim as anyone it liked.
     socket.on('call:initiate', (data) => {
-      const targetSocketId = connectedUsers.get(data.targetUserId);
-      if (targetSocketId) {
+      void (async () => {
+        const callerId = verifiedUserId();
+        if (!callerId) {
+          socket.emit('call:error', { error: 'Register with a Supabase session before placing a call.' });
+          return;
+        }
+
+        const targetUserId = String(data?.targetUserId ?? '');
+        const targetSocketId = targetUserId ? connectedUsers.get(targetUserId) : undefined;
+        if (!targetSocketId) {
+          // Previously the caller just kept ringing an offline user forever.
+          socket.emit('call:unavailable', { targetUserId });
+          return;
+        }
+
+        const { data: caller } = await supabase
+          .from('users')
+          .select('display_name, avatar_url')
+          .eq('id', callerId)
+          .maybeSingle();
+
+        // Record who the room belongs to so /api/livekit/token can refuse a
+        // publish token to anyone else who learns or guesses the name.
+        const roomName = typeof data?.roomName === 'string' ? data.roomName : '';
+        if (roomName) registerCallRoom(roomName, [callerId, targetUserId]);
+
         io.to(targetSocketId).emit('call:incoming', {
-          callerId: data.callerId,
-          callerName: data.callerName,
-          callerAvatar: data.callerAvatar,
-          offer: data.offer,
-          roomName: data.roomName,
-          videoEnabled: data.videoEnabled,
-          transmissionId: data.transmissionId
+          callerId,
+          callerName: caller?.display_name ?? 'Unknown caller',
+          callerAvatar: caller?.avatar_url ?? null,
+          offer: data?.offer,
+          roomName: data?.roomName,
+          videoEnabled: data?.videoEnabled,
+          transmissionId: data?.transmissionId,
         });
-      }
+      })().catch((err) => {
+        console.error('[socket] call:initiate failed:', err);
+        socket.emit('call:error', { error: 'Could not place the call.' });
+      });
     });
 
     socket.on('call:accept', (data) => {
@@ -851,6 +1046,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     });
 
     socket.on('call:end', (data) => {
+      if (typeof data?.roomName === 'string' && data.roomName) releaseCallRoom(data.roomName);
       const targetSocketId = connectedUsers.get(data.targetUserId);
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:ended');
@@ -858,33 +1054,61 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     });
 
     // ---- Post/Like/Comment events ----
+    // Feed freshness comes from Supabase Realtime. Global socket.broadcast for
+    // every like/comment turns a viral post into an O(N sockets) event storm.
+    // Keep toast notifications targeted at the content owner / follow target.
     socket.on('post:create', (post) => {
-      socket.broadcast.emit('activity:notification', { type: 'post', data: post });
+      // Authors still get local UI feedback; other clients pick up via postgres_changes.
+      socket.emit('activity:notification', { type: 'post', data: post });
     });
 
     socket.on('post:like', (likeData) => {
-      socket.broadcast.emit('activity:notification', { type: 'like', data: likeData });
+      emitActivityToUser(likeData?.postAuthorId ?? likeData?.authorId, {
+        type: 'like',
+        data: likeData,
+      });
     });
 
     socket.on('post:comment', (commentData) => {
-      socket.broadcast.emit('activity:notification', { type: 'comment', data: commentData });
+      emitActivityToUser(commentData?.postAuthorId ?? commentData?.authorId, {
+        type: 'comment',
+        data: commentData,
+      });
     });
 
     socket.on('user:follow', (data) => {
-      socket.broadcast.emit('activity:notification', {
+      emitActivityToUser(data?.following?.id, {
         type: 'follow',
         data: {
-          displayName: data.follower.displayName,
-          targetName: data.following.displayName,
-          avatarUrl: data.follower.avatarUrl
-        }
+          displayName: data?.follower?.displayName ?? data?.follower?.display_name,
+          targetName: data?.following?.displayName ?? data?.following?.display_name,
+          avatarUrl: data?.follower?.avatarUrl ?? data?.follower?.avatar_url,
+        },
       });
     });
 
     // ---- Live Streaming events ----
-    socket.on('stream:start', (userData) => {
-      liveStreams.set(socket.id, { ...userData, crowdSize: 0 });
-      broadcastCrowds();
+    // crowds:update is broadcast to every client, so the streamer's display fields
+    // come from their own row rather than from the payload — otherwise any socket
+    // could inject an arbitrary entry into everyone's "top crowds" list.
+    socket.on('stream:start', () => {
+      void (async () => {
+        const streamerId = verifiedUserId();
+        if (!streamerId) return;
+        const { data: streamer } = await supabase
+          .from('users')
+          .select('username, display_name, avatar_url')
+          .eq('id', streamerId)
+          .maybeSingle();
+        if (!streamer) return;
+        liveStreams.set(socket.id, {
+          username: streamer.username ?? '',
+          displayName: streamer.display_name ?? '',
+          avatarUrl: streamer.avatar_url ?? '',
+          crowdSize: 0,
+        });
+        broadcastCrowds();
+      })().catch((err) => console.error('[socket] stream:start failed:', err));
     });
 
     socket.on('stream:stop', () => {
@@ -894,11 +1118,20 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
 
     socket.on('crowd:join', (streamId) => {
       const stream = liveStreams.get(streamId);
-      if (stream) {
-        stream.crowdSize++;
-        userToStream.set(socket.id, streamId);
-        broadcastCrowds();
+      if (!stream) return;
+
+      // Joining a second stream without leaving the first used to increment both
+      // and only ever decrement one, so crowd sizes drifted upwards permanently.
+      const previousStreamId = userToStream.get(socket.id);
+      if (previousStreamId === streamId) return;
+      if (previousStreamId) {
+        const previous = liveStreams.get(previousStreamId);
+        if (previous) previous.crowdSize = Math.max(0, previous.crowdSize - 1);
       }
+
+      stream.crowdSize++;
+      userToStream.set(socket.id, streamId);
+      broadcastCrowds();
     });
 
     socket.on('crowd:leave', () => {
@@ -917,6 +1150,12 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     socket.on('disconnect', () => {
       console.log(`[socket] Disconnected: ${socket.id} (total: ${io.engine.clientsCount})`);
       if (workspaceResourceTimer) clearInterval(workspaceResourceTimer);
+
+      // Socket.IO removes the socket from its rooms before this fires, so an empty
+      // room here means nobody is left to read the state. Without this the map grew
+      // by one entry per user/project for the lifetime of the process.
+      for (const key of joinedWorkspaceKeys) releaseWorkspaceState(key);
+      joinedWorkspaceKeys.clear();
 
       for (const [userId, socketId] of connectedUsers.entries()) {
         if (socketId === socket.id) {
@@ -940,14 +1179,6 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
         userToStream.delete(socket.id);
       }
     });
-
-    function broadcastCrowds() {
-      const topCrowds = Array.from(liveStreams.entries())
-        .map(([id, data]) => ({ id, ...data }))
-        .sort((a, b) => b.crowdSize - a.crowdSize)
-        .slice(0, 10);
-      io.emit('crowds:update', topCrowds);
-    }
   });
 
   // Casper CLI install scripts — must be registered before the SPA fallback so
@@ -978,12 +1209,22 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     app.use(vite.middlewares);
     console.log('[server] Serving frontend through Vite dev middleware');
   } else if (fs.existsSync(distPath)) {
-    app.use(express.static(distPath));
+    app.use(express.static(distPath, {
+      maxAge: '365d',
+      immutable: true,
+      setHeaders(res, filePath) {
+        if (path.basename(filePath) === 'index.html') {
+          // SPA shell must revalidate so deploys pick up new hashed assets.
+          res.setHeader('Cache-Control', 'no-cache');
+        }
+      },
+    }));
     // SPA fallback — must be last route, only for non-API/non-socket paths
     app.get('*', (req, res, next) => {
       if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
         return next();
       }
+      res.setHeader('Cache-Control', 'no-cache');
       res.sendFile(path.join(distPath, 'index.html'));
     });
     console.log(`[server] Serving frontend from ${distPath}`);

@@ -71,7 +71,7 @@ export function assertProductionConfig(
   }
 }
 
-function timingSafeStringEqual(a: string, b: string): boolean {
+export function timingSafeStringEqual(a: string, b: string): boolean {
   // Hash first so the comparison is constant-time regardless of length.
   const ha = crypto.createHash('sha256').update(a).digest();
   const hb = crypto.createHash('sha256').update(b).digest();
@@ -176,6 +176,77 @@ export function createRateLimiter(options: RateLimitOptions): RequestHandler {
     recent.push(now);
     hits.set(key, recent);
     next();
+  };
+}
+
+export interface ConcurrencyGateOptions {
+  /** Maximum number of overlapping async operations. */
+  max: number;
+  /** How long a waiter may sit in the queue before failing open with 503. */
+  queueTimeoutMs?: number;
+  /** Label used in error messages. */
+  name?: string;
+}
+
+/**
+ * Process-local semaphore for expensive work (AI generation, shell exec).
+ * Caps in-flight concurrency so a marketing spike cannot open dozens of
+ * 45–60s provider calls on the same Node event loop.
+ */
+export function createConcurrencyGate(options: ConcurrencyGateOptions) {
+  const max = Math.max(1, options.max);
+  const queueTimeoutMs = options.queueTimeoutMs ?? 10_000;
+  const name = options.name ?? 'resource';
+  let inFlight = 0;
+  const waiters: Array<{
+    resolve: () => void;
+    reject: (err: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }> = [];
+
+  const release = () => {
+    inFlight = Math.max(0, inFlight - 1);
+    const next = waiters.shift();
+    if (!next) return;
+    clearTimeout(next.timer);
+    inFlight += 1;
+    next.resolve();
+  };
+
+  const acquire = async (): Promise<() => void> => {
+    if (inFlight < max) {
+      inFlight += 1;
+      return release;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const entry = {
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          const idx = waiters.indexOf(entry);
+          if (idx >= 0) waiters.splice(idx, 1);
+          reject(new Error(`${name} is at capacity. Try again shortly.`));
+        }, queueTimeoutMs),
+      };
+      waiters.push(entry);
+    });
+
+    return release;
+  };
+
+  return {
+    async run<T>(fn: () => Promise<T>): Promise<T> {
+      const done = await acquire();
+      try {
+        return await fn();
+      } finally {
+        done();
+      }
+    },
+    get stats() {
+      return { inFlight, waiting: waiters.length, max };
+    },
   };
 }
 

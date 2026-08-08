@@ -255,7 +255,7 @@ export const CasperCoBrowse: React.FC<CoBrowseProps> = ({
     stopTts();
     try {
       const serverUrl = import.meta.env.VITE_APP_URL || window.location.origin;
-      const res = await fetch(`${serverUrl}/api/tts`, {
+      const res = await authedFetch(`${serverUrl}/api/tts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: text.slice(0, 4096), speed: 1.05 }),

@@ -365,6 +365,10 @@ export const Feed: React.FC = () => {
   });
   const realtimeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { currentUser } = useAuth();
+  // A stable dependency for the block list. The profile object is replaced on
+  // every realtime update to the user's row (CRED, view_count, streak, ...), so
+  // depending on it reloaded the whole feed underneath the reader.
+  const blockedKey = (currentUser?.blocked_users ?? []).join(',');
 
   // Real-time state
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -375,26 +379,43 @@ export const Feed: React.FC = () => {
 
   useEffect(() => {
     const postId = searchParams.get('post');
-    if (postId) {
-      setIsSharedPostLoading(true);
-      const fetchSharedPost = async () => {
-        try {
-          const { data, error } = await supabase.from('posts').select('*').eq('id', postId).maybeSingle();
-          if (error) throw error;
-          if (data) setSharedPost(data as Post);
-        } catch (error) {
-          console.error('Error fetching shared post:', error);
-        } finally {
-          setIsSharedPostLoading(false);
-        }
-      };
-      fetchSharedPost();
+    if (!postId) {
+      // Without this the modal kept showing the last shared post after the
+      // ?post parameter was removed.
+      setSharedPost(null);
+      setIsSharedPostLoading(false);
+      return;
     }
+
+    let cancelled = false;
+    setIsSharedPostLoading(true);
+    const fetchSharedPost = async () => {
+      try {
+        const { data, error } = await supabase.from('posts').select('*').eq('id', postId).maybeSingle();
+        if (cancelled) return;
+        if (error) throw error;
+        if (data) setSharedPost(data as Post);
+      } catch (error) {
+        if (!cancelled) console.error('Error fetching shared post:', error);
+      } finally {
+        if (!cancelled) setIsSharedPostLoading(false);
+      }
+    };
+    fetchSharedPost();
+
+    return () => { cancelled = true; };
   }, [searchParams]);
 
   const handleLike = (id: string) => {
     if (!currentUser) return;
-    socket.emit('post:like', { postId: id, author: currentUser });
+    const post = posts.find((p) => p.id === id)
+      ?? recommendedPosts.find((p) => p.id === id)
+      ?? (sharedPost?.id === id ? sharedPost : null);
+    socket.emit('post:like', {
+      postId: id,
+      author: currentUser,
+      postAuthorId: post?.author_id ?? null,
+    });
   };
 
   const handleDeletePost = (id: string) => {
@@ -443,7 +464,7 @@ export const Feed: React.FC = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transmissions' }, () => fetchUnread())
       .subscribe();
     return () => { supabase.removeChannel(txChannel); };
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   useEffect(() => {
     socket.on('activity:notification', (notification) => {
@@ -495,7 +516,7 @@ export const Feed: React.FC = () => {
     setLoading(false);
     setHasMore(rows.length >= PAGE_SIZE);
     setCursor(rows.length > 0 ? rows[rows.length - 1].created_at : null);
-  }, [currentUser]);
+  }, [currentUser?.id, blockedKey]);
 
   // Cursor-based: load next page
   const fetchMorePosts = useCallback(async () => {
@@ -518,7 +539,7 @@ export const Feed: React.FC = () => {
     setHasMore(rows.length >= PAGE_SIZE);
     setCursor(rows.length > 0 ? rows[rows.length - 1].created_at : null);
     setIsLoadingMore(false);
-  }, [currentUser, cursor, isLoadingMore, hasMore]);
+  }, [currentUser?.id, blockedKey, cursor, isLoadingMore, hasMore]);
 
   useEffect(() => {
     fetchInitialPosts();
@@ -697,11 +718,14 @@ export const Feed: React.FC = () => {
 
   useEffect(() => {
     // Trigger recommendations whenever the user switches to For You tab
-    // (not just when empty, so a tab switch always refreshes)
-    if (feedType === 'foryou') {
-      getRecommendations();
+    // (not just when empty, so a tab switch always refreshes).
+    // getRecommendations() bails out when no posts have loaded yet, so this also
+    // waits for the first page: opening For You during the initial load used to
+    // leave the tab permanently empty until the user switched away and back.
+    if (feedType === 'foryou' && posts.length > 0) {
+      void getRecommendations();
     }
-  }, [feedType]);
+  }, [feedType, posts.length > 0]);
 
   const [trendFilter, setTrendFilter] = useState<string | null>(null);
 
@@ -1063,7 +1087,9 @@ export const Feed: React.FC = () => {
             endReached={() => { if (feedType === 'latest') loadMorePosts(); }}
             overscan={600}
             itemContent={(index, post) => (
-              <div className="holo-card mb-4">
+              // Keyed by post so a recycled row remounts instead of showing the
+              // previous post's like state and view counter.
+              <div key={post.id} className="holo-card mb-4">
                 <PostCard post={post} onLike={handleLike} onDelete={handleDeletePost} />
               </div>
             )}

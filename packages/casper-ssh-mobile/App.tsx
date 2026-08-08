@@ -12,6 +12,7 @@ import {
   HostCredentials,
   HostProfile,
   knownHostsPath,
+  loadTrustedHosts,
   loadHostProfiles,
   recordTrustedHost,
   removeTrustedHost,
@@ -123,7 +124,14 @@ export default function App() {
               continue;
             }
           } else if (details?.code === 'SSH_HOST_KEY_CHANGED') {
-            const shouldReTrust = await confirmChangedHost(profile);
+            const savedHost = (await loadTrustedHosts()).find(
+              (item) => item.host === profile.host && item.port === profile.port,
+            );
+            const shouldReTrust = await confirmChangedHost(
+              profile,
+              savedHost?.fingerprint,
+              details.fingerprint,
+            );
             if (shouldReTrust) {
               try {
                 await removeTrustedHost(profile.host, profile.port);
@@ -131,7 +139,7 @@ export default function App() {
                 Alert.alert('Unable to remove saved host key', errorMessage(removalError));
                 break;
               }
-              accepted = false;
+              accepted = true;
               continue;
             }
           } else {
@@ -258,11 +266,11 @@ function confirmHostKey(profile: HostProfile, keyType: string, fingerprint: stri
   });
 }
 
-function confirmChangedHost(profile: HostProfile): Promise<boolean> {
+function confirmChangedHost(profile: HostProfile, oldFingerprint?: string, newFingerprint?: string): Promise<boolean> {
   return new Promise((resolve) => {
     Alert.alert(
       'HOST KEY CHANGED',
-      `The key for ${profile.host}:${profile.port} no longer matches the saved key. This may indicate a man-in-the-middle attack. Delete the saved key and re-trust only if you have independently verified the server.`,
+      `The key for ${profile.host}:${profile.port} no longer matches the saved key. This may indicate a man-in-the-middle attack.\n\nPreviously trusted:\n${oldFingerprint ?? 'unknown'}\n\nPresented now:\n${newFingerprint ?? 'unknown'}\n\nDelete the saved key and trust the new key only if you have independently verified the server.`,
       [{ text: 'Keep blocked', style: 'cancel', onPress: () => resolve(false) }, { text: 'Delete and re-trust', style: 'destructive', onPress: () => resolve(true) }],
       { cancelable: true, onDismiss: () => resolve(false) },
     );

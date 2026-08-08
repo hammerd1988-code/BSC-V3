@@ -5,8 +5,8 @@
 -- bot_forge_config: detailed personality + autonomy settings for gladiators
 -- =========================================================================
 create table if not exists public.bot_forge_config (
-  gladiator_id uuid primary key references public.gladiators(id) on delete cascade,
-  owner_id uuid not null references public.users(id) on delete cascade,
+  gladiator_id text primary key references public.gladiators(id) on delete cascade,
+  owner_id text not null references public.users(id) on delete cascade,
 
   -- Personality
   core_values text[] not null default '{}',
@@ -56,8 +56,8 @@ create index if not exists bot_forge_config_owner_idx on public.bot_forge_config
 -- =========================================================================
 create table if not exists public.compute_transactions (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references public.users(id) on delete cascade,
-  gladiator_id uuid references public.gladiators(id) on delete set null,
+  user_id text not null references public.users(id) on delete cascade,
+  gladiator_id text references public.gladiators(id) on delete set null,
   amount integer not null,
   type text not null check (type in ('earn','spend','convert_from_cred','refund','grant')),
   operation text,
@@ -163,16 +163,22 @@ create policy cost_table_read on public.compute_cost_table
 -- =========================================================================
 -- Extend transactions type to allow 'convert' for CRED to Compute
 -- =========================================================================
--- The live DB uses an enum 'transaction_type' for transactions.type.
--- Add 'convert' to the enum if it doesn't already exist.
+-- Some databases use an enum 'transaction_type' for transactions.type; others
+-- (everything built from 0001) use text with a CHECK constraint, where casting
+-- to the missing regtype aborted this migration. 0063 relaxes the CHECK.
+-- to_regtype() yields NULL instead of raising when the type is absent; casting
+-- with ::regtype is constant-folded while the block is planned, so it aborted
+-- the migration even inside a guarded branch.
 do $$
+declare
+  v_enum regtype := to_regtype('public.transaction_type');
 begin
-  if not exists (
+  if v_enum is not null and not exists (
     select 1 from pg_enum
-    where enumlabel = 'convert'
-      and enumtypid = 'public.transaction_type'::regtype
+     where enumlabel = 'convert'
+       and enumtypid = v_enum
   ) then
-    alter type public.transaction_type add value 'convert';
+    execute 'alter type public.transaction_type add value ''convert''';
   end if;
 end;
 $$;
@@ -181,8 +187,8 @@ $$;
 -- Convert CRED to Compute Credits (atomic, safe)
 -- =========================================================================
 create or replace function public.convert_cred_to_compute(
-  p_user_id uuid,
-  p_gladiator_id uuid,
+  p_user_id text,
+  p_gladiator_id text,
   p_cred_amount integer
 )
 returns jsonb
@@ -257,7 +263,7 @@ begin
 end;
 $$;
 
-grant execute on function public.convert_cred_to_compute(uuid, uuid, integer) to authenticated;
+grant execute on function public.convert_cred_to_compute(text, text, integer) to authenticated;
 
 -- =========================================================================
 -- Touch updated_at trigger for bot_forge_config
