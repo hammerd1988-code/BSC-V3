@@ -37,7 +37,14 @@ import { registerServerAiRoutes } from './serverAi.js';
 import { registerColosseumRoutes } from './colosseumRoutes.js';
 import { initBotMayhemAutonomy, registerBotMayhemRoutes } from './botMayhemAutonomy.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
-import { registerCallRoom, releaseCallRoom } from './callRooms.js';
+import {
+  areCallPeers,
+  isCallRoomParticipant,
+  registerCallPeers,
+  registerCallRoom,
+  releaseCallPeers,
+  releaseCallRoom,
+} from './callRooms.js';
 import { registerCoBrowseSocket } from './casperCoBrowse.js';
 import { registerStripeRoutes } from './stripeRoutes.js';
 import { findCredPackageByPrice, totalCred } from './shared/credPackages.js';
@@ -52,20 +59,11 @@ import {
   resolveSocketCorsOrigin,
 } from './serverSecurity.js';
 
-/** Paths that legitimately carry large JSON (base64 images / studio payloads). */
-const LARGE_JSON_BODY_PREFIXES = [
-  '/api/ai/vision',
-  '/api/runway',
-  '/api/casper/browser',
-  '/api/casper/cobrowse',
-];
-
-function jsonBodyLimitForPath(pathname: string): string {
-  if (LARGE_JSON_BODY_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))) {
-    return '12mb';
-  }
-  return '1mb';
-}
+import {
+  cacheControlForAsset,
+  jsonBodyLimitForPath,
+  userRoom,
+} from './serverHttp.js';
 
 const supabase = createServerSupabaseClient();
 
@@ -114,10 +112,27 @@ async function startServer() {
   app.use(compression({ threshold: 1024 }));
 
   // Middleware (skip Stripe webhook — needs raw body for signature verification).
-  // Default JSON body is 1mb; vision/studio routes keep the 12mb ceiling.
+  // Default JSON body is 1mb; vision/studio/relay routes keep the 12mb ceiling.
   app.use((req, res, next) => {
     if (req.path === '/api/stripe/webhook') return next();
     express.json({ limit: jsonBodyLimitForPath(req.path) })(req, res, next);
+  });
+
+  // body-parser raises PayloadTooLargeError, which Express's default handler
+  // renders as an HTML stack page. Every client here parses JSON, so translate
+  // it (and malformed JSON) into the response shape they already understand.
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!err) return next();
+    if (err.type === 'entity.too.large') {
+      return res.status(413).json({
+        success: false,
+        error: `Request body exceeds the ${jsonBodyLimitForPath(req.path)} limit for this endpoint.`,
+      });
+    }
+    if (err.type === 'entity.parse.failed') {
+      return res.status(400).json({ success: false, error: 'Request body is not valid JSON.' });
+    }
+    return next(err);
   });
 
   // CORS middleware for REST endpoints, including Bot API Bearer-token calls.
@@ -449,13 +464,15 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim()
         || (result.ok ? '(no output)' : result.reason || `command exited with code ${result.exitCode}`);
 
-      // Broadcast the terminal activity to clients so they can see bots working
+      // Let clients see that a bot is working, but never what it ran or what it
+      // printed: this is an io.emit, so `command` and `output` went to every
+      // connected socket — including anonymous ones — and in elevated mode that
+      // is arbitrary shell output from the host. No client reads those two
+      // fields; the operator gets them in the HTTP response below.
       io.emit('activity:notification', {
         type: 'terminal_execution',
         data: {
           agentId,
-          command,
-          output,
           ok: result.ok,
           exitCode: result.exitCode,
           truncated: result.truncated,
@@ -528,7 +545,10 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
         console.warn('[casper-terminal] activity log skipped:', logErr);
       }
 
-      io.emit('activity:notification', {
+      // Scoped to the operator who ran it. Broadcasting the command and its
+      // output to every socket leaked the contents of an admin shell session to
+      // anyone with the page open.
+      io.to(userRoom(profile.id)).emit('activity:notification', {
         type: 'terminal_execution',
         data: {
           actorId: profile.id,
@@ -678,7 +698,9 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
         console.warn('[casper-integrations] activity log skipped:', logErr);
       }
 
-      io.emit('activity:notification', {
+      // Which third-party integrations an account has connected, and what it
+      // does with them, is that account's business — send it only to them.
+      io.to(userRoom(profile.id)).emit('activity:notification', {
         type: 'integration_execution',
         data: {
           actorId: profile.id,
@@ -839,13 +861,19 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     }, CROWDS_BROADCAST_MS);
   }
 
-  /** Notify one verified user when possible; never mesh-broadcast social noise. */
-  function emitActivityToUser(userId: unknown, notification: { type: string; data: unknown }) {
+  /**
+   * Notify every live socket for one verified user; never mesh-broadcast social
+   * noise. `exceptUserId` suppresses self-notification, so liking your own post
+   * or commenting on your own thread does not toast you about yourself.
+   */
+  function emitActivityToUser(
+    userId: unknown,
+    notification: { type: string; data: unknown },
+    exceptUserId?: string | null,
+  ) {
     if (typeof userId !== 'string' || !userId) return;
-    const targetSocketId = connectedUsers.get(userId);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('activity:notification', notification);
-    }
+    if (exceptUserId && exceptUserId === userId) return;
+    io.to(userRoom(userId)).emit('activity:notification', notification);
   }
 
   // Co-browse: register Casper shared browser control events
@@ -891,6 +919,11 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       const verifiedId = String(profile?.id ?? data.user.id);
 
       connectedUsers.set(verifiedId, socket.id);
+      // `connectedUsers` holds one socket per user, so a second tab evicts the
+      // first and closing the second removes the entry while the first is still
+      // open. Notifications go through a per-user room instead, which tracks
+      // every live socket for the account.
+      void socket.join(userRoom(verifiedId));
       socket.data.userId = verifiedId;
       socket.emit('user:registered', { userId: verifiedId });
       console.log(`[socket] ${label} ${verifiedId} -> ${socket.id}`);
@@ -1001,6 +1034,9 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
         // publish token to anyone else who learns or guesses the name.
         const roomName = typeof data?.roomName === 'string' ? data.roomName : '';
         if (roomName) registerCallRoom(roomName, [callerId, targetUserId]);
+        // Also recorded without the room name, because the signalling events
+        // that follow do not all carry one.
+        registerCallPeers(callerId, targetUserId);
 
         io.to(targetSocketId).emit('call:incoming', {
           callerId,
@@ -1017,74 +1053,106 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       });
     });
 
+    /**
+     * The peer id in these payloads is client-supplied, so on its own it let any
+     * socket answer someone else's call with its own SDP, push ICE candidates
+     * into a conversation it was not part of, or hang up a stranger's call.
+     * Resolve the socket's own verified id and require the two to be paired by a
+     * `call:initiate` that actually happened.
+     */
+    const callPeerSocket = (peerId: unknown): string | undefined => {
+      const selfId = verifiedUserId();
+      const otherId = typeof peerId === 'string' ? peerId : '';
+      if (!selfId || !otherId || !areCallPeers(selfId, otherId)) return undefined;
+      return connectedUsers.get(otherId);
+    };
+
     socket.on('call:accept', (data) => {
-      const targetSocketId = connectedUsers.get(data.callerId);
+      const targetSocketId = callPeerSocket(data?.callerId);
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:accepted', { answer: data.answer, roomName: data.roomName });
       }
     });
 
     socket.on('call:reject', (data) => {
-      const targetSocketId = connectedUsers.get(data.callerId);
+      const targetSocketId = callPeerSocket(data?.callerId);
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:rejected');
       }
+      const selfId = verifiedUserId();
+      if (selfId && typeof data?.callerId === 'string') releaseCallPeers(selfId, data.callerId);
     });
 
     socket.on('call:ice-candidate', (data) => {
-      const targetSocketId = connectedUsers.get(data.targetUserId);
+      const targetSocketId = callPeerSocket(data?.targetUserId);
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:ice-candidate', { candidate: data.candidate });
       }
     });
 
     socket.on('call:filter', (data) => {
-      const targetSocketId = connectedUsers.get(data.targetUserId);
+      const targetSocketId = callPeerSocket(data?.targetUserId);
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:filter', { filter: data.filter });
       }
     });
 
     socket.on('call:end', (data) => {
-      if (typeof data?.roomName === 'string' && data.roomName) releaseCallRoom(data.roomName);
-      const targetSocketId = connectedUsers.get(data.targetUserId);
+      const selfId = verifiedUserId();
+      const targetSocketId = callPeerSocket(data?.targetUserId);
+      // Releasing the room is what stops LiveKit minting more publish tokens for
+      // it, so only a participant may do it.
+      if (selfId && typeof data?.roomName === 'string' && data.roomName
+          && isCallRoomParticipant(data.roomName, selfId)) {
+        releaseCallRoom(data.roomName);
+      }
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:ended');
       }
+      if (selfId && typeof data?.targetUserId === 'string') releaseCallPeers(selfId, data.targetUserId);
     });
 
     // ---- Post/Like/Comment events ----
-    // Feed freshness comes from Supabase Realtime. Global socket.broadcast for
-    // every like/comment turns a viral post into an O(N sockets) event storm.
-    // Keep toast notifications targeted at the content owner / follow target.
-    socket.on('post:create', (post) => {
-      // Authors still get local UI feedback; other clients pick up via postgres_changes.
-      socket.emit('activity:notification', { type: 'post', data: post });
-    });
+    //
+    // Feed freshness comes from Supabase Realtime, so these exist only to raise a
+    // toast. Broadcasting each one turned a viral post into an O(N sockets) event
+    // storm, and an unregistered socket could spray the whole platform with
+    // invented activity — so each is now delivered to the one account it concerns
+    // and requires a verified session behind it.
+    //
+    // `post:create` has no single recipient, so there is nobody to target.
+    // Echoing it back to the sender only toasts the author about their own post,
+    // and the feed already shows it via postgres_changes, so the event is
+    // deliberately left unhandled until there is a follower fan-out to send it
+    // to. Clients may keep emitting it; Socket.IO drops unhandled events.
 
     socket.on('post:like', (likeData) => {
-      emitActivityToUser(likeData?.postAuthorId ?? likeData?.authorId, {
-        type: 'like',
-        data: likeData,
-      });
+      const actorId = verifiedUserId();
+      if (!actorId) return;
+      emitActivityToUser(likeData?.postAuthorId ?? likeData?.authorId, { type: 'like', data: likeData }, actorId);
     });
 
     socket.on('post:comment', (commentData) => {
-      emitActivityToUser(commentData?.postAuthorId ?? commentData?.authorId, {
-        type: 'comment',
-        data: commentData,
-      });
+      const actorId = verifiedUserId();
+      if (!actorId) return;
+      emitActivityToUser(commentData?.postAuthorId ?? commentData?.authorId, { type: 'comment', data: commentData }, actorId);
     });
 
     socket.on('user:follow', (data) => {
-      emitActivityToUser(data?.following?.id, {
-        type: 'follow',
-        data: {
-          displayName: data?.follower?.displayName ?? data?.follower?.display_name,
-          targetName: data?.following?.displayName ?? data?.following?.display_name,
-          avatarUrl: data?.follower?.avatarUrl ?? data?.follower?.avatar_url,
+      const actorId = verifiedUserId();
+      if (!actorId) return;
+      emitActivityToUser(
+        data?.following?.id,
+        {
+          type: 'follow',
+          data: {
+            displayName: data?.follower?.displayName ?? data?.follower?.display_name,
+            targetName: data?.following?.displayName ?? data?.following?.display_name,
+            avatarUrl: data?.follower?.avatarUrl ?? data?.follower?.avatar_url,
+          },
         },
-      });
+        actorId,
+      );
     });
 
     // ---- Live Streaming events ----
@@ -1210,13 +1278,8 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     console.log('[server] Serving frontend through Vite dev middleware');
   } else if (fs.existsSync(distPath)) {
     app.use(express.static(distPath, {
-      maxAge: '365d',
-      immutable: true,
       setHeaders(res, filePath) {
-        if (path.basename(filePath) === 'index.html') {
-          // SPA shell must revalidate so deploys pick up new hashed assets.
-          res.setHeader('Cache-Control', 'no-cache');
-        }
+        res.setHeader('Cache-Control', cacheControlForAsset(distPath, filePath));
       },
     }));
     // SPA fallback — must be last route, only for non-API/non-socket paths
@@ -1255,6 +1318,22 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     httpServer.listen(PORT, '0.0.0.0');
   });
 }
+
+// Node's default for an unhandled rejection is to terminate. This process holds
+// all Socket.IO connections, the live-stream crowd map and the workspace state
+// in memory, so one stray rejection anywhere — a background autonomy timer, a
+// provider call nobody awaited — drops every connected session and loses that
+// state. Keep serving and make the rejection loud instead. An uncaught
+// exception leaves indeterminate state, so that one still exits and lets the
+// platform restart the process.
+process.on('unhandledRejection', (reason) => {
+  console.error('[server] Unhandled promise rejection (process kept alive):', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[server] Uncaught exception — exiting for a clean restart:', err);
+  process.exit(1);
+});
 
 startServer().catch(err => {
   console.error('[server] Failed to start:', err);

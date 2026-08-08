@@ -66,6 +66,7 @@ const REQUIRED_TABLES = [
   'device_push_tokens',
   'referrals',
   'gladiators',
+  'user_ai_credentials',
 ];
 
 /**
@@ -89,6 +90,7 @@ const UPSERT_CONFLICT_TARGETS: Array<[string, string]> = [
   ['casper_cli_devices', 'machine_id'],
   ['casper_integrations', 'user_id,integration_key'],
   ['device_push_tokens', 'token'],
+  ['user_ai_credentials', 'user_id'],
   ['faction_members', 'id'],
   ['factions', 'id'],
   ['gladiators', 'id'],
@@ -268,6 +270,80 @@ describe('supabase migrations', () => {
     );
     expect(rows[0]?.anon).toBe(false);
     expect(rows[0]?.authed).toBe(true);
+  });
+
+  /**
+   * The like button writes nothing but the post_likes row and relies entirely on
+   * this trigger for the counters, so both columns have to move together and
+   * neither may go negative. Before this, nothing wrote post_likes from the
+   * browser at all and botApi incremented likes_count itself on top of the
+   * trigger, which double-counted every bot reaction.
+   */
+  it('moves both post counters from the post_likes row alone', async () => {
+    await db.query(`insert into public.users (id, username, display_name) values ('liker', 'liker', 'Liker')`);
+    await db.query(`insert into public.posts (id, author_id, content) values ('liked-post', 'liker', 'hello')`);
+
+    const counters = async () => {
+      const { rows } = await db.query<{ likes: number; likes_count: number }>(
+        `select likes, likes_count from public.posts where id = 'liked-post'`,
+      );
+      return { likes: Number(rows[0]?.likes), likesCount: Number(rows[0]?.likes_count) };
+    };
+
+    expect(await counters()).toEqual({ likes: 0, likesCount: 0 });
+
+    await db.query(`insert into public.post_likes (post_id, user_id) values ('liked-post', 'liker')`);
+    expect(await counters()).toEqual({ likes: 1, likesCount: 1 });
+
+    // The client treats a duplicate as "already liked" rather than a failure,
+    // which only holds because the primary key rejects it.
+    await expect(
+      db.query(`insert into public.post_likes (post_id, user_id) values ('liked-post', 'liker')`),
+    ).rejects.toThrow(/duplicate key/i);
+    expect(await counters()).toEqual({ likes: 1, likesCount: 1 });
+
+    await db.query(`delete from public.post_likes where post_id = 'liked-post' and user_id = 'liker'`);
+    expect(await counters()).toEqual({ likes: 0, likesCount: 0 });
+
+    // An unlike that matches nothing must not drive the counter below zero.
+    await db.query(`delete from public.post_likes where post_id = 'liked-post' and user_id = 'liker'`);
+    expect(await counters()).toEqual({ likes: 0, likesCount: 0 });
+  });
+
+  /**
+   * `users readable by authed` has no column restriction and every client read
+   * is `select('*')`, so anything secret in that row is readable by every
+   * signed-in account. The provider key the user pays for therefore lives in
+   * its own owner-scoped table, and a trigger keeps it from drifting back.
+   */
+  it('keeps the per-user provider key out of the shared users row', async () => {
+    await db.query(
+      `insert into public.users (id, username, display_name, ai_settings)
+       values ('ai-key-user', 'ai_key_user', 'AI Key User', '{"model":"m","apiKey":"sk-insert"}'::jsonb)`,
+    );
+    const afterInsert = await db.query<{ settings: string }>(
+      `select ai_settings::text as settings from public.users where id = 'ai-key-user'`,
+    );
+    expect(afterInsert.rows[0]?.settings).not.toContain('sk-insert');
+
+    await db.query(
+      `update public.users set ai_settings = '{"model":"m","api_key":"sk-update"}'::jsonb where id = 'ai-key-user'`,
+    );
+    const afterUpdate = await db.query<{ settings: string }>(
+      `select ai_settings::text as settings from public.users where id = 'ai-key-user'`,
+    );
+    expect(afterUpdate.rows[0]?.settings).not.toContain('sk-update');
+  });
+
+  it('scopes user_ai_credentials to its owner and hides it from anon', async () => {
+    const { rows } = await db.query<{ anon: boolean; rls: boolean; policies: number }>(
+      `select has_table_privilege('anon', 'public.user_ai_credentials', 'select') as anon,
+              (select relrowsecurity from pg_class where oid = 'public.user_ai_credentials'::regclass) as rls,
+              (select count(*)::int from pg_policy where polrelid = 'public.user_ai_credentials'::regclass) as policies`,
+    );
+    expect(rows[0]?.anon).toBe(false);
+    expect(rows[0]?.rls).toBe(true);
+    expect(rows[0]?.policies).toBe(4);
   });
 
   it('keeps apply_increments on invoker rights', async () => {

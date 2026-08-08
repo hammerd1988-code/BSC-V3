@@ -54,6 +54,9 @@ type ApnsClient = import('apns2').ApnsClient;
 const APNS_BUNDLE_ID = process.env.APNS_BUNDLE_ID || 'org.bloodsweatcode.app';
 const FCM_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
+// Push is fired from notification paths that callers await. Without a deadline a
+// stalled Google connection holds those callers open for the socket's lifetime.
+const FCM_TIMEOUT_MS = 10_000;
 
 let serviceAccount: ServiceAccount | null | undefined;
 let cachedAccessToken: { value: string; expiresAt: number } | null = null;
@@ -129,6 +132,7 @@ async function getFcmAccessToken(sa: ServiceAccount): Promise<string | null> {
       grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
       assertion,
     }),
+    signal: AbortSignal.timeout(FCM_TIMEOUT_MS),
   });
 
   if (!res.ok) {
@@ -219,6 +223,7 @@ async function sendFcm(
           body: JSON.stringify({
             message: { token, notification: { title: msg.title, body: msg.body }, data, android },
           }),
+          signal: AbortSignal.timeout(FCM_TIMEOUT_MS),
         });
 
         if (res.ok) {

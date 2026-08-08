@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { maxTokensParam } from './src/lib/modelParams.js';
-import { createConcurrencyGate, createRateLimiter } from './serverSecurity.js';
+import { createConcurrencyGate, createRateLimiter, isCapacityError } from './serverSecurity.js';
 
 /** Cap concurrent provider calls so a traffic spike cannot saturate the event loop. */
 const AI_MAX_IN_FLIGHT = Math.max(1, Number(process.env.AI_MAX_IN_FLIGHT || 5) || 5);
@@ -172,14 +172,17 @@ export async function generateServerText(
 ): Promise<ServerAIResult> {
   try {
     return await aiConcurrencyGate.run(() => generateServerTextUnlocked(prompt, options));
-  } catch (err: any) {
-    const message = String(err?.message ?? err ?? 'AI generation is at capacity');
-    if (message.includes('at capacity')) {
+  } catch (err) {
+    // Only a gate timeout degrades to an empty result. A provider error has to
+    // keep propagating, otherwise every upstream failure is reported to callers
+    // as "no text generated" and the real cause never reaches the logs.
+    if (isCapacityError(err)) {
+      const usesGemini = !options.apiKeyOverride && Boolean(GEMINI_API_KEY());
       return {
-        provider: 'openai-compatible',
-        model: openAiModel(options.preferredModel),
+        provider: usesGemini ? 'gemini' : 'openai-compatible',
+        model: usesGemini ? geminiModel(options.preferredModel) : openAiModel(options.preferredModel),
         text: '',
-        lastError: message,
+        lastError: err.message,
       };
     }
     throw err;
@@ -448,6 +451,22 @@ function bearerToken(req: Request) {
   return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
 }
 
+/**
+ * These two routes bill the platform's provider key, and `maxTokens` and the
+ * prompt were both passed straight through from the request body. A signed-in
+ * caller could therefore ask for an arbitrarily large completion, which the
+ * 30-per-minute rate limit does nothing about — it counts requests, not spend.
+ */
+export const MAX_REQUESTED_MAX_TOKENS = 8192;
+const MAX_PROMPT_CHARS = 100_000;
+
+export function clampRequestedMaxTokens(requested: unknown): number | undefined {
+  if (typeof requested !== 'number' || !Number.isFinite(requested)) return undefined;
+  const floored = Math.floor(requested);
+  if (floored < 1) return undefined;
+  return Math.min(floored, MAX_REQUESTED_MAX_TOKENS);
+}
+
 async function requireSupabaseUser(req: Request, res: Response, supabase: SupabaseClient) {
   const token = bearerToken(req);
   if (!token) {
@@ -467,6 +486,7 @@ async function requireSupabaseUser(req: Request, res: Response, supabase: Supaba
 export function registerServerAiRoutes(app: Express, supabase: SupabaseClient) {
   const aiRateLimit = createRateLimiter({ name: 'AI generation', windowMs: 60_000, max: 30 });
 
+
   app.post('/api/ai/generate-text', aiRateLimit, async (req, res) => {
     try {
       const authorized = await requireSupabaseUser(req, res, supabase);
@@ -485,11 +505,15 @@ export function registerServerAiRoutes(app: Express, supabase: SupabaseClient) {
         res.status(400).json({ success: false, error: 'Prompt is required.' });
         return;
       }
+      if (prompt.length > MAX_PROMPT_CHARS) {
+        res.status(413).json({ success: false, error: 'Prompt is too long.' });
+        return;
+      }
 
       const result = await generateServerText(prompt, {
         systemPrompt: typeof body.systemPrompt === 'string' ? body.systemPrompt : undefined,
         temperature: typeof body.temperature === 'number' ? body.temperature : undefined,
-        maxTokens: typeof body.maxTokens === 'number' ? body.maxTokens : undefined,
+        maxTokens: clampRequestedMaxTokens(body.maxTokens),
         jsonResponse: Boolean(body.jsonResponse),
       });
 
@@ -549,13 +573,32 @@ export function registerServerAiRoutes(app: Express, supabase: SupabaseClient) {
       res.json({ success: true, text: result });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Vision analysis failed.';
+      if (isCapacityError(error)) {
+        res.setHeader('Retry-After', '5');
+        res.status(503).json({ success: false, error: message });
+        return;
+      }
       console.error('[serverAi] vision route error:', message);
       res.status(502).json({ success: false, error: message });
     }
   });
 }
 
+/**
+ * Vision is the most expensive provider call in the app — a multi-megabyte
+ * upload plus a 45s ceiling — so it shares the text path's concurrency budget
+ * rather than running unbounded alongside it.
+ */
 async function generateVisionText(
+  imageBase64: string,
+  prompt: string,
+  mimeType: string,
+  systemPrompt?: string,
+): Promise<string> {
+  return aiConcurrencyGate.run(() => generateVisionTextUnlocked(imageBase64, prompt, mimeType, systemPrompt));
+}
+
+async function generateVisionTextUnlocked(
   imageBase64: string,
   prompt: string,
   mimeType: string,

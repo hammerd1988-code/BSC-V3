@@ -402,8 +402,11 @@ async function recordFeatureUsage(supabase: SupabaseClient, access: FeatureAcces
       p_amount: 1,
     });
     if (error) {
+      // No absolute-value fallback here: `access.used` came from a read taken
+      // before the generation, so writing `used + 1` can hand back a slot two
+      // overlapping requests already spent. Losing one increment is better than
+      // rewinding the counter.
       console.error('[Runway] feature usage increment failed:', error);
-      await supabase.from('feature_usage').update({ usage_count: access.used + 1 }).eq('id', access.usageId);
     }
     return access.used + 1;
   }
