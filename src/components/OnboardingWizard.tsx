@@ -90,17 +90,30 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
     const selectedArchetype = ARCHETYPES.find(a => a.id === archetype) ?? DEFAULT_ARCHETYPE;
     const bioText = bio.trim() || selectedArchetype.desc;
 
-    const { error } = await supabase.from('users').update({
+    const identityFields = {
       display_name: callsign.trim() || currentUser.display_name || currentUser.username || 'New Operative',
       bio: bioText,
       custom_accent: accentColor || selectedArchetype.accent,
-      onboarding_complete: true,
       ai_settings: {
         ...(currentUser.ai_settings || {}),
         archetype: selectedArchetype.id,
         interests: Array.from(interests),
       },
-    }).eq('id', currentUser.id);
+    };
+
+    const { error } = await supabase.from('users')
+      .update({ ...identityFields, onboarding_complete: true })
+      .eq('id', currentUser.id);
+
+    // If the database predates migration 0062 the onboarding_complete column
+    // doesn't exist and the whole update is rejected. Retry without the flag
+    // so the user's identity (name/bio/accent) is never lost to it.
+    if (error && /onboarding_complete/i.test(error.message)) {
+      const retry = await supabase.from('users').update(identityFields).eq('id', currentUser.id);
+      if (retry.error) throw retry.error;
+      localStorage.setItem(`bsc_onboarding_dismissed_${currentUser.id}`, '1');
+      return;
+    }
     if (error) throw error;
   };
 
@@ -139,14 +152,29 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
 
   const handlePlanSelect = async (tier: SubscriptionTier, billing: 'monthly' | 'annual') => {
     if (!currentUser) return;
+    setSaveError(null);
+
     if (tier === 'indie') {
-      await awardAchievement(currentUser.id, 'early_adopter');
-      await awardAchievement(currentUser.id, 'profile_complete');
+      // Achievements are a bonus; failing to award one must not trap the user on
+      // the plan step at the end of signup.
+      try {
+        await awardAchievement(currentUser.id, 'early_adopter');
+        await awardAchievement(currentUser.id, 'profile_complete');
+      } catch (err) {
+        console.error('[Onboarding] Achievement award failed:', err);
+      }
       setStep('complete');
       setTimeout(onComplete, 2500);
       return;
     }
-    await openCheckout(tier as 'operator' | 'architect', billing);
+
+    try {
+      await openCheckout(tier as 'operator' | 'architect', billing);
+    } catch (err) {
+      // Without this the rejection was unhandled and the plan step just sat there.
+      console.error('[Onboarding] Checkout failed:', err);
+      setSaveError('Could not open checkout. You can upgrade any time from Settings.');
+    }
   };
 
   const STEPS: Step[] = ['intro', 'archetype', 'callsign', 'interests', 'theme', 'plan', 'complete'];
@@ -509,12 +537,18 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
 
         {/* ── PLAN ──────────────────────────────────────────────────────── */}
         {step === 'plan' && (
-          <SubscriptionOnboarding
-            key="plan"
-            variant="embedded"
-            onBack={() => setStep('theme')}
-            onSelectPlan={handlePlanSelect}
-          />
+          <div key="plan" className="w-full">
+            <SubscriptionOnboarding
+              variant="embedded"
+              onBack={() => setStep('theme')}
+              onSelectPlan={handlePlanSelect}
+            />
+            {saveError && (
+              <p className="mx-auto mt-4 max-w-md rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-center text-xs font-bold text-red-200">
+                {saveError}
+              </p>
+            )}
+          </div>
         )}
 
         {/* ── COMPLETE ──────────────────────────────────────────────────── */}

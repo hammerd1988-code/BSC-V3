@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { ArrowLeft, Crown, Loader2, Megaphone, MessageCircle, Plus, Send, Shield, ShieldAlert, Users, Zap } from 'lucide-react';
@@ -50,8 +50,15 @@ export const FactionDetail: React.FC = () => {
   const captain = members.find((member) => member.role === 'captain');
   const factionLore = faction ? getFactionLore(faction.slug) : null;
 
+  // Guards against a slower earlier load painting its faction into a view the
+  // reader has already navigated away from: switching factions mid-fetch showed
+  // the previous faction's members and posts under the new faction's header.
+  const loadRequestRef = useRef(0);
+
   const loadFaction = async () => {
     if (!slug) return;
+    const request = ++loadRequestRef.current;
+    const isStale = () => request !== loadRequestRef.current;
     setLoading(true);
 
     const { data: factionRow, error: factionError } = await supabase
@@ -59,6 +66,8 @@ export const FactionDetail: React.FC = () => {
       .select('*')
       .eq('slug', slug)
       .maybeSingle();
+
+    if (isStale()) return;
 
     if (factionError || !factionRow) {
       console.warn('[FactionDetail] Faction not found', factionError?.message);
@@ -84,6 +93,8 @@ export const FactionDetail: React.FC = () => {
         .limit(50),
     ]);
 
+    if (isStale()) return;
+
     setMembers((memberRows ?? []) as JoinedFactionMember[]);
     setPosts((postRows ?? []) as JoinedFactionPost[]);
     setLoading(false);
@@ -108,10 +119,14 @@ export const FactionDetail: React.FC = () => {
     if (!currentUser || !faction) return;
     setJoining(true);
 
-    if (currentMembership) {
-      await supabase.from('faction_members').delete().eq('id', currentMembership.id);
-    } else {
-      await supabase.from('faction_members').insert({ faction_id: faction.id, user_id: currentUser.id, role: 'member' });
+    // An RLS rejection here used to be discarded, so the button spun and the
+    // roster came back unchanged with nothing explaining why.
+    const { error } = currentMembership
+      ? await supabase.from('faction_members').delete().eq('id', currentMembership.id)
+      : await supabase.from('faction_members').insert({ faction_id: faction.id, user_id: currentUser.id, role: 'member' });
+
+    if (error) {
+      console.warn('[FactionDetail] Failed to change membership', error.message);
     }
 
     await loadFaction();
