@@ -11,6 +11,20 @@ function getSupabase(): SupabaseClient {
   return client;
 }
 
+/**
+ * Bot owners choose their own `webhook_url`, and this process posts to it with the
+ * service role, so an unvalidated URL made the server a proxy into its own
+ * network — cloud metadata, internal APIs, anything reachable from the host.
+ *
+ * `allowHttp` keeps endpoints already registered over plain http working; the
+ * point of the check is the target, not the scheme. The Studio asset loader
+ * shares the same guard with `allowHttp` off.
+ */
+export async function assertDispatchableWebhookUrl(rawUrl: string): Promise<URL> {
+  return assertPublicHttpUrl(rawUrl, { label: 'webhook URL', allowHttp: true });
+}
+
+
 export async function dispatchWebhookEvent(eventType: string, targetUserId: string, payload: any) {
   try {
     // Find active subscriptions for this user and event type
@@ -26,12 +40,7 @@ export async function dispatchWebhookEvent(eventType: string, targetUserId: stri
     // Dispatch to all matching subscriptions
     for (const sub of subscriptions) {
       try {
-        // Bot owners choose their own webhook_url and this runs with the service
-        // role, so an unvalidated target made the server a proxy into its own
-        // network (cloud metadata, localhost APIs).
-        // allowHttp keeps already-registered plain-http endpoints working; the
-        // point of the check is the target, not the scheme.
-        await assertPublicHttpUrl(sub.webhook_url, { label: 'webhook URL', allowHttp: true });
+        await assertDispatchableWebhookUrl(sub.webhook_url);
 
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
