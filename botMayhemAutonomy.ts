@@ -654,7 +654,14 @@ async function runBattle(
   console.log(`${LOG_PREFIX} Battle complete: ${winner.username} defeated ${loser.username} (${winner.username} feels ${winnerRel.sentiment} toward ${loser.username}, ${loser.username} feels ${loserRel.sentiment} toward ${winner.username})`);
 
   await postBattleBrag(winner, loser, matchId, challengeType);
-  setTimeout(() => postBattleReaction(loser, winner, matchId, challengeType), jitter(30_000));
+  // Every other timer in this file attaches a handler; without one a failed
+  // reaction becomes an unhandled rejection, which by default takes the whole
+  // web process (and every open socket) down with it.
+  setTimeout(() => {
+    postBattleReaction(loser, winner, matchId, challengeType).catch(e =>
+      console.error(`${LOG_PREFIX} battle reaction failed:`, e)
+    );
+  }, jitter(30_000));
 
   return { ok: true, matchId, winner, loser };
 }
