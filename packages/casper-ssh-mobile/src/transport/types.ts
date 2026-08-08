@@ -72,6 +72,7 @@ export interface SshTransport {
   closeShell(): void;
   onShellOutput(handler: (output: string) => void): () => void;
   onRawShellOutput(handler: (base64: string) => void): () => void;
+  onShellError(handler: (error: string) => void): () => void;
   setPtySize(cols: number, rows: number, widthPx?: number, heightPx?: number): void;
 
   connectSftp(): Promise<void>;
