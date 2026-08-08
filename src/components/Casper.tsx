@@ -13,6 +13,7 @@ import { generateText } from '../lib/ai';
 import { sendCasperCommand, type CasperCommandResponse, type CasperToolCall } from '../lib/casper';
 import { fromDb, supabase, toDb } from '../supabase';
 import { cn } from '../lib/utils';
+import { saveOwnApiKey, withoutApiKey } from '../lib/aiCredentials';
 import { casperAuthFetch } from '../lib/casperApi';
 import { formatDistanceToNow } from 'date-fns';
 import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
@@ -783,11 +784,14 @@ export const Casper: React.FC = () => {
         delete nextSettings.max_tool_rounds;
       }
 
+      // The key never goes into users.ai_settings — every signed-in session can
+      // read that table. It lives in user_ai_credentials, owner-scoped by RLS.
       const { error } = await supabase
         .from('users')
-        .update({ ai_settings: nextSettings, context_note: aiCoreForm.contextNote.trim() || null })
+        .update({ ai_settings: withoutApiKey(nextSettings), context_note: aiCoreForm.contextNote.trim() || null })
         .eq('id', currentUser.id);
       if (error) throw error;
+      await saveOwnApiKey(currentUser.id, aiCoreForm.apiKey);
       setAiSettings(nextSettings);
       setShowAiCore(false);
     } catch (error) {

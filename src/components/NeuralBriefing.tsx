@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Sparkles, Terminal, Loader2, Brain, Zap, ChevronRight } from 'lucide-react';
 import { useAuth } from '../AuthContext';
@@ -15,33 +15,56 @@ export const NeuralBriefing: React.FC<NeuralBriefingProps> = ({ recentPosts }) =
   const [briefing, setBriefing] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  // `briefing` is only set when the call comes back, so it cannot stop a second
+  // call that starts while the first is still in flight. The parent re-renders
+  // (and hands over a new `recentPosts` array) several times a second while the
+  // feed loads, and each one of these is a billed model call.
+  const requestedRef = useRef(false);
+  const currentUserRef = useRef(currentUser);
+  currentUserRef.current = currentUser;
+
+  const hasPosts = recentPosts.length > 0;
 
   useEffect(() => {
-    const generateBriefing = async () => {
-      if (!currentUser || recentPosts.length === 0 || briefing) return;
+    requestedRef.current = false;
+    setBriefing(null);
+  }, [currentUser?.id]);
 
+  useEffect(() => {
+    const user = currentUserRef.current;
+    if (!user || !hasPosts || requestedRef.current) return;
+    requestedRef.current = true;
+
+    let cancelled = false;
+    const generateBriefing = async () => {
       setIsLoading(true);
       try {
         const postSummary = recentPosts.slice(0, 5).map(p => p.content).join(' | ');
-        const prompt = `You are a personal neural assistant for ${currentUser.display_name}. 
+        const prompt = `You are a personal neural assistant for ${user.display_name}. 
         Analyze the current network activity and provide a 2-sentence "Neural Briefing". 
         Tailor it to be helpful, cryptic, and high-tech. 
         Network Activity: ${postSummary}`;
 
-        const response = await generateText(prompt, currentUser.ai_settings, {
+        const response = await generateText(prompt, user.ai_settings, {
           systemPrompt: "You are a personal AI assistant. Provide a concise, thematic briefing for the user.",
           temperature: 0.8
         });
-        setBriefing(response);
+        if (!cancelled) setBriefing(response);
       } catch (error) {
         console.error("Briefing Gen Error:", error);
+        // Let a later render retry rather than leaving the panel permanently blank.
+        requestedRef.current = false;
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     };
 
-    generateBriefing();
-  }, [currentUser, recentPosts]);
+    void generateBriefing();
+    return () => { cancelled = true; };
+    // recentPosts is read for its first render's content only; adding it here
+    // would re-run this on every feed update, which is what made it expensive.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasPosts, currentUser?.id]);
 
   if (!currentUser) return null;
 
