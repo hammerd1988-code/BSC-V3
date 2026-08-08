@@ -1,21 +1,56 @@
-import type { Express, RequestHandler } from 'express';
+import type { Express, Request, RequestHandler, Response } from 'express';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import multer from 'multer';
 import fs from 'fs';
 import { tmpdir } from 'os';
-import { execSync } from 'child_process';
+import { join } from 'path';
+import { randomUUID } from 'crypto';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+
+/** A hung provider must not hold the request (and its socket) open indefinitely. */
+const PROVIDER_TIMEOUT_MS = 60_000;
+/** ffmpeg is a best-effort optimisation; do not let it wedge a request. */
+const FFMPEG_TIMEOUT_MS = 20_000;
 
 const OPENAI_TTS_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'] as const;
 
 type WhisperProvider = { name: string; url: string; key: string; model: string };
 
+/**
+ * These routes spend money with OpenAI/Mimo/Whisper on every call, so they need a
+ * real Supabase session; the per-IP rate limiter alone left them open to anyone
+ * who could reach the host.
+ */
+async function requireSupabaseUser(req: Request, res: Response, supabase: SupabaseClient): Promise<boolean> {
+  const header = req.headers.authorization;
+  const token = typeof header === 'string' ? header.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() : null;
+  if (!token) {
+    res.status(401).json({ error: 'Missing Supabase session bearer token.' });
+    return false;
+  }
+
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data.user) {
+    res.status(401).json({ error: 'Invalid or expired Supabase session.' });
+    return false;
+  }
+
+  return true;
+}
+
 // Speech synthesis and transcription. Extracted from the server entrypoints so
 // the OpenAI, Mimo, and Whisper routes exist exactly once.
-export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler) {
+export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler, supabase: SupabaseClient) {
   // ── Text-to-Speech (OpenAI) ──
   app.post('/api/tts', aiRateLimit, async (req, res) => {
     try {
+      if (!(await requireSupabaseUser(req, res, supabase))) return;
+
       const { text, voice, speed } = req.body;
 
       if (!text || typeof text !== 'string') {
@@ -34,6 +69,7 @@ export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler) 
 
       const response = await fetch('https://api.openai.com/v1/audio/speech', {
         method: 'POST',
+        signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
@@ -67,6 +103,8 @@ export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler) 
   // ── Text-to-Speech (Mimo) ──
   app.post('/api/tts/mimo', aiRateLimit, async (req, res) => {
     try {
+      if (!(await requireSupabaseUser(req, res, supabase))) return;
+
       const { text, voice, speed } = req.body;
 
       if (!text || typeof text !== 'string') {
@@ -87,6 +125,7 @@ export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler) 
 
       const response = await fetch(`${baseUrl}/audio/speech`, {
         method: 'POST',
+        signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
@@ -153,6 +192,8 @@ export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler) 
   // ── Audio Transcription (Whisper) ──
   app.post('/api/transcribe', aiRateLimit, upload.single('audio'), async (req, res) => {
     try {
+      if (!(await requireSupabaseUser(req, res, supabase))) return;
+
       const file = req.file;
       if (!file) return res.status(400).json({ error: 'No audio file provided' });
 
@@ -201,12 +242,21 @@ export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler) 
       // ffmpeg is optional — the deployment image does not ship it, so the
       // conversion routinely throws. Clean up in `finally` or every request
       // that takes this path leaks its upload (up to 25 MB) onto disk.
-      const tmpIn = `${tmpdir()}/casper_in_${Date.now()}.webm`;
-      const tmpOut = `${tmpdir()}/casper_out_${Date.now()}.wav`;
+      //
+      // A random id rather than Date.now(): two uploads in the same millisecond
+      // shared both paths, so one request could transcribe another's audio. And
+      // execFile rather than execSync, because a synchronous transcode blocked
+      // the event loop — every other request and all socket traffic stalled for
+      // its duration.
+      const conversionId = randomUUID();
+      const tmpIn = join(tmpdir(), `casper_in_${conversionId}.webm`);
+      const tmpOut = join(tmpdir(), `casper_out_${conversionId}.wav`);
       try {
-        fs.writeFileSync(tmpIn, file.buffer);
-        execSync(`ffmpeg -y -i "${tmpIn}" -ar 16000 -ac 1 -f wav "${tmpOut}" 2>/dev/null`);
-        audioBuffer = fs.readFileSync(tmpOut);
+        await fs.promises.writeFile(tmpIn, file.buffer);
+        await execFileAsync('ffmpeg', ['-y', '-i', tmpIn, '-ar', '16000', '-ac', '1', '-f', 'wav', tmpOut], {
+          timeout: FFMPEG_TIMEOUT_MS,
+        });
+        audioBuffer = await fs.promises.readFile(tmpOut);
         audioMime = 'audio/wav';
         audioExt = 'wav';
         console.log(`[transcribe] Converted webm to wav (${audioBuffer.length} bytes)`);
@@ -215,7 +265,7 @@ export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler) 
       } finally {
         for (const tmp of [tmpIn, tmpOut]) {
           try {
-            fs.rmSync(tmp, { force: true });
+            await fs.promises.rm(tmp, { force: true });
           } catch (cleanupErr) {
             console.warn(`[transcribe] Failed to remove ${tmp}:`, (cleanupErr as Error).message);
           }
@@ -235,6 +285,7 @@ export function registerSpeechRoutes(app: Express, aiRateLimit: RequestHandler) 
 
           const response = await fetch(provider.url, {
             method: 'POST',
+            signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
             headers: { 'Authorization': `Bearer ${provider.key}` },
             body: formData,
           });

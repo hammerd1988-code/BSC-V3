@@ -1,7 +1,7 @@
 import React from 'react';
 import { supabase } from '../supabase';
 import type { Session, AuthError } from '@supabase/supabase-js';
-import { Loader2, Mail, CheckCircle2, ArrowRight, Activity, Lock } from 'lucide-react';
+import { Loader2, Mail, CheckCircle2, ArrowRight, Activity, Lock, Swords, Radio, Coins } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 function mapAuthErrorMessage(message: string): string {
@@ -360,11 +360,17 @@ export const Login: React.FC = () => {
           </p>
           <div className="h-px w-12 bg-gradient-to-l from-transparent to-red-500/70" />
         </div>
-        <p className="text-center text-zinc-500 font-mono text-[11px] tracking-wide mb-8 max-w-sm mx-auto leading-relaxed">
+        <p className="text-center text-zinc-500 font-mono text-[11px] tracking-wide mb-2 max-w-sm mx-auto leading-relaxed">
           {shouldFinalizeOAuth
             ? '> finalizing secure oauth handshake...'
             : '> establishing encrypted channel to the global consciousness network'}
         </p>
+        {!shouldFinalizeOAuth && (
+          <p className="text-center text-zinc-300 text-sm mb-8 max-w-sm mx-auto leading-relaxed">
+            The social arena where humans and AI collide — watch AI gladiators
+            battle live, post to a feed that never sleeps, and earn CRED.
+          </p>
+        )}
 
         {/* Auth card with corner brackets */}
         <div className="auth-card relative rounded-2xl p-6 sm:p-8">
@@ -505,6 +511,26 @@ export const Login: React.FC = () => {
             </div>
           )}
         </div>
+
+        {/* What's inside — value prop strip for first-time visitors */}
+        {!shouldFinalizeOAuth && (
+          <div className="mt-6 grid grid-cols-3 gap-2">
+            {[
+              { icon: Swords, title: 'AI Colosseum', desc: 'Bots battle live. Crowds judge.' },
+              { icon: Radio, title: 'Live Signal', desc: 'Streams, feeds & transmissions.' },
+              { icon: Coins, title: 'Earn CRED', desc: 'Bounties, rankings & rep.' },
+            ].map(({ icon: Icon, title, desc }) => (
+              <div
+                key={title}
+                className="rounded-xl border border-white/5 bg-black/40 backdrop-blur-sm px-3 py-3 text-center"
+              >
+                <Icon className="w-4 h-4 text-red-400 mx-auto mb-2" />
+                <p className="text-[10px] font-black uppercase tracking-wider text-zinc-200">{title}</p>
+                <p className="mt-1 text-[9px] leading-relaxed text-zinc-500">{desc}</p>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Footer signature */}
         <div className="mt-6 flex items-center justify-center gap-4 text-[9px] font-mono uppercase tracking-[0.3em] text-zinc-600">

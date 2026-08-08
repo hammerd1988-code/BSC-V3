@@ -6,6 +6,7 @@ import { supabase } from '../supabase';
 import { handleDbError } from '../lib/errors';
 import { authedFetch } from '../lib/authSession';
 import { cn } from '../lib/utils';
+import { CRED_PACKAGES, totalCred, type CredPackage } from '../../shared/credPackages';
 
 interface WalletModalProps {
   isOpen: boolean;
@@ -40,20 +41,20 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
   const [exchangeAmount, setExchangeAmount] = useState('10');
 
   // Square payment state
-  const [selectedTier, setSelectedTier] = useState<{ amount: number; bonus: number; price: string; priceInCents: number } | null>(null);
+  const [selectedTier, setSelectedTier] = useState<CredPackage | null>(null);
   const [squareLoaded, setSquareLoaded] = useState(false);
   const [squareCard, setSquareCard] = useState<any>(null);
   const [squarePayments, setSquarePayments] = useState<any>(null);
   const [paymentProcessing, setPaymentProcessing] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  // Stable per-attempt key so a retried request reuses the Square charge.
+  const [paymentAttemptId, setPaymentAttemptId] = useState(() => crypto.randomUUID());
   const cardContainerRef = useRef<HTMLDivElement>(null);
 
-  const TIERS = [
-    { amount: 100, price: '$4.99', priceInCents: 499, bonus: 0 },
-    { amount: 500, price: '$19.99', priceInCents: 1999, bonus: 0 },
-    { amount: 1500, price: '$49.99', priceInCents: 4999, bonus: 0, popular: true },
-  ];
+  // Prices and CRED amounts are shared with the server, which recomputes the
+  // grant from the price rather than trusting the client.
+  const TIERS = CRED_PACKAGES;
 
   useEffect(() => {
     if (isOpen && user) {
@@ -127,7 +128,6 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
 
     setExchanging(true);
     try {
-      const tokensReceived = amount * 1000;
       const response = await authedFetch('/api/cred/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -162,28 +162,31 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
         throw new Error(result.errors?.[0]?.message || 'Card tokenization failed');
       }
 
-      const credToAdd = selectedTier.amount + selectedTier.bonus;
+      const credToAdd = totalCred(selectedTier);
       const response = await authedFetch('/api/square/process-payment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sourceId: result.token,
+          // The server derives the CRED granted from this price, so it is the
+          // only thing that needs to travel.
           amount: selectedTier.priceInCents,
           userId: user.id,
-          credAmount: credToAdd,
+          // Lets a retry of the same attempt reuse the charge instead of doubling it.
+          idempotencyKey: paymentAttemptId,
         }),
       });
 
       const data = await response.json();
 
-      if (response.ok && data.success) {
-        setPaymentSuccess(`✓ ${credToAdd} CRED added to your wallet!`);
-      } else {
+      if (!response.ok || !data.success) {
         throw new Error(data.message || data.error || 'Payment failed on server.');
       }
 
-      setPaymentSuccess(`✓ ${credToAdd} CRED added to your wallet!`);
+      setPaymentSuccess(`✓ ${data.credAmount ?? credToAdd} CRED added to your wallet!`);
       setSelectedTier(null);
+      // A completed purchase must not share its idempotency key with the next one.
+      setPaymentAttemptId(crypto.randomUUID());
       fetchTransactions();
     } catch (err: any) {
       setPaymentError(err?.message || 'Payment failed. Please try again.');
@@ -299,6 +302,7 @@ export function WalletModal({ isOpen, onClose, user }: WalletModalProps) {
                     onClick={() => {
                       setSelectedTier(selectedTier?.amount === tier.amount ? null : tier);
                       setPaymentError(null);
+                      setPaymentAttemptId(crypto.randomUUID());
                     }}
                     className={cn(
                       "relative p-4 rounded-xl border transition-all text-left flex flex-col justify-between group",

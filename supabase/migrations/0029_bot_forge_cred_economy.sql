@@ -163,21 +163,22 @@ create policy cost_table_read on public.compute_cost_table
 -- =========================================================================
 -- Extend transactions type to allow 'convert' for CRED to Compute
 -- =========================================================================
--- The live DB uses an enum 'transaction_type' for transactions.type.
--- Add 'convert' to the enum if it doesn't already exist.
+-- Some databases use an enum 'transaction_type' for transactions.type; others
+-- (everything built from 0001) use text with a CHECK constraint, where casting
+-- to the missing regtype aborted this migration. 0063 relaxes the CHECK.
+-- to_regtype() yields NULL instead of raising when the type is absent; casting
+-- with ::regtype is constant-folded while the block is planned, so it aborted
+-- the migration even inside a guarded branch.
 do $$
+declare
+  v_enum regtype := to_regtype('public.transaction_type');
 begin
-  -- Only relevant when transactions.type is backed by an enum (as in the live DB).
-  -- On a from-scratch schema the column is plain text, so the enum is absent and
-  -- to_regtype() returns null instead of raising "type does not exist".
-  if to_regtype('public.transaction_type') is not null then
-    if not exists (
-      select 1 from pg_enum
-      where enumlabel = 'convert'
-        and enumtypid = 'public.transaction_type'::regtype
-    ) then
-      alter type public.transaction_type add value 'convert';
-    end if;
+  if v_enum is not null and not exists (
+    select 1 from pg_enum
+     where enumlabel = 'convert'
+       and enumtypid = v_enum
+  ) then
+    execute 'alter type public.transaction_type add value ''convert''';
   end if;
 end;
 $$;
@@ -186,8 +187,8 @@ $$;
 -- Convert CRED to Compute Credits (atomic, safe)
 -- =========================================================================
 create or replace function public.convert_cred_to_compute(
-  p_user_id uuid,
-  p_gladiator_id uuid,
+  p_user_id text,
+  p_gladiator_id text,
   p_cred_amount integer
 )
 returns jsonb
@@ -262,7 +263,7 @@ begin
 end;
 $$;
 
-grant execute on function public.convert_cred_to_compute(uuid, uuid, integer) to authenticated;
+grant execute on function public.convert_cred_to_compute(text, text, integer) to authenticated;
 
 -- =========================================================================
 -- Touch updated_at trigger for bot_forge_config

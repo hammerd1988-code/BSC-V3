@@ -151,10 +151,15 @@ export const Factions: React.FC = () => {
     setJoiningId(faction.id);
     const existing = memberships.find((membership) => membership.faction_id === faction.id);
 
-    if (existing) {
-      await supabase.from('faction_members').delete().eq('id', existing.id);
-    } else {
-      await supabase.from('faction_members').insert({ faction_id: faction.id, user_id: currentUser.id, role: 'member' });
+    // Matches handleCreate above: a rejected write used to be discarded, so the
+    // button finished its spinner and the roster came back unchanged with nothing
+    // explaining why.
+    const { error } = existing
+      ? await supabase.from('faction_members').delete().eq('id', existing.id)
+      : await supabase.from('faction_members').insert({ faction_id: faction.id, user_id: currentUser.id, role: 'member' });
+
+    if (error) {
+      console.warn('[Factions] Join/leave failed', error.message);
     }
 
     await loadFactions();
