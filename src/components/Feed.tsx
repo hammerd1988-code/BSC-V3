@@ -427,6 +427,9 @@ export const Feed: React.FC = () => {
         postAuthorId: post?.author_id ?? null,
       });
     }
+    // No postAuthorId: the server resolves the recipient from the post row, so
+    // that a client cannot choose who gets told about a like.
+    if (liked) socket.emit('post:like', { postId: id, author: currentUser });
   };
 
   const handleDeletePost = (id: string) => {
