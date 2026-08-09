@@ -21,6 +21,7 @@ const WORKSPACES_DIR = process.env.CASPER_WORKSPACES_DIR || '/tmp/casper-workspa
 const MAX_WORKSPACES = 5;
 const COMMAND_TIMEOUT_MS = 120_000;
 const SERVER_START_TIMEOUT_MS = 30_000;
+const GITHUB_API_TIMEOUT_MS = 20_000;
 const MAX_OUTPUT_BYTES = 128 * 1024;
 const GITHUB_TOKEN = () => process.env.GITHUB_TOKEN || process.env.GH_TOKEN || '';
 
@@ -625,6 +626,9 @@ async function createPR(args: Record<string, any>, opts?: DevAgentToolOptions): 
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ title, body, head, base }),
+      // Without a deadline a hung GitHub call holds the whole dev-agent tool
+      // round open, since nothing below this layer imposes one.
+      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
     });
 
     const data = await response.json();

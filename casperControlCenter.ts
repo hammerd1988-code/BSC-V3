@@ -27,6 +27,7 @@ const PLATFORM_DEFAULT_MODEL = process.env.CASPER_MODEL || process.env.OPENAI_MO
 const ROUTINE_POLL_INTERVAL_MS = Number(process.env.CASPER_ROUTINE_POLL_INTERVAL_MS || 60_000);
 const TASK_QUEUE_POLL_INTERVAL_MS = Number(process.env.CASPER_TASK_QUEUE_POLL_INTERVAL_MS || 30_000);
 const TASK_QUEUE_BATCH_SIZE = Math.max(1, Math.min(12, Number(process.env.CASPER_TASK_QUEUE_BATCH_SIZE || 4)));
+const MAX_COMMAND_CHARS = 100_000;
 const TASK_QUEUE_STALE_RUNNING_MS = Math.max(60_000, Number(process.env.CASPER_TASK_QUEUE_STALE_RUNNING_MS || 15 * 60_000));
 
 let routineRunnerStarted = false;
@@ -1420,6 +1421,11 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
   const source = input.source ?? 'admin';
 
   if (!command) throw new Error('Command is required.');
+  // /api/ai/generate-text caps prompts at MAX_PROMPT_CHARS; this path reaches the
+  // same providers (and, with tools enabled, once per round) but had no cap at all.
+  if (command.length > MAX_COMMAND_CHARS) {
+    throw new Error(`Command must be ${MAX_COMMAND_CHARS} characters or fewer.`);
+  }
 
   if (!taskId) {
     const { data: task, error } = await supabase
@@ -1841,18 +1847,27 @@ async function runDueRoutines(supabase: SupabaseClient, casperMemory: any, trigg
 
 async function runtimeStatus(supabase: SupabaseClient) {
   const since = new Date(Date.now() - 60_000).toISOString();
-  const [tasks, recentActions, routines, skills, integrations] = await Promise.all([
-    supabase.from('casper_tasks').select('status', { count: 'exact', head: false }).in('status', ['pending', 'running', 'completed', 'failed']),
+  // One `head: true` count per status rather than fetching every matching row
+  // and counting in JS. Every sibling query here already counts server-side;
+  // this one downloaded the whole task history on each poll of /api/casper/status.
+  const TASK_STATUSES = ['pending', 'running', 'completed', 'failed'] as const;
+  const [taskCounts, recentActions, routines, skills, integrations] = await Promise.all([
+    Promise.all(TASK_STATUSES.map((status) =>
+      supabase.from('casper_tasks').select('id', { count: 'exact', head: true }).eq('status', status),
+    )),
     supabase.from('casper_activity_log').select('id', { count: 'exact', head: true }).gte('created_at', since),
     supabase.from('casper_routines').select('id', { count: 'exact', head: true }).eq('is_enabled', true),
     supabase.from('casper_skills').select('id', { count: 'exact', head: true }).eq('is_enabled', true),
     supabase.from('casper_integrations').select('id', { count: 'exact', head: true }).eq('enabled', true).eq('status', 'connected'),
   ]);
 
-  const taskRows = (tasks.data ?? []) as Array<{ status: string }>;
-  const running = taskRows.filter((task) => task.status === 'running').length;
-  const pending = taskRows.filter((task) => task.status === 'pending').length;
-  const failed = taskRows.filter((task) => task.status === 'failed').length;
+  const countFor = (status: (typeof TASK_STATUSES)[number]) => {
+    const result = taskCounts[TASK_STATUSES.indexOf(status)];
+    return result?.error ? 0 : result?.count ?? 0;
+  };
+  const running = countFor('running');
+  const pending = countFor('pending');
+  const failed = countFor('failed');
 
   return {
     agent_status: running > 0 ? 'active' : failed > 0 ? 'blocked' : pending > 0 ? 'idle' : 'idle',
@@ -1860,7 +1875,7 @@ async function runtimeStatus(supabase: SupabaseClient) {
     tasks: {
       pending,
       running,
-      completed: taskRows.filter((task) => task.status === 'completed').length,
+      completed: countFor('completed'),
       failed,
     },
     active_routines: routines.error ? 0 : routines.count ?? 0,
