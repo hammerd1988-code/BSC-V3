@@ -535,15 +535,16 @@ export const Transmissions: React.FC = () => {
         setDecryptedCache(prev => ({ ...prev, ...newDecrypted }));
         setBurnCountdowns(prev => ({ ...prev, ...newCountdowns }));
 
-        // Mark as read
+        // Mark as read. Clearing our own key by rewriting the whole map also
+        // republished whatever count we last saw for the other participant, so
+        // anything they accumulated since this thread was opened was undone.
         const unreadCounts = activeTransmissionRef.current?.unread_counts;
         if ((unreadCounts?.[currentUser.id] ?? 0) > 0) {
-          const newUnread = { ...unreadCounts };
-          newUnread[currentUser.id] = 0;
-          await supabase
-            .from('transmissions')
-            .update({ unread_counts: newUnread })
-            .eq('id', activeTransmissionId);
+          const { error: clearError } = await supabase.rpc('clear_transmission_unread', {
+            p_transmission_id: activeTransmissionId,
+            p_user_id: currentUser.id,
+          });
+          if (clearError) console.error('Error clearing unread count:', clearError);
         }
       } catch (err) {
         console.error('Error fetching transmits:', err);
@@ -1003,26 +1004,29 @@ export const Transmissions: React.FC = () => {
           : savedMessage || `[File] ${attachment.name}`
         : savedMessage;
 
-      const updatedUnread = { ...(activeTransmission.unread_counts ?? {}) };
-      updatedUnread[otherUserId] = (updatedUnread[otherUserId] || 0) + 1;
-
-      const { error: updateError } = await supabase
-        .from('transmissions')
-        .update({
-          last_transmit: {
-            content: preview,
-            sender_id: currentUser.id,
-            created_at: new Date().toISOString()
-          },
-          unread_counts: updatedUnread,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', activeTransmission.id);
+      // `activeTransmission` is state captured when the thread was opened, so
+      // building the whole map from it republished a stale count for our own
+      // side and reset a badge the reader had already cleared. Bump the one key
+      // in the database instead.
+      const { error: updateError } = await supabase.rpc('bump_transmission_unread', {
+        p_transmission_id: activeTransmission.id,
+        p_recipient_id: otherUserId,
+        p_last_transmit: {
+          content: preview,
+          sender_id: currentUser.id,
+          created_at: new Date().toISOString()
+        },
+      });
       if (updateError) {
         console.error('Error updating transmission metadata:', updateError);
       }
 
-      setActiveTransmission(prev => prev ? { ...prev, unread_counts: updatedUnread } : prev);
+      setActiveTransmission(prev => {
+        if (!prev) return prev;
+        const nextUnread = { ...(prev.unread_counts ?? {}) };
+        nextUnread[otherUserId] = (nextUnread[otherUserId] || 0) + 1;
+        return { ...prev, unread_counts: nextUnread };
+      });
 
       const senderName = currentUser.display_name || currentUser.username || 'Someone';
       void sendPushEvent({
