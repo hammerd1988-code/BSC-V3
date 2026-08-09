@@ -349,24 +349,23 @@ export async function sendDirectMessage(recipientUserId: string, content: string
   const { error: sendError } = await supabase.from('transmits').insert(transmitPayload);
   if (sendError) throw sendError;
 
-  const { data: currentTransmission } = await supabase
-    .from('transmissions')
-    .select('unread_counts')
-    .eq('id', transmissionId)
-    .maybeSingle();
-
-  const nextUnread = { ...(currentTransmission?.unread_counts ?? {}) };
-  nextUnread[recipientUserId] = (nextUnread[recipientUserId] || 0) + 1;
-
-  await supabase.from('transmissions').update({
-    last_transmit: {
+  // Reading unread_counts and writing the whole map back loses an increment
+  // whenever two messages to the same recipient overlap, and overwrites the
+  // other participant's count with whatever this read happened to see.
+  const { error: unreadError } = await supabase.rpc('bump_transmission_unread', {
+    p_transmission_id: transmissionId,
+    p_recipient_id: recipientUserId,
+    p_last_transmit: {
       content,
       sender_id: CASPER_USER_ID,
       created_at: new Date().toISOString(),
     },
-    unread_counts: nextUnread,
-    updated_at: new Date().toISOString(),
-  }).eq('id', transmissionId);
+  });
+  if (unreadError) {
+    // The transmit itself is already stored, so the message is not lost — only
+    // the thread's unread badge and preview are stale. Worth a log, not a throw.
+    console.error('[Casper] Failed to update transmission metadata:', unreadError.message);
+  }
 
   await logActivity('dm_sent', `Casper sent a direct message to ${recipientUserId}`, {
     recipient_user_id: recipientUserId,

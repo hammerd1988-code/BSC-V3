@@ -108,6 +108,8 @@ const UPSERT_CONFLICT_TARGETS: Array<[string, string]> = [
  * would not have caught it.
  */
 const RPC_SIGNATURES: Array<[string, string[]]> = [
+  ['bump_transmission_unread', ['p_last_transmit', 'p_recipient_id', 'p_transmission_id']],
+  ['clear_transmission_unread', ['p_transmission_id', 'p_user_id']],
   ['casper_memory_stats', ['p_user_id']],
   ['convert_cred_to_compute', ['p_cred_amount', 'p_gladiator_id', 'p_user_id']],
   ['draw_colosseum_arena_modifier', ['p_challenge_type', 'p_challenger_id', 'p_defender_id']],
@@ -133,6 +135,8 @@ const RPC_SIGNATURES: Array<[string, string[]]> = [
 
 /** Functions called via supabase.rpc(...) somewhere in the app. */
 const REQUIRED_FUNCTIONS = [
+  'bump_transmission_unread',
+  'clear_transmission_unread',
   'increment_counter',
   'increment_cred_balance',
   'exchange_cred_for_tokens',
@@ -573,5 +577,71 @@ describe('renamed migrations re-applied out of order', () => {
     await expect(
       db.query(`select public.increment_counter('users', 'u2', 'compute_tokens', 1000)`),
     ).rejects.toThrow(/not an incrementable counter/i);
+  });
+
+  /**
+   * The unread map used to be read, edited in JavaScript and written back whole,
+   * so a sender working from a stale snapshot reset the other participant's
+   * count. These functions edit one key inside a single UPDATE instead.
+   */
+  it('bumps one participant\'s unread count without disturbing the other', async () => {
+    await db.query(
+      `insert into public.transmissions (id, participant_ids, unread_counts)
+       values ('t1', array['a','b']::text[], '{"a": 0, "b": 0}'::jsonb)`,
+    );
+
+    const unread = async () => {
+      const { rows } = await db.query<{ unread_counts: Record<string, number> | string }>(
+        `select unread_counts from public.transmissions where id = 't1'`,
+      );
+      const value = rows[0]?.unread_counts;
+      return typeof value === 'string' ? JSON.parse(value) : value;
+    };
+
+    await db.query(`select public.bump_transmission_unread('t1', 'b', null)`);
+    await db.query(`select public.bump_transmission_unread('t1', 'a', null)`);
+    expect(await unread()).toEqual({ a: 1, b: 1 });
+
+    // The stale-snapshot case: a client that still holds {"a":0,"b":0} bumps b.
+    // The whole-object write would have published {"a":0,"b":1} and wiped a's
+    // unread; the function only ever touches the key it was given.
+    await db.query(`select public.bump_transmission_unread('t1', 'b', null)`);
+    expect(await unread()).toEqual({ a: 1, b: 2 });
+
+    // Two sends to the same recipient must record two unreads, not one.
+    await db.query(`select public.bump_transmission_unread('t1', 'a', null)`);
+    await db.query(`select public.bump_transmission_unread('t1', 'a', null)`);
+    expect(await unread()).toEqual({ a: 3, b: 2 });
+
+    await db.query(`select public.clear_transmission_unread('t1', 'a')`);
+    expect(await unread()).toEqual({ a: 0, b: 2 });
+
+    // A participant who has never been counted starts from zero rather than
+    // throwing on a missing key.
+    await db.query(`select public.bump_transmission_unread('t1', 'c', null)`);
+    expect(await unread()).toEqual({ a: 0, b: 2, c: 1 });
+  });
+
+  it('writes last_transmit only when the caller supplies one', async () => {
+    await db.query(
+      `insert into public.transmissions (id, participant_ids, unread_counts, last_transmit)
+       values ('t2', array['a','b']::text[], '{}'::jsonb, '{"content": "first"}'::jsonb)`,
+    );
+
+    const lastTransmit = async () => {
+      const { rows } = await db.query<{ last_transmit: Record<string, unknown> | string | null }>(
+        `select last_transmit from public.transmissions where id = 't2'`,
+      );
+      const value = rows[0]?.last_transmit;
+      return typeof value === 'string' ? JSON.parse(value) : value;
+    };
+
+    await db.query(`select public.bump_transmission_unread('t2', 'b', null)`);
+    expect(await lastTransmit()).toEqual({ content: 'first' });
+
+    await db.query(
+      `select public.bump_transmission_unread('t2', 'b', '{"content": "second"}'::jsonb)`,
+    );
+    expect(await lastTransmit()).toEqual({ content: 'second' });
   });
 });
