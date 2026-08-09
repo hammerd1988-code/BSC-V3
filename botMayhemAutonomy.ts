@@ -13,7 +13,7 @@ import { BOT_GLADIATOR_PROFILES, type BotGladiatorProfileSeed } from './src/lib/
 import { FOUNDING_FACTIONS, type FactionLore } from './src/lib/factionLore.js';
 import { generateServerText, isServerAiConfigured } from './serverAi.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
-import { timingSafeStringEqual } from './serverSecurity.js';
+import { internalCallHeaders, timingSafeStringEqual } from './serverSecurity.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const BOT_UUID_NAMESPACE = '00000000-0000-4000-8000-000000000b5c';
@@ -585,7 +585,7 @@ async function runBattle(
     const port = Number(process.env.PORT) || 3001;
     const resp = await fetch(`http://localhost:${port}/api/colosseum/gladiator-solutions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...internalCallHeaders() },
       body: JSON.stringify({
         matchId,
         challengeType,
@@ -605,7 +605,7 @@ async function runBattle(
     const port = Number(process.env.PORT) || 3001;
     const resp = await fetch(`http://localhost:${port}/api/colosseum/judge-battle`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...internalCallHeaders() },
       body: JSON.stringify({ matchId, challengeType }),
       signal: AbortSignal.timeout(SELF_CALL_TIMEOUT_MS),
     });

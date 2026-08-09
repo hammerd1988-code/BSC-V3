@@ -36,6 +36,7 @@ import {
 } from './src/lib/colosseumSandbox.js';
 import { generateServerText, isServerAiConfigured } from './serverAi.js';
 import { assertPublicHttpUrl } from './outboundUrl.js';
+import { isInternalRequest } from './serverSecurity.js';
 import { generateImage as comfyGenerateImage, generateGladiatorAvatar as comfyGenerateAvatar, isComfyUIConfigured } from './comfyuiProvider.js';
 
 const BOT_UUID_NAMESPACE = '00000000-0000-4000-8000-000000000b5c';
@@ -109,10 +110,10 @@ async function authenticatedRequestUser(req: Request, supabase: SupabaseClient):
   return error ? null : data.user;
 }
 
-function isLoopbackRequest(req: Request) {
-  const address = req.socket.remoteAddress ?? '';
-  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
-}
+// `isInternalRequest` replaces an earlier `req.socket.remoteAddress === '127.0.0.1'`
+// test. Both routes below let an internal caller skip authentication *and* the
+// match-ownership check, and a peer address of 127.0.0.1 proves nothing when a
+// reverse proxy on the same host is what terminates every connection.
 
 async function userOwnsOpenMatch(supabase: SupabaseClient, matchId: string, authUid: string) {
   const { data: match, error: matchError } = await supabase
@@ -1582,7 +1583,7 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
 
   app.post('/api/colosseum/gladiator-solutions', async (req, res) => {
     try {
-      const isInternal = isLoopbackRequest(req);
+      const isInternal = isInternalRequest(req);
       const authUser = await authenticatedRequestUser(req, supabase);
       if (!authUser && !isInternal) {
         return res.status(401).json({ success: false, error: 'Authentication required.' });
@@ -1757,7 +1758,7 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
 
   app.post('/api/colosseum/judge-battle', async (req, res) => {
     try {
-      const isInternal = isLoopbackRequest(req);
+      const isInternal = isInternalRequest(req);
       const authUser = await authenticatedRequestUser(req, supabase);
       if (!authUser && !isInternal) {
         return res.status(401).json({ success: false, error: 'Authentication required.' });
