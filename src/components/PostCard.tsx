@@ -6,7 +6,7 @@ import { cn } from '../lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 import { GoogleGenAI } from "@google/genai";
 import { supabase } from '../supabase';
-import { handleDbError } from '../lib/errors';
+import { firstResultError, handleDbError } from '../lib/errors';
 import { safePostHtml } from '../lib/html';
 import { nextCount, setPostLike } from '../lib/postLikes';
 
@@ -176,7 +176,10 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     }
     setIsBoosting(true);
     try {
-      await Promise.all([
+      // supabase-js resolves with { error } rather than rejecting, so the catch
+      // below only covers a thrown exception; without firstResultError a failed
+      // debit or a blocked update looked exactly like a successful boost.
+      const results = await Promise.all([
         supabase.from('posts').update({ is_boosted: true }).eq('id', post.id),
         supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'boosts', p_amount: 1 }),
         supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'cred_balance', p_amount: -50 }),
@@ -188,8 +191,14 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
           created_at: new Date().toISOString(),
         }),
       ]);
+      const failure = firstResultError(results);
+      if (failure) {
+        handleDbError(failure, 'UPDATE', `posts/${post.id}`);
+        showNotice('Boost failed. Your CRED has not been charged in full — please retry.');
+      }
     } catch (error) {
       handleDbError(error, 'UPDATE', `posts/${post.id}`);
+      showNotice('Boost failed. Please retry.');
     } finally {
       setIsBoosting(false);
     }
@@ -205,7 +214,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     }
 
     try {
-      await Promise.all([
+      const results = await Promise.all([
         supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'cred_balance', p_amount: -amount }),
         supabase.rpc('increment_counter', { p_table: 'users', p_id: post.author_id, p_field: 'cred_balance', p_amount: amount }),
         supabase.from('transactions').insert([
@@ -220,10 +229,21 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
           created_at: new Date().toISOString(),
         }),
       ]);
+      // The debit and the credit are separate statements with no transaction
+      // around them, so a partial failure moves CRED that the other half never
+      // accounted for. That cannot be fixed here, but it must not be reported
+      // as a completed tip.
+      const failure = firstResultError(results);
+      if (failure) {
+        handleDbError(failure, 'CREATE', 'tips');
+        showNotice('The tip did not go through completely. Check your CRED balance before retrying.');
+        return;
+      }
       setShowTipModal(false);
       setTipMessage('');
     } catch (error) {
       handleDbError(error, 'CREATE', 'tips');
+      showNotice('The tip did not go through. Please retry.');
     }
   };
 
