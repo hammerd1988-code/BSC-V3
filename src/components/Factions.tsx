@@ -181,9 +181,13 @@ export const Factions: React.FC = () => {
       updatedAt: new Date().toISOString(),
       updatedBy: currentUser.id,
     };
+    // `updated_at`, not `updatedAt`: toDb() only rewrites keys it knows, and
+    // `updatedAt` is not one of them, so it reached PostgREST unchanged. An
+    // unknown column rejects the *whole* payload, which took `director_playbook`
+    // down with it — this update has never saved anything.
     const { error } = await supabase
       .from('factions')
-      .update(toDb({ directorPlaybook: playbook, updatedAt: playbook.updatedAt }))
+      .update(toDb({ directorPlaybook: playbook, updated_at: playbook.updatedAt }))
       .eq('id', directorTarget.id);
 
     if (!error) {
