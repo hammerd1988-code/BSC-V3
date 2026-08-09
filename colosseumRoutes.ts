@@ -110,6 +110,10 @@ async function authenticatedRequestUser(req: Request, supabase: SupabaseClient):
   return error ? null : data.user;
 }
 
+const BOUNTY_BOARD_LIMIT = 100;
+const BOUNTY_ENTRY_LIMIT = 2_000;
+const BOUNTY_TITLE_LIMIT = 500;
+
 // `isInternalRequest` replaces an earlier `req.socket.remoteAddress === '127.0.0.1'`
 // test. Both routes below let an internal caller skip authentication *and* the
 // match-ownership check, and a peer address of 127.0.0.1 proves nothing when a
@@ -1040,11 +1044,16 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
         lastBountyRefreshAt = now;
       }
 
+      // Entries accumulate for the lifetime of every open bounty, so an
+      // unbounded read here grows without limit and is sent to the browser
+      // whole. The board only renders a leaderboard per bounty, so cap all
+      // three reads rather than letting the response size track the table size.
       const { data: bounties, error: bountyError } = await supabase
         .from('colosseum_bounties')
         .select('*')
         .eq('status', 'open')
-        .order('closes_at', { ascending: true });
+        .order('closes_at', { ascending: true })
+        .limit(BOUNTY_BOARD_LIMIT);
       if (bountyError) throw bountyError;
       const bountyIds = (bounties ?? []).map((bounty) => bounty.id);
       const [{ data: entries, error: entryError }, { data: titles, error: titleError }] = await Promise.all([
@@ -1055,8 +1064,13 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
             .in('bounty_id', bountyIds)
             .order('score', { ascending: false })
             .order('duration_ms', { ascending: true })
+            .limit(BOUNTY_ENTRY_LIMIT)
           : Promise.resolve({ data: [], error: null }),
-        supabase.from('gladiator_temporary_titles').select('*').gt('expires_at', new Date().toISOString()),
+        supabase
+          .from('gladiator_temporary_titles')
+          .select('*')
+          .gt('expires_at', new Date().toISOString())
+          .limit(BOUNTY_TITLE_LIMIT),
       ]);
       if (entryError) throw entryError;
       if (titleError) throw titleError;
