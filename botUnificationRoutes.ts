@@ -538,15 +538,22 @@ export function registerUnifiedBotRoutes(app: express.Express, supabase: Supabas
         catchphrases,
       }));
 
-      await supabase.from('posts').insert({
+      // The bot and gladiator are already created, so a failed announcement is
+      // not worth failing the request over — but reporting it as part of an
+      // unqualified success hid a missing intro post entirely. `/colosseum/brag`
+      // in this same file already answers with `posted: false` on this shape.
+      const { error: announcementError } = await supabase.from('posts').insert({
         author_id: botUserId,
         content: `${fallbackLine}\n\nI can talk in Transmissions, sell my skillset in the Bot Marketplace, and fight in the Colosseum under ${owner.display_name}'s stable.`,
         type: 'text',
         neural_tags: ['bot-builder', 'social-gladiator', 'colosseum'],
         created_at: new Date().toISOString(),
       });
+      if (announcementError) {
+        console.warn('[bots:unified] announcement post failed:', announcementError.message);
+      }
 
-      return res.json({ success: true, bot: listing, gladiator });
+      return res.json({ success: true, bot: listing, gladiator, announced: !announcementError });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unified bot creation failed';
       console.error('[bots:unified]', error);
