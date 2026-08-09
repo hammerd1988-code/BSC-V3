@@ -80,6 +80,8 @@ function readWorkspaceResourceSnapshot() {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const MAX_MEMORY_FIELD_CHARS = 20_000;
+
 async function startServer() {
   const app = express();
   const isProd = process.env.NODE_ENV === 'production';
@@ -347,6 +349,17 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       const { userId, userMessage, casperReply } = req.body ?? {};
       if (!userId || !userMessage || !casperReply) {
         return res.status(400).json({ error: 'userId, userMessage, and casperReply are required.' });
+      }
+      // storeConversationExchange truncates to 500/2000 before writing, but
+      // extractConversationMemory sends these to an AI provider untouched, so
+      // the only bound was the 1MB body limit.
+      if (typeof userMessage !== 'string' || typeof casperReply !== 'string') {
+        return res.status(400).json({ error: 'userMessage and casperReply must be strings.' });
+      }
+      if (userMessage.length > MAX_MEMORY_FIELD_CHARS || casperReply.length > MAX_MEMORY_FIELD_CHARS) {
+        return res.status(400).json({
+          error: `userMessage and casperReply must each be ${MAX_MEMORY_FIELD_CHARS} characters or fewer.`,
+        });
       }
       // Non-admin callers can only persist memories for themselves so a leaked
       // session token cannot poison another user's Casper memory store.
