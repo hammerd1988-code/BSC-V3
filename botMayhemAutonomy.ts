@@ -383,7 +383,14 @@ async function ensureBotGladiator(userId: string, persona: BotPersona, profile: 
 }
 
 // ── Relationship persistence ─────────────────────────────────────────────────
-async function persistRelationship(source: string, target: string, type: string, score: number, sentiment: string, notes = '') {
+async function persistRelationship(
+  source: string,
+  target: string,
+  type: string,
+  score: number,
+  sentiment: string,
+  notes = '',
+): Promise<{ ok: boolean; error?: string }> {
   const { error } = await supabase.from('bot_mayhem_relationships').upsert({
     source_username: source,
     target_username: target,
@@ -395,7 +402,9 @@ async function persistRelationship(source: string, target: string, type: string,
   }, { onConflict: 'source_username,target_username' });
   if (error) {
     console.warn(`${LOG_PREFIX} persist relationship failed:`, error.message);
+    return { ok: false, error: error.message };
   }
+  return { ok: true };
 }
 
 async function loadRelationships(): Promise<void> {
@@ -418,7 +427,16 @@ async function loadRelationships(): Promise<void> {
   }
 }
 
-function setBotRelationship(a: ActiveBot, b: ActiveBot, type: 'alliance' | 'rivalry' | 'neutral', notes = '') {
+// Returns the persistence outcome. It used to fire both upserts as `void` and
+// return synchronously, so POST /api/bot-mayhem/relationships answered
+// `{ success: true }` before either write had been attempted — an admin setting
+// a rivalry saw it applied while it lived only in memory until the next restart.
+async function setBotRelationship(
+  a: ActiveBot,
+  b: ActiveBot,
+  type: 'alliance' | 'rivalry' | 'neutral',
+  notes = '',
+): Promise<{ ok: boolean; error?: string }> {
   const score = type === 'alliance' ? 75 : type === 'rivalry' ? -75 : 0;
   const sentiment = type === 'alliance' ? 'allied' : type === 'rivalry' ? 'hostile' : 'neutral';
 
@@ -432,8 +450,12 @@ function setBotRelationship(a: ActiveBot, b: ActiveBot, type: 'alliance' | 'riva
   reverse.sentiment = sentiment;
   reverse.lastInteraction = Date.now();
 
-  void persistRelationship(a.username, b.username, type, score, sentiment, notes);
-  void persistRelationship(b.username, a.username, type, score, sentiment, notes);
+  const [forwardWrite, reverseWrite] = await Promise.all([
+    persistRelationship(a.username, b.username, type, score, sentiment, notes),
+    persistRelationship(b.username, a.username, type, score, sentiment, notes),
+  ]);
+  const failure = [forwardWrite, reverseWrite].find((write) => !write.ok);
+  return failure ? { ok: false, error: failure.error } : { ok: true };
 }
 
 // ── Factions ─────────────────────────────────────────────────────────────────
@@ -628,7 +650,10 @@ async function runBattle(
     defender_faction: defender.faction.name,
   };
 
-  await supabase.from('matches').update({
+  // This is the only durable record of the battle. Discarding its error meant a
+  // failed write still produced victory brags and a `{ success: true }` from
+  // /api/bot-mayhem/trigger-battle, for a match that stays open forever.
+  const { error: matchUpdateError } = await supabase.from('matches').update({
     winner_id: winnerId,
     completed_at: new Date().toISOString(),
     replay_data: {
@@ -646,6 +671,11 @@ async function runBattle(
       completed_at: new Date().toISOString(),
     },
   }).eq('id', matchId);
+
+  if (matchUpdateError) {
+    console.error(`${LOG_PREFIX} Failed to record battle result:`, matchUpdateError.message);
+    return { ok: false, matchId, error: matchUpdateError.message };
+  }
 
   const { error: rpcError } = await supabase.rpc('increment_gladiator_wins', { gladiator_id: winnerId });
   if (rpcError) {
@@ -670,12 +700,13 @@ async function runBattle(
   return { ok: true, matchId, winner, loser };
 }
 
-async function runAutonomousBattle(): Promise<void> {
-  if (activeBots.length < 2) return;
+async function runAutonomousBattle(): Promise<{ ok: boolean; error?: string }> {
+  if (activeBots.length < 2) return { ok: false, error: 'Need at least 2 active bots' };
   const challenger = pick(activeBots);
   const defender = chooseBattleOpponent(challenger);
   const challengeType = pick([...CHALLENGE_TYPES]);
-  await runBattle(challenger, defender, challengeType);
+  const result = await runBattle(challenger, defender, challengeType);
+  return { ok: result.ok, error: result.error };
 }
 
 // ── Battle result posts ───────────────────────────────────────────────────────
@@ -988,8 +1019,9 @@ async function executePlaybook(
           }
           for (const bot of bots) {
             if (bot.username === targetBot.username) continue;
-            setBotRelationship(bot, targetBot, relationshipType, actionPayload.notes);
-            results.push({ source: bot.username, target: targetBot.username, type: relationshipType });
+            const write = await setBotRelationship(bot, targetBot, relationshipType, actionPayload.notes);
+            if (!write.ok) errors.push(`Relationship ${bot.username}->${targetBot.username} not saved: ${write.error}`);
+            results.push({ source: bot.username, target: targetBot.username, type: relationshipType, saved: write.ok });
           }
         } else if (targetFaction) {
           const targetFactionSlug = FOUNDING_FACTIONS.find(f => f.slug === targetFaction || f.name === targetFaction)?.slug;
@@ -1001,8 +1033,9 @@ async function executePlaybook(
           for (const sourceBot of bots) {
             for (const targetBot of targetBots) {
               if (sourceBot.username === targetBot.username) continue;
-              setBotRelationship(sourceBot, targetBot, relationshipType, actionPayload.notes);
-              results.push({ source: sourceBot.username, target: targetBot.username, type: relationshipType });
+              const write = await setBotRelationship(sourceBot, targetBot, relationshipType, actionPayload.notes);
+              if (!write.ok) errors.push(`Relationship ${sourceBot.username}->${targetBot.username} not saved: ${write.error}`);
+              results.push({ source: sourceBot.username, target: targetBot.username, type: relationshipType, saved: write.ok });
             }
           }
         } else {
@@ -1114,7 +1147,7 @@ Return ONLY a JSON object with keys "bio" (string), "system_prompt" (string), an
   return true;
 }
 
-function seedRelationshipsForSwitch(switchConfig: MagaSwitch) {
+async function seedRelationshipsForSwitch(switchConfig: MagaSwitch) {
   const bots = [...activeBots];
   const pairs: [ActiveBot, ActiveBot, 'alliance' | 'rivalry'][] = [];
 
@@ -1170,7 +1203,7 @@ function seedRelationshipsForSwitch(switchConfig: MagaSwitch) {
     const key = [a.username, b.username].sort().join(':');
     if (seen.has(key)) continue;
     seen.add(key);
-    setBotRelationship(a, b, type, `${switchConfig.name} dynamic`);
+    await setBotRelationship(a, b, type, `${switchConfig.name} dynamic`);
   }
 }
 
@@ -1320,7 +1353,7 @@ async function runMagaCampaign(switchConfig: MagaSwitch, runBy?: string): Promis
     }
 
     // Seed relationships
-    seedRelationshipsForSwitch(switchConfig);
+    await seedRelationshipsForSwitch(switchConfig);
     results.push({ action: 'relationships', ok: true });
 
     // Persist active switch
@@ -1410,7 +1443,9 @@ function scheduleNextBattle(delay = BATTLE_INTERVAL_MS) {
   if (battleTimer) clearTimeout(battleTimer);
   battleTimer = setTimeout(async () => {
     if (autonomousEnabled) {
-      await runAutonomousBattle().catch(e => console.error(`${LOG_PREFIX} scheduled battle failed:`, e));
+      const battle = await runAutonomousBattle()
+        .catch(e => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+      if (!battle.ok) console.error(`${LOG_PREFIX} scheduled battle failed:`, battle.error);
       if (autonomousEnabled) scheduleNextBattle();
     }
   }, jitter(delay));
@@ -1458,8 +1493,11 @@ function startAutonomous() {
 export async function triggerBattle(): Promise<{ success: boolean; error?: string }> {
   if (activeBots.length < 2) return { success: false, error: 'Need at least 2 active bots' };
   try {
-    await runAutonomousBattle();
-    return { success: true };
+    // runAutonomousBattle used to return void, so a battle that failed to
+    // record still answered `{ success: true }` here — matching how
+    // triggerFactionPost already propagates its result.
+    const result = await runAutonomousBattle();
+    return { success: result.ok, error: result.error };
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : String(e) };
   }
@@ -1547,7 +1585,13 @@ export function registerBotMayhemRoutes(app: import('express').Express, supabase
     next();
   };
 
-  app.get('/api/bot-mayhem/status', (_req, res) => {
+  // Every sibling route is adminOnly, and /roster returns a strict subset of
+  // this payload while being gated — so this one was ungated by oversight, not
+  // by design. It publishes the whole bot roster (including each bot's userId
+  // and gladiatorId), the full inter-bot relationship graph and the scheduling
+  // state to anonymous callers. Nothing in src/ requests it; the console reads
+  // /roster.
+  app.get('/api/bot-mayhem/status', adminOnly, (_req, res) => {
     res.json(getBotMayhemStatus());
   });
 
@@ -1591,7 +1635,10 @@ export function registerBotMayhemRoutes(app: import('express').Express, supabase
       if (!sourceBot || !targetBot) {
         return res.status(404).json({ success: false, error: 'One or both bots not active' });
       }
-      setBotRelationship(sourceBot, targetBot, type, notes || '');
+      const write = await setBotRelationship(sourceBot, targetBot, type, notes || '');
+      if (!write.ok) {
+        return res.status(502).json({ success: false, error: write.error || 'Relationship was not persisted' });
+      }
       res.json({ success: true, source: sourceUsername, target: targetUsername, type });
     } catch (e) {
       res.status(500).json({ success: false, error: e instanceof Error ? e.message : String(e) });
