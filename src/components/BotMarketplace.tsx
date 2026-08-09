@@ -9,7 +9,7 @@ import {
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
 import { getValidSession } from '../lib/authSession';
-import { handleDbError } from '../lib/errors';
+import { firstResultError, handleDbError } from '../lib/errors';
 import { cn } from '../lib/utils';
 import { WalletModal } from './WalletModal';
 import { scoreBotPersona, TIER_DEFINITIONS, type BotTier } from '../lib/botScoring';
@@ -191,6 +191,7 @@ export const BotMarketplace: React.FC = () => {
   const [showWallet, setShowWallet] = useState(false);
   const [showBuilder, setShowBuilder] = useState(false);
   const [purchaseSuccess, setPurchaseSuccess] = useState<string | null>(null);
+  const [purchaseError, setPurchaseError] = useState<string | null>(null);
   const [reportBot, setReportBot] = useState<BotListing | null>(null);
 
   const fetchBots = useCallback(async () => {
@@ -300,8 +301,12 @@ export const BotMarketplace: React.FC = () => {
     }
 
     setPurchasing(true);
+    setPurchaseError(null);
     try {
-      await Promise.all([
+      // supabase-js resolves with { error } rather than rejecting, so this catch
+      // never saw a failed purchase: the buyer was told the bot was in their
+      // collection even when the bot_purchases insert had been rejected.
+      const results = await Promise.all([
         supabase.from('bot_purchases').insert({ buyer_id: currentUser.id, bot_id: bot.id, price_paid: bot.price }),
         supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'cred_balance', p_amount: -bot.price }),
         supabase.rpc('increment_counter', { p_table: 'users', p_id: bot.creator_id, p_field: 'cred_balance', p_amount: Math.floor(bot.price * 0.8) }),
@@ -318,11 +323,19 @@ export const BotMarketplace: React.FC = () => {
         }),
       ]);
 
+      const failure = firstResultError(results);
+      if (failure) {
+        handleDbError(failure, 'CREATE', 'bot_purchases');
+        setPurchaseError('The purchase did not complete. Check your CRED balance before retrying.');
+        return;
+      }
+
       setOwnedBotIds(prev => new Set([...prev, bot.id]));
       setPurchaseSuccess(`✓ ${bot.name} is now in your collection!`);
       setSelectedBot(null);
     } catch (err) {
       handleDbError(err, 'CREATE', 'bot_purchases');
+      setPurchaseError('The purchase did not complete. Please retry.');
     } finally {
       setPurchasing(false);
     }
@@ -442,6 +455,17 @@ export const BotMarketplace: React.FC = () => {
               <Check className="w-5 h-5 text-green-400 flex-shrink-0" />
               <p className="text-sm font-bold text-green-400 flex-1">{purchaseSuccess}</p>
               <button onClick={() => setPurchaseSuccess(null)}><X className="w-4 h-4 text-green-400/50" /></button>
+            </motion.div>
+          )}
+          {purchaseError && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="flex items-center gap-3 p-4 bg-red-500/10 border border-red-500/30 rounded-xl"
+            >
+              <p className="text-sm font-bold text-red-400 flex-1">{purchaseError}</p>
+              <button onClick={() => setPurchaseError(null)}><X className="w-4 h-4 text-red-400/50" /></button>
             </motion.div>
           )}
         </AnimatePresence>
