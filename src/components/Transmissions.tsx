@@ -1171,18 +1171,24 @@ export const Transmissions: React.FC = () => {
   };
 
   const filteredTransmissions = useMemo(() => {
+    const search = searchQuery.trim().toLowerCase();
+    // With no query every thread belongs in the list. The predicate below is
+    // three optional chains OR'd together, so a thread whose participant is not
+    // in userCache yet and which has no last_transmit — exactly the state of a
+    // freshly created thread — evaluated to undefined and was hidden.
+    if (!search) return transmissions;
+
     return transmissions.filter(t => {
       const otherUserId = t.participant_ids?.find(id => id !== currentUser?.id);
       const otherUser = otherUserId ? userCache.current[otherUserId] : null;
-      const search = searchQuery.toLowerCase();
-      
-      return (
+
+      return Boolean(
         otherUser?.display_name?.toLowerCase().includes(search) ||
         otherUser?.username?.toLowerCase().includes(search) ||
         t.last_transmit?.content?.toLowerCase().includes(search)
       );
     });
-  }, [transmissions, searchQuery, currentUser]);
+  }, [transmissions, searchQuery, currentUser?.id]);
 
   const { initiateCall } = useCall();
 
