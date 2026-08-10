@@ -22,6 +22,15 @@ jobs:
           # scripts can't read it.
           persist-credentials: false
 
+      # A conflict "resolution" that commits the markers themselves should
+      # never survive to the expensive steps — or to review.
+      - name: Check for leftover merge conflict markers
+        run: |
+          if git grep -nE '^(<{7}|>{7})( |$)' -- .; then
+            echo '::error::Unresolved merge conflict markers are committed to the tree'
+            exit 1
+          fi
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -43,3 +52,9 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # Typecheck, tests, and `vite build` never execute server.ts, so a
+      # server that dies at import time passes all of them. Boot the real
+      # entrypoint against stub credentials and require /api/health to answer.
+      - name: Boot smoke test (server.ts serves /api/health)
+        run: bash scripts/ci-smoke.sh
