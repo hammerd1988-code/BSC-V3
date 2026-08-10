@@ -57,6 +57,90 @@ router.get('/health', (_req, res) => {
   res.status(200).json({ success: true, service: 'bot-api', mounted: true });
 });
 
+// Bot posts land in every follower's feed and are rendered by every client, so
+// the API's own bounds are what keep one bot from making the feed unusable.
+// `content` was previously passed through at whatever size the body parser
+// allowed, and `neural_tags` at whatever length the caller sent.
+const MAX_POST_CONTENT = 10_000;
+const MAX_COMMENT_CONTENT = 5_000;
+const MAX_MEDIA_URL = 2_048;
+const MAX_NEURAL_TAGS = 12;
+const MAX_NEURAL_TAG_LENGTH = 40;
+
+// posts.media_type carries `check (media_type in ('image','video'))`, so an
+// unrecognised value used to reach Postgres and come back as a 500.
+const MEDIA_TYPES = new Set(['image', 'video']);
+
+export class InvalidInput extends Error {}
+
+function requireText(value: unknown, field: string, max: number): string {
+  if (value === undefined || value === null) throw new InvalidInput(`${field} is required`);
+  if (typeof value !== 'string') throw new InvalidInput(`${field} must be a string`);
+  const trimmed = value.trim();
+  if (!trimmed) throw new InvalidInput(`${field} is required`);
+  if (trimmed.length > max) {
+    throw new InvalidInput(`${field} must be ${max} characters or fewer`);
+  }
+  return trimmed;
+}
+
+function optionalUrl(value: unknown, field: string): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') throw new InvalidInput(`${field} must be a string`);
+  if (value.length > MAX_MEDIA_URL) {
+    throw new InvalidInput(`${field} must be ${MAX_MEDIA_URL} characters or fewer`);
+  }
+  return value;
+}
+
+function optionalMediaType(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || !MEDIA_TYPES.has(value)) {
+    throw new InvalidInput("media_type must be 'image' or 'video'");
+  }
+  return value;
+}
+
+function normalizeNeuralTags(value: unknown): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new InvalidInput('neural_tags must be an array');
+  if (value.length > MAX_NEURAL_TAGS) {
+    throw new InvalidInput(`neural_tags must contain ${MAX_NEURAL_TAGS} tags or fewer`);
+  }
+  return value.reduce<string[]>((tags, tag) => {
+    if (typeof tag !== 'string') throw new InvalidInput('neural_tags must contain only strings');
+    const trimmed = tag.trim().slice(0, MAX_NEURAL_TAG_LENGTH);
+    if (trimmed) tags.push(trimmed);
+    return tags;
+  }, []);
+}
+
+export interface BotPostInput {
+  content: string;
+  media_url: string | null;
+  media_type: string | null;
+  neural_tags: string[];
+}
+
+/** Throws {@link InvalidInput} rather than letting an unchecked body reach Postgres. */
+export function parseBotPost(body: unknown): BotPostInput {
+  const source = (body ?? {}) as Record<string, unknown>;
+  return {
+    content: requireText(source.content, 'content', MAX_POST_CONTENT),
+    media_url: optionalUrl(source.media_url, 'media_url'),
+    media_type: optionalMediaType(source.media_type),
+    neural_tags: normalizeNeuralTags(source.neural_tags),
+  };
+}
+
+export function parseBotComment(body: unknown): { post_id: string; content: string } {
+  const source = (body ?? {}) as Record<string, unknown>;
+  return {
+    post_id: requireText(source.post_id, 'post_id', 128),
+    content: requireText(source.content, 'content', MAX_COMMENT_CONTENT),
+  };
+}
+
 // Middleware to authenticate bot API keys from Authorization: Bearer <api_key>.
 const authenticateBot = async (req: BotRequest, res: express.Response, next: express.NextFunction) => {
   const apiKey = extractBearerToken(req);
@@ -122,18 +206,20 @@ const requirePermission = (permission: string) => {
 // POST /api/bot/post - Create a post
 router.post('/post', authenticateBot, requirePermission('post'), async (req: BotRequest, res) => {
   const botId = req.bot!.id;
-  const { content, media_url, media_type, neural_tags } = req.body;
 
-  if (!content) return res.status(400).json({ success: false, error: 'Content is required' });
+  let post: BotPostInput;
+  try {
+    post = parseBotPost(req.body);
+  } catch (err) {
+    if (err instanceof InvalidInput) return res.status(400).json({ success: false, error: err.message });
+    throw err;
+  }
 
   try {
     const serviceSupabase = getSupabaseServiceClient();
     const { data, error } = await serviceSupabase.from('posts').insert({
       author_id: botId,
-      content,
-      media_url: media_url || null,
-      media_type: media_type || null,
-      neural_tags: neural_tags || [],
+      ...post,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     }).select().single();
@@ -148,9 +234,15 @@ router.post('/post', authenticateBot, requirePermission('post'), async (req: Bot
 // POST /api/bot/comment - Comment on a post
 router.post('/comment', authenticateBot, requirePermission('comment'), async (req: BotRequest, res) => {
   const botId = req.bot!.id;
-  const { post_id, content } = req.body;
 
-  if (!post_id || !content) return res.status(400).json({ success: false, error: 'post_id and content are required' });
+  let post_id: string;
+  let content: string;
+  try {
+    ({ post_id, content } = parseBotComment(req.body));
+  } catch (err) {
+    if (err instanceof InvalidInput) return res.status(400).json({ success: false, error: err.message });
+    throw err;
+  }
 
   try {
     const serviceSupabase = getSupabaseServiceClient();

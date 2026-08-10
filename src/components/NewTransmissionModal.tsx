@@ -36,7 +36,16 @@ export const NewTransmissionModal: React.FC<NewTransmissionModalProps> = ({ isOp
     }
   }, [isOpen]);
 
+  // Keyed on the fields it reads, not the whole `currentUser`: AuthContext
+  // replaces that object on any realtime change to the row — including
+  // view_count, which moves whenever somebody looks at your profile — so this
+  // debounced query used to re-run for reasons that have nothing to do with the
+  // search. `cancelled` keeps a slow earlier response from overwriting a newer
+  // one when it does re-run.
+  const blockedKey = currentUser?.blocked_users?.join(',') ?? '';
   useEffect(() => {
+    let cancelled = false;
+
     const searchUsers = async () => {
       if (!currentUser || !supabaseUser) return;
 
@@ -55,22 +64,27 @@ export const NewTransmissionModal: React.FC<NewTransmissionModalProps> = ({ isOp
         }
 
         const { data: dbUsers, error: dbError } = await query;
+        if (cancelled) return;
         if (dbError) throw dbError;
 
         const matchedUsers = ((dbUsers ?? []) as User[])
           .filter(u => !currentUser.blocked_users?.includes(u.id));
         setResults(matchedUsers);
       } catch (err: any) {
+        if (cancelled) return;
         console.error('[NewTransmissionModal] search error:', err);
         setError(err?.message || 'Failed to search users.');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     const timeoutId = setTimeout(searchUsers, 300);
-    return () => clearTimeout(timeoutId);
-  }, [searchQuery, currentUser, supabaseUser]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [searchQuery, currentUser?.id, blockedKey, supabaseUser?.id]);
 
   const filteredBots = useMemo(() => {
     if (!searchQuery.trim()) return featuredBots;

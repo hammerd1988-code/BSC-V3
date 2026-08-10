@@ -3,6 +3,25 @@
  * Replaces the legacy database error handling pattern.
  */
 
+/**
+ * Returns the first error among a batch of Supabase results, or null.
+ *
+ * supabase-js resolves with `{ error }` instead of rejecting, so
+ * `try { await Promise.all([...supabase calls]) } catch {}` has a catch block
+ * that can never run: every call "succeeds" from the promise's point of view
+ * even when all of them failed. Several CRED-spending flows reported success to
+ * the user that way. Pass the settled results through this before deciding
+ * whether the operation worked.
+ */
+export function firstResultError(
+  results: ReadonlyArray<{ error?: unknown } | null | undefined>,
+): unknown | null {
+  for (const result of results) {
+    if (result && result.error) return result.error;
+  }
+  return null;
+}
+
 export function handleDbError(
   error: unknown,
   operation: string,

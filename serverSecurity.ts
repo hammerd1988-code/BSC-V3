@@ -79,6 +79,36 @@ export function timingSafeStringEqual(a: string, b: string): boolean {
 }
 
 /**
+ * Recognising the server calling its own HTTP routes.
+ *
+ * Bot Mayhem drives battles by POSTing to the Colosseum's own endpoints on
+ * localhost, and those endpoints let the caller skip both authentication and
+ * the match-ownership check. The test used to be
+ * `req.socket.remoteAddress === '127.0.0.1'`, which is not an authentication
+ * check at all: it is equally true for every request that arrives through a
+ * reverse proxy or sidecar sharing the host, and for any other process with a
+ * foothold on the box. Under a local proxy it grants the bypass to the whole
+ * internet.
+ *
+ * This token is minted once per process, is never written to disk or logged,
+ * and is only reachable through `internalCallHeaders()`, so presenting it
+ * requires already executing inside this process.
+ */
+const INTERNAL_CALL_TOKEN = crypto.randomBytes(32).toString('hex');
+export const INTERNAL_CALL_HEADER = 'x-bsc-internal-call';
+
+export function internalCallHeaders(): Record<string, string> {
+  return { [INTERNAL_CALL_HEADER]: INTERNAL_CALL_TOKEN };
+}
+
+export function isInternalRequest(req: Pick<Request, 'headers'>): boolean {
+  const presented = req.headers[INTERNAL_CALL_HEADER];
+  const token = Array.isArray(presented) ? presented[0] : presented;
+  if (typeof token !== 'string' || !token) return false;
+  return timingSafeStringEqual(token, INTERNAL_CALL_TOKEN);
+}
+
+/**
  * Webhook auth for the agent/job callbacks.
  *
  * Production requires AGENT_WEBHOOK_SECRET. Development mints a random

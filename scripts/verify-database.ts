@@ -137,41 +137,63 @@ async function verifyTables(): Promise<{ found: string[]; missing: string[] }> {
   return { found, missing };
 }
 
-async function verifyRLS(): Promise<boolean> {
+type CheckResult = 'ok' | 'failed' | 'unverified';
+
+/**
+ * Every branch of this used to return true, and one of them printed
+ * "✓ RLS is enabled in migration file (0001_init.sql)" — a claim about a file it
+ * never opened, on the path taken when the check had just failed to run. The
+ * RPC it calls, get_tables_with_rls_status, does not exist in any migration, so
+ * that was the only path ever taken: the step reported a pass unconditionally.
+ *
+ * It now distinguishes "verified" from "could not verify". RLS on every public
+ * table is asserted properly by supabase/migrations.test.ts, which applies the
+ * real migration chain to Postgres, so that is where an unverified run is sent.
+ */
+async function verifyRLS(): Promise<CheckResult> {
   console.log('\n[3/4] Verifying RLS policies...');
-  
+
   if (!hasUsableServiceKey) {
-    console.log('  ⚠ Skipping RLS verification (requires service role key)');
-    return true;
+    console.log('  ⚠ Cannot verify RLS (requires service role key)');
+    return 'unverified';
   }
 
   try {
-    // Query pg_tables to check RLS status
-    const { data, error } = await supabase.rpc('get_tables_with_rls_status').select('*');
-    
+    const { data, error } = await supabase.rpc('get_tables_with_rls_status');
+
     if (error) {
-      // If the function doesn't exist, we'll check another way
-      console.log('  ⚠ RLS status check not available via RPC');
-      console.log('  ✓ RLS is enabled in migration file (0001_init.sql)');
-      return true;
+      console.log(`  ⚠ Cannot verify RLS against this database: ${error.message}`);
+      console.log('    Run `npm run test:run` — supabase/migrations.test.ts asserts');
+      console.log('    that every table in `public` has RLS enabled.');
+      return 'unverified';
     }
-    
-    if (data) {
-      console.log('  ✓ RLS verification complete');
+
+    const tables = (data ?? []) as Array<{ table_name?: string; rls_enabled?: boolean }>;
+    if (tables.length === 0) {
+      console.log('  ⚠ RLS status query returned no rows');
+      return 'unverified';
     }
-    return true;
-  } catch {
-    console.log('  ✓ RLS is configured in migration file');
-    return true;
+
+    const unprotected = tables.filter((table) => table.rls_enabled === false);
+    if (unprotected.length > 0) {
+      console.log(`  ✗ RLS disabled on: ${unprotected.map((t) => t.table_name).join(', ')}`);
+      return 'failed';
+    }
+
+    console.log(`  ✓ RLS enabled on all ${tables.length} tables`);
+    return 'ok';
+  } catch (error) {
+    console.log(`  ⚠ Cannot verify RLS: ${error instanceof Error ? error.message : error}`);
+    return 'unverified';
   }
 }
 
-async function verifyStorage(): Promise<boolean> {
+async function verifyStorage(): Promise<CheckResult> {
   console.log('\n[4/4] Verifying storage bucket...');
 
   if (!hasUsableServiceKey) {
-    console.log('  ⚠ Skipping storage bucket check (requires service role key)');
-    return true;
+    console.log('  ⚠ Cannot check storage bucket (requires service role key)');
+    return 'unverified';
   }
   
   const bucketName = process.env.VITE_SUPABASE_STORAGE_BUCKET || 'media';
@@ -181,7 +203,7 @@ async function verifyStorage(): Promise<boolean> {
     
     if (error) {
       console.log(`  ⚠ Could not list buckets: ${error.message}`);
-      return false;
+      return 'unverified';
     }
     
     const bucket = buckets?.find(b => b.name === bucketName);
@@ -189,15 +211,15 @@ async function verifyStorage(): Promise<boolean> {
     if (bucket) {
       console.log(`  ✓ Storage bucket '${bucketName}' exists`);
       console.log(`    - Public: ${bucket.public}`);
-      return true;
+      return 'ok';
     } else {
       console.log(`  ✗ Storage bucket '${bucketName}' not found`);
       console.log(`    Available buckets: ${buckets?.map(b => b.name).join(', ') || 'none'}`);
-      return false;
+      return 'failed';
     }
   } catch (error) {
     console.log(`  ⚠ Storage verification failed: ${error}`);
-    return false;
+    return 'unverified';
   }
 }
 
@@ -215,8 +237,8 @@ async function main() {
   }
 
   const { found, missing } = await verifyTables();
-  await verifyRLS();
-  await verifyStorage();
+  const rls = await verifyRLS();
+  const storage = await verifyStorage();
 
   console.log('\n═══════════════════════════════════════════════════════════');
   console.log('  Summary');
@@ -232,7 +254,35 @@ async function main() {
     console.log('\n✓ All required tables are present');
   }
 
+  const unverified = [
+    rls === 'unverified' ? 'RLS' : null,
+    storage === 'unverified' ? 'storage bucket' : null,
+  ].filter(Boolean);
+  if (unverified.length > 0) {
+    console.log(`\n⚠ Not verified: ${unverified.join(', ')}`);
+  }
+
+  // The results of these checks used to be discarded and the script exited 0
+  // whatever it found, so "verification passed" meant only that the connection
+  // worked. AGENTS.md points here after schema changes, so a real failure has
+  // to be a real failure.
+  const failures = [
+    missing.length > 0 ? `${missing.length} missing table(s)` : null,
+    rls === 'failed' ? 'RLS disabled on one or more tables' : null,
+    storage === 'failed' ? 'storage bucket missing' : null,
+  ].filter(Boolean);
+
   console.log('\n═══════════════════════════════════════════════════════════\n');
+
+  if (failures.length > 0) {
+    console.log(`❌ Database verification failed: ${failures.join('; ')}\n`);
+    process.exit(1);
+  }
 }
 
-main().catch(console.error);
+main().catch((error) => {
+  // `catch(console.error)` logged and then exited 0, so a crash mid-verification
+  // was indistinguishable from a pass.
+  console.error('\n❌ Database verification crashed:', error);
+  process.exit(1);
+});

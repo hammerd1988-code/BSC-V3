@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Request, Response } from 'express';
 import {
   CapacityError,
+  INTERNAL_CALL_HEADER,
   ProductionConfigError,
   assertProductionConfig,
   createConcurrencyGate,
@@ -10,6 +11,8 @@ import {
   createSquareClient,
   createWebhookAuthMiddleware,
   getSquareLocationId,
+  internalCallHeaders,
+  isInternalRequest,
   parseAllowedOrigins,
   resolveSocketCorsOrigin,
 } from './serverSecurity.js';
@@ -242,6 +245,40 @@ describe('createConcurrencyGate', () => {
     await expect(gate.run(async () => { throw new Error('boom'); })).rejects.toThrow('boom');
     expect(gate.stats.inFlight).toBe(0);
     await expect(gate.run(async () => 'recovered')).resolves.toBe('recovered');
+  });
+});
+
+describe('internal self-call authentication', () => {
+  const asReq = (headers: Record<string, string | string[]>) =>
+    ({ headers } as unknown as Request);
+
+  it('accepts the token minted for this process', () => {
+    expect(isInternalRequest(asReq(internalCallHeaders()))).toBe(true);
+  });
+
+  it('rejects a request that presents no token', () => {
+    expect(isInternalRequest(asReq({}))).toBe(false);
+    expect(isInternalRequest(asReq({ [INTERNAL_CALL_HEADER]: '' }))).toBe(false);
+  });
+
+  it('rejects a guessed token', () => {
+    expect(isInternalRequest(asReq({ [INTERNAL_CALL_HEADER]: 'a'.repeat(64) }))).toBe(false);
+  });
+
+  it('does not treat a loopback peer address as internal', () => {
+    // The whole point of the change: a request can originate on the host (a
+    // reverse proxy, a sidecar, any local process) and still not be this server.
+    const proxied = {
+      headers: {},
+      socket: { remoteAddress: '127.0.0.1' },
+      ip: '127.0.0.1',
+    } as unknown as Request;
+    expect(isInternalRequest(proxied)).toBe(false);
+  });
+
+  it('ignores a duplicated header rather than accepting the first match', () => {
+    const token = internalCallHeaders()[INTERNAL_CALL_HEADER];
+    expect(isInternalRequest(asReq({ [INTERNAL_CALL_HEADER]: ['wrong', token] }))).toBe(false);
   });
 });
 
