@@ -78,6 +78,32 @@ return () => { supabase.removeChannel(channel); };
 - **DO NOT** use camelCase in SQL or database field names
 - **DO NOT** forget to handle RLS policy errors gracefully
 
+## Merge discipline (required — past outages came from ignoring this)
+
+Two production incidents on this repo came from merge handling, not from the
+code being authored. Follow these rules exactly:
+
+1. **Never merge before the CI `verify` check has completed on the exact
+   commit being merged.** A conflict resolution was once merged 14 seconds
+   after push — the CI job takes ~80 seconds, so nothing had a chance to
+   report — and main was unbootable for hours.
+2. **Never resolve a merge conflict by keeping both sides.** That resolution
+   once landed a duplicate block mid-object-literal in `server.ts` (22 syntax
+   errors, dead entrypoint) and a duplicated `post:like` emit in `Feed.tsx`
+   that type-checked and shipped. Read both sides, understand which change
+   supersedes which, and produce one intentional result. If the two sides are
+   independent changes to the same region, verify the combined behavior — not
+   just that the file parses.
+3. **After any conflict resolution, run `npm run lint` AND
+   `bash scripts/ci-smoke.sh`** before pushing. The smoke script boots the
+   real server entrypoint with stub credentials and requires `/api/health` to
+   answer — it catches import-time and init-time breakage that typecheck,
+   tests, and `vite build` all miss.
+4. A previous "reconciliation" merge silently dropped three security fixes.
+   When resolving conflicts in security-sensitive code (auth middleware,
+   webhook verification, RLS-adjacent server routes), diff the resolution
+   against **both** parents and confirm nothing protective was discarded.
+
 ## Custom Agents
 
 - [.agent.md](.agent.md) - Specialized Supabase development agent
