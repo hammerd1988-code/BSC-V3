@@ -43,3 +43,9 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # Typecheck, tests, and `vite build` never execute server.ts, so a
+      # server that dies at import time passes all of them. Boot the real
+      # entrypoint against stub credentials and require /api/health to answer.
+      - name: Boot smoke test (server.ts serves /api/health)
+        run: bash scripts/ci-smoke.sh
