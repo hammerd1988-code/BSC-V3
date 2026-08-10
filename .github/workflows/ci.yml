@@ -43,3 +43,56 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # `npm run build` only bundles the Vite client — nothing in this workflow
+      # ever executed server.ts. A merge conflict resolved by keeping both sides
+      # once left it unparseable, and `npm start` died with
+      # ERR_INVALID_TYPESCRIPT_SYNTAX while typecheck, tests and build all still
+      # passed on their own. Anything that throws at import or during startup
+      # (a bad specifier, a module-level throw, a route registered twice) is
+      # invisible to the four steps above.
+      #
+      # Dummy credentials pointing at a closed port are deliberate: the server
+      # must reach "listening" and serve /api/health without any external
+      # dependency, so this stays hermetic and touches no real database.
+      - name: Smoke test — server boots and serves
+        env:
+          NODE_ENV: production
+          PORT: '3099'
+          APP_URL: http://127.0.0.1:3099
+          SUPABASE_URL: http://127.0.0.1:1
+          VITE_SUPABASE_URL: http://127.0.0.1:1
+          SUPABASE_SERVICE_ROLE_KEY: dummy-service-role-key-for-smoke-test-only
+          VITE_SUPABASE_ANON_KEY: dummy-anon-key-for-smoke-test-only
+        run: |
+          set -euo pipefail
+          npx tsx server.ts > /tmp/smoke.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+
+          for attempt in $(seq 1 60); do
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+              echo "::error::server exited during startup"
+              cat /tmp/smoke.log
+              exit 1
+            fi
+            if curl -fsS -m 5 http://127.0.0.1:3099/api/health -o /tmp/health.json 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          if ! [ -s /tmp/health.json ]; then
+            echo "::error::server never answered /api/health within 60s"
+            cat /tmp/smoke.log
+            exit 1
+          fi
+
+          cat /tmp/health.json
+          node -e '
+            const health = require("/tmp/health.json");
+            if (health.status !== "ok") throw new Error(`unhealthy: ${health.status}`);
+            // Catches a build that emitted nothing, which the Build step alone
+            // would not have reported.
+            if (!health.frontendServed) throw new Error("dist/ was not served — the build produced no frontend");
+          '
