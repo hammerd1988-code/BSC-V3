@@ -111,6 +111,7 @@ const RPC_SIGNATURES: Array<[string, string[]]> = [
   ['bump_transmission_unread', ['p_last_transmit', 'p_recipient_id', 'p_transmission_id']],
   ['clear_transmission_unread', ['p_transmission_id', 'p_user_id']],
   ['casper_memory_stats', ['p_user_id']],
+  ['get_tables_with_rls_status', []],
   ['convert_cred_to_compute', ['p_cred_amount', 'p_gladiator_id', 'p_user_id']],
   ['draw_colosseum_arena_modifier', ['p_challenge_type', 'p_challenger_id', 'p_defender_id']],
   ['exchange_cred_for_tokens', ['user_id', 'cred_to_deduct', 'tokens_to_add']],
@@ -136,6 +137,7 @@ const RPC_SIGNATURES: Array<[string, string[]]> = [
 /** Functions called via supabase.rpc(...) somewhere in the app. */
 const REQUIRED_FUNCTIONS = [
   'bump_transmission_unread',
+  'get_tables_with_rls_status',
   'clear_transmission_unread',
   'increment_counter',
   'increment_cred_balance',
