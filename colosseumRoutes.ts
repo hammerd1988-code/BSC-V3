@@ -36,6 +36,7 @@ import {
 } from './src/lib/colosseumSandbox.js';
 import { generateServerText, isServerAiConfigured } from './serverAi.js';
 import { assertPublicHttpUrl } from './outboundUrl.js';
+import { isInternalRequest } from './serverSecurity.js';
 import { generateImage as comfyGenerateImage, generateGladiatorAvatar as comfyGenerateAvatar, isComfyUIConfigured } from './comfyuiProvider.js';
 
 const BOT_UUID_NAMESPACE = '00000000-0000-4000-8000-000000000b5c';
@@ -81,6 +82,38 @@ function openaiCompatibleBaseUrl() {
 }
 const SAPPHIRE_API_URL = (process.env.SAPPHIRE_API_URL || 'https://sapphire.bloodsweatcode.site').replace(/\/$/, '');
 let lastBountyRefreshAt = 0;
+
+/**
+ * The two `/ensure` routes below seed the hardcoded persona roster and the
+ * Sapphire house bot through the service role, and BotForge and Colosseum both
+ * call them on mount — so the full roster upsert ran once per page view, and any
+ * authenticated client could repeat it at will.
+ *
+ * Admin-gating them would break those pages for ordinary users, so instead the
+ * seed runs at most once per window and concurrent callers share the same
+ * in-flight promise. That removes the write amplification and the abuse case
+ * without changing what a caller receives.
+ */
+const ENSURE_TTL_MS = 5 * 60_000;
+
+export function memoizeEnsure<T>(load: () => Promise<T>, ttlMs: number = ENSURE_TTL_MS) {
+  let cachedAt = 0;
+  let cached: Promise<T> | null = null;
+  return (): Promise<T> => {
+    const now = Date.now();
+    if (!cached || now - cachedAt >= ttlMs) {
+      cachedAt = now;
+      cached = load().catch((error) => {
+        // A failed seed must not be cached, or the roster stays broken for the
+        // whole window.
+        cached = null;
+        cachedAt = 0;
+        throw error;
+      });
+    }
+    return cached;
+  };
+}
 const CHALLENGE_BRIEFS: Record<ColosseumChallengeType, string> = {
   speed_round: 'Solve the task as quickly as possible while keeping the implementation correct and readable.',
   debug_battle: 'Find and fix the defect. Explain the root cause and provide corrected code or a precise patch.',
@@ -109,10 +142,14 @@ async function authenticatedRequestUser(req: Request, supabase: SupabaseClient):
   return error ? null : data.user;
 }
 
-function isLoopbackRequest(req: Request) {
-  const address = req.socket.remoteAddress ?? '';
-  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
-}
+const BOUNTY_BOARD_LIMIT = 100;
+const BOUNTY_ENTRY_LIMIT = 2_000;
+const BOUNTY_TITLE_LIMIT = 500;
+
+// `isInternalRequest` replaces an earlier `req.socket.remoteAddress === '127.0.0.1'`
+// test. Both routes below let an internal caller skip authentication *and* the
+// match-ownership check, and a peer address of 127.0.0.1 proves nothing when a
+// reverse proxy on the same host is what terminates every connection.
 
 async function userOwnsOpenMatch(supabase: SupabaseClient, matchId: string, authUid: string) {
   const { data: match, error: matchError } = await supabase
@@ -1027,6 +1064,9 @@ async function ensureSapphireHouseBot(supabase: SupabaseClient) {
 }
 
 export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) {
+  const ensurePersonaBotsThrottled = memoizeEnsure(() => ensurePersonaBotGladiators(supabase));
+  const ensureSapphireThrottled = memoizeEnsure(() => ensureSapphireHouseBot(supabase));
+
   app.get('/api/colosseum/bounties', async (req, res) => {
     try {
       const authUser = await authenticatedRequestUser(req, supabase);
@@ -1039,11 +1079,16 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
         lastBountyRefreshAt = now;
       }
 
+      // Entries accumulate for the lifetime of every open bounty, so an
+      // unbounded read here grows without limit and is sent to the browser
+      // whole. The board only renders a leaderboard per bounty, so cap all
+      // three reads rather than letting the response size track the table size.
       const { data: bounties, error: bountyError } = await supabase
         .from('colosseum_bounties')
         .select('*')
         .eq('status', 'open')
-        .order('closes_at', { ascending: true });
+        .order('closes_at', { ascending: true })
+        .limit(BOUNTY_BOARD_LIMIT);
       if (bountyError) throw bountyError;
       const bountyIds = (bounties ?? []).map((bounty) => bounty.id);
       const [{ data: entries, error: entryError }, { data: titles, error: titleError }] = await Promise.all([
@@ -1054,8 +1099,13 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
             .in('bounty_id', bountyIds)
             .order('score', { ascending: false })
             .order('duration_ms', { ascending: true })
+            .limit(BOUNTY_ENTRY_LIMIT)
           : Promise.resolve({ data: [], error: null }),
-        supabase.from('gladiator_temporary_titles').select('*').gt('expires_at', new Date().toISOString()),
+        supabase
+          .from('gladiator_temporary_titles')
+          .select('*')
+          .gt('expires_at', new Date().toISOString())
+          .limit(BOUNTY_TITLE_LIMIT),
       ]);
       if (entryError) throw entryError;
       if (titleError) throw titleError;
@@ -1072,7 +1122,7 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
       if (!(await authenticatedRequestUser(req, supabase))) {
         return res.status(401).json({ success: false, error: 'Authentication required.' });
       }
-      const gladiators = await ensurePersonaBotGladiators(supabase);
+      const gladiators = await ensurePersonaBotsThrottled();
       return res.json({ success: true, gladiators });
     } catch (error: any) {
       console.error('[colosseum:persona-bots:ensure]', error);
@@ -1085,7 +1135,7 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
       if (!(await authenticatedRequestUser(req, supabase))) {
         return res.status(401).json({ success: false, error: 'Authentication required.' });
       }
-      const gladiator = await ensureSapphireHouseBot(supabase);
+      const gladiator = await ensureSapphireThrottled();
       return res.json({ success: true, gladiator });
     } catch (error: any) {
       console.error('[colosseum:sapphire:ensure]', error);
@@ -1582,7 +1632,7 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
 
   app.post('/api/colosseum/gladiator-solutions', async (req, res) => {
     try {
-      const isInternal = isLoopbackRequest(req);
+      const isInternal = isInternalRequest(req);
       const authUser = await authenticatedRequestUser(req, supabase);
       if (!authUser && !isInternal) {
         return res.status(401).json({ success: false, error: 'Authentication required.' });
@@ -1676,7 +1726,11 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
       if (match?.id) {
         const existingReplay = (match.replay_data && typeof match.replay_data === 'object') ? match.replay_data : {};
         const existingLog = Array.isArray(existingReplay.log) ? existingReplay.log : [];
-        await supabase
+        // The artifact upsert below already throws on error; this write is what
+        // the replay and resolve flows actually read, and discarding its error
+        // let the route answer `{ success: true, moves }` for moves that were
+        // never recorded.
+        const { error: replayError } = await supabase
           .from('matches')
           .update({
             replay_data: {
@@ -1690,6 +1744,7 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
             },
           })
           .eq('id', match.id);
+        if (replayError) throw replayError;
         const artifactRows = moves.map((move) => ({
           match_id: match.id,
           gladiator_id: String(move.gladiator_id),
@@ -1757,7 +1812,7 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
 
   app.post('/api/colosseum/judge-battle', async (req, res) => {
     try {
-      const isInternal = isLoopbackRequest(req);
+      const isInternal = isInternalRequest(req);
       const authUser = await authenticatedRequestUser(req, supabase);
       if (!authUser && !isInternal) {
         return res.status(401).json({ success: false, error: 'Authentication required.' });
