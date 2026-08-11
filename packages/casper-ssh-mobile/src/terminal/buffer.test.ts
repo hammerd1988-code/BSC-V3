@@ -1,4 +1,8 @@
-import { appendTerminalInput, TerminalBufferState } from './buffer';
+import {
+  appendTerminalInput,
+  overwriteCarriageReturns,
+  TerminalBufferState,
+} from './buffer';
 import { expect, it } from 'vitest';
 
 function append(state: TerminalBufferState, value: string): TerminalBufferState & { lines: string[] } {
@@ -35,7 +39,18 @@ it('keeps only the final segment of an interior carriage-return redraw', () => {
 
 it('removes only the line-ending CR when the line ends in CRCRLF', () => {
   expect(append(initialState, 'progress\r\r\n')).toMatchObject({
-    lines: [''],
+    lines: ['progress'],
+    pendingLine: '',
+  });
+});
+
+it('keeps visible text before a trailing carriage return', () => {
+  expect(overwriteCarriageReturns('progress\r')).toBe('progress');
+});
+
+it('overlays a shorter redraw onto the existing line', () => {
+  expect(append(initialState, 'old progress\rnew\n')).toMatchObject({
+    lines: ['new progress'],
     pendingLine: '',
   });
 });
@@ -51,4 +66,14 @@ it('reassembles a CRLF split across chunks', () => {
     lines: ['VISIBLE_MARKER_123'],
     pendingLine: '',
   });
+});
+
+it('bounds a newline-free carriage-return spinner to its longest segment', () => {
+  let state = initialState;
+  for (const segment of ['spinner 100%', 'spinner 99%', 'spinner 9%', 'spinner 1%']) {
+    state = append(state, `${segment}\r`);
+  }
+
+  expect(state.pendingLine.length).toBeLessThanOrEqual('spinner 100%\r'.length);
+  expect(overwriteCarriageReturns(state.pendingLine).length).toBeLessThanOrEqual('spinner 100%'.length);
 });
