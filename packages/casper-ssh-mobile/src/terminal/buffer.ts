@@ -11,6 +11,12 @@ export interface TerminalBufferResult {
   style: AnsiStyle;
 }
 
+export function overwriteCarriageReturns(input: string): string {
+  return input
+    .split('\r')
+    .reduce((line, segment) => segment + line.slice(segment.length), '');
+}
+
 export function appendTerminalInput(
   state: TerminalBufferState,
   value: string,
@@ -30,7 +36,7 @@ export function appendTerminalInput(
     const lineWithoutTerminator = rawLine.endsWith('\r')
       ? rawLine.slice(0, -1)
       : rawLine;
-    const visibleLine = lineWithoutTerminator.split('\r').at(-1) ?? '';
+    const visibleLine = overwriteCarriageReturns(lineWithoutTerminator);
     const parsed = parseAnsiLine(visibleLine, style);
     lines.push(parsed.spans);
     style = parsed.style;
@@ -38,13 +44,10 @@ export function appendTerminalInput(
     newlineIndex = input.indexOf('\n', start);
   }
 
-  let pendingLine = input.slice(start);
-  const trailingCarriageReturn = pendingLine.endsWith('\r');
-  const carriageReturn = pendingLine.lastIndexOf(
-    '\r',
-    trailingCarriageReturn ? pendingLine.length - 2 : pendingLine.length,
-  );
-  if (carriageReturn >= 0) pendingLine = pendingLine.slice(carriageReturn + 1);
+  const rawPendingLine = input.slice(start);
+  const pendingLine = `${overwriteCarriageReturns(rawPendingLine)}${
+    rawPendingLine.endsWith('\r') ? '\r' : ''
+  }`;
 
   return { lines, pendingLine, style };
 }

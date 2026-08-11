@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { SshTransport } from '../transport/types';
 import { AnsiSpan, AnsiStyle, parseAnsiLine } from '../terminal/ansi';
-import { appendTerminalInput } from '../terminal/buffer';
+import { appendTerminalInput, overwriteCarriageReturns } from '../terminal/buffer';
 
 const MAX_LINES = 500;
 
@@ -139,7 +139,7 @@ export default function TerminalScreen({ transport, onDisconnect }: {
 
   const verified = transport.capabilities.hostKeyVerification && transport.hostKeyInfo;
   const pendingSpans = pendingLine
-    ? parseAnsiLine(pendingLine.split('\r').at(-1) ?? '', styleRef.current).spans
+    ? parseAnsiLine(overwriteCarriageReturns(pendingLine), styleRef.current).spans
     : [];
 
   return (
