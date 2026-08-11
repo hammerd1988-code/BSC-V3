@@ -53,8 +53,10 @@ export function appendTerminalInput(
 
   const parsed = parseAnsiLine(stripTerminalControls(value), state.style);
   const lines: AnsiSpan[][] = [];
-  const cells = state.pendingLine.map((span) => ({ ...span, style: { ...span.style } }));
-  let cursorColumn = state.cursorColumn;
+  const cells = state.pendingLine.flatMap((span) =>
+    Array.from(span.text, (text) => ({ text, style: { ...span.style } })),
+  );
+  let cursorColumn = Math.min(state.cursorColumn, cells.length);
 
   for (const span of parsed.spans) {
     for (const character of Array.from(span.text)) {
