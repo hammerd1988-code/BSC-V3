@@ -8,8 +8,8 @@ import {
   View,
 } from 'react-native';
 import { SshTransport } from '../transport/types';
-import { AnsiSpan, AnsiStyle, parseAnsiLine } from '../terminal/ansi';
-import { appendTerminalInput, overwriteCarriageReturns } from '../terminal/buffer';
+import { AnsiSpan, AnsiStyle } from '../terminal/ansi';
+import { appendTerminalInput } from '../terminal/buffer';
 
 const MAX_LINES = 500;
 
@@ -35,9 +35,10 @@ export default function TerminalScreen({ transport, onDisconnect }: {
   const [busy, setBusy] = useState(false);
   const [ctrlMode, setCtrlMode] = useState(false);
   const [terminalSize, setTerminalSize] = useState({ width: 0, height: 0 });
-  const [pendingLine, setPendingLine] = useState('');
+  const [pendingLine, setPendingLine] = useState<AnsiSpan[]>([]);
   const scrollRef = useRef<ScrollView>(null);
-  const pendingLineRef = useRef('');
+  const pendingLineRef = useRef<AnsiSpan[]>([]);
+  const cursorColumnRef = useRef(0);
   const styleRef = useRef<AnsiStyle>({});
   const fallbackBytesRef = useRef<Uint8Array>(new Uint8Array());
   const decoderRef = useRef<TextDecoder | null>(
@@ -48,10 +49,12 @@ export default function TerminalScreen({ transport, onDisconnect }: {
     if (!value) return;
     const result = appendTerminalInput({
       pendingLine: pendingLineRef.current,
+      cursorColumn: cursorColumnRef.current,
       style: styleRef.current,
     }, value);
     styleRef.current = result.style;
     pendingLineRef.current = result.pendingLine;
+    cursorColumnRef.current = result.cursorColumn;
     setPendingLine(pendingLineRef.current);
     if (result.lines.length) {
       setLines((current) => [...current, ...result.lines].slice(-MAX_LINES));
@@ -138,9 +141,6 @@ export default function TerminalScreen({ transport, onDisconnect }: {
   };
 
   const verified = transport.capabilities.hostKeyVerification && transport.hostKeyInfo;
-  const pendingSpans = pendingLine
-    ? parseAnsiLine(overwriteCarriageReturns(pendingLine), styleRef.current).spans
-    : [];
 
   return (
     <View style={styles.container}>
@@ -166,7 +166,7 @@ export default function TerminalScreen({ transport, onDisconnect }: {
         onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: false })}
       >
         {lines.map((line, index) => <StyledLine key={`${index}-${line.map((span) => span.text).join('')}`} spans={line} />)}
-        {pendingSpans.length > 0 && <StyledLine spans={pendingSpans} />}
+        {pendingLine.length > 0 && <StyledLine spans={pendingLine} />}
       </ScrollView>
       {shellActive && (
         <View style={styles.keyBar}>

@@ -1,63 +1,17 @@
 import { AnsiSpan, AnsiStyle, parseAnsiLine, stripTerminalControls } from './ansi';
 
 export interface TerminalBufferState {
-  pendingLine: string;
+  pendingLine: AnsiSpan[];
+  cursorColumn: number;
   style: AnsiStyle;
 }
 
 export interface TerminalBufferResult {
   lines: AnsiSpan[][];
-  pendingLine: string;
+  pendingLine: AnsiSpan[];
+  cursorColumn: number;
   style: AnsiStyle;
 }
-
-interface StyledCell {
-  text: string;
-  style: AnsiStyle;
-}
-
-interface OverlayResult {
-  text: string;
-  style: AnsiStyle;
-}
-
-const COLORS: Record<string, number> = {
-  '#111827': 30,
-  '#f87171': 31,
-  '#4ade80': 32,
-  '#facc15': 33,
-  '#60a5fa': 34,
-  '#e879f9': 35,
-  '#22d3ee': 36,
-  '#e5e7eb': 37,
-  '#6b7280': 90,
-  '#fb7185': 91,
-  '#86efac': 92,
-  '#fde047': 93,
-  '#93c5fd': 94,
-  '#f0abfc': 95,
-  '#67e8f9': 96,
-  '#f9fafb': 97,
-};
-
-const BACKGROUNDS: Record<string, number> = {
-  '#111827': 40,
-  '#7f1d1d': 41,
-  '#14532d': 42,
-  '#713f12': 43,
-  '#1e3a8a': 44,
-  '#581c87': 45,
-  '#164e63': 46,
-  '#e5e7eb': 47,
-  '#4b5563': 100,
-  '#be123c': 101,
-  '#166534': 102,
-  '#a16207': 103,
-  '#1d4ed8': 104,
-  '#7e22ce': 105,
-  '#0e7490': 106,
-  '#f3f4f6': 107,
-};
 
 function sameStyle(left: AnsiStyle, right: AnsiStyle): boolean {
   return left.color === right.color
@@ -67,48 +21,21 @@ function sameStyle(left: AnsiStyle, right: AnsiStyle): boolean {
     && left.underline === right.underline;
 }
 
-function styleCodes(style: AnsiStyle): number[] {
-  const codes: number[] = [];
-  if (style.bold) codes.push(1);
-  if (style.dim) codes.push(2);
-  if (style.underline) codes.push(4);
-  if (style.color && COLORS[style.color]) codes.push(COLORS[style.color]);
-  if (style.backgroundColor && BACKGROUNDS[style.backgroundColor]) {
-    codes.push(BACKGROUNDS[style.backgroundColor]);
+function appendSpan(spans: AnsiSpan[], text: string, style: AnsiStyle): void {
+  if (!text) return;
+  const previous = spans[spans.length - 1];
+  if (previous && sameStyle(previous.style, style)) {
+    previous.text += text;
+  } else {
+    spans.push({ text, style: { ...style } });
   }
-  return codes;
 }
 
-function serializeCells(cells: StyledCell[]): string {
-  let output = '';
-  let currentStyle: AnsiStyle = {};
-  for (const cell of cells) {
-    if (!sameStyle(currentStyle, cell.style)) {
-      const codes = styleCodes(cell.style);
-      output += `\u001b[${codes.length ? codes.join(';') : '0'}m`;
-      currentStyle = cell.style;
-    }
-    output += cell.text;
-  }
-  return output;
-}
-
-function overlayCarriageReturns(input: string, initialStyle: AnsiStyle): OverlayResult {
-  let cells: StyledCell[] = [];
-  let style = initialStyle;
-  for (const segment of input.split('\r')) {
-    const parsed = parseAnsiLine(segment, style);
-    const segmentCells = parsed.spans
-      .filter((span) => span.text)
-      .flatMap((span) => Array.from(span.text, (text) => ({ text, style: span.style })));
-    cells = [...segmentCells, ...cells.slice(segmentCells.length)];
-    style = parsed.style;
-  }
-  return { text: serializeCells(cells), style };
-}
-
-export function overwriteCarriageReturns(input: string): string {
-  return overlayCarriageReturns(input, {}).text;
+function cellsToSpans(cells: AnsiSpan[]): AnsiSpan[] {
+  return cells.reduce<AnsiSpan[]>((spans, span) => {
+    appendSpan(spans, span.text, span.style);
+    return spans;
+  }, []);
 }
 
 export function appendTerminalInput(
@@ -116,34 +43,44 @@ export function appendTerminalInput(
   value: string,
 ): TerminalBufferResult {
   if (!value) {
-    return { lines: [], pendingLine: state.pendingLine, style: state.style };
+    return {
+      lines: [],
+      pendingLine: state.pendingLine,
+      cursorColumn: state.cursorColumn,
+      style: state.style,
+    };
   }
 
-  const input = stripTerminalControls(`${state.pendingLine}${value}`);
+  const parsed = parseAnsiLine(stripTerminalControls(value), state.style);
   const lines: AnsiSpan[][] = [];
-  let start = 0;
-  let newlineIndex = input.indexOf('\n');
-  let style = state.style;
+  const cells = state.pendingLine.map((span) => ({ ...span, style: { ...span.style } }));
+  let cursorColumn = state.cursorColumn;
 
-  while (newlineIndex >= 0) {
-    const rawLine = input.slice(start, newlineIndex);
-    const lineWithoutTerminator = rawLine.endsWith('\r')
-      ? rawLine.slice(0, -1)
-      : rawLine;
-    const overlaid = overlayCarriageReturns(lineWithoutTerminator, style);
-    const parsed = parseAnsiLine(overlaid.text, style);
-    lines.push(parsed.spans);
-    style = overlaid.style;
-    start = newlineIndex + 1;
-    newlineIndex = input.indexOf('\n', start);
+  for (const span of parsed.spans) {
+    for (const character of Array.from(span.text)) {
+      if (character === '\r') {
+        cursorColumn = 0;
+      } else if (character === '\n') {
+        lines.push(cellsToSpans(cells));
+        cells.length = 0;
+        cursorColumn = 0;
+      } else {
+        const existing = cells[cursorColumn];
+        if (existing) {
+          existing.text = character;
+          existing.style = { ...span.style };
+        } else {
+          cells[cursorColumn] = { text: character, style: { ...span.style } };
+        }
+        cursorColumn += 1;
+      }
+    }
   }
 
-  const rawPendingLine = input.slice(start);
-  const overlaidPending = overlayCarriageReturns(rawPendingLine, style);
-  const pendingLine = `${overlaidPending.text}${
-    rawPendingLine.endsWith('\r') ? '\r' : ''
-  }`;
-  style = overlaidPending.style;
-
-  return { lines, pendingLine, style };
+  return {
+    lines,
+    pendingLine: cellsToSpans(cells),
+    cursorColumn,
+    style: parsed.style,
+  };
 }
