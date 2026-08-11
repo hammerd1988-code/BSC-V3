@@ -90,6 +90,23 @@ it('reassembles a CRLF split across chunks', () => {
   });
 });
 
+it('overlays a shorter redraw across chunk boundaries', () => {
+  const afterCarriageReturn = append(initialState, 'old progress\r');
+  expect(append(afterCarriageReturn, 'new\n')).toMatchObject({
+    lines: ['new progress'],
+    pendingLine: [],
+  });
+});
+
+it('preserves the colored tail across a chunk-boundary redraw', () => {
+  const first = appendTerminalInput(initialState, '\u001b[32mold progress\r');
+  const result = appendTerminalInput(first, '\u001b[31mnew\n');
+
+  expect(lineText(result.lines[0])).toBe('new progress');
+  expect(result.lines[0].find((span) => span.text === 'new')?.style).toEqual({ color: '#f87171' });
+  expect(result.lines[0].find((span) => span.text === ' progress')?.style).toEqual({ color: '#4ade80' });
+});
+
 it('bounds a newline-free carriage-return spinner to its longest segment', () => {
   let state = initialState;
   for (const segment of ['spinner 100%', 'spinner 99%', 'spinner 9%', 'spinner 1%']) {
