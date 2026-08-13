@@ -15,6 +15,7 @@ function append(state: TerminalBufferState, value: string): TerminalBufferState 
     cursorColumn: result.cursorColumn,
     style: result.style,
     escapeRemainder: result.escapeRemainder,
+    discardingEscape: result.discardingEscape,
     lines: result.lines.map(lineText),
   };
 }
@@ -24,6 +25,7 @@ const initialState: TerminalBufferState = {
   cursorColumn: 0,
   style: {},
   escapeRemainder: '',
+  discardingEscape: null,
 };
 
 it('renders text from a CRLF-terminated line', () => {
@@ -173,5 +175,29 @@ it('clears the whole line with 2K', () => {
 });
 
 it('blanks the head while keeping the tail with 1K', () => {
-  expect(append(initialState, 'abcdef\rabc\u001b[1K\n').lines).toEqual(['   def']);
+  expect(append(initialState, 'abcdef\rabc\u001b[1K\n').lines).toEqual(['    ef']);
+});
+
+it('discards an over-long OSC sequence across chunks', () => {
+  const first = append(initialState, `\u001b]0;${'window-title/'.repeat(8)}`);
+  expect(first.pendingLine).toEqual([]);
+  expect(first.escapeRemainder).toBe('');
+  expect(first.discardingEscape).toBe('osc');
+
+  const result = appendTerminalInput(first, '\u0007\u001b[32mVISIBLE\n');
+  expect(lineText(result.lines[0])).toBe('VISIBLE');
+  expect(result.lines[0][0].style).toEqual({ color: '#4ade80' });
+  expect(lineText(result.lines[0])).not.toMatch(/\]0;|window-title|BEL/);
+});
+
+it('discards an over-long CSI sequence across chunks', () => {
+  const first = append(initialState, `\u001b[${'1'.repeat(70)}`);
+  expect(first.pendingLine).toEqual([]);
+  expect(first.escapeRemainder).toBe('');
+  expect(first.discardingEscape).toBe('csi');
+
+  const result = appendTerminalInput(first, 'm\u001b[31mVISIBLE\n');
+  expect(lineText(result.lines[0])).toBe('VISIBLE');
+  expect(result.lines[0][0].style).toEqual({ color: '#f87171' });
+  expect(lineText(result.lines[0])).not.toMatch(/1+m/);
 });

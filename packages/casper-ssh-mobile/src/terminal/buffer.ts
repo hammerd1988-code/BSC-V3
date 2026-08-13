@@ -1,10 +1,11 @@
-import { AnsiSpan, AnsiStyle, tokenizeAnsi } from './ansi';
+import { AnsiSpan, AnsiStyle, DiscardingEscape, tokenizeAnsi } from './ansi';
 
 export interface TerminalBufferState {
   pendingLine: AnsiSpan[];
   cursorColumn: number;
   style: AnsiStyle;
   escapeRemainder: string;
+  discardingEscape: DiscardingEscape;
 }
 
 export interface TerminalBufferResult {
@@ -13,6 +14,7 @@ export interface TerminalBufferResult {
   cursorColumn: number;
   style: AnsiStyle;
   escapeRemainder: string;
+  discardingEscape: DiscardingEscape;
 }
 
 function sameStyle(left: AnsiStyle, right: AnsiStyle): boolean {
@@ -51,10 +53,15 @@ export function appendTerminalInput(
       cursorColumn: state.cursorColumn,
       style: state.style,
       escapeRemainder: state.escapeRemainder,
+      discardingEscape: state.discardingEscape,
     };
   }
 
-  const parsed = tokenizeAnsi(`${state.escapeRemainder}${value}`, state.style);
+  const parsed = tokenizeAnsi(
+    `${state.escapeRemainder}${value}`,
+    state.style,
+    state.discardingEscape,
+  );
   const lines: AnsiSpan[][] = [];
   const cells = state.pendingLine.flatMap((span) =>
     Array.from(span.text, (text) => ({ text, style: { ...span.style } })),
@@ -70,7 +77,7 @@ export function appendTerminalInput(
         while (cells.length < cursorColumn) {
           cells.push({ text: ' ', style: { ...eraseStyle } });
         }
-        for (let column = 0; column < cursorColumn; column += 1) {
+        for (let column = 0; column <= cursorColumn; column += 1) {
           cells[column] = { text: ' ', style: { ...eraseStyle } };
         }
       } else if (token.mode === 2) {
@@ -110,5 +117,6 @@ export function appendTerminalInput(
     cursorColumn,
     style: parsed.style,
     escapeRemainder: parsed.remainder,
+    discardingEscape: parsed.discardingEscape,
   };
 }
