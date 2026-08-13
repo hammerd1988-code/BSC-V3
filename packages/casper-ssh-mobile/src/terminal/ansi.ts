@@ -11,11 +11,6 @@ export interface AnsiSpan {
   style: AnsiStyle;
 }
 
-export interface AnsiLineResult {
-  spans: AnsiSpan[];
-  style: AnsiStyle;
-}
-
 export type AnsiToken =
   | { type: 'text'; text: string; style: AnsiStyle }
   | { type: 'sgr'; codes: number[]; style: AnsiStyle }
@@ -46,8 +41,6 @@ const BACKGROUNDS: Record<number, string> = {
   100: '#4b5563', 101: '#be123c', 102: '#166534', 103: '#a16207',
   104: '#1d4ed8', 105: '#7e22ce', 106: '#0e7490', 107: '#f3f4f6',
 };
-
-const CSI_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 
 function pushText(tokens: AnsiToken[], text: string, style: AnsiStyle): void {
   if (!text) return;
@@ -257,28 +250,4 @@ export function tokenizeAnsi(
   }
 
   return { tokens, style, remainder: '', discardingEscape };
-}
-
-export function parseAnsiLine(input: string, initialStyle: AnsiStyle = {}): AnsiLineResult {
-  const result = tokenizeAnsi(input, initialStyle);
-  const spans: AnsiSpan[] = [];
-  result.tokens.forEach((token) => {
-    if (token.type !== 'text') return;
-    const previous = spans[spans.length - 1];
-    if (previous && sameStyle(previous.style, token.style)) previous.text += token.text;
-    else spans.push({ text: token.text, style: { ...token.style } });
-  });
-  if (result.remainder) {
-    const previous = spans[spans.length - 1];
-    if (previous && sameStyle(previous.style, result.style)) previous.text += result.remainder;
-    else spans.push({ text: result.remainder, style: { ...result.style } });
-  }
-  return { spans: spans.length ? spans : [{ text: '', style: { ...result.style } }], style: result.style };
-}
-
-export function stripTerminalControls(input: string): string {
-  return input
-    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
-    .replace(/\u001b[()][0-2A-Z]/g, '')
-    .replace(CSI_PATTERN, (sequence) => sequence.endsWith('m') ? sequence : '');
 }
