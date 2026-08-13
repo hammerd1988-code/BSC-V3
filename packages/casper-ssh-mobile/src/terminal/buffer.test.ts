@@ -14,11 +14,17 @@ function append(state: TerminalBufferState, value: string): TerminalBufferState 
     pendingLine: result.pendingLine,
     cursorColumn: result.cursorColumn,
     style: result.style,
+    escapeRemainder: result.escapeRemainder,
     lines: result.lines.map(lineText),
   };
 }
 
-const initialState: TerminalBufferState = { pendingLine: [], cursorColumn: 0, style: {} };
+const initialState: TerminalBufferState = {
+  pendingLine: [],
+  cursorColumn: 0,
+  style: {},
+  escapeRemainder: '',
+};
 
 it('renders text from a CRLF-terminated line', () => {
   expect(append(initialState, 'VISIBLE_MARKER_123\r\n')).toMatchObject({
@@ -34,7 +40,7 @@ it('renders LF-only lines', () => {
   });
 });
 
-it('keeps only the final segment of an interior carriage-return redraw', () => {
+it('overwrites from column zero for an interior carriage-return redraw', () => {
   expect(append(initialState, 'old progress\rnew progress\n')).toMatchObject({
     lines: ['new progress'],
     pendingLine: [],
@@ -134,4 +140,38 @@ it('keeps a reset at the start of the next line', () => {
   expect(lineText(result.lines[1])).toBe('PLAIN');
   expect(result.lines[0][0].style).toEqual({ color: '#f87171' });
   expect(result.lines[1][0].style).toEqual({});
+});
+
+it('reassembles an escape sequence split across chunks', () => {
+  const first = append(initialState, '\u001b[3');
+  expect(first.pendingLine).toEqual([]);
+  expect(first.escapeRemainder).toBe('\u001b[3');
+
+  const result = appendTerminalInput(first, '2mGREEN\n');
+  expect(lineText(result.lines[0])).toBe('GREEN');
+  expect(result.lines[0]).toEqual([
+    { text: 'GREEN', style: { color: '#4ade80' } },
+  ]);
+  expect(lineText(result.lines[0])).not.toMatch(/\[3|32m/);
+});
+
+it('does not render an incomplete escape sequence as cells', () => {
+  const result = append(initialState, '\u001b[3');
+
+  expect(result.pendingLine).toEqual([]);
+  expect(result.lines).toEqual([]);
+  expect(result.style).toEqual({});
+  expect(result.escapeRemainder).toBe('\u001b[3');
+});
+
+it('erases from the cursor to the end of the line with K', () => {
+  expect(append(initialState, 'downloading 100%\r\u001b[Kdone\n').lines).toEqual(['done']);
+});
+
+it('clears the whole line with 2K', () => {
+  expect(append(initialState, 'stale text\r\u001b[2K\n').lines).toEqual(['']);
+});
+
+it('blanks the head while keeping the tail with 1K', () => {
+  expect(append(initialState, 'abcdef\rabc\u001b[1K\n').lines).toEqual(['   def']);
 });

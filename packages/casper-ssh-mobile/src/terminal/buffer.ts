@@ -1,9 +1,10 @@
-import { AnsiSpan, AnsiStyle, parseAnsiLine, stripTerminalControls } from './ansi';
+import { AnsiSpan, AnsiStyle, tokenizeAnsi } from './ansi';
 
 export interface TerminalBufferState {
   pendingLine: AnsiSpan[];
   cursorColumn: number;
   style: AnsiStyle;
+  escapeRemainder: string;
 }
 
 export interface TerminalBufferResult {
@@ -11,6 +12,7 @@ export interface TerminalBufferResult {
   pendingLine: AnsiSpan[];
   cursorColumn: number;
   style: AnsiStyle;
+  escapeRemainder: string;
 }
 
 function sameStyle(left: AnsiStyle, right: AnsiStyle): boolean {
@@ -48,18 +50,38 @@ export function appendTerminalInput(
       pendingLine: state.pendingLine,
       cursorColumn: state.cursorColumn,
       style: state.style,
+      escapeRemainder: state.escapeRemainder,
     };
   }
 
-  const parsed = parseAnsiLine(stripTerminalControls(value), state.style);
+  const parsed = tokenizeAnsi(`${state.escapeRemainder}${value}`, state.style);
   const lines: AnsiSpan[][] = [];
   const cells = state.pendingLine.flatMap((span) =>
     Array.from(span.text, (text) => ({ text, style: { ...span.style } })),
   );
   let cursorColumn = Math.min(state.cursorColumn, cells.length);
 
-  for (const span of parsed.spans) {
-    for (const character of Array.from(span.text)) {
+  for (const token of parsed.tokens) {
+    if (token.type === 'erase') {
+      const eraseStyle = token.style;
+      if (token.mode === 0) {
+        cells.length = Math.min(cursorColumn, cells.length);
+      } else if (token.mode === 1) {
+        while (cells.length < cursorColumn) {
+          cells.push({ text: ' ', style: { ...eraseStyle } });
+        }
+        for (let column = 0; column < cursorColumn; column += 1) {
+          cells[column] = { text: ' ', style: { ...eraseStyle } };
+        }
+      } else if (token.mode === 2) {
+        cells.length = 0;
+      }
+      continue;
+    }
+
+    if (token.type !== 'text') continue;
+
+    for (const character of Array.from(token.text)) {
       if (character === '\r') {
         cursorColumn = 0;
       } else if (character === '\n') {
@@ -67,12 +89,15 @@ export function appendTerminalInput(
         cells.length = 0;
         cursorColumn = 0;
       } else {
+        while (cells.length < cursorColumn) {
+          cells.push({ text: ' ', style: { ...token.style } });
+        }
         const existing = cells[cursorColumn];
         if (existing) {
           existing.text = character;
-          existing.style = { ...span.style };
+          existing.style = { ...token.style };
         } else {
-          cells[cursorColumn] = { text: character, style: { ...span.style } };
+          cells.push({ text: character, style: { ...token.style } });
         }
         cursorColumn += 1;
       }
@@ -84,5 +109,6 @@ export function appendTerminalInput(
     pendingLine: cellsToSpans(cells),
     cursorColumn,
     style: parsed.style,
+    escapeRemainder: parsed.remainder,
   };
 }
