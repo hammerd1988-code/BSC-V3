@@ -11,10 +11,22 @@ export interface AnsiSpan {
   style: AnsiStyle;
 }
 
-export interface AnsiLineResult {
-  spans: AnsiSpan[];
+export type AnsiToken =
+  | { type: 'text'; text: string; style: AnsiStyle }
+  | { type: 'sgr'; codes: number[]; style: AnsiStyle }
+  | { type: 'erase'; mode: number; style: AnsiStyle }
+  | { type: 'drop'; style: AnsiStyle };
+
+export interface AnsiTokenResult {
+  tokens: AnsiToken[];
   style: AnsiStyle;
+  remainder: string;
+  discardingEscape: DiscardingEscape;
 }
+
+export type DiscardingEscape = 'csi' | 'osc' | 'osc-escape' | null;
+
+const MAX_INCOMPLETE_ESCAPE_LENGTH = 64;
 
 const COLORS: Record<number, string> = {
   30: '#111827', 31: '#f87171', 32: '#4ade80', 33: '#facc15',
@@ -30,58 +42,219 @@ const BACKGROUNDS: Record<number, string> = {
   104: '#1d4ed8', 105: '#7e22ce', 106: '#0e7490', 107: '#f3f4f6',
 };
 
-const CSI_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
-
-export function parseAnsiLine(input: string, initialStyle: AnsiStyle = {}): AnsiLineResult {
-  const spans: AnsiSpan[] = [];
-  let style: AnsiStyle = { ...initialStyle };
-  let cursor = 0;
-  const pattern = /\u001b\[([0-9;?]*)([ -/]*)([@-~])/g;
-
-  const pushText = (text: string) => {
-    if (!text) return;
-    const previous = spans[spans.length - 1];
-    if (previous && JSON.stringify(previous.style) === JSON.stringify(style)) {
-      previous.text += text;
-    } else {
-      spans.push({ text, style: { ...style } });
-    }
-  };
-
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(input))) {
-    pushText(input.slice(cursor, match.index));
-    cursor = pattern.lastIndex;
-    if (match[3] !== 'm') continue;
-    const codes = match[1] ? match[1].split(';').map(Number) : [0];
-    codes.forEach((code) => {
-      if (code === 0) style = {};
-      else if (code === 1) style = { ...style, bold: true };
-      else if (code === 2) style = { ...style, dim: true };
-      else if (code === 4) style = { ...style, underline: true };
-      else if (code === 22) {
-        const { bold: _bold, dim: _dim, ...rest } = style;
-        style = rest;
-      } else if (code === 24) {
-        const { underline: _underline, ...rest } = style;
-        style = rest;
-      } else if (code === 39) {
-        const { color: _color, ...rest } = style;
-        style = rest;
-      } else if (code === 49) {
-        const { backgroundColor: _backgroundColor, ...rest } = style;
-        style = rest;
-      } else if (COLORS[code]) style = { ...style, color: COLORS[code] };
-      else if (BACKGROUNDS[code]) style = { ...style, backgroundColor: BACKGROUNDS[code] };
-    });
+function pushText(tokens: AnsiToken[], text: string, style: AnsiStyle): void {
+  if (!text) return;
+  const previous = tokens[tokens.length - 1];
+  if (previous?.type === 'text' && sameStyle(previous.style, style)) {
+    previous.text += text;
+  } else {
+    tokens.push({ type: 'text', text, style: { ...style } });
   }
-  pushText(input.slice(cursor));
-  return { spans: spans.length ? spans : [{ text: '', style: { ...style } }], style };
 }
 
-export function stripTerminalControls(input: string): string {
-  return input
-    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
-    .replace(/\u001b[()][0-2A-Z]/g, '')
-    .replace(CSI_PATTERN, (sequence) => sequence.endsWith('m') ? sequence : '');
+function sameStyle(left: AnsiStyle, right: AnsiStyle): boolean {
+  return left.color === right.color
+    && left.backgroundColor === right.backgroundColor
+    && left.bold === right.bold
+    && left.dim === right.dim
+    && left.underline === right.underline;
+}
+
+export function applySgrCodes(initialStyle: AnsiStyle, codes: number[]): AnsiStyle {
+  let style = { ...initialStyle };
+  codes.forEach((code) => {
+    if (code === 0) style = {};
+    else if (code === 1) style = { ...style, bold: true };
+    else if (code === 2) style = { ...style, dim: true };
+    else if (code === 4) style = { ...style, underline: true };
+    else if (code === 22) {
+      const { bold: _bold, dim: _dim, ...rest } = style;
+      style = rest;
+    } else if (code === 24) {
+      const { underline: _underline, ...rest } = style;
+      style = rest;
+    } else if (code === 39) {
+      const { color: _color, ...rest } = style;
+      style = rest;
+    } else if (code === 49) {
+      const { backgroundColor: _backgroundColor, ...rest } = style;
+      style = rest;
+    } else if (COLORS[code]) style = { ...style, color: COLORS[code] };
+    else if (BACKGROUNDS[code]) style = { ...style, backgroundColor: BACKGROUNDS[code] };
+  });
+  return style;
+}
+
+function incompleteEscape(
+  input: string,
+  start: number,
+  kind: 'csi' | 'osc',
+): { remainder: string; discardingEscape: DiscardingEscape } {
+  const candidate = input.slice(start);
+  if (candidate.length <= MAX_INCOMPLETE_ESCAPE_LENGTH) {
+    return { remainder: candidate, discardingEscape: null };
+  }
+  return {
+    remainder: '',
+    discardingEscape: kind === 'osc' && candidate.endsWith('\u001b')
+      ? 'osc-escape'
+      : kind,
+  };
+}
+
+function isCsiFinal(character: string): boolean {
+  const code = character.charCodeAt(0);
+  return code >= 0x40 && code <= 0x7e;
+}
+
+function parseMode(parameters: string): number {
+  const mode = Number.parseInt(parameters.split(';')[0] || '0', 10);
+  return Number.isFinite(mode) ? mode : 0;
+}
+
+export function tokenizeAnsi(
+  input: string,
+  initialStyle: AnsiStyle = {},
+  initialDiscardingEscape: DiscardingEscape = null,
+): AnsiTokenResult {
+  const tokens: AnsiToken[] = [];
+  let style = { ...initialStyle };
+  let index = 0;
+  let discardingEscape = initialDiscardingEscape;
+
+  while (index < input.length) {
+    if (discardingEscape === 'csi') {
+      let end = index;
+      while (end < input.length && !isCsiFinal(input[end])) end += 1;
+      if (end >= input.length) {
+        return { tokens, style, remainder: '', discardingEscape };
+      }
+      index = end + 1;
+      discardingEscape = null;
+      continue;
+    }
+
+    if (discardingEscape === 'osc-escape') {
+      if (input[index] === '\\') {
+        index += 1;
+        discardingEscape = null;
+        continue;
+      }
+      discardingEscape = 'osc';
+    }
+
+    if (discardingEscape === 'osc') {
+      let end = index;
+      while (end < input.length) {
+        if (input[end] === '\u0007') {
+          index = end + 1;
+          discardingEscape = null;
+          break;
+        }
+        if (input[end] === '\u001b') {
+          if (end + 1 >= input.length) {
+            return { tokens, style, remainder: '', discardingEscape: 'osc-escape' };
+          }
+          if (input[end + 1] === '\\') {
+            index = end + 2;
+            discardingEscape = null;
+            break;
+          }
+        }
+        // Abandon OSC discard on C0 controls that cannot appear in an OSC string
+        const code = input.charCodeAt(end);
+        if (code === 0x0a || code === 0x0d || code === 0x18 || code === 0x1a) {
+          index = end;
+          discardingEscape = null;
+          break;
+        }
+        end += 1;
+      }
+      if (discardingEscape === 'osc') {
+        return { tokens, style, remainder: '', discardingEscape };
+      }
+      continue;
+    }
+
+    if (input[index] !== '\u001b') {
+      const nextEscape = input.indexOf('\u001b', index);
+      const end = nextEscape < 0 ? input.length : nextEscape;
+      pushText(tokens, input.slice(index, end), style);
+      index = end;
+      continue;
+    }
+
+    if (index + 1 >= input.length) {
+      const incomplete = input.slice(index);
+      return {
+        tokens,
+        style,
+        remainder: incomplete,
+        discardingEscape: null,
+      };
+    }
+
+    const kind = input[index + 1];
+    if (kind === '[') {
+      let end = index + 2;
+      while (end < input.length && !isCsiFinal(input[end])) end += 1;
+      if (end >= input.length) {
+        const incomplete = incompleteEscape(input, index, 'csi');
+        return { tokens, style, ...incomplete };
+      }
+
+      const parameters = input.slice(index + 2, end);
+      const final = input[end];
+      if (final === 'm') {
+        const codes = parameters
+          ? parameters.split(';').map((code) => (code ? Number.parseInt(code, 10) : 0))
+          : [0];
+        const validCodes = codes.filter(Number.isFinite);
+        style = applySgrCodes(style, validCodes);
+        tokens.push({ type: 'sgr', codes: validCodes, style: { ...style } });
+      } else if (final === 'K') {
+        tokens.push({ type: 'erase', mode: parseMode(parameters), style: { ...style } });
+      } else {
+        tokens.push({ type: 'drop', style: { ...style } });
+      }
+      index = end + 1;
+      continue;
+    }
+
+    if (kind === ']') {
+      let end = index + 2;
+      let terminated = false;
+      while (end < input.length) {
+        if (input[end] === '\u0007') {
+          end += 1;
+          terminated = true;
+          break;
+        }
+        if (input[end] === '\u001b' && input[end + 1] === '\\') {
+          end += 2;
+          terminated = true;
+          break;
+        }
+        end += 1;
+      }
+      if (!terminated) {
+        const incomplete = incompleteEscape(input, index, 'osc');
+        return { tokens, style, ...incomplete };
+      }
+      index = end;
+      continue;
+    }
+
+    if (kind === '(' || kind === ')') {
+      if (index + 2 >= input.length) {
+        return { tokens, style, remainder: input.slice(index), discardingEscape: null };
+      }
+      index += 3;
+      continue;
+    }
+
+    index += 2;
+  }
+
+  return { tokens, style, remainder: '', discardingEscape };
 }

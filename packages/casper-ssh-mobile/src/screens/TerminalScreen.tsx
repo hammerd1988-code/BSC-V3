@@ -8,7 +8,8 @@ import {
   View,
 } from 'react-native';
 import { SshTransport } from '../transport/types';
-import { AnsiSpan, AnsiStyle, parseAnsiLine, stripTerminalControls } from '../terminal/ansi';
+import { AnsiSpan, AnsiStyle } from '../terminal/ansi';
+import { appendTerminalInput } from '../terminal/buffer';
 
 const MAX_LINES = 500;
 
@@ -34,10 +35,13 @@ export default function TerminalScreen({ transport, onDisconnect }: {
   const [busy, setBusy] = useState(false);
   const [ctrlMode, setCtrlMode] = useState(false);
   const [terminalSize, setTerminalSize] = useState({ width: 0, height: 0 });
-  const [pendingLine, setPendingLine] = useState('');
+  const [pendingLine, setPendingLine] = useState<AnsiSpan[]>([]);
   const scrollRef = useRef<ScrollView>(null);
-  const pendingLineRef = useRef('');
+  const pendingLineRef = useRef<AnsiSpan[]>([]);
+  const cursorColumnRef = useRef(0);
   const styleRef = useRef<AnsiStyle>({});
+  const escapeRemainderRef = useRef('');
+  const discardingEscapeRef = useRef<null | 'csi' | 'osc' | 'osc-escape'>(null);
   const fallbackBytesRef = useRef<Uint8Array>(new Uint8Array());
   const decoderRef = useRef<TextDecoder | null>(
     typeof TextDecoder === 'function' ? new TextDecoder('utf-8', { fatal: false }) : null,
@@ -45,26 +49,21 @@ export default function TerminalScreen({ transport, onDisconnect }: {
 
   const append = useCallback((value: string) => {
     if (!value) return;
-    const input = stripTerminalControls(`${pendingLineRef.current}${value}`);
-    const nextLines: AnsiSpan[][] = [];
-    let start = 0;
-    let newlineIndex = input.indexOf('\n');
-    while (newlineIndex >= 0) {
-      const rawLine = input.slice(start, newlineIndex);
-      const visibleLine = rawLine.split('\r').at(-1) ?? '';
-      const parsed = parseAnsiLine(visibleLine, styleRef.current);
-      nextLines.push(parsed.spans);
-      styleRef.current = parsed.style;
-      start = newlineIndex + 1;
-      newlineIndex = input.indexOf('\n', start);
-    }
-    let pending = input.slice(start);
-    const carriageReturn = pending.lastIndexOf('\r');
-    if (carriageReturn >= 0) pending = pending.slice(carriageReturn + 1);
-    pendingLineRef.current = pending;
+    const result = appendTerminalInput({
+      pendingLine: pendingLineRef.current,
+      cursorColumn: cursorColumnRef.current,
+      style: styleRef.current,
+      escapeRemainder: escapeRemainderRef.current,
+      discardingEscape: discardingEscapeRef.current,
+    }, value);
+    styleRef.current = result.style;
+    pendingLineRef.current = result.pendingLine;
+    cursorColumnRef.current = result.cursorColumn;
+    escapeRemainderRef.current = result.escapeRemainder;
+    discardingEscapeRef.current = result.discardingEscape;
     setPendingLine(pendingLineRef.current);
-    if (nextLines.length) {
-      setLines((current) => [...current, ...nextLines].slice(-MAX_LINES));
+    if (result.lines.length) {
+      setLines((current) => [...current, ...result.lines].slice(-MAX_LINES));
     }
   }, []);
 
@@ -148,9 +147,6 @@ export default function TerminalScreen({ transport, onDisconnect }: {
   };
 
   const verified = transport.capabilities.hostKeyVerification && transport.hostKeyInfo;
-  const pendingSpans = pendingLine
-    ? parseAnsiLine(pendingLine.split('\r').at(-1) ?? '', styleRef.current).spans
-    : [];
 
   return (
     <View style={styles.container}>
@@ -176,7 +172,7 @@ export default function TerminalScreen({ transport, onDisconnect }: {
         onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: false })}
       >
         {lines.map((line, index) => <StyledLine key={`${index}-${line.map((span) => span.text).join('')}`} spans={line} />)}
-        {pendingSpans.length > 0 && <StyledLine spans={pendingSpans} />}
+        {pendingLine.length > 0 && <StyledLine spans={pendingLine} />}
       </ScrollView>
       {shellActive && (
         <View style={styles.keyBar}>
