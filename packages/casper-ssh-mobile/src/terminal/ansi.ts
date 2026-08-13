@@ -161,6 +161,13 @@ export function tokenizeAnsi(
             break;
           }
         }
+        // Abandon OSC discard on C0 controls that cannot appear in an OSC string
+        const code = input.charCodeAt(end);
+        if (code === 0x0a || code === 0x0d || code === 0x18 || code === 0x1a) {
+          index = end;
+          discardingEscape = null;
+          break;
+        }
         end += 1;
       }
       if (discardingEscape === 'osc') {
@@ -200,7 +207,7 @@ export function tokenizeAnsi(
       const final = input[end];
       if (final === 'm') {
         const codes = parameters
-          ? parameters.split(';').map((code) => Number.parseInt(code, 10))
+          ? parameters.split(';').map((code) => (code ? Number.parseInt(code, 10) : 0))
           : [0];
         const validCodes = codes.filter(Number.isFinite);
         style = applySgrCodes(style, validCodes);
