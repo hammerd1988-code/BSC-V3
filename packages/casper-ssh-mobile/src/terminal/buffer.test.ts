@@ -174,6 +174,12 @@ it('clears the whole line with 2K', () => {
   expect(append(initialState, 'stale text\r\u001b[2K\n').lines).toEqual(['']);
 });
 
+it('keeps the cursor column after 2K across chunks', () => {
+  const cleared = append(initialState, '0123456789\u001b[2K');
+  expect(cleared.cursorColumn).toBe(10);
+  expect(append(cleared, 'X\n').lines).toEqual(['          X']);
+});
+
 it('blanks the head while keeping the tail with 1K', () => {
   expect(append(initialState, 'abcdef\rabc\u001b[1K\n').lines).toEqual(['    ef']);
 });
@@ -200,4 +206,13 @@ it('discards an over-long CSI sequence across chunks', () => {
   expect(lineText(result.lines[0])).toBe('VISIBLE');
   expect(result.lines[0][0].style).toEqual({ color: '#f87171' });
   expect(lineText(result.lines[0])).not.toMatch(/1+m/);
+});
+
+it('resumes after an over-long OSC split between ESC and its terminator', () => {
+  const first = append(initialState, `\u001b]0;${'window-title/'.repeat(8)}\u001b`);
+  expect(first.pendingLine).toEqual([]);
+  expect(first.discardingEscape).toBe('osc-escape');
+
+  const result = appendTerminalInput(first, '\\VISIBLE\n');
+  expect(lineText(result.lines[0])).toBe('VISIBLE');
 });

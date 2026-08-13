@@ -66,7 +66,7 @@ export function appendTerminalInput(
   const cells = state.pendingLine.flatMap((span) =>
     Array.from(span.text, (text) => ({ text, style: { ...span.style } })),
   );
-  let cursorColumn = Math.min(state.cursorColumn, cells.length);
+  let cursorColumn = state.cursorColumn;
 
   for (const token of parsed.tokens) {
     if (token.type === 'erase') {

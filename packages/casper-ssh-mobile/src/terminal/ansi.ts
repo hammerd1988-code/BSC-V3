@@ -101,7 +101,12 @@ function incompleteEscape(
   if (candidate.length <= MAX_INCOMPLETE_ESCAPE_LENGTH) {
     return { remainder: candidate, discardingEscape: null };
   }
-  return { remainder: '', discardingEscape: kind };
+  return {
+    remainder: '',
+    discardingEscape: kind === 'osc' && candidate.endsWith('\u001b')
+      ? 'osc-escape'
+      : kind,
+  };
 }
 
 function isCsiFinal(character: string): boolean {
