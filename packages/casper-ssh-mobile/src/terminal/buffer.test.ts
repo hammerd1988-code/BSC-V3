@@ -216,3 +216,12 @@ it('resumes after an over-long OSC split between ESC and its terminator', () => 
   const result = appendTerminalInput(first, '\\VISIBLE\n');
   expect(lineText(result.lines[0])).toBe('VISIBLE');
 });
+
+it('abandons OSC discard on a newline and resumes normal output', () => {
+  const first = append(initialState, `\u001b]0;${'window-title/'.repeat(8)}`);
+  expect(first.discardingEscape).toBe('osc');
+
+  const result = appendTerminalInput(first, '\nVISIBLE\n');
+  expect(lineText(result.lines[0])).toBe('');
+  expect(lineText(result.lines[1])).toBe('VISIBLE');
+});
