@@ -26,7 +26,10 @@ export interface AnsiTokenResult {
   tokens: AnsiToken[];
   style: AnsiStyle;
   remainder: string;
+  discardingEscape: DiscardingEscape;
 }
+
+export type DiscardingEscape = 'csi' | 'osc' | 'osc-escape' | null;
 
 const MAX_INCOMPLETE_ESCAPE_LENGTH = 64;
 
@@ -90,15 +93,15 @@ export function applySgrCodes(initialStyle: AnsiStyle, codes: number[]): AnsiSty
 }
 
 function incompleteEscape(
-  tokens: AnsiToken[],
   input: string,
   start: number,
-  style: AnsiStyle,
-): string {
+  kind: 'csi' | 'osc',
+): { remainder: string; discardingEscape: DiscardingEscape } {
   const candidate = input.slice(start);
-  if (candidate.length <= MAX_INCOMPLETE_ESCAPE_LENGTH) return candidate;
-  pushText(tokens, candidate.slice(0, -MAX_INCOMPLETE_ESCAPE_LENGTH), style);
-  return candidate.slice(-MAX_INCOMPLETE_ESCAPE_LENGTH);
+  if (candidate.length <= MAX_INCOMPLETE_ESCAPE_LENGTH) {
+    return { remainder: candidate, discardingEscape: null };
+  }
+  return { remainder: '', discardingEscape: kind };
 }
 
 function isCsiFinal(character: string): boolean {
@@ -114,12 +117,60 @@ function parseMode(parameters: string): number {
 export function tokenizeAnsi(
   input: string,
   initialStyle: AnsiStyle = {},
+  initialDiscardingEscape: DiscardingEscape = null,
 ): AnsiTokenResult {
   const tokens: AnsiToken[] = [];
   let style = { ...initialStyle };
   let index = 0;
+  let discardingEscape = initialDiscardingEscape;
 
   while (index < input.length) {
+    if (discardingEscape === 'csi') {
+      let end = index;
+      while (end < input.length && !isCsiFinal(input[end])) end += 1;
+      if (end >= input.length) {
+        return { tokens, style, remainder: '', discardingEscape };
+      }
+      index = end + 1;
+      discardingEscape = null;
+      continue;
+    }
+
+    if (discardingEscape === 'osc-escape') {
+      if (input[index] === '\\') {
+        index += 1;
+        discardingEscape = null;
+        continue;
+      }
+      discardingEscape = 'osc';
+    }
+
+    if (discardingEscape === 'osc') {
+      let end = index;
+      while (end < input.length) {
+        if (input[end] === '\u0007') {
+          index = end + 1;
+          discardingEscape = null;
+          break;
+        }
+        if (input[end] === '\u001b') {
+          if (end + 1 >= input.length) {
+            return { tokens, style, remainder: '', discardingEscape: 'osc-escape' };
+          }
+          if (input[end + 1] === '\\') {
+            index = end + 2;
+            discardingEscape = null;
+            break;
+          }
+        }
+        end += 1;
+      }
+      if (discardingEscape === 'osc') {
+        return { tokens, style, remainder: '', discardingEscape };
+      }
+      continue;
+    }
+
     if (input[index] !== '\u001b') {
       const nextEscape = input.indexOf('\u001b', index);
       const end = nextEscape < 0 ? input.length : nextEscape;
@@ -129,7 +180,13 @@ export function tokenizeAnsi(
     }
 
     if (index + 1 >= input.length) {
-      return { tokens, style, remainder: incompleteEscape(tokens, input, index, style) };
+      const incomplete = input.slice(index);
+      return {
+        tokens,
+        style,
+        remainder: incomplete,
+        discardingEscape: null,
+      };
     }
 
     const kind = input[index + 1];
@@ -137,7 +194,8 @@ export function tokenizeAnsi(
       let end = index + 2;
       while (end < input.length && !isCsiFinal(input[end])) end += 1;
       if (end >= input.length) {
-        return { tokens, style, remainder: incompleteEscape(tokens, input, index, style) };
+        const incomplete = incompleteEscape(input, index, 'csi');
+        return { tokens, style, ...incomplete };
       }
 
       const parameters = input.slice(index + 2, end);
@@ -175,7 +233,8 @@ export function tokenizeAnsi(
         end += 1;
       }
       if (!terminated) {
-        return { tokens, style, remainder: incompleteEscape(tokens, input, index, style) };
+        const incomplete = incompleteEscape(input, index, 'osc');
+        return { tokens, style, ...incomplete };
       }
       index = end;
       continue;
@@ -183,7 +242,7 @@ export function tokenizeAnsi(
 
     if (kind === '(' || kind === ')') {
       if (index + 2 >= input.length) {
-        return { tokens, style, remainder: incompleteEscape(tokens, input, index, style) };
+        return { tokens, style, remainder: input.slice(index), discardingEscape: null };
       }
       index += 3;
       continue;
@@ -192,7 +251,7 @@ export function tokenizeAnsi(
     index += 2;
   }
 
-  return { tokens, style, remainder: '' };
+  return { tokens, style, remainder: '', discardingEscape };
 }
 
 export function parseAnsiLine(input: string, initialStyle: AnsiStyle = {}): AnsiLineResult {
