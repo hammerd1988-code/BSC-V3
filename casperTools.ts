@@ -131,6 +131,14 @@ export type ToolExecutionContext = {
   adapterTimeoutMs?: number;
   // Memory system for persisting workspace events / tool usage.
   memorySystem?: CasperMemorySystem;
+  // When present, the model can spawn parallel sub-agents from within a
+  // directive (`subagents__spawn`). Wired by casperControlCenter for the
+  // parent directive loop only — sub-agents themselves don't get it, so
+  // the fan-out can't recurse.
+  spawnSubagents?: (input: { objectives: string[]; parentObjective: string }) => Promise<{
+    parentTaskId: string;
+    results: Array<{ objective: string; status: 'completed' | 'failed'; result: string }>;
+  }>;
 };
 
 function summarizeToolResult(_call: LlmToolCall, result: LlmToolCallResult): string {
@@ -287,6 +295,72 @@ const MEMORY_TOOL_SPECS: LlmToolSpec[] = [
   },
 ];
 
+// ── Sub-agent Spawn Tool ────────────────────────────────────────────────────────
+
+const SUBAGENT_SPAWN_TOOL_NAME = `subagents${TOOL_NAME_SEPARATOR}spawn`;
+
+const SUBAGENT_SPAWN_TOOL_SPEC: LlmToolSpec = {
+  type: 'function',
+  function: {
+    name: SUBAGENT_SPAWN_TOOL_NAME,
+    description:
+      '[Sub-agents] Spawn parallel Casper sub-agents, one per objective, and wait for their results. ' +
+      'Use this to fan out independent pieces of a large directive (research tracks, content variants, ' +
+      'separate engineering objectives) so they run concurrently. Each sub-agent has its own tool-calling ' +
+      'loop with the same integrations and shell access as you. Do not use it for work you can do directly ' +
+      'in one or two tool calls.',
+    parameters: {
+      type: 'object',
+      properties: {
+        objectives: {
+          type: 'array',
+          description: 'One focused objective per sub-agent (max 8). Each should be independently completable.',
+          items: { type: 'string' },
+        },
+        parent_objective: {
+          type: 'string',
+          description: 'Short summary of the overall directive, given to each sub-agent as context.',
+        },
+      },
+      required: ['objectives'],
+    },
+  },
+};
+
+async function executeSubagentSpawnTool(
+  call: LlmToolCall,
+  ctx: ToolExecutionContext,
+): Promise<LlmToolCallResult> {
+  const start = Date.now();
+  if (!ctx.spawnSubagents) {
+    return { id: call.id, name: call.name, ok: false, data: null, error: 'Sub-agent spawning is not available in this context.', status: 403, durationMs: Date.now() - start };
+  }
+  const rawObjectives = Array.isArray(call.args?.objectives) ? call.args.objectives : [];
+  const objectives = rawObjectives.map((o: unknown) => String(o ?? '').trim()).filter((o: string) => o.length > 0).slice(0, 8);
+  if (objectives.length === 0) {
+    return { id: call.id, name: call.name, ok: false, data: null, error: 'At least one non-empty objective is required.', status: 400, durationMs: Date.now() - start };
+  }
+  const parentObjective = String(call.args?.parent_objective ?? '').trim() || objectives.join(' / ');
+  try {
+    const outcome = await ctx.spawnSubagents({ objectives, parentObjective });
+    return {
+      id: call.id,
+      name: call.name,
+      ok: true,
+      data: {
+        parent_task_id: outcome.parentTaskId,
+        spawned: outcome.results.length,
+        results: outcome.results,
+      },
+      error: null,
+      status: 200,
+      durationMs: Date.now() - start,
+    };
+  } catch (err: any) {
+    return { id: call.id, name: call.name, ok: false, data: null, error: err?.message || String(err), status: 500, durationMs: Date.now() - start };
+  }
+}
+
 function isMemoryTool(toolName: string): boolean {
   return toolName.startsWith(`${MEMORY_PREFIX}${TOOL_NAME_SEPARATOR}`);
 }
@@ -368,6 +442,12 @@ export function buildToolSpecs(ctx: ToolExecutionContext): LlmToolSpec[] {
     specs.push(...MEMORY_TOOL_SPECS);
   }
 
+  // Sub-agent fan-out — only when the caller wired a spawn handler
+  // (parent directive loop; never sub-agents themselves).
+  if (ctx.spawnSubagents) {
+    specs.push(SUBAGENT_SPAWN_TOOL_SPEC);
+  }
+
   return specs;
 }
 
@@ -421,6 +501,11 @@ export async function executeTool(
     // Memory tools — search, remember, workspace/conversation history
     if (isMemoryTool(call.name)) {
       return executeMemoryTool(call, ctx);
+    }
+
+    // Sub-agent fan-out
+    if (call.name === SUBAGENT_SPAWN_TOOL_NAME) {
+      return executeSubagentSpawnTool(call, ctx);
     }
 
     if (call.name === SHELL_TOOL_NAME) {

@@ -103,13 +103,19 @@ export const NewTransmissionModal: React.FC<NewTransmissionModalProps> = ({ isOp
     setError(null);
     try {
       // Check if transmission already exists
-      const { data: existing, error: existingError } = await supabase
+      // `contains` also matches group threads that include both users, and
+      // more than one match would make maybeSingle() error — so fetch the
+      // candidates and pick the exact 1:1 thread.
+      const { data: candidates, error: existingError } = await supabase
         .from('transmissions')
         .select('*')
-        .contains('participant_ids', [currentUser.id, user.id])
-        .maybeSingle();
+        .contains('participant_ids', [currentUser.id, user.id]);
 
       if (existingError) throw existingError;
+
+      const existing = (candidates ?? []).find(
+        (t: Transmission) => (t.participant_ids ?? []).length === 2,
+      );
 
       if (existing) {
         onSelect(existing as Transmission);

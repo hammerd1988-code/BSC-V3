@@ -171,6 +171,34 @@ export const CallModal: React.FC<CallModalProps> = ({
     };
   }, [status]);
 
+  // Ring timeout: an unanswered call shouldn't ring forever. Outgoing calls
+  // give up as "no answer"; incoming calls auto-decline so the caller's UI
+  // resolves too.
+  useEffect(() => {
+    if (status !== CallStatus.CALLING && status !== CallStatus.RINGING) return;
+    const isOutgoing = status === CallStatus.CALLING;
+    const timeout = setTimeout(() => {
+      if (isOutgoing) {
+        socket.emit('call:end', {
+          targetUserId,
+          roomName: callRoomNameRef.current,
+        });
+        setError('No answer.');
+        setStatus(CallStatus.FAILED);
+        cleanupCall();
+        setTimeout(onClose, 2500);
+      } else {
+        if (incomingData) {
+          socket.emit('call:reject', { callerId: incomingData.callerId });
+        }
+        setStatus(CallStatus.ENDED);
+        cleanupCall();
+        setTimeout(onClose, 1000);
+      }
+    }, 45_000);
+    return () => clearTimeout(timeout);
+  }, [status]);
+
   // Random rather than `<callerId>-<calleeId>-<Date.now()>`: both ids are public
   // and a millisecond timestamp is guessable, and the server checks the room name
   // against the pair it recorded for the call, so a predictable name was the one

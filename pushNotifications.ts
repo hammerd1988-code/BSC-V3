@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import webPush from 'web-push';
 import { sendNativePush, type NativePushResult } from './nativePush.js';
 
-export type PushEventType = 'dm' | 'comment' | 'mention';
+export type PushEventType = 'dm' | 'comment' | 'mention' | 'call';
 
 type PushSubscriptionJSON = {
   endpoint: string;
@@ -95,6 +95,8 @@ function titleForType(type: PushEventType, senderName: string): string {
       return `${senderName} commented on your post`;
     case 'mention':
       return `${senderName} mentioned you`;
+    case 'call':
+      return `\u{1F4DE} ${senderName} is calling you`;
     default:
       return 'BloodSweatCode notification';
   }
@@ -104,6 +106,7 @@ function tagFor(input: PushNotificationInput): string {
   if (input.type === 'dm' && input.transmissionId) return `bsc-dm-${input.transmissionId}`;
   if (input.type === 'comment' && input.postId) return `bsc-comment-${input.postId}`;
   if (input.type === 'mention' && input.commentId) return `bsc-mention-${input.commentId}`;
+  if (input.type === 'call') return 'bsc-incoming-call';
   return `bsc-${input.type}-${input.recipientUserId}`;
 }
 
@@ -120,7 +123,9 @@ function makePayload(input: PushNotificationInput): PushPayload {
     senderName: input.senderName || 'Someone',
     messagePreview: preview,
     sound: DEFAULT_SOUND,
-    vibrate: input.type === 'dm' ? [80, 40, 80] : [60, 35, 60],
+    vibrate: input.type === 'call'
+      ? [300, 200, 300, 200, 300, 200, 300]
+      : input.type === 'dm' ? [80, 40, 80] : [60, 35, 60],
     timestamp: Date.now(),
     data: {
       url: input.url || '/',
@@ -220,8 +225,9 @@ async function sendWebPush(
 
     try {
       await webPush.sendNotification(subscription as webPush.PushSubscription, payload, {
-        TTL: 60 * 60 * 24,
-        urgency: input.type === 'dm' ? 'high' : 'normal',
+        // Calls are useless once the caller hangs up — don't queue them for a day.
+        TTL: input.type === 'call' ? 60 : 60 * 60 * 24,
+        urgency: input.type === 'dm' || input.type === 'call' ? 'high' : 'normal',
       });
       sent += 1;
     } catch (error: any) {
@@ -257,7 +263,7 @@ export async function sendPushNotification(
       url: payload.url,
       tag: payload.tag,
       data: payload.data,
-      highPriority: input.type === 'dm',
+      highPriority: input.type === 'dm' || input.type === 'call',
     }).catch((err): NativePushResult => {
       console.warn('[push] Native push error:', err);
       return { attempted: 0, sent: 0, skipped: true };
@@ -272,7 +278,7 @@ export async function sendPushNotification(
 }
 
 async function createInAppNotificationIfNeeded(supabase: SupabaseClient, input: PushNotificationInput) {
-  if (input.createInAppNotification === false || input.type === 'dm') return;
+  if (input.createInAppNotification === false || input.type === 'dm' || input.type === 'call') return;
 
   const payload = {
     from_user_id: input.senderId,

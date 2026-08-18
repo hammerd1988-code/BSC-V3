@@ -88,6 +88,8 @@ self.addEventListener('push', (event) => {
     timestamp: payload.timestamp || Date.now(),
     renotify: true,
     silent: false,
+    // Incoming calls stay on screen until answered or dismissed.
+    requireInteraction: (payload.type || payload.data?.type) === 'call',
   };
 
   event.waitUntil(self.registration.showNotification(title, options));
