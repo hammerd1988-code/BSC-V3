@@ -29,7 +29,7 @@ import { runCasperShell, describeAllowlist, isShellElevationEnabled, type Casper
 import { getAdapter, listAdapterTools, decodeIntegrationKey, CASPER_ADAPTERS } from './casperAdapters.js';
 import { initWebhookListener } from "./webhookListener.js";
 import botApi from './botApi.js';
-import { registerPushRoutes } from './pushNotifications.js';
+import { registerPushRoutes, sendPushNotification } from './pushNotifications.js';
 import { registerLiveKitRoutes } from './livekitRoutes.js';
 import { registerRunwayRoutes } from './runwayRoutes.js';
 import { registerUnifiedBotRoutes } from './botUnificationRoutes.js';
@@ -1031,17 +1031,34 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
 
         const targetUserId = String(data?.targetUserId ?? '');
         const targetSocketId = targetUserId ? connectedUsers.get(targetUserId) : undefined;
-        if (!targetSocketId) {
-          // Previously the caller just kept ringing an offline user forever.
-          socket.emit('call:unavailable', { targetUserId });
-          return;
-        }
 
         const { data: caller } = await supabase
           .from('users')
           .select('display_name, avatar_url')
           .eq('id', callerId)
           .maybeSingle();
+
+        // Ring the recipient's other devices too: a high-urgency push makes
+        // a backgrounded browser tab or the mobile app buzz like a real
+        // incoming call instead of relying on the socket being foregrounded.
+        if (targetUserId && targetUserId !== callerId) {
+          void sendPushNotification(supabase, {
+            recipientUserId: targetUserId,
+            senderId: callerId,
+            senderName: caller?.display_name ?? 'Unknown caller',
+            senderAvatar: caller?.avatar_url ?? null,
+            type: 'call',
+            messagePreview: data?.videoEnabled ? 'Incoming video call' : 'Incoming voice call',
+            url: '/transmissions',
+            transmissionId: typeof data?.transmissionId === 'string' ? data.transmissionId : undefined,
+          }).catch((err) => console.warn('[socket] call push failed:', err));
+        }
+
+        if (!targetSocketId) {
+          // Previously the caller just kept ringing an offline user forever.
+          socket.emit('call:unavailable', { targetUserId });
+          return;
+        }
 
         // Record who the room belongs to so /api/livekit/token can refuse a
         // publish token to anyone else who learns or guesses the name.

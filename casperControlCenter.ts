@@ -6,6 +6,7 @@ import {
   generateServerText,
   generateServerToolTurn,
   isServerAiConfigured,
+  resolveServerOpenAIConfig,
   type ServerAIMessage,
 } from './serverAi.js';
 import {
@@ -23,7 +24,10 @@ import {
 } from './casperTools.js';
 import { createRateLimiter } from './serverSecurity.js';
 
-const PLATFORM_DEFAULT_MODEL = process.env.CASPER_MODEL || process.env.OPENAI_MODEL || 'gpt-5.4-mini';
+// Resolved through serverAi so the default model matches the effective
+// provider — e.g. `openai/gpt-5.4-mini` when OPENROUTER_API_KEY routes the
+// platform through OpenRouter (CASPER_MODEL / OPENAI_MODEL still win).
+const PLATFORM_DEFAULT_MODEL = resolveServerOpenAIConfig().model;
 const ROUTINE_POLL_INTERVAL_MS = Number(process.env.CASPER_ROUTINE_POLL_INTERVAL_MS || 60_000);
 const TASK_QUEUE_POLL_INTERVAL_MS = Number(process.env.CASPER_TASK_QUEUE_POLL_INTERVAL_MS || 30_000);
 const TASK_QUEUE_BATCH_SIZE = Math.max(1, Math.min(12, Number(process.env.CASPER_TASK_QUEUE_BATCH_SIZE || 4)));
@@ -1313,17 +1317,21 @@ function splitObjectivesServer(prompt: string): string[] {
 }
 
 const SUBAGENT_DEFAULT_TIMEOUT_MS = 60_000;
+// Tool-enabled sub-agents do real work (clone, install, build, push, PR)
+// that cannot fit in the 60s text-completion budget.
+const SUBAGENT_TOOL_TIMEOUT_MS = 10 * 60_000;
 // Must stay in sync with the client-side splitObjectives slice in
 // src/components/CasperContentManager.tsx. If we silently dropped objectives
 // past this cap, optimistic rows would render but the work never happens.
 export const SUBAGENT_MAX_PARALLEL = 8;
 
 // Sub-agent tool-calling loop bounds. Tighter than the parent
-// directive's bounds (MAX_TOOL_CALL_ROUNDS=5, MAX_TOOL_CALLS_PER_DIRECTIVE=15)
-// since each sub-agent is a focused single-objective worker. Keeping
-// these smaller limits the blast radius from N agents × M tools.
-const SUBAGENT_MAX_TOOL_ROUNDS = 3;
-const SUBAGENT_MAX_TOOL_CALLS = 8;
+// directive's bounds (MAX_TOOL_CALL_ROUNDS / MAX_TOOL_CALLS_PER_DIRECTIVE)
+// since each sub-agent is a focused single-objective worker, but large
+// enough to fit a full dev-agent workflow (clone → inspect → edit →
+// commit → push → PR).
+const SUBAGENT_MAX_TOOL_ROUNDS = 12;
+const SUBAGENT_MAX_TOOL_CALLS = 30;
 
 async function runSubagentObjective(
   supabase: SupabaseClient,
@@ -1364,7 +1372,7 @@ async function runSubagentObjective(
           maxToolCalls: SUBAGENT_MAX_TOOL_CALLS,
         }),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('subagent_timeout')), SUBAGENT_DEFAULT_TIMEOUT_MS),
+          setTimeout(() => reject(new Error('subagent_timeout')), SUBAGENT_TOOL_TIMEOUT_MS),
         ),
       ]);
       text = (execution.text || '').trim() || 'Sub-agent returned an empty response.';
@@ -1398,7 +1406,7 @@ async function runSubagentObjective(
     return { ok: true, result: text, provider, model, toolCalls: toolCalls.length > 0 ? toolCalls : undefined };
   } catch (error: any) {
     const message = error?.message === 'subagent_timeout'
-      ? `Sub-agent timed out after ${SUBAGENT_DEFAULT_TIMEOUT_MS / 1000}s on: ${objective}`
+      ? `Sub-agent timed out after ${(toolCtx ? SUBAGENT_TOOL_TIMEOUT_MS : SUBAGENT_DEFAULT_TIMEOUT_MS) / 1000}s on: ${objective}`
       : `Sub-agent failed: ${error?.message || String(error)}`;
     console.error('[casper-control:subagent]', message);
     await supabase
@@ -1542,7 +1550,7 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
     // Sub-agents, routines, follow-ups, the task queue runner, and manual
     // task re-runs all leave enableTools undefined and stay on the
     // single-shot text path. See PR #56 review thread.
-    const useToolLoop = input.enableTools === true && (surface === 'control_center' || surface === 'studio' || surface === 'guide') && isUuid(userId);
+    const useToolLoop = input.enableTools === true && (surface === 'control_center' || surface === 'studio' || surface === 'guide' || surface === 'transmissions' || surface === 'autopilot') && isUuid(userId);
     let executionText: string;
     let executionProvider: string;
     let executionModel: string;
@@ -1556,12 +1564,78 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
         // gets read-only by default, no elevated.
         enableShell: true,
       });
-      const toolCtx: ToolExecutionContext = {
+      // Sub-agent fan-out from within the directive: the model calls
+      // `subagents__spawn` and each objective runs its own bounded
+      // tool loop in parallel. The children share this context's
+      // integrations/shell but do NOT get spawnSubagents themselves,
+      // so the fan-out can't recurse.
+      const subagentChildCtx: ToolExecutionContext = {
         supabase,
         userId: String(userId),
         integrations,
         shellMode,
         memorySystem: casperMemory ?? undefined,
+      };
+      const spawnSubagents = async ({ objectives, parentObjective }: { objectives: string[]; parentObjective: string }) => {
+        const capped = objectives.slice(0, SUBAGENT_MAX_PARALLEL);
+        const parentTaskIdForSpawn = taskId ?? randomUUID();
+        const rowsToInsert = capped.map((objective) => ({
+          parent_task_id: parentTaskIdForSpawn,
+          user_id: String(userId),
+          objective,
+          status: 'queued' as const,
+        }));
+        const { data: insertedRaw, error: insertError } = await supabase
+          .from('casper_subagents')
+          .insert(rowsToInsert)
+          .select('*');
+        if (insertError) throw new Error(insertError.message || 'Failed to insert sub-agent rows.');
+        const inserted = (insertedRaw ?? []) as Array<{ id: string; objective: string }>;
+        const settled = await Promise.all(
+          inserted.map((row) =>
+            runSubagentObjective(
+              supabase,
+              row.id,
+              row.objective,
+              parentObjective,
+              systemPrompt,
+              cognitiveCore,
+              userSettings,
+              subagentChildCtx,
+            ).catch((err) => ({
+              ok: false as const,
+              result: `Sub-agent crashed: ${err?.message || String(err)}`,
+            })),
+          ),
+        );
+        await logActivity(supabase, {
+          action_type: 'subagents_spawned',
+          description: `Casper spawned ${inserted.length} sub-agent${inserted.length === 1 ? '' : 's'} from a directive: ${capped.map((o) => o.slice(0, 60)).join(' | ').slice(0, 480)}`,
+          actor_id: userId,
+          task_id: taskId,
+          metadata: {
+            parent_task_id: parentTaskIdForSpawn,
+            objective_count: inserted.length,
+            successes: settled.filter((s) => s.ok).length,
+            failures: settled.filter((s) => !s.ok).length,
+            spawned_via: 'directive_tool',
+          },
+        }).catch((logErr: unknown) => console.warn('[casper-control:subagents] activity log skipped:', logErr));
+        return {
+          parentTaskId: parentTaskIdForSpawn,
+          results: inserted.map((row, idx) => {
+            const s = settled[idx];
+            return {
+              objective: row.objective,
+              status: (s?.ok ? 'completed' : 'failed') as 'completed' | 'failed',
+              result: s?.result ?? '',
+            };
+          }),
+        };
+      };
+      const toolCtx: ToolExecutionContext = {
+        ...subagentChildCtx,
+        spawnSubagents,
       };
       const execution = await callOpenAICompatibleWithToolLoop({
         prompt: command,
