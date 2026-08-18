@@ -827,6 +827,25 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
   const liveStreams = new Map<string, { username: string; displayName: string; avatarUrl: string; crowdSize: number }>();
   const userToStream = new Map<string, string>();
   const connectedUsers = new Map<string, string>(); // userId -> socketId
+  // Throttle call push notifications per caller→target pair: without it a
+  // hostile account looping call:initiate could drive an endless stream of
+  // persistent, vibrating call banners onto a victim's devices.
+  const CALL_PUSH_THROTTLE_MS = 30_000;
+  const lastCallPushAt = new Map<string, number>();
+  const allowCallPush = (callerId: string, targetUserId: string): boolean => {
+    const key = `${callerId}->${targetUserId}`;
+    const now = Date.now();
+    const last = lastCallPushAt.get(key) ?? 0;
+    if (now - last < CALL_PUSH_THROTTLE_MS) return false;
+    lastCallPushAt.set(key, now);
+    // Bounded cleanup so the map can't grow unboundedly.
+    if (lastCallPushAt.size > 5000) {
+      for (const [k, t] of lastCallPushAt) {
+        if (now - t > CALL_PUSH_THROTTLE_MS) lastCallPushAt.delete(k);
+      }
+    }
+    return true;
+  };
   const workspaceStates = new Map<string, { assets: any[]; checkpoints: any[]; activity: any[] }>();
   const getWorkspaceState = (key: string) => {
     if (!workspaceStates.has(key)) workspaceStates.set(key, { assets: [], checkpoints: [], activity: [] });
@@ -1041,7 +1060,9 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
         // Ring the recipient's other devices too: a high-urgency push makes
         // a backgrounded browser tab or the mobile app buzz like a real
         // incoming call instead of relying on the socket being foregrounded.
-        if (targetUserId && targetUserId !== callerId) {
+        // Throttled per caller→target pair so a hostile account looping
+        // call:initiate can't spam persistent call banners on a victim's devices.
+        if (targetUserId && targetUserId !== callerId && allowCallPush(callerId, targetUserId)) {
           void sendPushNotification(supabase, {
             recipientUserId: targetUserId,
             senderId: callerId,

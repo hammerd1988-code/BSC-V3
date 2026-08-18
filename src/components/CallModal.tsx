@@ -12,6 +12,7 @@ import {
   playConnectedSound, playDisconnectedSound, playFailedSound,
   stopAllSounds
 } from '../lib/sounds';
+import { clearIncomingCallNotification } from '../lib/notifications';
 
 interface CallModalProps {
   isOpen: boolean;
@@ -373,6 +374,7 @@ export const CallModal: React.FC<CallModalProps> = ({
   const acceptCall = async () => {
     if (!incomingData) return;
 
+    clearIncomingCallNotification();
     try {
       const roomName = incomingData.roomName;
       if (!roomName) throw new Error('Incoming call did not include a LiveKit room.');

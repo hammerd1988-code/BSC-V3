@@ -308,13 +308,19 @@ export async function sendDirectMessage(recipientUserId: string, content: string
   const participantIds = [CASPER_USER_ID, recipientUserId];
   let transmissionId: string | null = null;
 
-  const { data: existing, error: existingError } = await supabase
+  // `contains` also matches group threads that include both users, and
+  // more than one match would make maybeSingle() error — so fetch the
+  // candidates and pick the exact 1:1 thread.
+  const { data: candidates, error: existingError } = await supabase
     .from('transmissions')
     .select('*')
-    .contains('participant_ids', participantIds)
-    .maybeSingle();
+    .contains('participant_ids', participantIds);
 
   if (existingError) throw existingError;
+
+  const existing = (candidates ?? []).find(
+    (t: { participant_ids?: string[] | null }) => (t.participant_ids ?? []).length === 2,
+  );
 
   if (existing?.id) {
     transmissionId = existing.id;

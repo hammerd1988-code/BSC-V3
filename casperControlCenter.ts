@@ -1333,6 +1333,21 @@ export const SUBAGENT_MAX_PARALLEL = 8;
 const SUBAGENT_MAX_TOOL_ROUNDS = 12;
 const SUBAGENT_MAX_TOOL_CALLS = 30;
 
+// How many times one directive may invoke the spawn tool.
+const SUBAGENT_SPAWNS_PER_DIRECTIVE = 2;
+
+// Race a promise against a timeout, clearing the timer once the work
+// settles so completed sub-agents don't leave long-lived timers pending.
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('subagent_timeout')), ms);
+  });
+  return Promise.race([work, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  }) as Promise<T>;
+}
+
 async function runSubagentObjective(
   supabase: SupabaseClient,
   rowId: string,
@@ -1361,7 +1376,7 @@ async function runSubagentObjective(
       // Tool-calling path: the sub-agent can invoke shell + integrations
       // independently, each sub-agent running its own bounded loop in
       // parallel with the other sub-agents.
-      const execution = await Promise.race([
+      const execution = await withTimeout(
         callOpenAICompatibleWithToolLoop({
           prompt: objective,
           systemPrompt,
@@ -1371,22 +1386,18 @@ async function runSubagentObjective(
           maxToolRounds: SUBAGENT_MAX_TOOL_ROUNDS,
           maxToolCalls: SUBAGENT_MAX_TOOL_CALLS,
         }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('subagent_timeout')), SUBAGENT_TOOL_TIMEOUT_MS),
-        ),
-      ]);
+        SUBAGENT_TOOL_TIMEOUT_MS,
+      );
       text = (execution.text || '').trim() || 'Sub-agent returned an empty response.';
       provider = execution.provider;
       model = execution.model;
       toolCalls = execution.toolCalls;
     } else {
       // Single-shot text completion (no tools).
-      const execution = await Promise.race([
+      const execution = await withTimeout(
         callOpenAICompatible({ prompt: objective, systemPrompt, cognitiveCore, userSettings }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('subagent_timeout')), SUBAGENT_DEFAULT_TIMEOUT_MS),
-        ),
-      ]);
+        SUBAGENT_DEFAULT_TIMEOUT_MS,
+      );
       text = (execution.text || '').trim() || 'Sub-agent returned an empty response.';
       provider = execution.provider;
       model = execution.model;
@@ -1576,7 +1587,17 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
         shellMode,
         memorySystem: casperMemory ?? undefined,
       };
+      // Per-directive spawn budget: without it the model could call the
+      // spawn tool on every round, multiplying 8 children × their tool
+      // budgets and holding the request open far past any proxy timeout.
+      let spawnCallsUsed = 0;
       const spawnSubagents = async ({ objectives, parentObjective }: { objectives: string[]; parentObjective: string }) => {
+        if (spawnCallsUsed >= SUBAGENT_SPAWNS_PER_DIRECTIVE) {
+          throw new Error(
+            `Sub-agent spawn budget exhausted (${SUBAGENT_SPAWNS_PER_DIRECTIVE} per directive). Finish the work with your own tools.`,
+          );
+        }
+        spawnCallsUsed += 1;
         const capped = objectives.slice(0, SUBAGENT_MAX_PARALLEL);
         const parentTaskIdForSpawn = taskId ?? randomUUID();
         const rowsToInsert = capped.map((objective) => ({
