@@ -832,6 +832,10 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
   // persistent, vibrating call banners onto a victim's devices.
   const CALL_PUSH_THROTTLE_MS = 30_000;
   const CALL_RING_TIMEOUT_MS = 45_000;
+  // When the target has no live socket the caller is told "unavailable"
+  // immediately, so the push banner only exists to wake a backgrounded
+  // device — give it a short window instead of the full ring timeout.
+  const CALL_UNREACHABLE_CANCEL_MS = 15_000;
   const lastCallPushAt = new Map<string, number>();
   const allowCallPush = (callerId: string, targetUserId: string): boolean => {
     const key = `${callerId}->${targetUserId}`;
@@ -1083,7 +1087,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
           // still be ringing on the target's devices — clear it after the
           // ring window since no call:end will ever arrive for this call.
           if (targetUserId && targetUserId !== callerId) {
-            const timer = setTimeout(() => cancelCallBanner(targetUserId), CALL_RING_TIMEOUT_MS);
+            const timer = setTimeout(() => cancelCallBanner(targetUserId, callerId), CALL_UNREACHABLE_CANCEL_MS);
             timer.unref?.();
           }
           return;
@@ -1129,9 +1133,12 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     // The ringing push banner is sticky (requireInteraction) so devices that
     // only received the push — backgrounded tabs, other browsers — need an
     // explicit cancel push to close it once the call is answered or over.
-    const cancelCallBanner = (recipientUserId: string) => {
+    // `callerId` scopes the cancel to that caller's banner (per-caller tag),
+    // so it can't dismiss an unrelated incoming call.
+    const cancelCallBanner = (recipientUserId: string, callerId: string) => {
       void sendPushNotification(supabase, {
         recipientUserId,
+        senderId: callerId,
         senderName: 'BloodSweatCode',
         type: 'call_cancel',
         messagePreview: 'Call ended',
@@ -1144,9 +1151,12 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:accepted', { answer: data.answer, roomName: data.roomName });
       }
-      // Close the ringing banner on the acceptor's other devices.
+      // Close the ringing banner on the acceptor's other devices. Requires a
+      // real pairing so an arbitrary socket can't fire cancel pushes at will.
       const selfId = verifiedUserId();
-      if (selfId) cancelCallBanner(selfId);
+      if (selfId && typeof data?.callerId === 'string' && areCallPeers(selfId, data.callerId)) {
+        cancelCallBanner(selfId, data.callerId);
+      }
     });
 
     socket.on('call:reject', (data) => {
@@ -1155,8 +1165,11 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
         io.to(targetSocketId).emit('call:rejected');
       }
       const selfId = verifiedUserId();
-      if (selfId && typeof data?.callerId === 'string') releaseCallPeers(selfId, data.callerId);
-      if (selfId) cancelCallBanner(selfId);
+      if (selfId && typeof data?.callerId === 'string' && areCallPeers(selfId, data.callerId)) {
+        releaseCallPeers(selfId, data.callerId);
+        // Close the ringing banner on the rejecter's other devices.
+        cancelCallBanner(selfId, data.callerId);
+      }
     });
 
     socket.on('call:ice-candidate', (data) => {
@@ -1185,10 +1198,12 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:ended');
       }
-      if (selfId && typeof data?.targetUserId === 'string') {
+      // Only a genuinely paired peer may trigger a cancel push, otherwise any
+      // socket could loop call:end to spray cancel pushes at arbitrary users.
+      if (selfId && typeof data?.targetUserId === 'string' && areCallPeers(selfId, data.targetUserId)) {
         releaseCallPeers(selfId, data.targetUserId);
         // The other party may still have a ringing banner on push-only devices.
-        cancelCallBanner(data.targetUserId);
+        cancelCallBanner(data.targetUserId, selfId);
       }
     });
 

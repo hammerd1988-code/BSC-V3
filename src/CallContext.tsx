@@ -59,7 +59,8 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Show browser push notification (works even when app is in background)
       notifyIncomingCall(
         data.callerName || 'Unknown',
-        data.callerAvatar
+        data.callerAvatar,
+        data.callerId
       );
     };
     const handleRejected = () => setOutgoingCall(null);

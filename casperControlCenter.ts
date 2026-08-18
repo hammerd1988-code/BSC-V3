@@ -1357,7 +1357,9 @@ async function runSubagentObjective(
   cognitiveCore: Record<string, any>,
   userSettings?: CasperUserAiSettings,
   toolCtx?: ToolExecutionContext | null,
+  timeoutMs?: number,
 ): Promise<{ ok: boolean; result: string; provider?: string; model?: string; toolCalls?: LlmToolCallResult[] }> {
+  const toolTimeoutMs = timeoutMs ?? SUBAGENT_TOOL_TIMEOUT_MS;
   // Mark working — best effort, don't block on failure.
   await supabase
     .from('casper_subagents')
@@ -1386,7 +1388,7 @@ async function runSubagentObjective(
           maxToolRounds: SUBAGENT_MAX_TOOL_ROUNDS,
           maxToolCalls: SUBAGENT_MAX_TOOL_CALLS,
         }),
-        SUBAGENT_TOOL_TIMEOUT_MS,
+        toolTimeoutMs,
       );
       text = (execution.text || '').trim() || 'Sub-agent returned an empty response.';
       provider = execution.provider;
@@ -1417,7 +1419,7 @@ async function runSubagentObjective(
     return { ok: true, result: text, provider, model, toolCalls: toolCalls.length > 0 ? toolCalls : undefined };
   } catch (error: any) {
     const message = error?.message === 'subagent_timeout'
-      ? `Sub-agent timed out after ${(toolCtx ? SUBAGENT_TOOL_TIMEOUT_MS : SUBAGENT_DEFAULT_TIMEOUT_MS) / 1000}s on: ${objective}`
+      ? `Sub-agent timed out after ${Math.round((toolCtx ? toolTimeoutMs : SUBAGENT_DEFAULT_TIMEOUT_MS) / 1000)}s on: ${objective}`
       : `Sub-agent failed: ${error?.message || String(error)}`;
     console.error('[casper-control:subagent]', message);
     await supabase
@@ -1591,11 +1593,19 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
       // spawn tool on every round, multiplying 8 children × their tool
       // budgets and holding the request open far past any proxy timeout.
       let spawnCallsUsed = 0;
+      // One shared wall-clock budget for ALL fan-out in this directive: a
+      // second spawn call only gets whatever time the first one left, so the
+      // request can never stay open for SPAWNS × TIMEOUT.
+      const fanoutDeadlineAt = Date.now() + SUBAGENT_TOOL_TIMEOUT_MS;
       const spawnSubagents = async ({ objectives, parentObjective }: { objectives: string[]; parentObjective: string }) => {
         if (spawnCallsUsed >= SUBAGENT_SPAWNS_PER_DIRECTIVE) {
           throw new Error(
             `Sub-agent spawn budget exhausted (${SUBAGENT_SPAWNS_PER_DIRECTIVE} per directive). Finish the work with your own tools.`,
           );
+        }
+        const fanoutBudgetLeft = fanoutDeadlineAt - Date.now();
+        if (fanoutBudgetLeft < 15_000) {
+          throw new Error('Sub-agent time budget for this directive is exhausted. Finish the work with your own tools.');
         }
         spawnCallsUsed += 1;
         const capped = objectives.slice(0, SUBAGENT_MAX_PARALLEL);
@@ -1623,6 +1633,7 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
               cognitiveCore,
               userSettings,
               subagentChildCtx,
+              fanoutBudgetLeft,
             ).catch((err) => ({
               ok: false as const,
               result: `Sub-agent crashed: ${err?.message || String(err)}`,
