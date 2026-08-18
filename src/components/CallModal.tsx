@@ -12,6 +12,7 @@ import {
   playConnectedSound, playDisconnectedSound, playFailedSound,
   stopAllSounds
 } from '../lib/sounds';
+import { clearIncomingCallNotification } from '../lib/notifications';
 
 interface CallModalProps {
   isOpen: boolean;
@@ -170,6 +171,34 @@ export const CallModal: React.FC<CallModalProps> = ({
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [status]);
+
+  // Ring timeout: an unanswered call shouldn't ring forever. Outgoing calls
+  // give up as "no answer"; incoming calls auto-decline so the caller's UI
+  // resolves too.
+  useEffect(() => {
+    if (status !== CallStatus.CALLING && status !== CallStatus.RINGING) return;
+    const isOutgoing = status === CallStatus.CALLING;
+    const timeout = setTimeout(() => {
+      if (isOutgoing) {
+        socket.emit('call:end', {
+          targetUserId,
+          roomName: callRoomNameRef.current,
+        });
+        setError('No answer.');
+        setStatus(CallStatus.FAILED);
+        cleanupCall();
+        setTimeout(onClose, 2500);
+      } else {
+        if (incomingData) {
+          socket.emit('call:reject', { callerId: incomingData.callerId });
+        }
+        setStatus(CallStatus.ENDED);
+        cleanupCall();
+        setTimeout(onClose, 1000);
+      }
+    }, 45_000);
+    return () => clearTimeout(timeout);
+  }, [status, incomingData?.callerId, targetUserId, onClose]);
 
   // Random rather than `<callerId>-<calleeId>-<Date.now()>`: both ids are public
   // and a millisecond timestamp is guessable, and the server checks the room name
@@ -345,6 +374,7 @@ export const CallModal: React.FC<CallModalProps> = ({
   const acceptCall = async () => {
     if (!incomingData) return;
 
+    clearIncomingCallNotification();
     try {
       const roomName = incomingData.roomName;
       if (!roomName) throw new Error('Incoming call did not include a LiveKit room.');
