@@ -4,7 +4,7 @@ import { getValidSession } from './lib/authSession';
 import { useAuth } from './AuthContext';
 import { User } from './types';
 import { CallModal } from './components/CallModal';
-import { notifyIncomingCall } from './lib/notifications';
+import { notifyIncomingCall, clearIncomingCallNotification } from './lib/notifications';
 
 interface CallContextType {
   incomingCall: any | null;
@@ -66,6 +66,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const handleEnded = () => {
       setIncomingCall(null);
       setOutgoingCall(null);
+      clearIncomingCallNotification();
     };
 
     socket.on('call:incoming', handleIncomingCall);
@@ -93,16 +94,19 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       socket.emit('call:reject', { callerId: incomingCall.callerId });
       setIncomingCall(null);
     }
+    clearIncomingCallNotification();
   };
 
   const endCall = () => {
     setIncomingCall(null);
     setOutgoingCall(null);
+    clearIncomingCallNotification();
   };
 
   const clearCall = () => {
     setIncomingCall(null);
     setOutgoingCall(null);
+    clearIncomingCallNotification();
   };
 
   return (

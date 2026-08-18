@@ -217,16 +217,39 @@ async function showLocalNotification(title: string, options: NotificationOptions
   }
 }
 
+// Must match the server push tag in pushNotifications.ts so a local
+// notification and a server push for the same call collapse into one banner.
+export const INCOMING_CALL_NOTIFICATION_TAG = 'bsc-incoming-call';
+
 export function notifyIncomingCall(callerName: string, callerAvatar?: string | null): void {
   void showLocalNotification('Incoming Call', {
     body: `${callerName} is calling you...`,
     icon: callerAvatar || '/icons/icon-192x192.png',
     badge: '/icons/icon-192x192.png',
-    tag: 'incoming-call',
+    tag: INCOMING_CALL_NOTIFICATION_TAG,
     requireInteraction: true,
     vibrate: [300, 200, 300, 200, 300],
     data: { url: '/transmissions', type: 'call' },
   } as NotificationOptions);
+}
+
+// Close any lingering incoming-call banner (they're requireInteraction, so
+// they never dismiss themselves) once the call is answered, rejected,
+// ended, or times out.
+export function clearIncomingCallNotification(): void {
+  void (async () => {
+    try {
+      if (!('serviceWorker' in navigator)) return;
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (!registration) return;
+      const notifications = await registration.getNotifications({
+        tag: INCOMING_CALL_NOTIFICATION_TAG,
+      });
+      notifications.forEach((n) => n.close());
+    } catch (err) {
+      console.warn('[Notifications] Failed to clear call notification:', err);
+    }
+  })();
 }
 
 export function notifyNewMessage(
