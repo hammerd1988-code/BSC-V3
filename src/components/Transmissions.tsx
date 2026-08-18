@@ -660,6 +660,7 @@ export const Transmissions: React.FC = () => {
 
     const openTargetTransmission = async () => {
       const existing = transmissionsRef.current.find(t =>
+        (t.participant_ids ?? []).length === 2 &&
         t.participant_ids?.includes(currentUser.id) &&
         t.participant_ids?.includes(targetUserId)
       );
@@ -671,13 +672,19 @@ export const Transmissions: React.FC = () => {
       }
 
       try {
-        const { data: existingFromDb, error: existingError } = await supabase
+        // `contains` also matches group threads that include both users, and
+        // more than one match would make maybeSingle() error — so fetch the
+        // candidates and pick the exact 1:1 thread.
+        const { data: candidates, error: existingError } = await supabase
           .from('transmissions')
           .select('*')
-          .contains('participant_ids', [currentUser.id, targetUserId])
-          .maybeSingle();
+          .contains('participant_ids', [currentUser.id, targetUserId]);
 
         if (existingError) throw existingError;
+
+        const existingFromDb = (candidates ?? []).find(
+          (t: Transmission) => (t.participant_ids ?? []).length === 2,
+        );
 
         if (existingFromDb) {
           if (!cancelled) {

@@ -29,7 +29,7 @@ import { runCasperShell, describeAllowlist, isShellElevationEnabled, type Casper
 import { getAdapter, listAdapterTools, decodeIntegrationKey, CASPER_ADAPTERS } from './casperAdapters.js';
 import { initWebhookListener } from "./webhookListener.js";
 import botApi from './botApi.js';
-import { registerPushRoutes } from './pushNotifications.js';
+import { registerPushRoutes, sendPushNotification } from './pushNotifications.js';
 import { registerLiveKitRoutes } from './livekitRoutes.js';
 import { registerRunwayRoutes } from './runwayRoutes.js';
 import { registerUnifiedBotRoutes } from './botUnificationRoutes.js';
@@ -827,6 +827,30 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
   const liveStreams = new Map<string, { username: string; displayName: string; avatarUrl: string; crowdSize: number }>();
   const userToStream = new Map<string, string>();
   const connectedUsers = new Map<string, string>(); // userId -> socketId
+  // Throttle call push notifications per caller→target pair: without it a
+  // hostile account looping call:initiate could drive an endless stream of
+  // persistent, vibrating call banners onto a victim's devices.
+  const CALL_PUSH_THROTTLE_MS = 30_000;
+  const CALL_RING_TIMEOUT_MS = 45_000;
+  // When the target has no live socket the caller is told "unavailable"
+  // immediately, so the push banner only exists to wake a backgrounded
+  // device — give it a short window instead of the full ring timeout.
+  const CALL_UNREACHABLE_CANCEL_MS = 15_000;
+  const lastCallPushAt = new Map<string, number>();
+  const allowCallPush = (callerId: string, targetUserId: string): boolean => {
+    const key = `${callerId}->${targetUserId}`;
+    const now = Date.now();
+    const last = lastCallPushAt.get(key) ?? 0;
+    if (now - last < CALL_PUSH_THROTTLE_MS) return false;
+    lastCallPushAt.set(key, now);
+    // Bounded cleanup so the map can't grow unboundedly.
+    if (lastCallPushAt.size > 5000) {
+      for (const [k, t] of lastCallPushAt) {
+        if (now - t > CALL_PUSH_THROTTLE_MS) lastCallPushAt.delete(k);
+      }
+    }
+    return true;
+  };
   const workspaceStates = new Map<string, { assets: any[]; checkpoints: any[]; activity: any[] }>();
   const getWorkspaceState = (key: string) => {
     if (!workspaceStates.has(key)) workspaceStates.set(key, { assets: [], checkpoints: [], activity: [] });
@@ -1031,17 +1055,43 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
 
         const targetUserId = String(data?.targetUserId ?? '');
         const targetSocketId = targetUserId ? connectedUsers.get(targetUserId) : undefined;
-        if (!targetSocketId) {
-          // Previously the caller just kept ringing an offline user forever.
-          socket.emit('call:unavailable', { targetUserId });
-          return;
-        }
 
         const { data: caller } = await supabase
           .from('users')
           .select('display_name, avatar_url')
           .eq('id', callerId)
           .maybeSingle();
+
+        // Ring the recipient's other devices too: a high-urgency push makes
+        // a backgrounded browser tab or the mobile app buzz like a real
+        // incoming call instead of relying on the socket being foregrounded.
+        // Throttled per caller→target pair so a hostile account looping
+        // call:initiate can't spam persistent call banners on a victim's devices.
+        if (targetUserId && targetUserId !== callerId && allowCallPush(callerId, targetUserId)) {
+          void sendPushNotification(supabase, {
+            recipientUserId: targetUserId,
+            senderId: callerId,
+            senderName: caller?.display_name ?? 'Unknown caller',
+            senderAvatar: caller?.avatar_url ?? null,
+            type: 'call',
+            messagePreview: data?.videoEnabled ? 'Incoming video call' : 'Incoming voice call',
+            url: '/transmissions',
+            transmissionId: typeof data?.transmissionId === 'string' ? data.transmissionId : undefined,
+          }).catch((err) => console.warn('[socket] call push failed:', err));
+        }
+
+        if (!targetSocketId) {
+          // Previously the caller just kept ringing an offline user forever.
+          socket.emit('call:unavailable', { targetUserId });
+          // The caller gives up immediately, but the push banner above may
+          // still be ringing on the target's devices — clear it after the
+          // ring window since no call:end will ever arrive for this call.
+          if (targetUserId && targetUserId !== callerId) {
+            const timer = setTimeout(() => cancelCallBanner(targetUserId, callerId), CALL_UNREACHABLE_CANCEL_MS);
+            timer.unref?.();
+          }
+          return;
+        }
 
         // Record who the room belongs to so /api/livekit/token can refuse a
         // publish token to anyone else who learns or guesses the name.
@@ -1080,10 +1130,32 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       return connectedUsers.get(otherId);
     };
 
+    // The ringing push banner is sticky (requireInteraction) so devices that
+    // only received the push — backgrounded tabs, other browsers — need an
+    // explicit cancel push to close it once the call is answered or over.
+    // `callerId` scopes the cancel to that caller's banner (per-caller tag),
+    // so it can't dismiss an unrelated incoming call.
+    const cancelCallBanner = (recipientUserId: string, callerId: string) => {
+      void sendPushNotification(supabase, {
+        recipientUserId,
+        senderId: callerId,
+        senderName: 'BloodSweatCode',
+        type: 'call_cancel',
+        messagePreview: 'Call ended',
+        url: '/transmissions',
+      }).catch((err) => console.warn('[socket] call cancel push failed:', err));
+    };
+
     socket.on('call:accept', (data) => {
       const targetSocketId = callPeerSocket(data?.callerId);
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:accepted', { answer: data.answer, roomName: data.roomName });
+      }
+      // Close the ringing banner on the acceptor's other devices. Requires a
+      // real pairing so an arbitrary socket can't fire cancel pushes at will.
+      const selfId = verifiedUserId();
+      if (selfId && typeof data?.callerId === 'string' && areCallPeers(selfId, data.callerId)) {
+        cancelCallBanner(selfId, data.callerId);
       }
     });
 
@@ -1093,7 +1165,11 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
         io.to(targetSocketId).emit('call:rejected');
       }
       const selfId = verifiedUserId();
-      if (selfId && typeof data?.callerId === 'string') releaseCallPeers(selfId, data.callerId);
+      if (selfId && typeof data?.callerId === 'string' && areCallPeers(selfId, data.callerId)) {
+        releaseCallPeers(selfId, data.callerId);
+        // Close the ringing banner on the rejecter's other devices.
+        cancelCallBanner(selfId, data.callerId);
+      }
     });
 
     socket.on('call:ice-candidate', (data) => {
@@ -1122,7 +1198,13 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:ended');
       }
-      if (selfId && typeof data?.targetUserId === 'string') releaseCallPeers(selfId, data.targetUserId);
+      // Only a genuinely paired peer may trigger a cancel push, otherwise any
+      // socket could loop call:end to spray cancel pushes at arbitrary users.
+      if (selfId && typeof data?.targetUserId === 'string' && areCallPeers(selfId, data.targetUserId)) {
+        releaseCallPeers(selfId, data.targetUserId);
+        // The other party may still have a ringing banner on push-only devices.
+        cancelCallBanner(data.targetUserId, selfId);
+      }
     });
 
     // ---- Post/Like/Comment events ----
