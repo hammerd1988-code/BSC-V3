@@ -198,7 +198,7 @@ export const CallModal: React.FC<CallModalProps> = ({
       }
     }, 45_000);
     return () => clearTimeout(timeout);
-  }, [status]);
+  }, [status, incomingData?.callerId, targetUserId, onClose]);
 
   // Random rather than `<callerId>-<calleeId>-<Date.now()>`: both ids are public
   // and a millisecond timestamp is guessable, and the server checks the room name
