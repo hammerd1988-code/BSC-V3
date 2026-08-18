@@ -72,6 +72,17 @@ self.addEventListener('push', (event) => {
     payload = { title: 'BloodSweatCode', body: event.data ? event.data.text() : 'New neural activity detected.' };
   }
 
+  // A call_cancel push means the call is over (hang-up, reject, timeout, or
+  // unreachable target): close the sticky incoming-call banner instead of
+  // showing anything.
+  if ((payload.type || payload.data?.type) === 'call_cancel') {
+    event.waitUntil(
+      self.registration.getNotifications({ tag: 'bsc-incoming-call' })
+        .then((notifications) => notifications.forEach((n) => n.close()))
+    );
+    return;
+  }
+
   const title = payload.title || 'BloodSweatCode';
   const options = {
     body: payload.body || payload.messagePreview || 'New neural activity detected.',

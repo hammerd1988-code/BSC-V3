@@ -831,6 +831,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
   // hostile account looping call:initiate could drive an endless stream of
   // persistent, vibrating call banners onto a victim's devices.
   const CALL_PUSH_THROTTLE_MS = 30_000;
+  const CALL_RING_TIMEOUT_MS = 45_000;
   const lastCallPushAt = new Map<string, number>();
   const allowCallPush = (callerId: string, targetUserId: string): boolean => {
     const key = `${callerId}->${targetUserId}`;
@@ -1078,6 +1079,13 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
         if (!targetSocketId) {
           // Previously the caller just kept ringing an offline user forever.
           socket.emit('call:unavailable', { targetUserId });
+          // The caller gives up immediately, but the push banner above may
+          // still be ringing on the target's devices — clear it after the
+          // ring window since no call:end will ever arrive for this call.
+          if (targetUserId && targetUserId !== callerId) {
+            const timer = setTimeout(() => cancelCallBanner(targetUserId), CALL_RING_TIMEOUT_MS);
+            timer.unref?.();
+          }
           return;
         }
 
@@ -1118,11 +1126,27 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       return connectedUsers.get(otherId);
     };
 
+    // The ringing push banner is sticky (requireInteraction) so devices that
+    // only received the push — backgrounded tabs, other browsers — need an
+    // explicit cancel push to close it once the call is answered or over.
+    const cancelCallBanner = (recipientUserId: string) => {
+      void sendPushNotification(supabase, {
+        recipientUserId,
+        senderName: 'BloodSweatCode',
+        type: 'call_cancel',
+        messagePreview: 'Call ended',
+        url: '/transmissions',
+      }).catch((err) => console.warn('[socket] call cancel push failed:', err));
+    };
+
     socket.on('call:accept', (data) => {
       const targetSocketId = callPeerSocket(data?.callerId);
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:accepted', { answer: data.answer, roomName: data.roomName });
       }
+      // Close the ringing banner on the acceptor's other devices.
+      const selfId = verifiedUserId();
+      if (selfId) cancelCallBanner(selfId);
     });
 
     socket.on('call:reject', (data) => {
@@ -1132,6 +1156,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       }
       const selfId = verifiedUserId();
       if (selfId && typeof data?.callerId === 'string') releaseCallPeers(selfId, data.callerId);
+      if (selfId) cancelCallBanner(selfId);
     });
 
     socket.on('call:ice-candidate', (data) => {
@@ -1160,7 +1185,11 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:ended');
       }
-      if (selfId && typeof data?.targetUserId === 'string') releaseCallPeers(selfId, data.targetUserId);
+      if (selfId && typeof data?.targetUserId === 'string') {
+        releaseCallPeers(selfId, data.targetUserId);
+        // The other party may still have a ringing banner on push-only devices.
+        cancelCallBanner(data.targetUserId);
+      }
     });
 
     // ---- Post/Like/Comment events ----
