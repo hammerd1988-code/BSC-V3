@@ -660,6 +660,7 @@ export const Transmissions: React.FC = () => {
 
     const openTargetTransmission = async () => {
       const existing = transmissionsRef.current.find(t =>
+        (t.participant_ids ?? []).length === 2 &&
         t.participant_ids?.includes(currentUser.id) &&
         t.participant_ids?.includes(targetUserId)
       );
