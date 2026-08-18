@@ -217,16 +217,24 @@ async function showLocalNotification(title: string, options: NotificationOptions
   }
 }
 
-// Must match the server push tag in pushNotifications.ts so a local
+// Must match the server push tag scheme in pushNotifications.ts so a local
 // notification and a server push for the same call collapse into one banner.
-export const INCOMING_CALL_NOTIFICATION_TAG = 'bsc-incoming-call';
+// The tag is per-caller so simultaneous calls don't overwrite or dismiss
+// each other's banners.
+export const INCOMING_CALL_NOTIFICATION_TAG_PREFIX = 'bsc-incoming-call';
 
-export function notifyIncomingCall(callerName: string, callerAvatar?: string | null): void {
+export function incomingCallTag(callerId?: string | null): string {
+  return callerId
+    ? `${INCOMING_CALL_NOTIFICATION_TAG_PREFIX}-${callerId}`
+    : INCOMING_CALL_NOTIFICATION_TAG_PREFIX;
+}
+
+export function notifyIncomingCall(callerName: string, callerAvatar?: string | null, callerId?: string | null): void {
   void showLocalNotification('Incoming Call', {
     body: `${callerName} is calling you...`,
     icon: callerAvatar || '/icons/icon-192x192.png',
     badge: '/icons/icon-192x192.png',
-    tag: INCOMING_CALL_NOTIFICATION_TAG,
+    tag: incomingCallTag(callerId),
     requireInteraction: true,
     vibrate: [300, 200, 300, 200, 300],
     data: { url: '/transmissions', type: 'call' },
@@ -242,10 +250,12 @@ export function clearIncomingCallNotification(): void {
       if (!('serviceWorker' in navigator)) return;
       const registration = await navigator.serviceWorker.getRegistration();
       if (!registration) return;
-      const notifications = await registration.getNotifications({
-        tag: INCOMING_CALL_NOTIFICATION_TAG,
-      });
-      notifications.forEach((n) => n.close());
+      // The call is over on this device, so close every call banner here
+      // regardless of which caller it belongs to.
+      const notifications = await registration.getNotifications();
+      notifications
+        .filter((n) => (n.tag ?? '').startsWith(INCOMING_CALL_NOTIFICATION_TAG_PREFIX))
+        .forEach((n) => n.close());
     } catch (err) {
       console.warn('[Notifications] Failed to clear call notification:', err);
     }

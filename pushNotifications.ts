@@ -108,7 +108,12 @@ function tagFor(input: PushNotificationInput): string {
   if (input.type === 'dm' && input.transmissionId) return `bsc-dm-${input.transmissionId}`;
   if (input.type === 'comment' && input.postId) return `bsc-comment-${input.postId}`;
   if (input.type === 'mention' && input.commentId) return `bsc-mention-${input.commentId}`;
-  if (input.type === 'call' || input.type === 'call_cancel') return 'bsc-incoming-call';
+  // Per-caller tag: simultaneous callers must not overwrite each other's
+  // banner, and a cancel must only dismiss the banner for its own call.
+  // Must match incomingCallTag() in src/lib/notifications.ts.
+  if (input.type === 'call' || input.type === 'call_cancel') {
+    return input.senderId ? `bsc-incoming-call-${input.senderId}` : 'bsc-incoming-call';
+  }
   return `bsc-${input.type}-${input.recipientUserId}`;
 }
 
