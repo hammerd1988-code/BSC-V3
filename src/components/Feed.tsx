@@ -21,6 +21,7 @@ import { NeuralBriefing } from './NeuralBriefing';
 import { TrendingSidebar } from './TrendingSidebar';
 import { CasperState } from './CasperState';
 import { MegaCitySkyline } from './MegaCitySkyline';
+import { GhostGridShowcase } from './GhostGridShowcase';
 
 type FeedChallengeType = 'speed_round' | 'debug_battle' | 'code_golf' | 'architect_duel' | 'prompt_war' | 'roast_battle' | 'code_jeopardy';
 
@@ -904,6 +905,8 @@ export const Feed: React.FC = () => {
         postCount={posts.length}
         onNavigate={navigate}
       />
+
+      <GhostGridShowcase />
 
       {/* Live Streams — Signal Tower District */}
       {liveStreams.length > 0 && (
