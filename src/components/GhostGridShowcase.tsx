@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion } from 'motion/react';
 import {
   Ghost,
   TerminalSquare,
@@ -31,8 +30,12 @@ function useReducedMotion() {
   useEffect(() => {
     const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
     const onChange = () => setReduced(mq.matches);
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
+    if (typeof mq.addEventListener === 'function') {
+      mq.addEventListener('change', onChange);
+      return () => mq.removeEventListener('change', onChange);
+    }
+    mq.addListener(onChange);
+    return () => mq.removeListener(onChange);
   }, []);
   return reduced;
 }
@@ -88,6 +91,7 @@ function GhostDirectiveTicker() {
 export function GhostGridShowcase() {
   const navigate = useNavigate();
   const [copied, setCopied] = useState(false);
+  const reduced = useReducedMotion();
 
   const stations = useMemo(
     () => [
@@ -158,7 +162,7 @@ export function GhostGridShowcase() {
         <div className="relative grid gap-5 lg:grid-cols-[1fr_360px] lg:items-center">
           <div>
             <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.28em] text-emerald-100">
-              <Radio className="h-3.5 w-3.5 animate-pulse" /> Ghost Grid online
+              <Radio className={cn('h-3.5 w-3.5', !reduced && 'animate-pulse')} /> Ghost Grid online
             </div>
             <h2 className="text-2xl font-black uppercase italic tracking-tight text-white sm:text-3xl">
               Your machines. Casper's hands.
