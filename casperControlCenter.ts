@@ -1336,6 +1336,14 @@ const SUBAGENT_MAX_TOOL_CALLS = 30;
 // How many times one directive may invoke the spawn tool.
 const SUBAGENT_SPAWNS_PER_DIRECTIVE = 2;
 
+// Ordinary chat surfaces (a DM to Casper, an autopilot reply) are a synchronous
+// request a human is waiting on, not an operator console: they keep the fan-out
+// tool, but on a budget that can't hold one chat turn open for ten minutes.
+const CHAT_SURFACES = new Set(['transmissions', 'autopilot']);
+const CHAT_FANOUT_BUDGET_MS = 2 * 60_000;
+const CHAT_SPAWNS_PER_DIRECTIVE = 1;
+const CHAT_MAX_PARALLEL = 3;
+
 // Race a promise against a timeout, clearing the timer once the work
 // settles so completed sub-agents don't leave long-lived timers pending.
 function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
@@ -1593,14 +1601,17 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
       // spawn tool on every round, multiplying 8 children × their tool
       // budgets and holding the request open far past any proxy timeout.
       let spawnCallsUsed = 0;
+      const isChatSurface = CHAT_SURFACES.has(surface);
+      const spawnBudget = isChatSurface ? CHAT_SPAWNS_PER_DIRECTIVE : SUBAGENT_SPAWNS_PER_DIRECTIVE;
+      const maxParallel = isChatSurface ? CHAT_MAX_PARALLEL : SUBAGENT_MAX_PARALLEL;
       // One shared wall-clock budget for ALL fan-out in this directive: a
       // second spawn call only gets whatever time the first one left, so the
       // request can never stay open for SPAWNS × TIMEOUT.
-      const fanoutDeadlineAt = Date.now() + SUBAGENT_TOOL_TIMEOUT_MS;
+      const fanoutDeadlineAt = Date.now() + (isChatSurface ? CHAT_FANOUT_BUDGET_MS : SUBAGENT_TOOL_TIMEOUT_MS);
       const spawnSubagents = async ({ objectives, parentObjective }: { objectives: string[]; parentObjective: string }) => {
-        if (spawnCallsUsed >= SUBAGENT_SPAWNS_PER_DIRECTIVE) {
+        if (spawnCallsUsed >= spawnBudget) {
           throw new Error(
-            `Sub-agent spawn budget exhausted (${SUBAGENT_SPAWNS_PER_DIRECTIVE} per directive). Finish the work with your own tools.`,
+            `Sub-agent spawn budget exhausted (${spawnBudget} per directive). Finish the work with your own tools.`,
           );
         }
         const fanoutBudgetLeft = fanoutDeadlineAt - Date.now();
@@ -1608,7 +1619,7 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
           throw new Error('Sub-agent time budget for this directive is exhausted. Finish the work with your own tools.');
         }
         spawnCallsUsed += 1;
-        const capped = objectives.slice(0, SUBAGENT_MAX_PARALLEL);
+        const capped = objectives.slice(0, maxParallel);
         const parentTaskIdForSpawn = taskId ?? randomUUID();
         const rowsToInsert = capped.map((objective) => ({
           parent_task_id: parentTaskIdForSpawn,
