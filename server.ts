@@ -868,6 +868,9 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     const now = Date.now();
     const callId = uuidv4();
     activeCallIds.set(`${callerId}->${targetUserId}`, { callId, at: now });
+    // This pair's current call goes this way, so an earlier call the other way
+    // must not still make the caller look like the party that was rung.
+    activeCallIds.delete(`${targetUserId}->${callerId}`);
     if (activeCallIds.size > 5000) {
       for (const [k, v] of activeCallIds) {
         if (now - v.at > CALL_ID_TTL_MS) activeCallIds.delete(k);
@@ -877,16 +880,16 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
   };
   // Either side can end a call, so look the id up in both directions: the
   // callee's call:end names itself as the canceller, not the original caller.
-  const takeCallId = (callerId: string, targetUserId: string): string | undefined => {
-    for (const key of [`${callerId}->${targetUserId}`, `${targetUserId}->${callerId}`]) {
-      const entry = activeCallIds.get(key);
-      if (entry) {
-        activeCallIds.delete(key);
-        return entry.callId;
-      }
-    }
-    return undefined;
-  };
+  // Entries are left in place (a redial overwrites, the TTL sweep expires) so
+  // the direction of the call stays known after the cancel push.
+  const currentCallId = (callerId: string, targetUserId: string): string | undefined =>
+    activeCallIds.get(`${callerId}->${targetUserId}`)?.callId
+    ?? activeCallIds.get(`${targetUserId}->${callerId}`)?.callId;
+  // True when `userId` placed the current call to `otherId`. Only the party that
+  // was rung may release the push throttle: otherwise a hostile caller could
+  // loop call:initiate → call:end and re-ring a victim every iteration.
+  const placedCallTo = (userId: string, otherId: string): boolean =>
+    activeCallIds.has(`${userId}->${otherId}`);
   const workspaceStates = new Map<string, { assets: any[]; checkpoints: any[]; activity: any[] }>();
   const getWorkspaceState = (key: string) => {
     if (!workspaceStates.has(key)) workspaceStates.set(key, { assets: [], checkpoints: [], activity: [] });
@@ -1122,11 +1125,14 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
         // incoming call instead of relying on the socket being foregrounded.
         // Throttled per caller→target pair so a hostile account looping
         // call:initiate can't spam persistent call banners on a victim's devices.
+        // Recorded for every attempt, throttled or not, so the cancel push can
+        // name the call and the throttle release can tell caller from callee.
+        const callId = startCallId(callerId, targetUserId);
         if (allowCallPush(callerId, targetUserId)) {
           void sendPushNotification(supabase, {
             recipientUserId: targetUserId,
             senderId: callerId,
-            callId: startCallId(callerId, targetUserId),
+            callId,
             senderName: caller?.display_name ?? 'Unknown caller',
             senderAvatar: caller?.avatar_url ?? null,
             type: 'call',
@@ -1144,8 +1150,6 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
           // ring window since no call:end will ever arrive for this call.
           const timer = setTimeout(() => {
             cancelCallBanner(targetUserId, callerId);
-            // Nothing came of this call, so a redial should ring again.
-            clearCallPushThrottle(callerId, targetUserId);
           }, CALL_UNREACHABLE_CANCEL_MS);
           timer.unref?.();
           return;
@@ -1203,7 +1207,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
         url: '/transmissions',
         // Names the call being cancelled so a ring push that lands after this
         // cancel is suppressed, while a later redial still rings.
-        callId: takeCallId(callerId, recipientUserId),
+        callId: currentCallId(callerId, recipientUserId),
       }).catch((err) => console.warn('[socket] call cancel push failed:', err));
     };
 
@@ -1217,7 +1221,8 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       const selfId = verifiedUserId();
       if (selfId && typeof data?.callerId === 'string' && areCallPeers(selfId, data.callerId)) {
         cancelCallBanner(selfId, data.callerId);
-        clearCallPushThrottle(data.callerId, selfId);
+        // Answering is consent, so this pair may ring again immediately.
+        if (placedCallTo(data.callerId, selfId)) clearCallPushThrottle(data.callerId, selfId);
       }
     });
 
@@ -1231,7 +1236,8 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
         releaseCallPeers(selfId, data.callerId);
         // Close the ringing banner on the rejecter's other devices.
         cancelCallBanner(selfId, data.callerId);
-        clearCallPushThrottle(data.callerId, selfId);
+        // Released by the rejecter's own action, so a call back rings at once.
+        if (placedCallTo(data.callerId, selfId)) clearCallPushThrottle(data.callerId, selfId);
       }
     });
 
@@ -1267,7 +1273,9 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
         releaseCallPeers(selfId, data.targetUserId);
         // The other party may still have a ringing banner on push-only devices.
         cancelCallBanner(data.targetUserId, selfId);
-        clearCallPushThrottle(selfId, data.targetUserId);
+        // Only when the party that was rung hangs up: a caller clearing its own
+        // throttle would turn call:initiate → call:end into an unlimited ringer.
+        if (placedCallTo(data.targetUserId, selfId)) clearCallPushThrottle(selfId, data.targetUserId);
       }
     });
 
