@@ -26,6 +26,12 @@ type PushNotificationInput = {
   postId?: string;
   commentId?: string;
   transmissionId?: string;
+  /**
+   * Identifies one ring/cancel pair. Web Push delivery is unordered, so the
+   * service worker uses it to drop a ring that arrives after its own cancel
+   * without muting a later redial from the same caller.
+   */
+  callId?: string;
   createInAppNotification?: boolean;
 };
 
@@ -143,6 +149,7 @@ function makePayload(input: PushNotificationInput): PushPayload {
       postId: input.postId,
       commentId: input.commentId,
       transmissionId: input.transmissionId,
+      callId: input.callId,
     },
   };
 }
@@ -261,13 +268,10 @@ export async function sendPushNotification(
 ): Promise<{ attempted: number; sent: number; skipped: boolean }> {
   const payload = makePayload(input);
 
-  // call_cancel is a silent web-push instruction that tells the service worker
-  // to close the ringing banner; native platforms would surface it as a new
-  // alert, so it's web-only.
-  if (input.type === 'call_cancel') {
-    return sendWebPush(supabase, input);
-  }
-
+  // call_cancel is delivered on both channels: FCM's android.notification.tag
+  // and the APNs collapseId both equal the ring's tag, so the "Call ended"
+  // notice replaces the high-priority "is calling you" banner instead of
+  // leaving it stuck on the lock screen until the caller's next call.
   const [web, native] = await Promise.all([
     sendWebPush(supabase, input),
     sendNativePush(supabase, {
