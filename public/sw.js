@@ -104,18 +104,24 @@ async function wasCallCancelled(callId) {
 // Replaces the banner carrying `tag` (the sticky ringing one, when it is still
 // on screen) with a dismissible notice, then closes it.
 function showTransientCallNotice(tag, { title, body, url }) {
+  // The tag is per-caller and a redial reuses it, so the cleanup must close
+  // only this notice: a redial landing inside the delay below raises a new ring
+  // under the same tag, and closing by tag would make it ring and vanish.
+  const noticeId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   return self.registration.showNotification(title, {
     body,
     icon: '/icons/icon-192x192.png',
     badge: '/icons/icon-96x96.png',
     tag,
-    data: { url: url || '/transmissions', type: 'call_cancel' },
+    data: { url: url || '/transmissions', type: 'call_cancel', noticeId },
     silent: true,
     requireInteraction: false,
   })
     .then(() => new Promise((resolve) => setTimeout(resolve, CALL_NOTICE_VISIBLE_MS)))
     .then(() => self.registration.getNotifications({ tag }))
-    .then((notifications) => notifications.forEach((n) => n.close()));
+    .then((notifications) => notifications
+      .filter((n) => n.data?.noticeId === noticeId)
+      .forEach((n) => n.close()));
 }
 
 function notificationOptions(payload) {
