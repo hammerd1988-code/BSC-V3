@@ -141,8 +141,8 @@ function LocalCoderSpotlight() {
     <div className="relative mt-5 overflow-hidden rounded-2xl border border-cyan-300/20 bg-black/70 p-4 shadow-[0_0_34px_rgba(0,229,255,0.1)] sm:p-5">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_0%_0%,rgba(0,229,255,0.1),transparent_38%),radial-gradient(circle_at_100%_100%,rgba(255,0,255,0.08),transparent_40%)]" />
 
-      <div className="relative grid gap-4 lg:grid-cols-[1fr_1fr] lg:items-start">
-        <div>
+      <div className="relative grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
+        <div className="min-w-0">
           <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-cyan-300/25 bg-cyan-300/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.28em] text-cyan-100">
             <Code2 className="h-3.5 w-3.5" /> Local Coder
           </div>
@@ -198,7 +198,7 @@ function LocalCoderSpotlight() {
           </a>
         </div>
 
-        <div>
+        <div className="min-w-0">
           <div className="relative overflow-hidden rounded-xl border border-white/10 bg-black/80">
             <div className="relative aspect-[16/10]">
               {LOCAL_CODER_SLIDES.map((s, i) => (
