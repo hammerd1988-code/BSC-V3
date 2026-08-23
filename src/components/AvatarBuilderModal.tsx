@@ -7,7 +7,6 @@ import {
 } from 'lucide-react';
 import { generateText } from '../lib/ai';
 import { useAuth } from '../AuthContext';
-import { useImageLightbox } from './ImageLightbox';
 import { cn } from '../lib/utils';
 
 interface AvatarBuilderModalProps {
@@ -154,7 +153,6 @@ async function generateAvatarImage(fullPrompt: string): Promise<string> {
 
 export const AvatarBuilderModal: React.FC<AvatarBuilderModalProps> = ({ isOpen, onClose, onApply, botName }) => {
   const { currentUser } = useAuth();
-  const lightbox = useImageLightbox();
 
   const [activeTab, setActiveTab] = useState<BuilderTab>('description');
   const [prompt, setPrompt] = useState('');
@@ -172,6 +170,7 @@ export const AvatarBuilderModal: React.FC<AvatarBuilderModalProps> = ({ isOpen, 
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState('');
   const [promptCopied, setPromptCopied] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
 
   const [micListening, setMicListening] = useState(false);
   const recognitionRef = useRef<any>(null);
@@ -291,11 +290,13 @@ Return ONLY the enhanced prompt text, nothing else.`,
     }
   }, [previewPrompt]);
 
-  // Keys are handled on the dialog itself, so the fullscreen preview (a sibling
-  // portal) can take Esc for itself without also closing the builder.
+  // Keys are handled on the dialog itself rather than on window, so anything
+  // else listening for Escape does not act on keys aimed at this dialog.
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
-      onClose();
+      // The zoomed preview is the innermost layer, so it consumes Escape first.
+      if (zoomed) setZoomed(false);
+      else onClose();
       return;
     }
     if (e.key !== 'Tab') return;
@@ -312,7 +313,11 @@ Return ONLY the enhanced prompt text, nothing else.`,
       e.preventDefault();
       last.focus();
     }
-  }, [onClose]);
+  }, [onClose, zoomed]);
+
+  useEffect(() => {
+    if (!isOpen) setZoomed(false);
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -354,7 +359,7 @@ Return ONLY the enhanced prompt text, nothing else.`,
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 24 }}
             transition={{ type: 'spring', stiffness: 320, damping: 32 }}
-            className="glass-card neon-border flex h-[100dvh] w-full max-w-5xl flex-col overflow-hidden outline-none sm:h-[min(90vh,880px)] sm:rounded-3xl"
+            className="glass-card neon-border relative flex h-[100dvh] w-full max-w-5xl flex-col overflow-hidden outline-none sm:h-[min(90vh,880px)] sm:rounded-3xl"
           >
             {/* Header */}
             <header className="flex items-center justify-between gap-3 border-b border-white/5 bg-black/50 px-5 py-4">
@@ -391,7 +396,7 @@ Return ONLY the enhanced prompt text, nothing else.`,
                     {generatedImage ? (
                       <button
                         type="button"
-                        onClick={() => lightbox.open(generatedImage, 'Generated avatar')}
+                        onClick={() => setZoomed(true)}
                         aria-label="View generated avatar full size"
                         className="group block h-full w-full"
                       >
@@ -839,6 +844,37 @@ Return ONLY the enhanced prompt text, nothing else.`,
                 Apply Avatar
               </button>
             </footer>
+
+            {/* Zoomed preview — kept inside the dialog so Escape and clicks
+                dismiss just this layer. */}
+            <AnimatePresence>
+              {zoomed && generatedImage && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setZoomed(false)}
+                  className="absolute inset-0 z-10 flex items-center justify-center bg-black/95 p-6"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setZoomed(false)}
+                    aria-label="Close preview"
+                    className="absolute right-4 top-4 rounded-full border border-white/15 bg-black/60 p-2.5 text-gray-300 transition hover:border-red-400/40 hover:text-red-300"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                  <motion.img
+                    src={generatedImage}
+                    alt="Generated avatar, full size"
+                    initial={{ scale: 0.94 }}
+                    animate={{ scale: 1 }}
+                    exit={{ scale: 0.94 }}
+                    className="max-h-full max-w-full rounded-2xl object-contain"
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
           </motion.div>
         </motion.div>
       )}
