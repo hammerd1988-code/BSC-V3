@@ -1993,13 +1993,13 @@ async function runtimeStatus(supabase: SupabaseClient) {
     queue_last_run_at: taskQueueLastRunAt,
     queue_last_executed: taskQueueLastExecuted,
     queue_batch_size: TASK_QUEUE_BATCH_SIZE,
-    ai: buildAiRuntimeStatus(),
     updated_at: new Date().toISOString(),
   };
 }
 
-// Non-secret snapshot of the platform-level AI provider the server falls back
-// to when an operator has not saved personal AI Core settings.
+// Non-secret snapshot of the platform-level AI providers, for admins only: it
+// reveals which vendor and model the deployment runs on, which no ordinary
+// member needs. The key itself is never included.
 function buildAiRuntimeStatus() {
   const config = resolveServerOpenAIConfig();
   let providerHost = 'unset';
@@ -2008,7 +2008,7 @@ function buildAiRuntimeStatus() {
     provider_host: providerHost,
     model: config.model,
     has_api_key: Boolean(config.apiKey),
-    gemini_fallback_configured: Boolean(process.env.GEMINI_API_KEY?.trim()),
+    gemini_configured: Boolean(process.env.GEMINI_API_KEY?.trim()),
   };
 }
 
@@ -2086,7 +2086,10 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       const profile = await requireAuth(req, res, supabase);
       if (!profile) return;
       const status = await runtimeStatus(supabase);
-      res.json({ success: true, status });
+      res.json({
+        success: true,
+        status: profile.role === 'admin' ? { ...status, ai: buildAiRuntimeStatus() } : status,
+      });
     } catch (error: any) {
       console.error('[casper-control:status]', error);
       res.status(500).json({ success: false, error: error.message || 'Unable to load Casper status.' });
