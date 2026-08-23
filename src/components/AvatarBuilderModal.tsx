@@ -171,6 +171,7 @@ export const AvatarBuilderModal: React.FC<AvatarBuilderModalProps> = ({ isOpen, 
   const [statusMessage, setStatusMessage] = useState('');
   const [promptCopied, setPromptCopied] = useState(false);
   const [zoomed, setZoomed] = useState(false);
+  const [lastFinalPrompt, setLastFinalPrompt] = useState<string | null>(null);
 
   const [micListening, setMicListening] = useState(false);
   const recognitionRef = useRef<any>(null);
@@ -231,6 +232,7 @@ export const AvatarBuilderModal: React.FC<AvatarBuilderModalProps> = ({ isOpen, 
     setIsGenerating(true);
     setError(null);
     setGeneratedImage(null);
+    setLastFinalPrompt(null);
 
     try {
       let finalPrompt = buildFullPrompt();
@@ -268,6 +270,7 @@ Return ONLY the enhanced prompt text, nothing else.`,
 
       setStatusMessage('Generating image...');
       const base64Image = await generateAvatarImage(finalPrompt);
+      setLastFinalPrompt(finalPrompt);
       setGeneratedImage(base64Image);
       setGallery((prev) => [base64Image, ...prev].slice(0, 6));
       setStatusMessage('');
@@ -282,13 +285,13 @@ Return ONLY the enhanced prompt text, nothing else.`,
 
   const copyPrompt = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(previewPrompt);
+      await navigator.clipboard.writeText(lastFinalPrompt ?? previewPrompt);
       setPromptCopied(true);
       setTimeout(() => setPromptCopied(false), 1500);
     } catch {
       // clipboard unavailable — nothing useful to show
     }
-  }, [previewPrompt]);
+  }, [lastFinalPrompt, previewPrompt]);
 
   // Keys are handled on the dialog itself rather than on window, so anything
   // else listening for Escape does not act on keys aimed at this dialog.
@@ -327,6 +330,7 @@ Return ONLY the enhanced prompt text, nothing else.`,
     setError(null);
     setStatusMessage('');
     setPromptCopied(false);
+    setLastFinalPrompt(null);
     setActiveTab('description');
   }, [isOpen, botName]);
 
@@ -480,7 +484,7 @@ Return ONLY the enhanced prompt text, nothing else.`,
                       </span>
                     </div>
                     <p className="max-h-24 overflow-y-auto rounded-xl border border-white/5 bg-black/40 p-2.5 text-[11px] leading-relaxed text-gray-500">
-                      {previewPrompt}
+                      {lastFinalPrompt ?? previewPrompt}
                     </p>
                   </div>
 
@@ -501,7 +505,7 @@ Return ONLY the enhanced prompt text, nothing else.`,
                         }
                         return (
                           <button
-                            key={img.slice(-24)}
+                            key={slot}
                             type="button"
                             onClick={() => setGeneratedImage(img)}
                             aria-label={`Use variant ${slot + 1}`}
@@ -519,7 +523,7 @@ Return ONLY the enhanced prompt text, nothing else.`,
                       <div className="mt-1.5 grid grid-cols-3 gap-1.5">
                         {gallery.slice(3).map((img, i) => (
                           <button
-                            key={img.slice(-24)}
+                            key={i + 3}
                             type="button"
                             onClick={() => setGeneratedImage(img)}
                             aria-label={`Use variant ${i + 4}`}
