@@ -1,8 +1,9 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   X, Wand2, Loader2, RefreshCw, Check, AlertCircle, Mic, MicOff,
-  Palette, Eye, Shield,
+  Palette, Eye, Shield, Download, Copy, Sparkles, Image as ImageIcon,
 } from 'lucide-react';
 import { generateText } from '../lib/ai';
 import { useAuth } from '../AuthContext';
@@ -36,6 +37,22 @@ const STYLE_MODIFIERS: Record<string, string> = {
   'Glitch Art': 'glitch art, data corruption, pixel sorting, chromatic aberration, VHS distortion',
   'Pixel Art': 'pixel art, 16-bit retro game style, low resolution charm, sprite art, nostalgic',
   'Vaporwave': 'vaporwave, pink and teal, marble busts, palm trees, retro computer graphics, dreamy',
+};
+
+/** Tiny gradient sample so each art style reads visually, not just as a word. */
+const STYLE_SWATCHES: Record<string, string> = {
+  'Cyberpunk': 'linear-gradient(135deg,#0b1030,#00e5ff 55%,#ff2bd6)',
+  'Neon Noir': 'linear-gradient(135deg,#05060a,#3b0d2a 60%,#ff1744)',
+  'Industrial Brutalist': 'linear-gradient(135deg,#1c1c1c,#6b6b6b 60%,#2b2b2b)',
+  'Holographic': 'linear-gradient(135deg,#a5f3fc,#c4b5fd 45%,#fbcfe8)',
+  'Anime': 'linear-gradient(135deg,#ffb4d1,#7dd3fc 60%,#fde68a)',
+  '3D Render': 'linear-gradient(135deg,#dfe6ee,#8fa3b8 60%,#3c4b5c)',
+  'Synthwave': 'linear-gradient(135deg,#2b0f4a,#ff2bd6 55%,#fbbf24)',
+  'Dark Fantasy': 'linear-gradient(135deg,#0a0713,#4c1d95 60%,#22d3ee)',
+  'Steampunk': 'linear-gradient(135deg,#2a1a0d,#b45309 60%,#fbbf24)',
+  'Glitch Art': 'linear-gradient(135deg,#00e5ff,#111 45%,#ff1744)',
+  'Pixel Art': 'linear-gradient(135deg,#22c55e,#0ea5e9 50%,#a855f7)',
+  'Vaporwave': 'linear-gradient(135deg,#ff2bd6,#67e8f9 60%,#fce7f3)',
 };
 
 // ── Face Traits ──────────────────────────────────────────────────────────────
@@ -94,12 +111,12 @@ const COLOR_SCHEMES = [
 ];
 
 const BACKGROUNDS = [
-  { id: 'city', label: 'Dark City', desc: 'dark cyberpunk city skyline background' },
-  { id: 'void', label: 'The Void', desc: 'pure black void with subtle particle effects' },
-  { id: 'arena', label: 'Arena', desc: 'colosseum arena background, combat ring, spotlights' },
-  { id: 'digital', label: 'Digital Grid', desc: 'digital matrix grid background, data streams' },
-  { id: 'flames', label: 'Flames', desc: 'wall of flames background, inferno, hellfire' },
-  { id: 'abstract', label: 'Abstract', desc: 'abstract geometric background, shapes, gradients' },
+  { id: 'city', label: 'Dark City', desc: 'dark cyberpunk city skyline background', swatch: 'linear-gradient(160deg,#050914,#0f2b45 55%,#00e5ff)' },
+  { id: 'void', label: 'The Void', desc: 'pure black void with subtle particle effects', swatch: 'radial-gradient(circle at 30% 30%,#1b1b24,#000 70%)' },
+  { id: 'arena', label: 'Arena', desc: 'colosseum arena background, combat ring, spotlights', swatch: 'linear-gradient(160deg,#2a1a10,#7c4a21 60%,#fbbf24)' },
+  { id: 'digital', label: 'Digital Grid', desc: 'digital matrix grid background, data streams', swatch: 'linear-gradient(160deg,#04120a,#0b3d24 55%,#22c55e)' },
+  { id: 'flames', label: 'Flames', desc: 'wall of flames background, inferno, hellfire', swatch: 'linear-gradient(160deg,#1a0500,#b91c1c 55%,#f97316)' },
+  { id: 'abstract', label: 'Abstract', desc: 'abstract geometric background, shapes, gradients', swatch: 'linear-gradient(160deg,#1e1b4b,#7c3aed 55%,#f472b6)' },
 ];
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
@@ -112,6 +129,8 @@ const TABS: { id: BuilderTab; label: string; icon: typeof Wand2 }[] = [
   { id: 'colors', label: 'Colors', icon: Palette },
   { id: 'accessories', label: 'Gear', icon: Shield },
 ];
+
+const SECTION_LABEL = 'text-[11px] font-bold uppercase tracking-[0.18em] text-gray-400';
 
 // ── Image Generation ─────────────────────────────────────────────────────────
 
@@ -150,9 +169,12 @@ export const AvatarBuilderModal: React.FC<AvatarBuilderModalProps> = ({ isOpen, 
   const [gallery, setGallery] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState('');
+  const [promptCopied, setPromptCopied] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
 
   const [micListening, setMicListening] = useState(false);
   const recognitionRef = useRef<any>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   const micSupported = typeof window !== 'undefined' &&
     Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
@@ -202,6 +224,8 @@ export const AvatarBuilderModal: React.FC<AvatarBuilderModalProps> = ({ isOpen, 
     parts.push('portrait, profile picture, centered, square format, high quality, detailed');
     return parts.join(', ');
   }, [prompt, botName, faceShape, eyeStyle, accessory, expression, colorScheme, background, selectedStyle]);
+
+  const previewPrompt = useMemo(() => buildFullPrompt(), [buildFullPrompt]);
 
   const handleGenerate = async () => {
     setIsGenerating(true);
@@ -256,359 +280,616 @@ Return ONLY the enhanced prompt text, nothing else.`,
     }
   };
 
-  if (!isOpen) return null;
+  const copyPrompt = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(previewPrompt);
+      setPromptCopied(true);
+      setTimeout(() => setPromptCopied(false), 1500);
+    } catch {
+      // clipboard unavailable — nothing useful to show
+    }
+  }, [previewPrompt]);
+
+  // Keys are handled on the dialog itself rather than on window, so anything
+  // else listening for Escape does not act on keys aimed at this dialog.
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      // The zoomed preview is the innermost layer, so it consumes Escape first.
+      if (zoomed) setZoomed(false);
+      else onClose();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    const focusables = dialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), a[href], textarea, input, select, [tabindex]:not([tabindex="-1"])',
+    );
+    if (!focusables?.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    } else if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    }
+  }, [onClose, zoomed]);
+
+  // The modal stays mounted while closed (so it can animate out), so each
+  // opening starts a fresh session instead of inheriting the previous bot's
+  // prompt and generated images.
+  useEffect(() => {
+    if (!isOpen) return;
+    setZoomed(false);
+    setPrompt('');
+    setGeneratedImage(null);
+    setGallery([]);
+    setError(null);
+    setStatusMessage('');
+    setPromptCopied(false);
+    setActiveTab('description');
+  }, [isOpen, botName]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    dialogRef.current?.focus();
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [isOpen]);
+
+  // A closed builder should not keep a microphone session running.
+  useEffect(() => {
+    if (!isOpen) stopMic();
+  }, [isOpen, stopMic]);
 
   const selectedColor = COLOR_SCHEMES.find((c) => c.id === colorScheme);
+  const accentColor = selectedColor?.primary ?? '#00e5ff';
 
-  return (
+  return createPortal(
     <AnimatePresence>
-      <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
+      {isOpen && (
         <motion.div
-          initial={{ opacity: 0, scale: 0.95, y: 20 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95, y: 20 }}
-          className="w-full max-w-3xl glass-card rounded-2xl overflow-hidden neon-border flex flex-col max-h-[92vh]"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={onClose}
+          className="fixed inset-0 z-[300] flex items-end justify-center bg-black/90 backdrop-blur-md sm:items-center sm:p-6"
         >
-          {/* Header */}
-          <div className="p-4 border-b border-white/5 flex items-center justify-between bg-black/50">
-            <h2 className="text-lg font-black text-white uppercase tracking-widest italic flex items-center gap-2">
-              <Wand2 className="w-5 h-5 text-accent" />
-              Avatar Builder
-              {botName && <span className="text-xs text-gray-400 not-italic">for {botName}</span>}
-            </h2>
-            <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-full transition-colors">
-              <X className="w-5 h-5 text-gray-400" />
-            </button>
-          </div>
-
-          {/* Tabs */}
-          <div className="flex border-b border-white/5 bg-black/30">
-            {TABS.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={cn(
-                  'flex-1 flex items-center justify-center gap-2 py-3 text-[10px] font-bold uppercase tracking-widest transition-all border-b-2',
-                  activeTab === tab.id
-                    ? 'border-accent text-accent bg-accent/5'
-                    : 'border-transparent text-gray-500 hover:text-white hover:bg-white/5',
-                )}
-              >
-                <tab.icon className="h-3.5 w-3.5" />
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex-1 overflow-y-auto">
-            <div className="flex flex-col md:flex-row gap-0">
-              {/* Preview + Gallery (left side) */}
-              <div className="flex-shrink-0 w-full md:w-56 border-b md:border-b-0 md:border-r border-white/5 p-4 flex flex-col items-center gap-3">
-                <div
-                  className="w-44 h-44 rounded-2xl border-2 bg-surface overflow-hidden relative flex items-center justify-center"
-                  style={{ borderColor: (selectedColor?.primary ?? '#00e5ff') + '44', boxShadow: `0 0 20px ${selectedColor?.primary ?? '#00e5ff'}22` }}
+          <motion.div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="avatar-builder-title"
+            tabIndex={-1}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={handleKeyDown}
+            initial={{ opacity: 0, scale: 0.96, y: 24 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 24 }}
+            transition={{ type: 'spring', stiffness: 320, damping: 32 }}
+            className="glass-card neon-border relative flex h-[100dvh] w-full max-w-5xl flex-col overflow-hidden outline-none sm:h-[min(90vh,880px)] sm:rounded-3xl"
+          >
+            {/* Header */}
+            <header className="flex items-center justify-between gap-3 border-b border-white/5 bg-black/50 px-5 py-4">
+              <div className="min-w-0">
+                <h2
+                  id="avatar-builder-title"
+                  className="flex items-center gap-2 text-base font-black uppercase italic tracking-[0.15em] text-white sm:text-lg"
                 >
-                  {generatedImage ? (
-                    <img src={generatedImage} alt="Generated Avatar" className="w-full h-full object-cover" />
-                  ) : isGenerating ? (
-                    <div className="flex flex-col items-center gap-2 text-accent">
-                      <Loader2 className="w-8 h-8 animate-spin" />
-                      <span className="text-[9px] font-bold uppercase tracking-widest text-center px-2">
-                        {statusMessage || 'Synthesizing...'}
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="text-gray-500 text-center p-4">
-                      <Wand2 className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                      <span className="text-[9px] font-bold uppercase tracking-widest">Preview</span>
-                    </div>
+                  <Wand2 className="h-5 w-5 shrink-0 text-accent" />
+                  Avatar Builder
+                </h2>
+                <p className="mt-1 truncate text-xs text-gray-500">
+                  {botName ? `Designing a face for ${botName}` : 'Design a face, generate it, apply it.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Close avatar builder"
+                className="shrink-0 rounded-full border border-white/10 p-2 text-gray-400 transition hover:border-red-400/40 hover:text-red-300"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </header>
+
+            <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+              {/* Preview rail — stays put while options are browsed. */}
+              <aside className="flex shrink-0 gap-4 border-b border-white/5 bg-black/20 p-4 lg:w-[300px] lg:flex-col lg:border-b-0 lg:border-r lg:overflow-y-auto lg:p-5">
+                <div className="flex w-28 shrink-0 flex-col gap-2 lg:w-full">
+                  <div
+                    className="relative aspect-square w-full overflow-hidden rounded-2xl border-2 bg-surface"
+                    style={{ borderColor: `${accentColor}44`, boxShadow: `0 0 24px ${accentColor}22` }}
+                  >
+                    {generatedImage ? (
+                      <button
+                        type="button"
+                        onClick={() => setZoomed(true)}
+                        aria-label="View generated avatar full size"
+                        className="group block h-full w-full"
+                      >
+                        <img
+                          src={generatedImage}
+                          alt="Generated avatar"
+                          className="h-full w-full object-cover transition group-hover:opacity-80"
+                        />
+                      </button>
+                    ) : isGenerating ? (
+                      <div className="flex h-full flex-col items-center justify-center gap-2 px-3 text-accent">
+                        <Loader2 className="h-7 w-7 animate-spin" />
+                        <span className="text-center text-[10px] font-bold uppercase tracking-[0.18em]">
+                          {statusMessage || 'Synthesizing...'}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="flex h-full flex-col items-center justify-center gap-2 px-3 text-gray-500">
+                        <ImageIcon className="h-7 w-7 opacity-50" />
+                        <span className="text-center text-[10px] font-bold uppercase tracking-[0.18em]">
+                          No avatar yet
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {generatedImage && (
+                    <a
+                      href={generatedImage}
+                      download="avatar.png"
+                      className="flex items-center justify-center gap-1.5 rounded-lg border border-white/10 py-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-gray-400 transition hover:border-white/25 hover:text-white lg:hidden"
+                    >
+                      <Download className="h-3.5 w-3.5" /> Save
+                    </a>
                   )}
                 </div>
 
-                {generatedImage && (
-                  <button
-                    onClick={() => onApply(generatedImage)}
-                    className="w-full py-2 bg-accent text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-accent/80 transition-colors flex items-center justify-center gap-2"
-                  >
-                    <Check className="w-4 h-4" />
-                    Apply Avatar
-                  </button>
-                )}
-
-                {gallery.length > 1 && (
-                  <div className="w-full">
-                    <p className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-2">Gallery</p>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {gallery.map((img, i) => (
-                        <button
-                          key={i}
-                          onClick={() => setGeneratedImage(img)}
-                          className={cn(
-                            'aspect-square rounded-lg overflow-hidden border-2 transition',
-                            generatedImage === img ? 'border-accent' : 'border-white/10 hover:border-white/30',
-                          )}
-                        >
-                          <img src={img} alt={`Variant ${i + 1}`} className="w-full h-full object-cover" />
-                        </button>
-                      ))}
+                <div className="min-w-0 flex-1 space-y-4">
+                  {error && (
+                    <div className="flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+                      <p className="text-xs font-semibold text-red-300">{error}</p>
                     </div>
-                  </div>
-                )}
-
-                <button
-                  onClick={handleGenerate}
-                  disabled={isGenerating}
-                  className="w-full py-2.5 bg-white/10 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-white/20 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  {isGenerating ? (
-                    <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {statusMessage || 'Generating...'}</>
-                  ) : (
-                    <><RefreshCw className="w-3.5 h-3.5" /> Generate</>
                   )}
-                </button>
 
-                <p className="text-[8px] text-gray-600 text-center">
-                  Powered by Pollinations.ai · Free
-                </p>
-              </div>
-
-              {/* Controls (right side) */}
-              <div className="flex-1 p-4 space-y-4 min-w-0">
-                {error && (
-                  <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
-                    <p className="text-red-400 text-xs font-bold">{error}</p>
+                  <div>
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <span className={SECTION_LABEL}>Recipe</span>
+                      <button
+                        type="button"
+                        onClick={copyPrompt}
+                        className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.18em] text-gray-500 transition hover:text-white"
+                      >
+                        {promptCopied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                        {promptCopied ? 'Copied' : 'Copy'}
+                      </button>
+                    </div>
+                    <div className="mb-2 flex flex-wrap gap-1.5">
+                      <span
+                        className="rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-black"
+                        style={{ background: accentColor }}
+                      >
+                        {selectedStyle}
+                      </span>
+                      <span className="rounded-md bg-white/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-gray-300">
+                        {EXPRESSIONS.find((e) => e.id === expression)?.label}
+                      </span>
+                      <span className="rounded-md bg-white/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-gray-300">
+                        {BACKGROUNDS.find((b) => b.id === background)?.label}
+                      </span>
+                    </div>
+                    <p className="max-h-24 overflow-y-auto rounded-xl border border-white/5 bg-black/40 p-2.5 text-[11px] leading-relaxed text-gray-500">
+                      {previewPrompt}
+                    </p>
                   </div>
-                )}
 
-                {/* Tab: Description */}
-                {activeTab === 'description' && (
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
-                        Describe Your Avatar
-                      </label>
-                      <div className="relative">
-                        <textarea
-                          value={prompt}
-                          onChange={(e) => setPrompt(e.target.value)}
-                          className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 pr-12 text-sm text-white focus:border-accent outline-none transition-colors resize-none h-24"
-                          placeholder="e.g., A hacker with neon green glasses, wearing a dark hoodie..."
-                        />
-                        {micSupported && (
+                  <div>
+                    <span className={cn(SECTION_LABEL, 'mb-2 block')}>
+                      Variants {gallery.length > 0 && <span className="text-gray-600">· {gallery.length}</span>}
+                    </span>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {Array.from({ length: 3 }).map((_, slot) => {
+                        const img = gallery[slot];
+                        if (!img) {
+                          return (
+                            <div
+                              key={`empty-${slot}`}
+                              className="aspect-square rounded-lg border border-dashed border-white/10 bg-white/[0.02]"
+                            />
+                          );
+                        }
+                        return (
                           <button
-                            onClick={micListening ? stopMic : startMic}
+                            key={img.slice(-24)}
+                            type="button"
+                            onClick={() => setGeneratedImage(img)}
+                            aria-label={`Use variant ${slot + 1}`}
                             className={cn(
-                              'absolute right-2 bottom-2 rounded-lg p-2 transition-all',
-                              micListening
-                                ? 'bg-red-500/20 text-red-400 animate-pulse'
-                                : 'bg-white/5 text-gray-400 hover:bg-white/10',
+                              'aspect-square overflow-hidden rounded-lg border-2 transition',
+                              generatedImage === img ? 'border-accent' : 'border-white/10 hover:border-white/30',
                             )}
-                            title={micListening ? 'Stop' : 'Describe with voice'}
                           >
-                            {micListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                            <img src={img} alt={`Variant ${slot + 1}`} className="h-full w-full object-cover" />
                           </button>
+                        );
+                      })}
+                    </div>
+                    {gallery.length > 3 && (
+                      <div className="mt-1.5 grid grid-cols-3 gap-1.5">
+                        {gallery.slice(3).map((img, i) => (
+                          <button
+                            key={img.slice(-24)}
+                            type="button"
+                            onClick={() => setGeneratedImage(img)}
+                            aria-label={`Use variant ${i + 4}`}
+                            className={cn(
+                              'aspect-square overflow-hidden rounded-lg border-2 transition',
+                              generatedImage === img ? 'border-accent' : 'border-white/10 hover:border-white/30',
+                            )}
+                          >
+                            <img src={img} alt={`Variant ${i + 4}`} className="h-full w-full object-cover" />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <p className="hidden text-[10px] text-gray-600 lg:block">
+                    Images by Pollinations.ai — free, no key required.
+                  </p>
+                </div>
+              </aside>
+
+              {/* Options */}
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div
+                  role="tablist"
+                  aria-label="Avatar options"
+                  className="flex shrink-0 gap-1 overflow-x-auto border-b border-white/5 bg-black/30 px-3"
+                >
+                  {TABS.map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeTab === tab.id}
+                      onClick={() => setActiveTab(tab.id)}
+                      className={cn(
+                        'flex shrink-0 items-center gap-2 border-b-2 px-3 py-3 text-xs font-bold uppercase tracking-[0.14em] transition',
+                        activeTab === tab.id
+                          ? 'border-accent text-accent'
+                          : 'border-transparent text-gray-500 hover:text-white',
+                      )}
+                    >
+                      <tab.icon className="h-4 w-4" />
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+                  {activeTab === 'description' && (
+                    <div className="space-y-6">
+                      <div>
+                        <label htmlFor="avatar-prompt" className={cn(SECTION_LABEL, 'mb-2 block')}>
+                          Describe your avatar
+                        </label>
+                        <div className="relative">
+                          <textarea
+                            id="avatar-prompt"
+                            value={prompt}
+                            onChange={(e) => setPrompt(e.target.value)}
+                            className="h-24 w-full resize-none rounded-xl border border-white/10 bg-black/40 px-4 py-3 pr-12 text-sm text-white outline-none transition-colors focus:border-accent"
+                            placeholder="e.g., A hacker with neon green glasses, wearing a dark hoodie..."
+                          />
+                          {micSupported && (
+                            <button
+                              type="button"
+                              onClick={micListening ? stopMic : startMic}
+                              className={cn(
+                                'absolute bottom-2 right-2 rounded-lg p-2 transition',
+                                micListening
+                                  ? 'animate-pulse bg-red-500/20 text-red-400'
+                                  : 'bg-white/5 text-gray-400 hover:bg-white/10',
+                              )}
+                              aria-label={micListening ? 'Stop voice input' : 'Describe with voice'}
+                              title={micListening ? 'Stop' : 'Describe with voice'}
+                            >
+                              {micListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                            </button>
+                          )}
+                        </div>
+                        <p className="mt-2 flex items-center gap-1.5 text-[11px] text-gray-600">
+                          <Sparkles className="h-3 w-3 shrink-0" />
+                          Free text is rewritten by AI before generating. Everything else is optional.
+                        </p>
+                        {micListening && (
+                          <div className="mt-2 flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-1.5">
+                            <div className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
+                            <span className="text-[11px] font-bold uppercase tracking-[0.18em] text-red-300">Listening...</span>
+                          </div>
                         )}
                       </div>
-                      {micListening && (
-                        <div className="flex items-center gap-2 mt-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-1.5">
-                          <div className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
-                          <span className="text-[9px] font-bold text-red-300 uppercase tracking-widest">Listening...</span>
+
+                      <div>
+                        <span className={cn(SECTION_LABEL, 'mb-2 block')}>Art style</span>
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                          {STYLES.map((style) => (
+                            <button
+                              key={style}
+                              type="button"
+                              onClick={() => setSelectedStyle(style)}
+                              className={cn(
+                                'flex items-center gap-2 rounded-xl border p-2 text-left transition',
+                                selectedStyle === style
+                                  ? 'border-accent bg-accent/10'
+                                  : 'border-white/10 bg-white/[0.02] hover:bg-white/5',
+                              )}
+                            >
+                              <span
+                                className="h-7 w-7 shrink-0 rounded-lg border border-white/10"
+                                style={{ background: STYLE_SWATCHES[style] }}
+                                aria-hidden="true"
+                              />
+                              <span className={cn(
+                                'truncate text-xs font-bold',
+                                selectedStyle === style ? 'text-accent' : 'text-gray-300',
+                              )}>
+                                {style}
+                              </span>
+                            </button>
+                          ))}
                         </div>
-                      )}
-                    </div>
+                      </div>
 
-                    <div>
-                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
-                        Art Style
-                      </label>
-                      <div className="flex flex-wrap gap-1.5">
-                        {STYLES.map((style) => (
-                          <button
-                            key={style}
-                            onClick={() => setSelectedStyle(style)}
-                            className={cn(
-                              'px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all border',
-                              selectedStyle === style
-                                ? 'bg-accent/20 border-accent text-accent'
-                                : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10 hover:text-white',
-                            )}
-                          >
-                            {style}
-                          </button>
-                        ))}
+                      <div>
+                        <span className={cn(SECTION_LABEL, 'mb-2 block')}>Expression</span>
+                        <div className="flex flex-wrap gap-2">
+                          {EXPRESSIONS.map((expr) => (
+                            <button
+                              key={expr.id}
+                              type="button"
+                              onClick={() => setExpression(expr.id)}
+                              className={cn(
+                                'flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold transition',
+                                expression === expr.id
+                                  ? 'border-accent bg-accent/10 text-accent'
+                                  : 'border-white/10 bg-white/[0.02] text-gray-300 hover:bg-white/5',
+                              )}
+                            >
+                              <span aria-hidden="true">{expr.emoji}</span>
+                              {expr.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <span className={cn(SECTION_LABEL, 'mb-2 block')}>Background</span>
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                          {BACKGROUNDS.map((bg) => (
+                            <button
+                              key={bg.id}
+                              type="button"
+                              onClick={() => setBackground(bg.id)}
+                              className={cn(
+                                'overflow-hidden rounded-xl border text-left transition',
+                                background === bg.id
+                                  ? 'border-accent'
+                                  : 'border-white/10 hover:border-white/25',
+                              )}
+                            >
+                              <span
+                                className="block h-12 w-full"
+                                style={{ background: bg.swatch }}
+                                aria-hidden="true"
+                              />
+                              <span className={cn(
+                                'block px-2 py-1.5 text-xs font-bold',
+                                background === bg.id ? 'text-accent' : 'text-gray-300',
+                              )}>
+                                {bg.label}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     </div>
+                  )}
 
-                    <div>
-                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
-                        Expression
-                      </label>
-                      <div className="flex flex-wrap gap-1.5">
-                        {EXPRESSIONS.map((expr) => (
-                          <button
-                            key={expr.id}
-                            onClick={() => setExpression(expr.id)}
-                            className={cn(
-                              'flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border',
-                              expression === expr.id
-                                ? 'bg-accent/20 border-accent text-accent'
-                                : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10',
-                            )}
-                          >
-                            <span>{expr.emoji}</span>
-                            {expr.label}
-                          </button>
-                        ))}
+                  {activeTab === 'traits' && (
+                    <div className="space-y-6">
+                      <div>
+                        <span className={cn(SECTION_LABEL, 'mb-2 block')}>Face shape</span>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {FACE_SHAPES.map((face) => (
+                            <button
+                              key={face.id}
+                              type="button"
+                              onClick={() => setFaceShape(face.id)}
+                              className={cn(
+                                'rounded-xl border p-3 text-left transition',
+                                faceShape === face.id
+                                  ? 'border-accent bg-accent/10'
+                                  : 'border-white/10 bg-white/[0.02] hover:bg-white/5',
+                              )}
+                            >
+                              <p className={cn('text-sm font-bold', faceShape === face.id ? 'text-accent' : 'text-white')}>
+                                {face.label}
+                              </p>
+                              <p className="mt-0.5 text-[11px] leading-relaxed text-gray-500">{face.desc}</p>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <span className={cn(SECTION_LABEL, 'mb-2 block')}>Eye style</span>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {EYE_STYLES.map((eye) => (
+                            <button
+                              key={eye.id}
+                              type="button"
+                              onClick={() => setEyeStyle(eye.id)}
+                              className={cn(
+                                'rounded-xl border p-3 text-left transition',
+                                eyeStyle === eye.id
+                                  ? 'border-accent bg-accent/10'
+                                  : 'border-white/10 bg-white/[0.02] hover:bg-white/5',
+                              )}
+                            >
+                              <p className={cn('text-sm font-bold', eyeStyle === eye.id ? 'text-accent' : 'text-white')}>
+                                {eye.label}
+                              </p>
+                              <p className="mt-0.5 text-[11px] leading-relaxed text-gray-500">{eye.desc}</p>
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     </div>
+                  )}
 
+                  {activeTab === 'colors' && (
                     <div>
-                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
-                        Background
-                      </label>
-                      <div className="flex flex-wrap gap-1.5">
-                        {BACKGROUNDS.map((bg) => (
-                          <button
-                            key={bg.id}
-                            onClick={() => setBackground(bg.id)}
-                            className={cn(
-                              'px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border',
-                              background === bg.id
-                                ? 'bg-accent/20 border-accent text-accent'
-                                : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10',
-                            )}
-                          >
-                            {bg.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Tab: Face & Eyes */}
-                {activeTab === 'traits' && (
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
-                        Face Shape
-                      </label>
-                      <div className="grid grid-cols-2 gap-2">
-                        {FACE_SHAPES.map((face) => (
-                          <button
-                            key={face.id}
-                            onClick={() => setFaceShape(face.id)}
-                            className={cn(
-                              'rounded-xl border p-3 text-left transition-all',
-                              faceShape === face.id
-                                ? 'bg-accent/10 border-accent'
-                                : 'bg-white/[0.02] border-white/10 hover:bg-white/5',
-                            )}
-                          >
-                            <p className={cn('text-xs font-bold', faceShape === face.id ? 'text-accent' : 'text-white')}>
-                              {face.label}
-                            </p>
-                            <p className="text-[9px] text-gray-500 mt-0.5">{face.desc}</p>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
-                        Eye Style
-                      </label>
-                      <div className="grid grid-cols-2 gap-2">
-                        {EYE_STYLES.map((eye) => (
-                          <button
-                            key={eye.id}
-                            onClick={() => setEyeStyle(eye.id)}
-                            className={cn(
-                              'rounded-xl border p-3 text-left transition-all',
-                              eyeStyle === eye.id
-                                ? 'bg-accent/10 border-accent'
-                                : 'bg-white/[0.02] border-white/10 hover:bg-white/5',
-                            )}
-                          >
-                            <p className={cn('text-xs font-bold', eyeStyle === eye.id ? 'text-accent' : 'text-white')}>
-                              {eye.label}
-                            </p>
-                            <p className="text-[9px] text-gray-500 mt-0.5">{eye.desc}</p>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Tab: Colors */}
-                {activeTab === 'colors' && (
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
-                        Color Scheme
-                      </label>
-                      <div className="grid grid-cols-2 gap-2">
+                      <span className={cn(SECTION_LABEL, 'mb-2 block')}>Accent color</span>
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                         {COLOR_SCHEMES.map((color) => (
                           <button
                             key={color.id}
+                            type="button"
                             onClick={() => setColorScheme(color.id)}
                             className={cn(
-                              'flex items-center gap-3 rounded-xl border p-3 transition-all',
+                              'flex items-center gap-3 rounded-xl border p-3 transition',
                               colorScheme === color.id
-                                ? 'border-white/30 bg-white/5'
-                                : 'border-white/5 bg-white/[0.02] hover:bg-white/5',
+                                ? 'border-white/40 bg-white/5'
+                                : 'border-white/10 bg-white/[0.02] hover:bg-white/5',
                             )}
                           >
-                            <div
-                              className="h-6 w-6 rounded-full shrink-0"
-                              style={{ backgroundColor: color.primary, boxShadow: `0 0 12px ${color.primary}88` }}
+                            <span
+                              className="h-7 w-7 shrink-0 rounded-full"
+                              style={{ backgroundColor: color.primary, boxShadow: `0 0 14px ${color.primary}88` }}
+                              aria-hidden="true"
                             />
-                            <span className={cn('text-xs font-bold', colorScheme === color.id ? 'text-white' : 'text-gray-400')}>
+                            <span className={cn(
+                              'truncate text-xs font-bold',
+                              colorScheme === color.id ? 'text-white' : 'text-gray-300',
+                            )}>
                               {color.label}
                             </span>
                           </button>
                         ))}
                       </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {/* Tab: Accessories */}
-                {activeTab === 'accessories' && (
-                  <div className="space-y-4">
+                  {activeTab === 'accessories' && (
                     <div>
-                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
-                        Headgear & Accessories
-                      </label>
-                      <div className="grid grid-cols-2 gap-2">
+                      <span className={cn(SECTION_LABEL, 'mb-2 block')}>Headgear &amp; accessories</span>
+                      <div className="grid gap-2 sm:grid-cols-2">
                         {ACCESSORIES.map((acc) => (
                           <button
                             key={acc.id}
+                            type="button"
                             onClick={() => setAccessory(acc.id)}
                             className={cn(
-                              'rounded-xl border p-3 text-left transition-all',
+                              'rounded-xl border p-3 text-left transition',
                               accessory === acc.id
-                                ? 'bg-accent/10 border-accent'
-                                : 'bg-white/[0.02] border-white/10 hover:bg-white/5',
+                                ? 'border-accent bg-accent/10'
+                                : 'border-white/10 bg-white/[0.02] hover:bg-white/5',
                             )}
                           >
-                            <p className={cn('text-xs font-bold', accessory === acc.id ? 'text-accent' : 'text-white')}>
+                            <p className={cn('text-sm font-bold', accessory === acc.id ? 'text-accent' : 'text-white')}>
                               {acc.label}
                             </p>
-                            {acc.desc && <p className="text-[9px] text-gray-500 mt-0.5">{acc.desc}</p>}
+                            {acc.desc && <p className="mt-0.5 text-[11px] leading-relaxed text-gray-500">{acc.desc}</p>}
                           </button>
                         ))}
                       </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             </div>
-          </div>
+
+            {/* Actions — always reachable, never scrolls away. */}
+            <footer className="flex shrink-0 items-center gap-2 border-t border-white/5 bg-black/60 px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
+              <button
+                type="button"
+                onClick={handleGenerate}
+                disabled={isGenerating}
+                className={cn(
+                  'flex flex-1 items-center justify-center gap-2 rounded-xl py-3 text-xs font-black uppercase tracking-[0.18em] transition disabled:opacity-50',
+                  generatedImage
+                    ? 'border border-white/15 text-white hover:bg-white/10'
+                    : 'bg-accent text-white hover:bg-accent/80',
+                )}
+              >
+                {isGenerating ? (
+                  <><Loader2 className="h-4 w-4 animate-spin" /> {statusMessage || 'Generating...'}</>
+                ) : generatedImage ? (
+                  <><RefreshCw className="h-4 w-4" /> Re-roll</>
+                ) : (
+                  <><Wand2 className="h-4 w-4" /> Generate</>
+                )}
+              </button>
+
+              {generatedImage && (
+                <a
+                  href={generatedImage}
+                  download="avatar.png"
+                  aria-label="Download this avatar"
+                  className="hidden shrink-0 rounded-xl border border-white/15 p-3 text-gray-400 transition hover:text-white lg:block"
+                >
+                  <Download className="h-4 w-4" />
+                </a>
+              )}
+
+              <button
+                type="button"
+                onClick={() => generatedImage && onApply(generatedImage)}
+                disabled={!generatedImage || isGenerating}
+                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-accent py-3 text-xs font-black uppercase tracking-[0.18em] text-white transition hover:bg-accent/80 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-gray-600"
+              >
+                <Check className="h-4 w-4" />
+                Apply Avatar
+              </button>
+            </footer>
+
+            {/* Zoomed preview — kept inside the dialog so Escape and clicks
+                dismiss just this layer. */}
+            <AnimatePresence>
+              {zoomed && generatedImage && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setZoomed(false)}
+                  className="absolute inset-0 z-10 flex items-center justify-center bg-black/95 p-6"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setZoomed(false)}
+                    aria-label="Close preview"
+                    className="absolute right-4 top-4 rounded-full border border-white/15 bg-black/60 p-2.5 text-gray-300 transition hover:border-red-400/40 hover:text-red-300"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                  <motion.img
+                    src={generatedImage}
+                    alt="Generated avatar, full size"
+                    initial={{ scale: 0.94 }}
+                    animate={{ scale: 1 }}
+                    exit={{ scale: 0.94 }}
+                    className="max-h-full max-w-full rounded-2xl object-contain"
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </motion.div>
         </motion.div>
-      </div>
-    </AnimatePresence>
+      )}
+    </AnimatePresence>,
+    document.body,
   );
 };
