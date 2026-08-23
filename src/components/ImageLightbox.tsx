@@ -59,7 +59,7 @@ export function ImageLightboxProvider({ children }: { children: React.ReactNode 
               aria-modal="true"
               aria-label={image.alt || 'Image viewer'}
               onClick={close}
-              className="fixed inset-0 z-[200] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md"
+              className="fixed inset-0 z-[500] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md"
             >
               <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
                 <a
