@@ -29,8 +29,8 @@ export const PLAN_CONFIG: Record<Exclude<PlanTier, 'indie'>, PlanConfig> = {
   architect: {
     tier: 'architect',
     name: 'Architect',
-    monthlyPriceCents: 3900,
-    annualPriceCents: 2900,
+    monthlyPriceCents: 2900,
+    annualPriceCents: 2400,
     stripePriceIdMonthly: process.env.STRIPE_ARCHITECT_MONTHLY_PRICE_ID || '',
     stripePriceIdAnnual: process.env.STRIPE_ARCHITECT_ANNUAL_PRICE_ID || '',
   },
