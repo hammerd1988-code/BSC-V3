@@ -47,6 +47,7 @@ import {
 } from './callRooms.js';
 import { registerCoBrowseSocket } from './casperCoBrowse.js';
 import { registerStripeRoutes } from './stripeRoutes.js';
+import { registerLicenseRoutes } from './licenseRoutes.js';
 import { findCredPackageByPrice, totalCred } from './shared/credPackages.js';
 import { registerCasperRelay } from './casperRelay.js';
 import {
@@ -173,6 +174,7 @@ async function startServer() {
   registerColosseumRoutes(app, supabase);
   registerBotMayhemRoutes(app, supabase);
   registerStripeRoutes(app, supabase);
+  registerLicenseRoutes(app, supabase);
 
   const requireWebhookAuth = createWebhookAuthMiddleware({ isProd });
 
