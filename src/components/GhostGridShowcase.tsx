@@ -10,6 +10,9 @@ import {
   Check,
   ChevronRight,
   Radio,
+  Code2,
+  ServerCog,
+  ExternalLink,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -22,6 +25,29 @@ const DIRECTIVE_LINES = [
 ];
 
 const INSTALL_CMD = 'curl -fsSL bloodsweatcode.org/install.sh | sh';
+
+const LOCAL_CODER_REPO_URL = 'https://github.com/hammerd1988-code/local-coder';
+
+const LOCAL_CODER_INSTALL_CMD =
+  'git clone https://github.com/hammerd1988-code/local-coder && cd local-coder && npm install && npm start';
+
+const LOCAL_CODER_SLIDES = [
+  {
+    src: '/local-coder/editor.webp',
+    label: 'IDE // Casper agent',
+    caption: 'Monaco editor + file explorer with Casper riding shotgun — chat, apply diffs, build mode.',
+  },
+  {
+    src: '/local-coder/terminal.webp',
+    label: 'Integrated terminal',
+    caption: 'Real shells in the browser (xterm + node-pty) right under your code.',
+  },
+  {
+    src: '/local-coder/server-ops.webp',
+    label: 'NEO//OPS server deck',
+    caption: 'The server interface: live vitals, processes, daemons, network & logs per node.',
+  },
+];
 
 function useReducedMotion() {
   const [reduced, setReduced] = useState(
@@ -83,6 +109,132 @@ function GhostDirectiveTicker() {
         <p className="mt-2 text-[10px] leading-4 text-zinc-500">
           → routed over the Casper relay → executed on your machine → streamed back live
         </p>
+      </div>
+    </div>
+  );
+}
+
+function LocalCoderSpotlight() {
+  const reduced = useReducedMotion();
+  const [slide, setSlide] = useState(0);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (reduced) return;
+    const t = setInterval(() => setSlide((s) => (s + 1) % LOCAL_CODER_SLIDES.length), 4500);
+    return () => clearInterval(t);
+  }, [reduced]);
+
+  const copyCmd = async () => {
+    try {
+      await navigator.clipboard.writeText(LOCAL_CODER_INSTALL_CMD);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard unavailable — ignore
+    }
+  };
+
+  const active = LOCAL_CODER_SLIDES[slide];
+
+  return (
+    <div className="relative mt-5 overflow-hidden rounded-2xl border border-cyan-300/20 bg-black/70 p-4 shadow-[0_0_34px_rgba(0,229,255,0.1)] sm:p-5">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_0%_0%,rgba(0,229,255,0.1),transparent_38%),radial-gradient(circle_at_100%_100%,rgba(255,0,255,0.08),transparent_40%)]" />
+
+      <div className="relative grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
+        <div className="min-w-0">
+          <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-cyan-300/25 bg-cyan-300/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.28em] text-cyan-100">
+            <Code2 className="h-3.5 w-3.5" /> Local Coder
+          </div>
+          <h3 className="text-xl font-black uppercase italic tracking-tight text-white sm:text-2xl">
+            The coding deck. Casper is the agent.
+          </h3>
+          <p className="mt-2 text-sm leading-6 text-zinc-400">
+            Local Coder is the self-hosted coding interface: a browser IDE where Casper writes, reviews and
+            applies code alongside you — and it's also where the server interface lives, with the NEO//OPS
+            control deck watching every node.
+          </p>
+          <ul className="mt-3 space-y-1.5 text-[11px] font-bold uppercase tracking-widest text-zinc-500">
+            <li className="flex items-center gap-2">
+              <Code2 className="h-3.5 w-3.5 shrink-0 text-cyan-300" /> Monaco IDE + Casper chat, build mode & diff-before-apply
+            </li>
+            <li className="flex items-center gap-2">
+              <TerminalSquare className="h-3.5 w-3.5 shrink-0 text-emerald-300" /> Integrated terminal, git & plugins
+            </li>
+            <li className="flex items-center gap-2">
+              <ServerCog className="h-3.5 w-3.5 shrink-0 text-fuchsia-300" /> NEO//OPS server deck — vitals, processes, daemons, logs
+            </li>
+          </ul>
+
+          <div className="mt-4 rounded-xl border border-white/10 bg-black/60 p-3">
+            <p className="text-[9px] font-black uppercase tracking-[0.22em] text-cyan-300/80">
+              Install &amp; launch
+            </p>
+            <button
+              type="button"
+              onClick={copyCmd}
+              title="Copy install command"
+              className="group mt-1.5 flex w-full items-center gap-1.5 text-left font-mono text-[10px] leading-4 text-zinc-300 transition hover:text-cyan-200"
+            >
+              <span className="truncate">{LOCAL_CODER_INSTALL_CMD}</span>
+              {copied ? (
+                <Check className="h-3 w-3 shrink-0 text-emerald-300" />
+              ) : (
+                <Copy className="h-3 w-3 shrink-0 text-zinc-500 transition group-hover:text-cyan-300" />
+              )}
+            </button>
+            <p className="mt-1.5 font-mono text-[10px] leading-4 text-zinc-500">
+              → UI on localhost:3000 · API on localhost:3001
+            </p>
+          </div>
+
+          <a
+            href={LOCAL_CODER_REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-3 inline-flex items-center gap-2 rounded-full border border-cyan-300/30 bg-cyan-400/15 px-4 py-2 text-[10px] font-black uppercase tracking-[0.22em] text-cyan-100 transition hover:bg-cyan-400/25 hover:shadow-[0_0_20px_rgba(0,229,255,0.25)]"
+          >
+            <ExternalLink className="h-3.5 w-3.5" /> Get Local Coder
+          </a>
+        </div>
+
+        <div className="min-w-0">
+          <div className="relative overflow-hidden rounded-xl border border-white/10 bg-black/80">
+            <div className="relative aspect-[16/10]">
+              {LOCAL_CODER_SLIDES.map((s, i) => (
+                <img
+                  key={s.src}
+                  src={s.src}
+                  alt={s.label}
+                  loading="lazy"
+                  className={cn(
+                    'absolute inset-0 h-full w-full object-cover object-top transition-opacity duration-700',
+                    i === slide ? 'opacity-100' : 'opacity-0'
+                  )}
+                />
+              ))}
+            </div>
+            <div className="ghost-grid-scan pointer-events-none absolute inset-0" />
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent p-3 pt-8">
+              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-200">{active.label}</p>
+              <p className="mt-0.5 text-[10px] leading-4 text-zinc-400">{active.caption}</p>
+            </div>
+          </div>
+          <div className="mt-2 flex items-center justify-center gap-2">
+            {LOCAL_CODER_SLIDES.map((s, i) => (
+              <button
+                key={s.src}
+                type="button"
+                aria-label={`Show ${s.label}`}
+                onClick={() => setSlide(i)}
+                className={cn(
+                  'h-1.5 rounded-full transition-all',
+                  i === slide ? 'w-6 bg-cyan-300' : 'w-2.5 bg-white/20 hover:bg-white/40'
+                )}
+              />
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -259,6 +411,8 @@ export function GhostGridShowcase() {
             </button>
           </div>
         </div>
+
+        <LocalCoderSpotlight />
       </div>
     </section>
   );
