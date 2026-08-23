@@ -315,9 +315,20 @@ Return ONLY the enhanced prompt text, nothing else.`,
     }
   }, [onClose, zoomed]);
 
+  // The modal stays mounted while closed (so it can animate out), so each
+  // opening starts a fresh session instead of inheriting the previous bot's
+  // prompt and generated images.
   useEffect(() => {
-    if (!isOpen) setZoomed(false);
-  }, [isOpen]);
+    if (!isOpen) return;
+    setZoomed(false);
+    setPrompt('');
+    setGeneratedImage(null);
+    setGallery([]);
+    setError(null);
+    setStatusMessage('');
+    setPromptCopied(false);
+    setActiveTab('description');
+  }, [isOpen, botName]);
 
   useEffect(() => {
     if (!isOpen) return;
