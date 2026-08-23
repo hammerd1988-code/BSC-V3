@@ -1993,7 +1993,22 @@ async function runtimeStatus(supabase: SupabaseClient) {
     queue_last_run_at: taskQueueLastRunAt,
     queue_last_executed: taskQueueLastExecuted,
     queue_batch_size: TASK_QUEUE_BATCH_SIZE,
+    ai: buildAiRuntimeStatus(),
     updated_at: new Date().toISOString(),
+  };
+}
+
+// Non-secret snapshot of the platform-level AI provider the server falls back
+// to when an operator has not saved personal AI Core settings.
+function buildAiRuntimeStatus() {
+  const config = resolveServerOpenAIConfig();
+  let providerHost = 'unset';
+  try { providerHost = new URL(config.baseUrl).host; } catch { /* keep 'unset' */ }
+  return {
+    provider_host: providerHost,
+    model: config.model,
+    has_api_key: Boolean(config.apiKey),
+    gemini_fallback_configured: Boolean(process.env.GEMINI_API_KEY?.trim()),
   };
 }
 
