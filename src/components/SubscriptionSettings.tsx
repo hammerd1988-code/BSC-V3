@@ -1,7 +1,114 @@
-import { useState } from 'react';
-import { Check, Crown, Rocket, Shield } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Check, Copy, Crown, KeyRound, RefreshCw, Rocket, Shield } from 'lucide-react';
 import { SUBSCRIPTION_PLANS, useSubscription, TIER_RANK } from '../lib/subscription';
 import type { SubscriptionTier } from '../lib/subscription';
+import { supabase } from '../supabase';
+
+async function licenseFetch(path: string, opts: RequestInit = {}): Promise<Response> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  return fetch(path, {
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(opts.headers || {}),
+    },
+  });
+}
+
+function LocalCoderLicense() {
+  const [licenseKey, setLicenseKey] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    licenseFetch('/api/license/key')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => setLicenseKey(data?.key ?? null))
+      .catch(() => setLicenseKey(null));
+  }, []);
+
+  const mint = async (rotate: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await licenseFetch('/api/license/key', {
+        method: 'POST',
+        body: JSON.stringify({ rotate }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to generate key.');
+      setLicenseKey(data.key);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copy = async () => {
+    if (!licenseKey) return;
+    await navigator.clipboard.writeText(licenseKey);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div className="mt-10 rounded-2xl border border-emerald-400/30 bg-emerald-950/20 p-6 backdrop-blur-xl">
+      <div className="mb-3 flex items-center gap-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-300">
+          <KeyRound className="h-5 w-5" />
+        </div>
+        <div>
+          <h3 className="text-lg font-black uppercase tracking-wider">Local Coder License</h3>
+          <p className="text-xs text-zinc-400">
+            Link your Local Coder install to this account. Your tier unlocks hosted AI and NEO//OPS remote nodes.
+          </p>
+        </div>
+      </div>
+
+      {licenseKey ? (
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <code className="flex-1 truncate rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-xs text-emerald-300">
+            {licenseKey}
+          </code>
+          <div className="flex gap-2">
+            <button
+              onClick={copy}
+              className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold uppercase tracking-wider text-zinc-300 transition hover:bg-white/10"
+            >
+              {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+            <button
+              onClick={() => mint(true)}
+              disabled={busy}
+              className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold uppercase tracking-wider text-zinc-300 transition hover:bg-white/10 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} />
+              Rotate
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={() => mint(false)}
+          disabled={busy}
+          className="rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 px-5 py-2.5 text-sm font-bold uppercase tracking-wider text-black transition hover:from-emerald-400 hover:to-cyan-400 disabled:opacity-50"
+        >
+          {busy ? 'Generating…' : 'Generate License Key'}
+        </button>
+      )}
+
+      {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
+      <p className="mt-3 text-[11px] text-zinc-500">
+        Paste this key in Local Coder → Casper settings → BSC License. Rotating invalidates the previous key.
+      </p>
+    </div>
+  );
+}
 
 const tierIcons: Record<SubscriptionTier, typeof Shield> = {
   indie: Shield,
@@ -152,6 +259,8 @@ export function SubscriptionSettings() {
             );
           })}
         </div>
+
+        <LocalCoderLicense />
 
         {/* Manage subscription */}
         {subscription?.stripe_customer_id && (
