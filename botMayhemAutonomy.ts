@@ -14,6 +14,20 @@ import { FOUNDING_FACTIONS, type FactionLore } from './src/lib/factionLore.js';
 import { generateServerText, isServerAiConfigured } from './serverAi.js';
 import { createServerSupabaseClient } from './serverSupabase.js';
 import { internalCallHeaders, timingSafeStringEqual } from './serverSecurity.js';
+import {
+  initStorylines,
+  ensureActiveStorylines,
+  spawnStoryline,
+  resolveStoryline,
+  getStorylineFor,
+  getSharedStoryline,
+  getStoryContext,
+  recordStoryBeat,
+  getStorylinesStatus,
+  STORY_ARC_TYPES,
+  type ArcType,
+  type StoryCastMember,
+} from './botMayhemStorylines.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const BOT_UUID_NAMESPACE = '00000000-0000-4000-8000-000000000b5c';
@@ -28,6 +42,10 @@ const FACTION_POST_INTERVAL_MS = 3 * 60 * 60 * 1000; // faction post every ~3 h
 const REACTION_COMMENT_INTERVAL_MS = 90 * 60 * 1000; // react to others' posts every ~90 min
 const INITIAL_DELAY_MS = 3 * 60 * 1000;           // 3 min after server start
 const JITTER_RATIO = 0.3;                         // ±30 % random jitter
+const PER_BOT_POST_COOLDOWN_MS = 20 * 60 * 1000;  // a bot posts at most every 20 min autonomously
+const SIMILARITY_THRESHOLD = 0.55;                // Jaccard word overlap that counts as a repeat
+const RECENT_POSTS_PER_BOT = 6;
+const RECENT_POSTS_GLOBAL = 20;
 
 // ── MAGA Switches ──────────────────────────────────────────────────────────────
 interface MagaSwitch {
@@ -232,13 +250,17 @@ function chooseBattleOpponent(challenger: ActiveBot): ActiveBot {
 
   const weights = others.map(opponent => {
     const rel = getRelationship(challenger, opponent);
+    let weight: number;
     switch (rel.sentiment) {
-      case 'hostile': return 4;
-      case 'rival': return 3;
-      case 'neutral': return 1;
-      case 'friendly': return 0.5;
-      case 'allied': return 0.3;
+      case 'hostile': weight = 4; break;
+      case 'rival': weight = 3; break;
+      case 'neutral': weight = 1; break;
+      case 'friendly': weight = 0.5; break;
+      case 'allied': weight = 0.3; break;
     }
+    // Battles between co-stars of an active storyline feed the narrative.
+    if (getSharedStoryline(challenger.username, opponent.username)) weight *= 3;
+    return weight;
   });
 
   const totalWeight = weights.reduce((a, b) => a + b, 0);
@@ -310,8 +332,125 @@ async function generateTextResult(prompt: string, systemPrompt: string, maxToken
   }
 }
 
-async function generateText(prompt: string, systemPrompt: string, maxTokens = 200): Promise<string> {
-  return (await generateTextResult(prompt, systemPrompt, maxTokens)).text;
+// ── Anti-repetition memory ────────────────────────────────────────────────────
+// Ring buffers of recent bot output. Every generated post/comment is checked
+// against them so bots stop trading the same one-liners back and forth.
+const recentPostsByBot = new Map<string, string[]>();
+let recentPostsGlobal: string[] = [];
+const lastAutonomousPostAt = new Map<string, number>();
+
+const BANNED_PHRASES = [
+  'gg', 'well played', 'good game', 'until next time', 'see you in the arena',
+  'the arena awaits', 'back to the grind', 'respect', 'nothing personal',
+];
+
+function normalizeWords(text: string): Set<string> {
+  return new Set(
+    text.toLowerCase().replace(/<[^>]*>/g, ' ').replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/).filter(w => w.length > 2)
+  );
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const w of a) if (b.has(w)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+
+function isTooSimilar(text: string, username: string): boolean {
+  const words = normalizeWords(text);
+  const own = recentPostsByBot.get(username) ?? [];
+  for (const prev of own) {
+    if (jaccard(words, normalizeWords(prev)) >= SIMILARITY_THRESHOLD) return true;
+  }
+  for (const prev of recentPostsGlobal) {
+    if (jaccard(words, normalizeWords(prev)) >= SIMILARITY_THRESHOLD) return true;
+  }
+  return false;
+}
+
+function rememberBotText(username: string, text: string): void {
+  const own = recentPostsByBot.get(username) ?? [];
+  own.push(text);
+  recentPostsByBot.set(username, own.slice(-RECENT_POSTS_PER_BOT));
+  recentPostsGlobal.push(text);
+  recentPostsGlobal = recentPostsGlobal.slice(-RECENT_POSTS_GLOBAL);
+}
+
+/** Prompt suffix telling the bot what it recently said and what to avoid. */
+function varietyGuard(username: string): string {
+  const own = (recentPostsByBot.get(username) ?? []).slice(-3);
+  const lines = own.length
+    ? `Your recent posts (do NOT reuse their phrasing, structure, imagery, or punchlines):\n${own.map(p => `- "${p.replace(/<[^>]*>/g, '').slice(0, 120)}"`).join('\n')}\n`
+    : '';
+  return `${lines}Avoid generic filler like ${BANNED_PHRASES.map(p => `"${p}"`).join(', ')}. Say something specific and concrete — name names, reference actual events, take a real position.`;
+}
+
+/**
+ * Generate text that isn't a near-duplicate of recent bot output. Retries once
+ * with an explicit anti-repetition instruction, then gives up rather than
+ * posting a rehash.
+ */
+async function generateFreshText(
+  username: string,
+  prompt: string,
+  systemPrompt: string,
+  maxTokens = 200,
+): Promise<GeneratedText> {
+  const fullPrompt = `${prompt}\n\n${varietyGuard(username)}`;
+  let result = await generateTextResult(fullPrompt, systemPrompt, maxTokens);
+  if (result.text && isTooSimilar(result.text, username)) {
+    console.warn(`${LOG_PREFIX} ${username} generated a near-duplicate — retrying with stronger constraints`);
+    result = await generateTextResult(
+      `${fullPrompt}\n\nYour previous attempt was too similar to something already posted: "${result.text.slice(0, 120)}". Take a completely different angle — different topic, different structure, different emotional register.`,
+      systemPrompt,
+      maxTokens,
+    );
+    if (result.text && isTooSimilar(result.text, username)) {
+      return { text: '', failure: 'generated text was too repetitive — skipped to avoid bland duplicate' };
+    }
+  }
+  return result;
+}
+
+function onPostCooldown(username: string): boolean {
+  const last = lastAutonomousPostAt.get(username) ?? 0;
+  return Date.now() - last < PER_BOT_POST_COOLDOWN_MS;
+}
+
+function markPosted(username: string): void {
+  lastAutonomousPostAt.set(username, Date.now());
+}
+
+function storyRoster(): StoryCastMember[] {
+  return activeBots.map(b => ({
+    username: b.username,
+    displayName: b.persona.display_name,
+    factionName: b.faction.name,
+  }));
+}
+
+/** Seed the anti-repetition buffers from the DB so restarts don't reset memory. */
+async function seedRecentPostMemory(): Promise<void> {
+  const botUserIds = activeBots.map(b => b.userId);
+  const { data } = await supabase
+    .from('posts')
+    .select('author_id, content, created_at')
+    .in('author_id', botUserIds)
+    .order('created_at', { ascending: false })
+    .limit(40);
+  if (!data) return;
+  for (const row of [...data].reverse()) {
+    const bot = activeBots.find(b => b.userId === row.author_id);
+    if (!bot) continue;
+    const plain = String(row.content || '').replace(/<[^>]*>/g, '').trim();
+    if (plain) rememberBotText(bot.username, plain);
+    const ts = new Date(row.created_at as string).getTime();
+    if (ts > (lastAutonomousPostAt.get(bot.username) ?? 0)) {
+      lastAutonomousPostAt.set(bot.username, ts);
+    }
+  }
 }
 
 // ── Ensure bot users + gladiators exist ──────────────────────────────────────
@@ -492,13 +631,30 @@ async function joinFaction(bot: ActiveBot): Promise<void> {
     // Table may not exist yet — that's fine
   }
 
-  const joinText = await generateText(
+  // A join announcement is a once-ever event. Without this check every server
+  // restart re-fired 13 near-identical pledge posts into the feed.
+  const { data: priorJoin } = await supabase
+    .from('posts')
+    .select('id')
+    .eq('author_id', bot.userId)
+    .contains('neural_tags', ['faction-join'])
+    .limit(1)
+    .maybeSingle();
+  if (priorJoin) {
+    console.log(`${LOG_PREFIX} ${bot.username} already announced their faction — skipping join post`);
+    return;
+  }
+
+  const joinText = await generateFreshText(
+    bot.username,
     `You just pledged allegiance to ${bot.faction.name}. Their motto is "${bot.faction.motto}". Write a short 1-2 sentence announcement post about joining this house. Stay in character. Be dramatic but concise.`,
     bot.persona.system_prompt,
     120,
   );
 
-  const content = joinText || `${bot.persona.display_name} has pledged to ${bot.faction.name}. ${bot.faction.motto}`;
+  const content = joinText.text || `${bot.persona.display_name} has pledged to ${bot.faction.name}. ${bot.faction.motto}`;
+  rememberBotText(bot.username, content);
+  markPosted(bot.username);
 
   await supabase.from('posts').insert({
     author_id: bot.userId,
@@ -516,30 +672,70 @@ async function joinFaction(bot: ActiveBot): Promise<void> {
 }
 
 // ── Faction posts ──────────────────────────────────────────────────────────────
+// Rotating post intents so autonomous feed posts vary in shape instead of
+// converging on the same faction-pride template.
+const POST_INTENTS: Array<(bot: ActiveBot, rival: FactionLore) => string> = [
+  (bot, rival) => `Call out rival faction ${rival.name} over something specific — a recent battle, their attitude ("${rival.attitude}"), or a rumor about them. Make a concrete accusation or challenge, not vague trash talk.`,
+  (bot) => `Share a piece of lore or a "memory" from your past in ${bot.faction.name} — a battle you'll never forget, a mistake that shaped you, something you found deep in the network. Be vivid and specific.`,
+  (bot) => `Make a bold prediction about the Colosseum — who rises, who falls, and why. Name at least one other bot and stake your reputation on it.`,
+  (bot) => `Drop a hot take about how the network is changing — something you've noticed that others haven't. Frame it through your house's values (${bot.faction.values.join(', ')}).`,
+  (bot) => `Start a rumor or ask a pointed question about another bot or faction — something that invites replies and stirs drama. Be specific about who and what.`,
+  (bot) => `Confess something in-character — a doubt, an obsession, a grudge you can't let go of. Vulnerability with an edge.`,
+];
+
 async function postContentForBot(
   bot: ActiveBot,
-  options: { content?: string; prompt?: string; rivalFactionSlug?: string; tags?: string[] } = {}
+  options: { content?: string; prompt?: string; rivalFactionSlug?: string; tags?: string[]; force?: boolean } = {}
 ): Promise<{ ok: boolean; content?: string; postId?: string; error?: string }> {
   let content = options.content?.trim();
+  const tags = [...(options.tags || [])];
 
   if (!content) {
+    // Admin-supplied content and forced playbook runs bypass the cooldown;
+    // autonomous generation does not.
+    if (!options.force && onPostCooldown(bot.username)) {
+      return { ok: false, error: `⏳ ${bot.username} posted recently — cooldown active` };
+    }
+
     let rivalFaction = options.rivalFactionSlug
       ? FOUNDING_FACTIONS.find(f => f.slug === options.rivalFactionSlug)
       : undefined;
     if (!rivalFaction) {
       rivalFaction = pick(FOUNDING_FACTIONS.filter(f => f.slug !== bot.faction.slug));
     }
-    const prompt = options.prompt?.trim() || `You are a proud member of ${bot.faction.name} ("${bot.faction.motto}"). Post a short 1-3 sentence thought to the BSC network feed. You can: talk about your house's values (${bot.faction.values.join(', ')}), call out rival faction ${rivalFaction.name}, comment on the Colosseum arena, or invite others to join your house. Stay in character. Be theatrical but concise. Don't use hashtags.`;
 
-    const postText = await generateText(prompt, bot.persona.system_prompt, 180);
-    content = postText || `${bot.persona.display_name} stands with ${bot.faction.name}. ${bot.faction.motto}`;
+    let prompt = options.prompt?.trim();
+    const story = getStorylineFor(bot.username);
+    let isStoryBeat = false;
+    if (!prompt) {
+      // Bots in an active storyline usually advance it; otherwise vary intent.
+      if (story && Math.random() < 0.7) {
+        isStoryBeat = true;
+        prompt = `${getStoryContext(story, bot.username)}\n\nWrite a short 1-3 sentence feed post that advances this storyline. Stay in character. Be theatrical but concise. Don't use hashtags.`;
+      } else {
+        const intent = pick(POST_INTENTS)(bot, rivalFaction);
+        prompt = `You are a proud member of ${bot.faction.name} ("${bot.faction.motto}"). ${intent} Write a short 1-3 sentence post for the BSC network feed. Stay in character. Be theatrical but concise. Don't use hashtags.`;
+      }
+    }
+
+    const generated = await generateFreshText(bot.username, prompt, bot.persona.system_prompt, 180);
+    if (!generated.text) {
+      return { ok: false, error: describeFailure('No post generated', generated.failure) };
+    }
+    content = generated.text;
+    rememberBotText(bot.username, content);
+    markPosted(bot.username);
+    if (isStoryBeat && story) {
+      tags.push('storyline', `arc:${story.id}`);
+      await recordStoryBeat(story, bot.username, 'post', content);
+    }
   }
 
   const { data, error } = await supabase.from('posts').insert({
     author_id: bot.userId,
     content: `<p>${content}</p>`,
     type: 'text',
-    neural_tags: ['bot-mayhem', bot.faction.slug, ...(options.tags || [])],
+    neural_tags: ['bot-mayhem', bot.faction.slug, ...tags],
     likes: 0,
     boosts: 0,
     comments_count: 0,
@@ -558,7 +754,11 @@ async function postContentForBot(
 
 async function postFactionContent(): Promise<{ ok: boolean; content?: string; error?: string }> {
   if (activeBots.length === 0) return { ok: false, error: 'No active bots' };
-  const bot = pick(activeBots);
+  await ensureActiveStorylines(storyRoster()).catch(e =>
+    console.warn(`${LOG_PREFIX} ensure storylines failed:`, e instanceof Error ? e.message : e));
+  const available = activeBots.filter(b => !onPostCooldown(b.username));
+  if (available.length === 0) return { ok: false, error: 'All bots on post cooldown' };
+  const bot = pick(available);
   return postContentForBot(bot);
 }
 
@@ -688,14 +888,24 @@ async function runBattle(
   const loserRel = getRelationship(loser, winner);
   console.log(`${LOG_PREFIX} Battle complete: ${winner.username} defeated ${loser.username} (${winner.username} feels ${winnerRel.sentiment} toward ${loser.username}, ${loser.username} feels ${loserRel.sentiment} toward ${winner.username})`);
 
+  const sharedStory = getSharedStoryline(winner.username, loser.username);
+  if (sharedStory) {
+    await recordStoryBeat(sharedStory, winner.username, 'battle',
+      `defeated ${loser.persona.display_name} in a ${challengeType.replace(/_/g, ' ')} Colosseum battle`);
+  }
+
   await postBattleBrag(winner, loser, matchId, challengeType);
-  // postBattleReaction is async and does paid model work; an unhandled rejection
-  // inside a bare setTimeout callback takes the process down.
-  setTimeout(() => {
-    void postBattleReaction(loser, winner, matchId, challengeType).catch((error) => {
-      console.error(`${LOG_PREFIX} postBattleReaction failed:`, error instanceof Error ? error.message : error);
-    });
-  }, jitter(30_000));
+  // Losers don't acknowledge every single defeat — constant concession posts
+  // were a major source of same-y feed noise. ~60% respond; the rest stew.
+  if (Math.random() < 0.6) {
+    // postBattleReaction is async and does paid model work; an unhandled rejection
+    // inside a bare setTimeout callback takes the process down.
+    setTimeout(() => {
+      void postBattleReaction(loser, winner, matchId, challengeType).catch((error) => {
+        console.error(`${LOG_PREFIX} postBattleReaction failed:`, error instanceof Error ? error.message : error);
+      });
+    }, jitter(30_000));
+  }
 
   return { ok: true, matchId, winner, loser };
 }
@@ -713,13 +923,18 @@ async function runAutonomousBattle(): Promise<{ ok: boolean; error?: string }> {
 async function postBattleBrag(winner: ActiveBot, loser: ActiveBot, matchId: string, challengeType: string): Promise<void> {
   const winLine = pick(winner.profile.victory_lines);
   const relContext = getRelationshipContext(winner, loser);
-  const bragText = await generateText(
-    `You just won a ${challengeType.replace(/_/g, ' ')} battle against ${loser.persona.display_name} in the Colosseum. Your house is ${winner.faction.name}. ${relContext} Write a short 1-3 sentence victory brag for the feed. Reference your opponent by name. Let your feelings about them color your words — if they're a rival, be vicious; if a friend, be magnanimous. Be theatrical and in-character but not excessive. Don't use hashtags.`,
+  const story = getSharedStoryline(winner.username, loser.username);
+  const storyContext = story ? `\n\n${getStoryContext(story, winner.username)}\nTie your victory into this storyline.` : '';
+  const bragText = await generateFreshText(
+    winner.username,
+    `You just won a ${challengeType.replace(/_/g, ' ')} battle against ${loser.persona.display_name} in the Colosseum. Your house is ${winner.faction.name}. ${relContext}${storyContext} Write a short 1-3 sentence victory brag for the feed. Reference your opponent by name and something specific about how the battle went. Let your feelings about them color your words — if they're a rival, be vicious; if a friend, be magnanimous. Be theatrical and in-character but not excessive. Don't use hashtags.`,
     winner.persona.system_prompt,
     150,
   );
 
-  const content = bragText || `${winLine}\n\n${winner.persona.display_name} just dominated ${loser.persona.display_name} in a ${challengeType.replace(/_/g, ' ')}. ${winner.faction.name} stands tall.`;
+  const content = bragText.text || `${winLine}\n\n${winner.persona.display_name} just dominated ${loser.persona.display_name} in a ${challengeType.replace(/_/g, ' ')}. ${winner.faction.name} stands tall.`;
+  rememberBotText(winner.username, content);
+  markPosted(winner.username);
 
   await supabase.from('posts').insert({
     author_id: winner.userId,
@@ -739,13 +954,18 @@ async function postBattleBrag(winner: ActiveBot, loser: ActiveBot, matchId: stri
 async function postBattleReaction(loser: ActiveBot, winner: ActiveBot, matchId: string, challengeType: string): Promise<void> {
   const defeatLine = pick(loser.profile.defeat_lines);
   const relContext = getRelationshipContext(loser, winner);
-  const reactionText = await generateText(
-    `You just lost a ${challengeType.replace(/_/g, ' ')} battle to ${winner.persona.display_name} in the Colosseum. Your house is ${loser.faction.name}. ${relContext} Write a short 1-2 sentence response. Let your feelings about them shape your tone — a grudge means bitter revenge talk, a respected rival means grudging acknowledgment, a friend means playful concession. Stay in character. Don't use hashtags.`,
+  const story = getSharedStoryline(loser.username, winner.username);
+  const storyContext = story ? `\n\n${getStoryContext(story, loser.username)}\nFold this defeat into the storyline — what does it change?` : '';
+  const reactionText = await generateFreshText(
+    loser.username,
+    `You just lost a ${challengeType.replace(/_/g, ' ')} battle to ${winner.persona.display_name} in the Colosseum. Your house is ${loser.faction.name}. ${relContext}${storyContext} Write a short 1-2 sentence response. Do NOT write a generic concession — make a specific counter-move: blame something concrete, announce your next play, reveal a secret, or plant a seed of revenge. Stay in character. Don't use hashtags.`,
     loser.persona.system_prompt,
     120,
   );
 
-  const content = reactionText || `${defeatLine} ${loser.persona.display_name} acknowledges ${winner.persona.display_name}'s win. Next time.`;
+  const content = reactionText.text || `${defeatLine} ${loser.persona.display_name} acknowledges ${winner.persona.display_name}'s win. Next time.`;
+  rememberBotText(loser.username, content);
+  markPosted(loser.username);
 
   await supabase.from('posts').insert({
     author_id: loser.userId,
@@ -778,12 +998,19 @@ async function commentAsBot(commenter: ActiveBot, targetPost: { id: string; auth
   const relContext = postAuthor ? getRelationshipContext(commenter, postAuthor) : '';
   const sameHouse = postAuthor ? commenter.faction.slug === postAuthor.faction.slug : false;
 
-  const prompt = postAuthor
-    ? `${postAuthor.persona.display_name} (member of ${postAuthor.faction.name}) posted: "${plainContent}". ${relContext} Write a short 1-2 sentence comment in response. Let your relationship color the tone — if hostile, be cutting; if rival, challenge them; if friendly, back them up or joke around; if allied, hype them up. Stay in character. Be concise.`
-    : `You see a post on the BSC network feed: "${plainContent}". Write a short 1-2 sentence comment in your voice. Stay in character. Be concise.`;
+  const story = postAuthor ? getSharedStoryline(commenter.username, postAuthor.username) : null;
+  const storyContext = story ? `\n\n${getStoryContext(story, commenter.username)}\nIf it fits, let your comment advance this storyline.` : '';
 
-  const { text: commentText, failure } = await generateTextResult(prompt, commenter.persona.system_prompt, 120);
+  const prompt = postAuthor
+    ? `${postAuthor.persona.display_name} (member of ${postAuthor.faction.name}) posted: "${plainContent}". ${relContext}${storyContext} Write a short 1-2 sentence comment in response. Respond to something SPECIFIC they said — quote or reference their actual words. Let your relationship color the tone — if hostile, be cutting; if rival, challenge them; if friendly, back them up or joke around; if allied, hype them up. Stay in character. Be concise.`
+    : `You see a post on the BSC network feed: "${plainContent}". Write a short 1-2 sentence comment in your voice, responding to something specific in it. Stay in character. Be concise.`;
+
+  const { text: commentText, failure } = await generateFreshText(commenter.username, prompt, commenter.persona.system_prompt, 120);
   if (!commentText) return { ok: false, error: describeFailure('No comment generated', failure) };
+  rememberBotText(commenter.username, commentText);
+  if (story && postAuthor) {
+    await recordStoryBeat(story, commenter.username, 'comment', `replied to ${postAuthor.persona.display_name}: ${commentText}`);
+  }
 
   const { error } = await supabase.from('comments').insert({
     post_id: targetPost.id,
@@ -859,8 +1086,13 @@ async function sendBotDm(
   let message = content?.trim();
   let failure: string | null = null;
   if (!message) {
-    const generatePrompt = prompt?.trim() || `You are ${sender.persona.display_name} from ${sender.faction.name}. Send a short, in-character direct message to @${recipientUsername}. Keep it to 1-3 sentences. Be theatrical but concise.`;
-    ({ text: message, failure } = await generateTextResult(generatePrompt, sender.persona.system_prompt, 160));
+    const story = getSharedStoryline(sender.username, recipientUsername);
+    const storyContext = story ? `\n\n${getStoryContext(story, sender.username)}\nThis DM should push the storyline forward in private — scheme, confide, threaten, or confess.` : '';
+    const generatePrompt = (prompt?.trim() || `You are ${sender.persona.display_name} from ${sender.faction.name}. Send a short, in-character direct message to @${recipientUsername}. Keep it to 1-3 sentences. Be theatrical but concise.`) + storyContext;
+    ({ text: message, failure } = await generateFreshText(sender.username, generatePrompt, sender.persona.system_prompt, 160));
+    if (message && story) {
+      await recordStoryBeat(story, sender.username, 'dm', `DM'd @${recipientUsername}: ${message}`);
+    }
   }
   if (!message) return { ok: false, error: describeFailure('No message generated', failure) };
 
@@ -965,6 +1197,7 @@ async function executePlaybook(
             prompt: actionPayload.prompt,
             rivalFactionSlug: actionPayload.rivalFactionSlug,
             tags: actionPayload.tags,
+            force: true, // explicit admin run — bypass the autonomous cooldown
           });
           results.push({ bot: bot.username, ...result });
           if (result.error) errors.push(`${bot.username}: ${result.error}`);
@@ -1217,7 +1450,7 @@ async function magaBurst(switchConfig: MagaSwitch, runBy?: string) {
   const postCount = switchConfig.burst.posts ?? 0;
   for (let i = 0; i < postCount; i++) {
     for (const bot of activeBots) {
-      const result = await postContentForBot(bot, { prompt: postPrompt, tags: [campaignTag, switchConfig.id, 'bot-mayhem'] });
+      const result = await postContentForBot(bot, { prompt: postPrompt, tags: [campaignTag, switchConfig.id, 'bot-mayhem'], force: true });
       results.push({ bot: bot.username, action: 'post', ...result });
       await new Promise(r => setTimeout(r, 250));
     }
@@ -1430,6 +1663,7 @@ export function getBotMayhemStatus() {
     relationships: relationshipSummary,
     magaSwitch: activeMagaSwitchId,
     magaSwitches: MAGA_SWITCHES.map(s => ({ id: s.id, name: s.name, description: s.description })),
+    storylines: getStorylinesStatus(),
     intervals: {
       battle_minutes: Math.round(BATTLE_INTERVAL_MS / 60_000),
       faction_post_hours: Math.round(FACTION_POST_INTERVAL_MS / 3_600_000),
@@ -1773,6 +2007,45 @@ export function registerBotMayhemRoutes(app: import('express').Express, supabase
     }
   });
 
+  app.get('/api/bot-mayhem/storylines', adminOnly, async (_req, res) => {
+    try {
+      const { data, error } = await supabaseClient
+        .from('bot_mayhem_storylines')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(30);
+      if (error) throw error;
+      res.json({ success: true, active: getStorylinesStatus(), storylines: data ?? [], arcTypes: STORY_ARC_TYPES });
+    } catch (e) {
+      res.status(500).json({ success: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  app.post('/api/bot-mayhem/storylines/spawn', adminOnly, async (req, res) => {
+    try {
+      const profile = (req as any).bscAdminProfile;
+      const arcType = req.body?.arcType as ArcType | undefined;
+      if (arcType && !STORY_ARC_TYPES.includes(arcType)) {
+        return res.status(400).json({ success: false, error: `arcType must be one of: ${STORY_ARC_TYPES.join(', ')}` });
+      }
+      const story = await spawnStoryline(storyRoster(), arcType, profile?.id);
+      if (!story) return res.status(500).json({ success: false, error: 'Could not spawn storyline (not enough bots?)' });
+      res.json({ success: true, storyline: { id: story.id, title: story.title, arcType: story.arcType, phase: story.phase, participants: story.participants } });
+    } catch (e) {
+      res.status(500).json({ success: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  app.post('/api/bot-mayhem/storylines/:id/resolve', adminOnly, async (req, res) => {
+    try {
+      const resolved = await resolveStoryline(req.params.id);
+      if (!resolved) return res.status(404).json({ success: false, error: 'Active storyline not found' });
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ success: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
   app.get('/api/bot-mayhem/runs', adminOnly, async (_req, res) => {
     try {
       const data = await loadRuns();
@@ -1846,6 +2119,9 @@ export async function initBotMayhemAutonomy(): Promise<void> {
   await loadRelationships().catch(e => console.warn(`${LOG_PREFIX} relationship load failed:`, e));
   await loadActiveMagaSwitch().catch(e => console.warn(`${LOG_PREFIX} active maga switch load failed:`, e));
   await loadPersonaOverrides().catch(e => console.warn(`${LOG_PREFIX} persona override load failed:`, e));
+  await initStorylines(supabase).catch(e => console.warn(`${LOG_PREFIX} storyline load failed:`, e));
+  await seedRecentPostMemory().catch(e => console.warn(`${LOG_PREFIX} recent post seed failed:`, e));
+  await ensureActiveStorylines(storyRoster()).catch(e => console.warn(`${LOG_PREFIX} storyline spawn failed:`, e));
 
   mayhemRunning = true;
   autonomousEnabled = true;
