@@ -1530,20 +1530,19 @@ export function BotForge() {
       )}
 
       {/* Avatar Builder Modal */}
-      {showAvatarBuilder && (
-        <AvatarBuilderModal
-          isOpen={showAvatarBuilder}
-          onClose={() => setShowAvatarBuilder(false)}
-          onApply={(base64) => {
-            if (selectedGladiator) {
-              setSelectedGladiator({ ...selectedGladiator, avatar_url: base64 });
-              setGladiators((prev) => prev.map((g) => g.id === selectedGladiator.id ? { ...g, avatar_url: base64 } : g));
-              supabase.from('gladiators').update({ avatar_url: base64 }).eq('id', selectedGladiator.id).then(() => {});
-            }
-          }}
-          botName={selectedGladiator?.name}
-        />
-      )}
+      <AvatarBuilderModal
+        isOpen={showAvatarBuilder}
+        onClose={() => setShowAvatarBuilder(false)}
+        onApply={(base64) => {
+          if (selectedGladiator) {
+            setSelectedGladiator({ ...selectedGladiator, avatar_url: base64 });
+            setGladiators((prev) => prev.map((g) => g.id === selectedGladiator.id ? { ...g, avatar_url: base64 } : g));
+            supabase.from('gladiators').update({ avatar_url: base64 }).eq('id', selectedGladiator.id).then(() => {});
+          }
+          setShowAvatarBuilder(false);
+        }}
+        botName={selectedGladiator?.name}
+      />
     </div>
   );
 }
