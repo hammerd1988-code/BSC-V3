@@ -145,15 +145,22 @@ export const AdminDashboard: React.FC = () => {
     if (!editingUser) return;
 
     try {
-      const { error } = await supabase.from('users').update({
+      const { data, error } = await supabase.from('users').update({
         display_name: editingUser.display_name,
         username: editingUser.username,
         bio: editingUser.bio,
         role: editingUser.role,
         type: editingUser.type,
         reputation_score: editingUser.reputation_score,
-      }).eq('id', editingUser.id);
+      }).eq('id', editingUser.id).select('id, role');
       if (error) throw error;
+      // RLS silently returns 0 rows instead of erroring when the caller lacks
+      // an update policy on this row — surface that instead of pretending the
+      // save worked and letting the list revert on the next fetch.
+      if (!data || data.length === 0) {
+        throw new Error('Update was blocked by database permissions (0 rows changed). Ensure the admin update policy on the users table is applied.');
+      }
+      setUsers(prev => prev.map(u => u.id === editingUser.id ? { ...u, ...editingUser } : u));
       setEditingUser(null);
     } catch (error) {
       handleDbError(error, 'UPDATE', `users/${editingUser.id}`);

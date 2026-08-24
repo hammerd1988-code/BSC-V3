@@ -88,6 +88,7 @@ const UPSERT_CONFLICT_TARGETS: Array<[string, string]> = [
   ['bot_mayhem_relationships', 'source_username,target_username'],
   ['bot_mayhem_runs', 'id'],
   ['casper_cli_devices', 'machine_id'],
+  ['casper_config', 'key'],
   ['casper_integrations', 'user_id,integration_key'],
   ['device_push_tokens', 'token'],
   ['user_ai_credentials', 'user_id'],
