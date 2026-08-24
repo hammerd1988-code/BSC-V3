@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { 
   ArrowLeft, Send, Loader2, RefreshCw, Trash2, Copy, Check, 
   AlertTriangle, Activity, Mic, MicOff, Volume2, X, Settings,
@@ -428,7 +428,8 @@ export const Casper: React.FC = () => {
   const { setSurfaceContext, clearSurfaceContext } = useAskCasper();
   const [upgradeGate, setUpgradeGate] = useState<FeatureGateResult | null>(null);
   const [aiSettings, setAiSettings] = useState<any>(currentUser?.ai_settings || {});
-  const [showAiCore, setShowAiCore] = useState(false);
+  const [searchParams] = useSearchParams();
+  const [showAiCore, setShowAiCore] = useState(() => searchParams.get('settings') === 'ai');
   const [showApiKey, setShowApiKey] = useState(false);
   const [savingAiCore, setSavingAiCore] = useState(false);
   const [aiCoreForm, setAiCoreForm] = useState(() => initialCasperCore(currentUser?.ai_settings, currentUser?.context_note));

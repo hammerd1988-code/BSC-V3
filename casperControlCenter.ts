@@ -2008,6 +2008,21 @@ async function runtimeStatus(supabase: SupabaseClient) {
   };
 }
 
+// Non-secret snapshot of the platform-level AI providers, for admins only: it
+// reveals which vendor and model the deployment runs on, which no ordinary
+// member needs. The key itself is never included.
+function buildAiRuntimeStatus() {
+  const config = resolveServerOpenAIConfig();
+  let providerHost = 'unset';
+  try { providerHost = new URL(config.baseUrl).host; } catch { /* keep 'unset' */ }
+  return {
+    provider_host: providerHost,
+    model: config.model,
+    has_api_key: Boolean(config.apiKey),
+    gemini_configured: Boolean(process.env.GEMINI_API_KEY?.trim()),
+  };
+}
+
 // Escape Postgres LIKE/ILIKE wildcards so a user-supplied search term cannot
 // change query semantics. Backslashes are removed because they are not
 // interpreted as escape characters unless an explicit ESCAPE clause is set.
@@ -2082,7 +2097,10 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       const profile = await requireAuth(req, res, supabase);
       if (!profile) return;
       const status = await runtimeStatus(supabase);
-      res.json({ success: true, status });
+      res.json({
+        success: true,
+        status: profile.role === 'admin' ? { ...status, ai: buildAiRuntimeStatus() } : status,
+      });
     } catch (error: any) {
       console.error('[casper-control:status]', error);
       res.status(500).json({ success: false, error: error.message || 'Unable to load Casper status.' });
