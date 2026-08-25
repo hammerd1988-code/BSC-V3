@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { ExternalLink, ShieldAlert, Sparkles, Loader2 } from 'lucide-react';
+import { ExternalLink, ShieldAlert, Sparkles, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
 import { NewTabPage } from './NewTabPage';
 import type { HauntedBookmark } from './bookmarks';
 import { GhostMascot, hostOf, NEWTAB } from './ghost';
 import { authedFetch } from '../../lib/authSession';
 
-type LoadState = 'probing' | 'embeddable' | 'blocked';
+type LoadState = 'probing' | 'embeddable' | 'blocked' | 'error';
 
 export function BrowserViewport({
   url,
@@ -20,6 +20,7 @@ export function BrowserViewport({
 }) {
   const [state, setState] = useState<LoadState>('probing');
   const [reason, setReason] = useState('');
+  const [retryCount, setRetryCount] = useState(0);
   const reqId = useRef(0);
 
   useEffect(() => {
@@ -31,6 +32,12 @@ export function BrowserViewport({
     let cancelled = false;
     authedFetch(`/api/casper/browser/probe?url=${encodeURIComponent(url)}`)
       .then(async (res) => {
+        if (cancelled || id !== reqId.current) return;
+        if (!res.ok) {
+          setReason(res.status === 401 ? 'session expired' : `probe failed (${res.status})`);
+          setState('error');
+          return;
+        }
         const payload = (await res.json().catch(() => ({}))) as { embeddable?: boolean; reason?: string };
         if (cancelled || id !== reqId.current) return;
         if (payload.embeddable) {
@@ -42,13 +49,14 @@ export function BrowserViewport({
       })
       .catch(() => {
         if (cancelled || id !== reqId.current) return;
-        setState('embeddable');
+        setReason('network error');
+        setState('error');
       });
 
     return () => {
       cancelled = true;
     };
-  }, [url]);
+  }, [url, retryCount]);
 
   if (url === NEWTAB) {
     return <NewTabPage bookmarks={bookmarks} onNavigate={onNavigate} onAskCasper={onAskCasper} />;
@@ -129,6 +137,39 @@ export function BrowserViewport({
               <ShieldAlert className="h-3.5 w-3.5" />
               In the Blood Sweat Code desktop app, every site loads natively with no embed limits.
             </p>
+          </div>
+        </div>
+      )}
+      {state === 'error' && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-[color-mix(in_srgb,var(--hb-bg)_95%,transparent)] p-6 backdrop-blur">
+          <div className="max-w-md text-center">
+            <AlertTriangle className="mx-auto h-12 w-12 text-amber-400" />
+            <h2 className="mt-4 text-xl font-bold" style={{ fontFamily: 'Sora, Inter, sans-serif' }}>
+              Probe failed
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-[var(--hb-muted)]">
+              Could not check whether <span className="font-medium text-[var(--hb-fg)]">{hostOf(url)}</span> can
+              be embedded{reason ? ` — ${reason}` : ''}.
+            </p>
+            <div className="mt-6 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => setRetryCount((c) => c + 1)}
+                className="flex h-11 items-center justify-center gap-2 rounded-full bg-[var(--hb-primary)] font-medium text-[var(--hb-primary-fg)] transition-opacity hover:opacity-90"
+              >
+                <RefreshCw className="h-4 w-4" />
+                Retry
+              </button>
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hb-glass flex h-11 items-center justify-center gap-2 rounded-full border border-[var(--hb-border)] text-sm transition-colors hover:border-[color-mix(in_srgb,var(--hb-primary)_40%,transparent)]"
+              >
+                <ExternalLink className="h-4 w-4" />
+                Open externally instead
+              </a>
+            </div>
           </div>
         </div>
       )}
