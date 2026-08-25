@@ -6,6 +6,7 @@ export interface TerminalBufferState {
   style: AnsiStyle;
   escapeRemainder: string;
   discardingEscape: DiscardingEscape;
+  discardingEscapeBytes: number;
 }
 
 export interface TerminalBufferResult {
@@ -15,6 +16,7 @@ export interface TerminalBufferResult {
   style: AnsiStyle;
   escapeRemainder: string;
   discardingEscape: DiscardingEscape;
+  discardingEscapeBytes: number;
 }
 
 function sameStyle(left: AnsiStyle, right: AnsiStyle): boolean {
@@ -54,6 +56,7 @@ export function appendTerminalInput(
       style: state.style,
       escapeRemainder: state.escapeRemainder,
       discardingEscape: state.discardingEscape,
+      discardingEscapeBytes: state.discardingEscapeBytes,
     };
   }
 
@@ -61,6 +64,7 @@ export function appendTerminalInput(
     `${state.escapeRemainder}${value}`,
     state.style,
     state.discardingEscape,
+    state.discardingEscapeBytes,
   );
   const lines: AnsiSpan[][] = [];
   const cells = state.pendingLine.flatMap((span) =>
@@ -118,5 +122,6 @@ export function appendTerminalInput(
     style: parsed.style,
     escapeRemainder: parsed.remainder,
     discardingEscape: parsed.discardingEscape,
+    discardingEscapeBytes: parsed.discardingEscapeBytes,
   };
 }
