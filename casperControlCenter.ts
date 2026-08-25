@@ -1755,7 +1755,7 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
       // private page content is never persisted into casper_memories.
       // This removes both selected-text blocks and the page text section.
       const commandForMemory = command
-        .replace(/\n\nThe user has selected this text on the page[^\n]*\n"[^"]*"/, '')
+        .replace(/\n\nThe user has selected this text on the page[^\n]*\n"[\s\S]*?"\n?(?=\n\nPage text:|\n\nUser says:)/, '')
         .replace(/\n\nPage text:\n[\s\S]*?\n\nUser says:/, '\n\nUser says:');
       // Store the exchange for conversation continuity (without page text)
       casperMemory.storeConversationExchange?.(userId, commandForMemory, executionText)?.catch?.((err: any) => {
