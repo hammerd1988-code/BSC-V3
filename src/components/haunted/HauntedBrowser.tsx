@@ -390,7 +390,7 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
       <div className="flex items-center gap-2 border-b border-[var(--hb-border)] bg-[color-mix(in_srgb,var(--hb-sidebar)_90%,transparent)] px-3 py-1.5">
         <button type="button" onClick={onClose} className="h-3 w-3 rounded-full bg-red-500/80 transition-colors hover:bg-red-400" title="Close" aria-label="Close Haunted Browser" />
         <button type="button" onClick={onToggleExpand} className="h-3 w-3 rounded-full bg-yellow-500/80 transition-colors hover:bg-yellow-400" title={isExpanded ? 'Minimize' : 'Maximize'} aria-label={isExpanded ? 'Minimize' : 'Maximize'} />
-        <button type="button" onClick={onToggleExpand} className="h-3 w-3 rounded-full bg-green-500/80 transition-colors hover:bg-green-400" title={isExpanded ? 'Minimize' : 'Maximize'} />
+        <button type="button" onClick={onToggleExpand} className="h-3 w-3 rounded-full bg-green-500/80 transition-colors hover:bg-green-400" title={isExpanded ? 'Minimize' : 'Maximize'} aria-label={isExpanded ? 'Minimize' : 'Maximize'} />
         <span className="ml-2 text-[10px] font-black uppercase tracking-[0.2em] text-[var(--hb-primary)]">Haunted Browser</span>
         <span className="ml-auto flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-[var(--hb-muted)]">
           {native ? 'Native Chromium' : 'Embedded'}

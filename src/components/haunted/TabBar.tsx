@@ -81,7 +81,7 @@ export function TabBar({
               <button
                 type="button"
                 aria-label="Close tab"
-                tabIndex={-1}
+                tabIndex={active ? 0 : -1}
                 onClick={(e) => {
                   e.stopPropagation();
                   onClose(tab.id);

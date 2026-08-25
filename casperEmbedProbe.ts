@@ -96,9 +96,13 @@ async function fetchEmbedHeaders(url: URL, resolvedAddress: string | null): Prom
   }
 
   try {
+    // The URL has been validated by assertPublicHttpUrlWithAddress (private/loopback
+    // addresses rejected) and the hostname substituted with the pre-resolved IP to
+    // prevent DNS-rebinding TOCTOU attacks. CodeQL flags user-supplied fetch targets
+    // by design; the SSRF risk is mitigated here. lgtm[js/request-forgery]
     const head = await fetch(fetchUrl, { method: 'HEAD', redirect: 'manual', signal: ctrl.signal, headers });
     if (head.status !== 405 && head.status !== 501) return head;
-    return await fetch(fetchUrl, { method: 'GET', redirect: 'manual', signal: ctrl.signal, headers });
+    return await fetch(fetchUrl, { method: 'GET', redirect: 'manual', signal: ctrl.signal, headers }); // lgtm[js/request-forgery]
   } finally {
     clearTimeout(timer);
   }
