@@ -22,30 +22,15 @@ export function TabBar({
         {tabs.map((tab) => {
           const active = tab.id === activeId;
           const isNewTab = tab.url === NEWTAB;
+          const tabId = `haunted-tab-${tab.id}`;
           return (
-            <button
-              type="button"
+            <div
               key={tab.id}
-              data-testid={`haunted-tab-${tab.id}`}
               role="tab"
               aria-selected={active}
-              tabIndex={active ? 0 : -1}
-              onClick={() => onSelect(tab.id)}
-              onAuxClick={(e) => {
-                if (e.button === 1) onClose(tab.id);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-                  e.preventDefault();
-                  const idx = tabs.findIndex((t) => t.id === tab.id);
-                  const next = e.key === 'ArrowRight'
-                    ? tabs[(idx + 1) % tabs.length]
-                    : tabs[(idx - 1 + tabs.length) % tabs.length];
-                  if (next) onSelect(next.id);
-                }
-              }}
+              aria-controls={tabId}
               className={cn(
-                'group relative flex h-9 min-w-[120px] max-w-[200px] shrink-0 cursor-default items-center gap-2 rounded-t-lg px-3 text-sm transition-colors',
+                'group relative flex h-9 min-w-[120px] max-w-[200px] shrink-0 cursor-default items-center gap-0 rounded-t-lg text-sm transition-colors',
                 active
                   ? 'bg-[var(--hb-bg)] text-[var(--hb-fg)]'
                   : 'text-[var(--hb-muted)] hover:bg-[var(--hb-accent)] hover:text-[var(--hb-fg)]',
@@ -55,33 +40,57 @@ export function TabBar({
               {active && (
                 <span className="hb-glow absolute inset-x-2 -bottom-px h-px bg-[var(--hb-primary)]" aria-hidden />
               )}
-              {isNewTab ? (
-                <span className="h-4 w-4 shrink-0 rounded-full bg-gradient-to-b from-[var(--hb-primary)] to-[color-mix(in_srgb,var(--hb-primary)_40%,transparent)]" />
-              ) : tab.loading ? (
-                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[var(--hb-muted)]" />
-              ) : (
-                <img
-                  src={tab.favicon || faviconFor(tab.url)}
-                  alt=""
-                  className="h-4 w-4 shrink-0 rounded"
-                  onError={(e) => {
-                    (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
-                  }}
-                />
-              )}
-              <span className="flex-1 truncate">{isNewTab ? 'New Tab' : tab.title || prettyTitle(tab.url)}</span>
+              {/* Tab select button — fills the row, excludes close button column */}
+              <button
+                type="button"
+                data-testid={tabId}
+                tabIndex={active ? 0 : -1}
+                onClick={() => onSelect(tab.id)}
+                onAuxClick={(e) => {
+                  if (e.button === 1) onClose(tab.id);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+                    e.preventDefault();
+                    const idx = tabs.findIndex((t) => t.id === tab.id);
+                    const next = e.key === 'ArrowRight'
+                      ? tabs[(idx + 1) % tabs.length]
+                      : tabs[(idx - 1 + tabs.length) % tabs.length];
+                    if (next) onSelect(next.id);
+                  }
+                }}
+                className="flex min-w-0 flex-1 items-center gap-2 pl-3 focus:outline-none"
+              >
+                {isNewTab ? (
+                  <span className="h-4 w-4 shrink-0 rounded-full bg-gradient-to-b from-[var(--hb-primary)] to-[color-mix(in_srgb,var(--hb-primary)_40%,transparent)]" />
+                ) : tab.loading ? (
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[var(--hb-muted)]" />
+                ) : (
+                  <img
+                    src={tab.favicon || faviconFor(tab.url)}
+                    alt=""
+                    className="h-4 w-4 shrink-0 rounded"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
+                    }}
+                  />
+                )}
+                <span className="flex-1 truncate">{isNewTab ? 'New Tab' : tab.title || prettyTitle(tab.url)}</span>
+              </button>
+              {/* Close button — separate interactive element, never nested inside another button */}
               <button
                 type="button"
                 aria-label="Close tab"
+                tabIndex={-1}
                 onClick={(e) => {
                   e.stopPropagation();
                   onClose(tab.id);
                 }}
-                className="rounded p-0.5 opacity-0 transition-opacity hover:bg-[color-mix(in_srgb,var(--hb-danger)_20%,transparent)] group-hover:opacity-100"
+                className="mr-1 rounded p-0.5 opacity-0 transition-opacity hover:bg-[color-mix(in_srgb,var(--hb-danger)_20%,transparent)] group-hover:opacity-100"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
-            </button>
+            </div>
           );
         })}
       </div>

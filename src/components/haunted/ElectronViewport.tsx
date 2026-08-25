@@ -35,6 +35,8 @@ export function ElectronViewport({
   onTabMeta?: (meta: TabMeta) => void;
 }) {
   const wvRef = useRef<HTMLElement | null>(null);
+  const urlRef = useRef(url);
+  urlRef.current = url;
   const lastReportedUrl = useRef<string>('');
   const cbRef = useRef({ onNavigate, onContext, onTabMeta });
   cbRef.current = { onNavigate, onContext, onTabMeta };
@@ -77,7 +79,7 @@ export function ElectronViewport({
         try {
           const cur = wv.getURL ? wv.getURL() : '';
           if (!cur) return true;
-          return cur.split('#')[0] === url.split('#')[0];
+          return cur.split('#')[0] === urlRef.current.split('#')[0];
         } catch {
           return true;
         }
