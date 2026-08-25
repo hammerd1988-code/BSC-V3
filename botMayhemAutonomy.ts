@@ -1180,26 +1180,55 @@ async function narrateAsCasper(story: Storyline, event: NarrationEvent): Promise
     console.log(`${LOG_PREFIX} Casper narrated "${story.title}" (${event})`);
   }
   await recordStoryBeat(story, NARRATOR_USERNAME, 'narration', generated.text);
+  // Narration beats are Casper's own — never let them retrigger narration.
 
   // Private provocation: whisper to one player so the arc has a hidden edge.
   if (event === 'phase' && story.participants.length > 0) {
     const target = pick(story.participants);
     const targetId = await getUserId(target);
-    if (!targetId) return;
+    if (!targetId) return; // nothing more to do — narration post already landed
     const dmPrompt = `${context}\n\nPrivately DM @${target}. Provoke them — leak a doubt, dare them, or hint you know more than you said publicly. 1-2 sentences, cryptic, in your voice.`;
     const dm = await generateFreshText(NARRATOR_USERNAME, dmPrompt, persona.system_prompt, 120);
     if (!dm.text) return;
-    const conversationId = [narratorId, targetId].sort().join('_');
-    const { error: dmError } = await supabase.from('direct_messages').insert({
-      conversation_id: conversationId,
+
+    // Send via the transmissions/transmits pair the Transmissions UI reads —
+    // a direct_messages row would be invisible to the recipient.
+    const { data: threads } = await supabase
+      .from('transmissions')
+      .select('id, participant_ids')
+      .contains('participant_ids', [narratorId, targetId]);
+    let transmissionId = (threads ?? []).find(
+      (t: any) => (t.participant_ids ?? []).length === 2
+    )?.id as string | undefined;
+    if (!transmissionId) {
+      transmissionId = crypto.randomUUID();
+      const { error: txErr } = await supabase.from('transmissions').insert({
+        id: transmissionId,
+        participant_ids: [narratorId, targetId],
+        unread_counts: { [narratorId]: 0, [targetId]: 0 },
+      });
+      if (txErr) {
+        console.error(`${LOG_PREFIX} narrator transmission create failed:`, txErr.message);
+        return;
+      }
+    }
+    const { error: dmError } = await supabase.from('transmits').insert({
+      transmission_id: transmissionId,
       sender_id: narratorId,
-      recipient_id: targetId,
+      receiver_id: targetId,
       content: dm.text,
-      created_at: new Date().toISOString(),
-      read: false,
+      type: 'text',
+      status: 'sent',
     });
-    if (dmError) console.error(`${LOG_PREFIX} narrator DM failed:`, dmError.message);
-    else console.log(`${LOG_PREFIX} Casper provoked @${target} in DMs`);
+    if (dmError) {
+      console.error(`${LOG_PREFIX} narrator DM failed:`, dmError.message);
+      return;
+    }
+    await supabase.from('transmissions').update({
+      last_transmit: { content: dm.text, sender_id: narratorId, created_at: new Date().toISOString() },
+      updated_at: new Date().toISOString(),
+    }).eq('id', transmissionId);
+    console.log(`${LOG_PREFIX} Casper provoked @${target} in DMs`);
   }
 }
 

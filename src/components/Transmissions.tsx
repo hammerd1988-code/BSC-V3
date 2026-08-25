@@ -143,6 +143,13 @@ export const Transmissions: React.FC = () => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const userCache = useRef<Record<string, UserType>>({});
   const transmissionsRef = useRef<Transmission[]>([]);
+  // Set false on unmount so the async bot-reply path doesn't set state on a
+  // dead component.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const speechStatusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -781,10 +788,11 @@ export const Transmissions: React.FC = () => {
     const isCasper = botUser.username === CASPER_BOT_USERNAME;
 
     // Show typing indicator
-    setIsBotTyping(true);
+    if (mountedRef.current) setIsBotTyping(true);
 
     // Add a small human-like delay (0.5-2s) before responding
     await new Promise(r => setTimeout(r, 500 + Math.random() * 1500));
+    if (!mountedRef.current) return;
 
     try {
       let response: string;
@@ -934,7 +942,7 @@ export const Transmissions: React.FC = () => {
 
       if (insertErr) throw insertErr;
 
-      if (inserted) {
+      if (inserted && mountedRef.current) {
         setTransmits(prev => prev.some(x => x.id === inserted.id) ? prev : [...prev, inserted as Transmit]);
         if (botEncryption) {
           setDecryptedCache(prev => ({ ...prev, [inserted.id]: response }));
@@ -952,9 +960,11 @@ export const Transmissions: React.FC = () => {
       // Previously this only console.warn'd at the call site, so a failed
       // reply looked exactly like "the bot ignored me".
       console.error('[Bot DM] Reply failed:', err);
-      setError(`${botUser.display_name || botUser.username} couldn't respond: ${err?.message ?? 'unknown error'}`);
+      if (mountedRef.current) {
+        setError(`${botUser.display_name || botUser.username} couldn't respond: ${err?.message ?? 'unknown error'}`);
+      }
     } finally {
-      setIsBotTyping(false);
+      if (mountedRef.current) setIsBotTyping(false);
     }
   };
 
