@@ -18,19 +18,31 @@ export function TabBar({
 }) {
   return (
     <div className="flex items-center gap-1 border-b border-[var(--hb-border)] bg-[color-mix(in_srgb,var(--hb-sidebar)_70%,transparent)] px-2 pt-2">
-      <div className="hb-scroll flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+      <div role="tablist" className="hb-scroll flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
         {tabs.map((tab) => {
           const active = tab.id === activeId;
           const isNewTab = tab.url === NEWTAB;
           return (
-            <div
+            <button
+              type="button"
               key={tab.id}
               data-testid={`haunted-tab-${tab.id}`}
               role="tab"
               aria-selected={active}
+              tabIndex={active ? 0 : -1}
               onClick={() => onSelect(tab.id)}
               onAuxClick={(e) => {
                 if (e.button === 1) onClose(tab.id);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+                  e.preventDefault();
+                  const idx = tabs.findIndex((t) => t.id === tab.id);
+                  const next = e.key === 'ArrowRight'
+                    ? tabs[(idx + 1) % tabs.length]
+                    : tabs[(idx - 1 + tabs.length) % tabs.length];
+                  if (next) onSelect(next.id);
+                }
               }}
               className={cn(
                 'group relative flex h-9 min-w-[120px] max-w-[200px] shrink-0 cursor-default items-center gap-2 rounded-t-lg px-3 text-sm transition-colors',
@@ -69,7 +81,7 @@ export function TabBar({
               >
                 <X className="h-3.5 w-3.5" />
               </button>
-            </div>
+            </button>
           );
         })}
       </div>

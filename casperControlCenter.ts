@@ -1751,13 +1751,19 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
     // slowing down the response. Only store for user-initiated
     // directives (not routine / task-queue background work).
     if (casperMemory && userId && (source === 'admin' || source === 'user')) {
-      // Store the full exchange for conversation continuity
-      casperMemory.storeConversationExchange?.(userId, command, executionText)?.catch?.((err: any) => {
+      // Strip page text excerpts injected by the Haunted Browser so that
+      // private page content is never persisted into casper_memories.
+      // This removes both selected-text blocks and the page text section.
+      const commandForMemory = command
+        .replace(/\n\nThe user has selected this text on the page[^\n]*\n"[^"]*"/, '')
+        .replace(/\n\nPage text:\n[\s\S]*?\n\nUser says:/, '\n\nUser says:');
+      // Store the exchange for conversation continuity (without page text)
+      casperMemory.storeConversationExchange?.(userId, commandForMemory, executionText)?.catch?.((err: any) => {
         console.warn('[casper-control] exchange storage failed (non-blocking):', err?.message ?? err);
       });
       // Extract key facts (preferences, project/release details, workspace
       // context, etc.) into long-term memory.
-      casperMemory.extractConversationMemory(userId, command, executionText).catch((err: any) => {
+      casperMemory.extractConversationMemory(userId, commandForMemory, executionText).catch((err: any) => {
         console.warn('[casper-control] memory extraction failed (non-blocking):', err?.message ?? err);
       });
     }
