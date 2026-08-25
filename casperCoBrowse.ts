@@ -1,4 +1,9 @@
-// Casper Co-Browse — real-time shared browser control via Socket.IO.
+// Casper Co-Browse — server-side Playwright session + screenshot stream.
+//
+// The Architect-tier Casper panel no longer renders this stream (Haunted
+// Browser replaced the screenshot viewport). The socket protocol remains so
+// Casper's Playwright tools (`/api/casper/browser/action`) and any future
+// "Casper drive" mode can still share a live page with a client.
 //
 // The server captures periodic screenshots of a user's Playwright page
 // and streams them as base64 data URIs directly over the socket (no
