@@ -281,6 +281,7 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
           command: built.command,
           conversationHistory,
           surface: 'control_center',
+          enableTools: built.disableTools ? false : undefined,
           pageContext: {
             path: '/casper',
             feature: 'Haunted Browser',
