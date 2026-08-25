@@ -55,6 +55,7 @@ export function ElectronViewport({
 
     if (wired.current !== wv) {
       wired.current = wv;
+      lastReportedUrl.current = '';
       const guest = wv as WebviewGuest & {
         addEventListener: (type: string, listener: (...args: unknown[]) => void) => void;
       };
