@@ -67,8 +67,9 @@ export function ElectronViewport({
       guest.addEventListener('did-navigate', handleNav);
       guest.addEventListener('did-navigate-in-page', handleNav);
       guest.addEventListener('new-window', (e: unknown) => {
-        const url = (e as { url?: string })?.url;
-        if (url) cbRef.current.onNavigate(url);
+        const event = e as { url?: string; preventDefault?: () => void };
+        event.preventDefault?.();
+        if (event.url) cbRef.current.onNavigate(event.url);
       });
 
       const samePage = () => {
