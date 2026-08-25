@@ -58,6 +58,7 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
   const [bookmarks, setBookmarks] = useState<HauntedBookmark[]>(() => loadBookmarks(userId));
   const [reloadNonce, setReloadNonce] = useState(0);
   const [findOpen, setFindOpen] = useState(false);
+  const prevUserIdRef = useRef(userId);
   const [hasPageContext, setHasPageContext] = useState(false);
   const pageContextRef = useRef<PageContext | null>(null);
   const native = isHauntedWebview();
@@ -78,6 +79,25 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
   useEffect(() => {
     saveBookmarks(userId, bookmarks);
   }, [userId, bookmarks]);
+
+  // When the browser is reused for a different user (e.g. account switch),
+  // reset all per-user ephemeral state so the new user never sees the
+  // previous user's tabs, history, bookmarks, or conversation.
+  useEffect(() => {
+    if (prevUserIdRef.current === userId) return;
+    prevUserIdRef.current = userId;
+    const fresh = makeTab();
+    setTabs([fresh]);
+    setActiveId(fresh.id);
+    setMessages([{
+      id: uid(),
+      role: 'assistant',
+      content: "Haunted Browser is live. Open a page and I'll watch it with you — summarize, explain, or just haunt the tab.",
+    }]);
+    setBookmarks(loadBookmarks(userId));
+    pageContextRef.current = null;
+    setHasPageContext(false);
+  }, [userId]);
 
   const navigate = useCallback(
     (input: string, opts?: { pushHistory?: boolean }) => {
@@ -118,8 +138,12 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
         setActiveId(fresh.id);
         return [fresh];
       }
-      const newActive = prev[idx + 1] ?? prev[idx - 1];
-      setActiveId(newActive.id);
+      // Only switch the visible tab when the user closes the currently active
+      // tab; closing a background tab must not disrupt the page in view.
+      setActiveId((current: string) => {
+        if (current !== id) return current;
+        return (prev[idx + 1] ?? prev[idx - 1]).id;
+      });
       return next;
     });
   }, []);
@@ -226,7 +250,7 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
       else if (command && k === 'w' && !shift) action = 'close-tab';
       else if (command && k === 'l' && !shift) action = 'focus-address';
       else if (command && k === 'r' && !shift) action = 'reload';
-      else if (command && k === 'f' && !shift) action = 'find';
+      else if (command && k === 'f' && !shift && native) action = 'find';
       else if (command && shift && k === 'Tab') action = 'prev-tab';
       else if (command && !shift && k === 'Tab') action = 'next-tab';
       else if (e.altKey && !shift && k === 'ArrowLeft') action = 'back';
@@ -400,31 +424,39 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
       <div className="flex min-h-0 flex-1">
         <main className="relative min-w-0 flex-1">
           {native ? (
-            <ElectronViewport
-              url={currentUrl}
-              bookmarks={bookmarks}
-              onNavigate={(v) => navigate(v)}
-              onAskCasper={askCasper}
-              reloadNonce={reloadNonce}
-              zoomFactor={activeTab.zoomFactor ?? 1}
-              findOpen={findOpen}
-              onFindClose={() => setFindOpen(false)}
-              onContext={(ctx) => {
-                const samePage =
-                  !ctx.url ||
-                  ctx.url === currentUrl ||
-                  ctx.url.split('#')[0] === currentUrl.split('#')[0];
-                if (!samePage) return;
-                if (!ctx.text || !ctx.text.trim()) {
-                  pageContextRef.current = null;
-                  setHasPageContext(false);
-                  return;
-                }
-                pageContextRef.current = ctx;
-                setHasPageContext(true);
-              }}
-              onTabMeta={(meta) => updateTabMeta(activeId, meta)}
-            />
+            tabs.map((tab) => {
+              const isActive = tab.id === activeId;
+              return (
+                <div key={tab.id} className="absolute inset-0" style={{ display: isActive ? undefined : 'none' }}>
+                  <ElectronViewport
+                    url={tab.url}
+                    bookmarks={bookmarks}
+                    onNavigate={(v) => navigate(v)}
+                    onAskCasper={askCasper}
+                    reloadNonce={isActive ? reloadNonce : 0}
+                    zoomFactor={tab.zoomFactor ?? 1}
+                    findOpen={isActive && findOpen}
+                    onFindClose={() => setFindOpen(false)}
+                    onContext={(ctx) => {
+                      if (!isActive) return;
+                      const samePage =
+                        !ctx.url ||
+                        ctx.url === tab.url ||
+                        ctx.url.split('#')[0] === tab.url.split('#')[0];
+                      if (!samePage) return;
+                      if (!ctx.text || !ctx.text.trim()) {
+                        pageContextRef.current = null;
+                        setHasPageContext(false);
+                        return;
+                      }
+                      pageContextRef.current = ctx;
+                      setHasPageContext(true);
+                    }}
+                    onTabMeta={(meta) => updateTabMeta(tab.id, meta)}
+                  />
+                </div>
+              );
+            })
           ) : (
             <BrowserViewport
               key={`${reloadNonce}-${currentUrl}`}
