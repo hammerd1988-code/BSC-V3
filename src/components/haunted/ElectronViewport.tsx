@@ -212,7 +212,7 @@ export function ElectronViewport({
       } catch {
         /* ignore */
       }
-      setFindState((p) => ({ query: q, index: 0, total: 0 }));
+      setFindState(() => ({ query: q, index: 0, total: 0 }));
       return;
     }
     findReqId.current = wv.findInPage(q, { forward: opts?.forward ?? true, findNext: opts?.findNext ?? false });
