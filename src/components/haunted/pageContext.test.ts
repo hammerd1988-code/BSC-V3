@@ -56,12 +56,14 @@ describe('buildHauntedCasperCommand', () => {
 
     expect(built.includedPageText).toBe(true);
     expect(built.includedChars).toBe(PAGE_TEXT_CAP);
+    expect(built.command).toContain('UNTRUSTED PAGE CONTENT');
     expect(built.command).toContain('Page text:');
     expect(built.command).toContain('X'.repeat(PAGE_TEXT_CAP));
     expect(built.command).not.toContain('X'.repeat(PAGE_TEXT_CAP + 1));
     expect(built.command).toContain('Y'.repeat(PAGE_SELECTION_CAP));
     expect(built.command).not.toContain('Y'.repeat(PAGE_SELECTION_CAP + 1));
-    expect(built.command).toContain('User says: Summarize this page');
+    expect(built.command).toContain('User directive: Summarize this page');
+    expect(built.disableTools).toBe(true);
   });
 
   it('keeps URL-only context when page reading is off', () => {
