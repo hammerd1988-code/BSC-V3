@@ -21,7 +21,8 @@ function getSupabase(): SupabaseClient {
  * shares the same guard with `allowHttp` off.
  */
 export async function assertDispatchableWebhookUrl(rawUrl: string): Promise<URL> {
-  return assertPublicHttpUrl(rawUrl, { label: 'webhook URL', allowHttp: true });
+  const { url } = await assertPublicHttpUrl(rawUrl, { label: 'webhook URL', allowHttp: true });
+  return url;
 }
 
 
