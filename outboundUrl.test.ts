@@ -40,7 +40,8 @@ describe('assertPublicHttpUrl', () => {
 
   it('still refuses a private target when http is permitted', async () => {
     await expect(assertPublicHttpUrl('http://10.0.0.5/hook', { allowHttp: true })).rejects.toThrow(/private address/i);
-    await expect(assertPublicHttpUrl('http://1.1.1.1/hook', { allowHttp: true })).resolves.toBeInstanceOf(URL);
+    const result = await assertPublicHttpUrl('http://1.1.1.1/hook', { allowHttp: true });
+    expect(result.url).toBeInstanceOf(URL);
   });
 
   it('rejects local names without needing DNS', async () => {
@@ -54,15 +55,15 @@ describe('assertPublicHttpUrl', () => {
   });
 
   it('allows a public literal address', async () => {
-    await expect(assertPublicHttpUrl('https://1.1.1.1/hook')).resolves.toBeInstanceOf(URL);
+    const result = await assertPublicHttpUrl('https://1.1.1.1/hook');
+    expect(result.url).toBeInstanceOf(URL);
   });
 
   it('allows an explicitly configured local integration over http', async () => {
     // The Studio/ComfyUI escape hatch: a configured host is the one case where a
     // private target is the intent.
-    await expect(
-      assertPublicHttpUrl('http://127.0.0.1:8188/view', { allowedHttpHosts: new Set(['127.0.0.1:8188']) }),
-    ).resolves.toBeInstanceOf(URL);
+    const result = await assertPublicHttpUrl('http://127.0.0.1:8188/view', { allowedHttpHosts: new Set(['127.0.0.1:8188']) });
+    expect(result.url).toBeInstanceOf(URL);
 
     await expect(
       assertPublicHttpUrl('http://127.0.0.1:9999/view', { allowedHttpHosts: new Set(['127.0.0.1:8188']) }),
