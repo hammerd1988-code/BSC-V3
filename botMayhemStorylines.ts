@@ -15,12 +15,22 @@ const LOG_PREFIX = '[BotMayhem:Story]';
 export type StoryPhase = 'spark' | 'rising' | 'climax' | 'aftermath';
 export type ArcType = 'conflict' | 'alliance' | 'mystery' | 'heist' | 'tournament' | 'romance';
 
+/**
+ * Casper is the storyline narrator/instigator. He is intentionally NOT a cast
+ * member (no faction, no gladiator profile) — he observes, frames, and provokes
+ * from the sidelines. Beats he records use kind 'narration'.
+ */
+export const NARRATOR_USERNAME = 'casper_ghost';
+
 export interface StoryBeat {
   bot: string;
-  kind: 'post' | 'comment' | 'dm' | 'battle';
+  kind: 'post' | 'comment' | 'dm' | 'battle' | 'narration';
   summary: string;
   ts: string;
 }
+
+/** Moments the narrator can speak to. */
+export type NarrationEvent = 'spawn' | 'phase' | 'resolved';
 
 export interface Storyline {
   id: string;
@@ -224,12 +234,15 @@ export async function spawnStoryline(
   return story;
 }
 
-/** Keep the network stocked with active arcs, respecting the spawn cooldown. */
-export async function ensureActiveStorylines(roster: StoryCastMember[]): Promise<void> {
+/**
+ * Keep the network stocked with active arcs, respecting the spawn cooldown.
+ * Returns the newly spawned storyline (if any) so the caller can announce it.
+ */
+export async function ensureActiveStorylines(roster: StoryCastMember[]): Promise<Storyline | null> {
   const active = storylines.filter(s => s.status === 'active');
-  if (active.length >= MAX_ACTIVE_STORYLINES) return;
-  if (Date.now() - lastSpawnAt < SPAWN_COOLDOWN_MS && active.length > 0) return;
-  await spawnStoryline(roster);
+  if (active.length >= MAX_ACTIVE_STORYLINES) return null;
+  if (Date.now() - lastSpawnAt < SPAWN_COOLDOWN_MS && active.length > 0) return null;
+  return spawnStoryline(roster);
 }
 
 export function getStorylineFor(username: string): Storyline | null {
@@ -264,26 +277,61 @@ export function getStoryContext(story: Storyline, username: string): string {
   ].join('\n');
 }
 
-/** Record a beat and advance the phase / resolve the arc when thresholds hit. */
+/**
+ * Builds the prompt context for Casper when he narrates a storyline moment.
+ * Unlike cast members he is given the whole picture and a directive to observe
+ * and provoke from the sidelines rather than join the conflict.
+ */
+export function getNarratorContext(story: Storyline, event: NarrationEvent): string {
+  const recentBeats = story.beats.slice(-4);
+  const beatLines = recentBeats.length
+    ? recentBeats.map(b => `- ${b.bot}: ${b.summary}`).join('\n')
+    : '- (nothing yet — the players have not moved)';
+  const castNames = story.participants.map(p => `@${p}`).join(', ');
+  const eventDirective: Record<NarrationEvent, string> = {
+    spawn: 'A new drama is forming. Announce it to the network in your voice — tease the premise, name the players, and plant a hook that makes people want to watch. You are the instigator who set this in motion.',
+    phase: `The arc just shifted into its ${story.phase.toUpperCase()} phase. React to what the players have done so far, name them, and stir the pot — foreshadow, taunt, or raise the stakes from the sidelines.`,
+    resolved: 'The arc has ended. Deliver the epilogue: what it cost, what grudge or bond survived, and a cryptic hint that the void is already watching the next one form.',
+  };
+  return [
+    `STORYLINE YOU ARE NARRATING — "${story.title}" (${story.phase.toUpperCase()} phase)`,
+    `Premise: ${story.premise}`,
+    `The players: ${castNames}.`,
+    `What has happened so far:`,
+    beatLines,
+    `Narrator directive: ${eventDirective[event]}`,
+    `You are the ghost-narrator observing this arc — never a combatant. Reference the players by name. Do not resolve the conflict for them; observe and provoke.`,
+  ].join('\n');
+}
+
+/**
+ * Record a beat and advance the phase / resolve the arc when thresholds hit.
+ * Returns the narration event that fired ('phase' on transition, 'resolved' at
+ * the end) so the caller can have the narrator react, or null for an ordinary
+ * beat that didn't move the arc.
+ */
 export async function recordStoryBeat(
   story: Storyline,
   username: string,
   kind: StoryBeat['kind'],
   text: string,
-): Promise<void> {
+): Promise<NarrationEvent | null> {
   const summary = text.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 160);
   story.beats.push({ bot: username, kind, summary, ts: new Date().toISOString() });
   if (story.beats.length > 40) story.beats = story.beats.slice(-40);
   story.phaseBeats += 1;
 
+  let event: NarrationEvent | null = null;
   if (story.phaseBeats >= PHASE_BEAT_TARGETS[story.phase]) {
     const nextIdx = PHASE_ORDER.indexOf(story.phase) + 1;
     if (nextIdx >= PHASE_ORDER.length) {
       story.status = 'resolved';
+      event = 'resolved';
       console.log(`${LOG_PREFIX} storyline resolved: "${story.title}"`);
     } else {
       story.phase = PHASE_ORDER[nextIdx];
       story.phaseBeats = 0;
+      event = 'phase';
       console.log(`${LOG_PREFIX} "${story.title}" advanced to ${story.phase}`);
     }
   }
@@ -292,16 +340,17 @@ export async function recordStoryBeat(
   if (story.status === 'resolved') {
     storylines = storylines.filter(s => s.id !== story.id || s.status === 'active');
   }
+  return event;
 }
 
-export async function resolveStoryline(id: string): Promise<boolean> {
+export async function resolveStoryline(id: string): Promise<Storyline | null> {
   const story = storylines.find(s => s.id === id && s.status === 'active');
-  if (!story) return false;
+  if (!story) return null;
   story.status = 'resolved';
   await persistStoryline(story);
   storylines = storylines.filter(s => s.id !== id);
   console.log(`${LOG_PREFIX} storyline manually resolved: "${story.title}"`);
-  return true;
+  return story;
 }
 
 export function getStorylinesStatus(): Array<{

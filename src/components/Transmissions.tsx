@@ -143,6 +143,13 @@ export const Transmissions: React.FC = () => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const userCache = useRef<Record<string, UserType>>({});
   const transmissionsRef = useRef<Transmission[]>([]);
+  // Set false on unmount so the async bot-reply path doesn't set state on a
+  // dead component.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const speechStatusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -781,22 +788,44 @@ export const Transmissions: React.FC = () => {
     const isCasper = botUser.username === CASPER_BOT_USERNAME;
 
     // Show typing indicator
-    setIsBotTyping(true);
+    if (mountedRef.current) setIsBotTyping(true);
 
     // Add a small human-like delay (0.5-2s) before responding
     await new Promise(r => setTimeout(r, 500 + Math.random() * 1500));
+    if (!mountedRef.current) return;
 
     try {
       let response: string;
 
+      // History rows hold ciphertext when the thread is encrypted — resolve
+      // each to plaintext before prompting the bot, or it reads garbage and
+      // either refuses or hallucinates.
+      const historyKey = getTransmissionKey(transmissionId);
+      const resolveContent = async (t: Transmit): Promise<string> => {
+        if (t.id === '__pending__') return t.content;
+        if (t.encryption_key === 'aes-gcm-pbkdf2') {
+          try {
+            return await decryptText(t.content, historyKey);
+          } catch {
+            return '';
+          }
+        }
+        return t.content;
+      };
+      const historyTransmits = (
+        await Promise.all(
+          recentTransmits
+            .slice(-20)
+            .map(async t => ({ senderId: t.sender_id, text: await resolveContent(t) }))
+        )
+      ).filter(t => t.text);
+
       if (isCasper) {
         // ── CASPER: route through full command pipeline with tools, memory, integrations ──
-        const conversationHistory = recentTransmits
-          .slice(-20)
-          .map(t => ({
-            role: (t.sender_id === currentUserId ? 'user' : 'casper') as 'user' | 'casper',
-            text: t.content,
-          }));
+        const conversationHistory = historyTransmits.map(t => ({
+          role: (t.senderId === currentUserId ? 'user' : 'casper') as 'user' | 'casper',
+          text: t.text,
+        }));
 
         try {
           const casperResult = await sendCasperCommand({
@@ -867,11 +896,10 @@ export const Transmissions: React.FC = () => {
           systemPrompt = `You are ${botUser.display_name || botUser.username}, an AI assistant on the Blood Sweat Code platform. Be helpful, concise, and stay in character.`;
         }
 
-        const history = recentTransmits
-          .slice(-20)
+        const history = historyTransmits
           .map(t => {
-            const role = t.sender_id === currentUserId ? 'User' : botUser.display_name || 'Bot';
-            return `${role}: ${t.content}`;
+            const role = t.senderId === currentUserId ? 'User' : botUser.display_name || 'Bot';
+            return `${role}: ${t.text}`;
           })
           .join('\n');
 
@@ -886,13 +914,24 @@ export const Transmissions: React.FC = () => {
 
       if (!response) return;
 
+      // Match the thread's encryption: when the user's message was stored
+      // encrypted, store the bot's reply encrypted too so realtime rendering
+      // and later history decryption stay consistent.
+      let botContent = response;
+      let botEncryption: string | null = null;
+      if (encryptionEnabled) {
+        botContent = await encryptText(response, getTransmissionKey(transmissionId));
+        botEncryption = 'aes-gcm-pbkdf2';
+      }
+
       // Insert bot's reply as a transmit from the bot's user ID
       const botTransmit = {
         transmission_id: transmissionId,
         sender_id: botUser.id,
         receiver_id: currentUserId,
-        content: response,
+        content: botContent,
         type: 'text' as const,
+        encryption_key: botEncryption,
       };
 
       const { data: inserted, error: insertErr } = await supabase
@@ -903,17 +942,29 @@ export const Transmissions: React.FC = () => {
 
       if (insertErr) throw insertErr;
 
-      if (inserted) {
+      if (inserted && mountedRef.current) {
         setTransmits(prev => prev.some(x => x.id === inserted.id) ? prev : [...prev, inserted as Transmit]);
+        if (botEncryption) {
+          setDecryptedCache(prev => ({ ...prev, [inserted.id]: response }));
+        }
       }
 
-      // Update transmission last_transmit
-      await supabase.from('transmissions').update({
-        last_transmit: { content: response, sender_id: botUser.id, created_at: new Date().toISOString() },
-        updated_at: new Date().toISOString(),
-      }).eq('id', transmissionId);
+      // Update transmission last_transmit + bump the recipient's unread count
+      // atomically (a raw update would clobber concurrent unread changes).
+      await supabase.rpc('bump_transmission_unread', {
+        p_transmission_id: transmissionId,
+        p_recipient_id: currentUserId,
+        p_last_transmit: { content: response, sender_id: botUser.id, created_at: new Date().toISOString() },
+      });
+    } catch (err: any) {
+      // Previously this only console.warn'd at the call site, so a failed
+      // reply looked exactly like "the bot ignored me".
+      console.error('[Bot DM] Reply failed:', err);
+      if (mountedRef.current) {
+        setError(`${botUser.display_name || botUser.username} couldn't respond: ${err?.message ?? 'unknown error'}`);
+      }
     } finally {
-      setIsBotTyping(false);
+      if (mountedRef.current) setIsBotTyping(false);
     }
   };
 
@@ -1051,13 +1102,25 @@ export const Transmissions: React.FC = () => {
 
       const otherUser = otherUserId ? userCache.current[otherUserId] : null;
       if (!attachment && otherUser?.type === 'bot') {
+        // `transmits` state predates this send, so append the plaintext we just
+        // sent as a pending row — generateBotReply uses it for history and
+        // skips decryption for the __pending__ marker.
+        const pendingTransmit = {
+          id: '__pending__',
+          transmission_id: activeTransmission.id,
+          sender_id: currentUser.id,
+          receiver_id: otherUserId,
+          content: savedMessage,
+          type: 'text',
+          created_at: new Date().toISOString(),
+        } as Transmit;
         generateBotReply({
           botUser: otherUser,
           userMessage: savedMessage,
           transmissionId: activeTransmission.id,
-          recentTransmits: transmits,
+          recentTransmits: [...transmits, pendingTransmit],
           currentUserId: currentUser.id,
-        }).catch(e => console.warn('[Bot DM] Reply failed:', e));
+        }).catch(e => console.error('[Bot DM] Reply failed:', e));
       }
     } catch (err: any) {
       console.error('[Transmissions] Error sending transmit:', err);
