@@ -61,7 +61,7 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
   const [hasPageContext, setHasPageContext] = useState(false);
   const pageContextRef = useRef<PageContext | null>(null);
   const native = isHauntedWebview();
-  const [pageReading, setPageReading] = useState<PageReadingPref>(() => loadPageReading(userId));
+  const [pageReading, setPageReading] = useState<PageReadingPref>('unset');
   const [consentOpen, setConsentOpen] = useState(false);
   const pendingSendRef = useRef<{ text: string; injectPage?: boolean } | null>(null);
 
@@ -72,7 +72,8 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
   useEffect(() => {
     pageContextRef.current = null;
     setHasPageContext(false);
-  }, [activeId, currentUrl]);
+    setPageReading(loadPageReading(userId, currentUrl));
+  }, [activeId, currentUrl, userId]);
 
   useEffect(() => {
     saveBookmarks(userId, bookmarks);
@@ -310,7 +311,7 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
 
   const resolveConsent = useCallback(
     (pref: Exclude<PageReadingPref, 'unset'>) => {
-      savePageReading(userId, pref);
+      savePageReading(userId, pref, currentUrl);
       setPageReading(pref);
       setConsentOpen(false);
       const pending = pendingSendRef.current;
@@ -319,15 +320,15 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
         void sendToCasper(pending.text, { injectPage: pending.injectPage }, { pageReading: pref });
       }
     },
-    [userId, sendToCasper],
+    [userId, currentUrl, sendToCasper],
   );
 
   const setPageReadingPref = useCallback(
     (pref: PageReadingPref) => {
-      savePageReading(userId, pref);
+      savePageReading(userId, pref, currentUrl);
       setPageReading(pref);
     },
-    [userId],
+    [userId, currentUrl],
   );
 
   const askCasper = useCallback(

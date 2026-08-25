@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ExternalLink, ShieldAlert, Sparkles, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
 import { NewTabPage } from './NewTabPage';
 import type { HauntedBookmark } from './bookmarks';
@@ -58,6 +58,22 @@ export function BrowserViewport({
     };
   }, [url, retryCount]);
 
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  const handleIframeLoad = useCallback(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    try {
+      const newUrl = iframe.contentWindow?.location.href;
+      if (newUrl && newUrl !== 'about:blank' && newUrl !== url) {
+        onNavigate(newUrl);
+      }
+    } catch {
+      // Cross-origin: cannot read location. Navigation within the sandboxed
+      // frame may have occurred but we cannot detect the new URL.
+    }
+  }, [url, onNavigate]);
+
   if (url === NEWTAB) {
     return <NewTabPage bookmarks={bookmarks} onNavigate={onNavigate} onAskCasper={onAskCasper} />;
   }
@@ -66,6 +82,7 @@ export function BrowserViewport({
     <div className="relative h-full bg-[var(--hb-bg)]">
       {state === 'embeddable' && (
         <iframe
+          ref={iframeRef}
           key={url}
           src={url}
           title="Haunted Browser content"
@@ -73,6 +90,7 @@ export function BrowserViewport({
           className="h-full w-full border-0 bg-white"
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-presentation"
           referrerPolicy="no-referrer"
+          onLoad={handleIframeLoad}
         />
       )}
 

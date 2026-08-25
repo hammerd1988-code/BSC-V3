@@ -156,7 +156,7 @@ async function loadAssetBody(assetUrl: string, allowedHttpHosts: ReadonlySet<str
   // Any https URL used to be accepted, so a caller could have the server fetch an
   // internal service — or a public hostname pointed at a private address — and
   // then publish the response to storage. Resolution happens inside the guard.
-  const parsed = await assertPublicHttpUrl(assetUrl, { allowedHttpHosts, label: 'Studio asset URL' });
+  const { url: parsed } = await assertPublicHttpUrl(assetUrl, { allowedHttpHosts, label: 'Studio asset URL' });
 
   const response = await fetch(parsed, { redirect: 'error', signal: AbortSignal.timeout(60000) });
   if (!response.ok) throw new Error(`Unable to fetch Studio asset (${response.status}).`);

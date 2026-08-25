@@ -2,6 +2,24 @@ import { NEWTAB, samePageUrl, type PageContext } from './ghost';
 
 export const PAGE_TEXT_CAP = 12_000;
 export const PAGE_SELECTION_CAP = 1_500;
+
+/**
+ * Strip credentials, query strings, and fragments from a URL before sending it
+ * to the AI backend. This prevents tokens, signed parameters, and sensitive
+ * fragments from being persisted in casper_tasks/casper_memories.
+ */
+export function redactUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    u.username = '';
+    u.password = '';
+    u.search = '';
+    u.hash = '';
+    return u.toString();
+  } catch {
+    return raw;
+  }
+}
 export const PAGE_INJECT_KEYWORDS =
   /(summar|explain|this page|current page|fix site|fix this|about this|describe|key points|extract|tldr)/i;
 
@@ -21,10 +39,11 @@ export function buildHauntedCasperCommand(input: {
   injectPage?: boolean;
   pageReadingAllowed: boolean;
 }): { command: string; includedPageText: boolean; includedChars: number; disableTools: boolean } {
+  const safeUrl = redactUrl(input.currentUrl);
   const browseLine =
     input.currentUrl === NEWTAB
       ? '[Haunted Browser idle — new tab]'
-      : `[Haunted Browser viewing ${input.currentUrl}${input.tabTitle ? ` — "${input.tabTitle}"` : ''}]`;
+      : `[Haunted Browser viewing ${safeUrl}${input.tabTitle ? ` — "${input.tabTitle}"` : ''}]`;
 
   const wants = wantsPageInjection(input.userText, input.injectPage);
   const fresh = isFreshPageContext(input.ctx, input.currentUrl);
