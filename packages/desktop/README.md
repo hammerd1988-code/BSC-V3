@@ -9,6 +9,12 @@ native capabilities a browser PWA can't provide:
   process proxies the requests instead.
 - **Embedded Casper CLI** — ships the [`@bsc/casper-cli`](../casper-cli) binary as a
   sidecar so the UI can run real shell-backed operations (build, push, scrape, git).
+  This is `bridge.casper.run()` / `bsc:casper:run`. It is **not** how the Haunted
+  Browser Casper panel talks to Casper.
+- **Haunted Browser** — Casper's in-app browser uses real Chromium `<webview>`
+  tabs (no iframe X-Frame-Options limits). Chrome shortcuts typed while a page
+  has focus are forwarded to the renderer via `bsc:browser:shortcut`. In-panel
+  chat is still HTTP: `sendCasperCommand` → `/api/casper/command`.
 - **Auto-updates** — via `electron-updater` against GitHub Releases.
 - **Standalone window** — no browser chrome, single-instance, off-origin links open
   in the user's real browser.
@@ -18,7 +24,7 @@ native capabilities a browser PWA can't provide:
 ```
 packages/desktop/
   electron/
-    main.ts          # main process: window, IPC handlers, auto-updater
+    main.ts          # main process: window, IPC, webview shortcuts, auto-updater
     preload.ts       # contextBridge → window.bscDesktop (typed, sandboxed)
     ipc.ts           # shared IPC channel names
     localLlm.ts      # LM Studio / Ollama probe + chat proxy (OpenAI-compatible)
@@ -43,6 +49,21 @@ if (isDesktopApp()) {
 
 In a normal browser these helpers are inert (`isDesktopApp()` is `false`), so the
 same code falls back to cloud models and the relay-based Casper flow.
+
+### What Haunted Browser actually uses
+
+```
+focused <webview> key
+  → Electron main `before-input-event`
+  → IPC `bsc:browser:shortcut`
+  → preload `browser.onShortcut`
+  → HauntedBrowser.dispatchShortcut
+```
+
+The Casper side panel does **not** call `getDesktopBridge().casper.run()`. It builds
+a command (optionally with a user-consented page excerpt) and posts it to BSC's
+existing `/api/casper/command` on the `control_center` surface so identity, tools,
+memory, missions, entitlements, and provider routing stay in the BSC backend.
 
 ## Develop
 

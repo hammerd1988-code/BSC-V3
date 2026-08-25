@@ -23,6 +23,7 @@ import {
   type ToolExecutionContext,
 } from './casperTools.js';
 import { createRateLimiter } from './serverSecurity.js';
+import { probeFrameEmbeddable } from './casperEmbedProbe.js';
 
 // Resolved through serverAi so the default model matches the effective
 // provider — e.g. `openai/gpt-5.4-mini` when OPENROUTER_API_KEY routes the
@@ -2032,6 +2033,7 @@ function sanitizeLikePattern(value: string): string {
 
 export function registerCasperControlRoutes(app: Express, supabase: SupabaseClient, casperMemory: any) {
   const directiveRateLimit = createRateLimiter({ name: 'Casper directives', windowMs: 60_000, max: 30 });
+  const probeRateLimit = createRateLimiter({ name: 'Haunted Browser probe', windowMs: 60_000, max: 60 });
 
   // Public diagnostic endpoint. Reports whether the server's Supabase
   // configuration matches the project that issued the bearer token (if one
@@ -2263,6 +2265,24 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
         success: false,
         error: error?.message || 'Failed to record local-LLM execution result.',
       });
+    }
+  });
+
+  // Header-only probe used by Haunted Browser's iframe viewport to detect
+  // X-Frame-Options / CSP frame-ancestors before embedding. SSRF-guarded.
+  app.get('/api/casper/browser/probe', probeRateLimit, async (req, res) => {
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+      const url = String(req.query.url || '').trim();
+      if (!url) {
+        return res.status(400).json({ success: false, error: 'url is required.' });
+      }
+      const result = await probeFrameEmbeddable(url);
+      return res.json({ success: true, ...result });
+    } catch (error: any) {
+      console.error('[casper-control:browser-probe]', error);
+      return res.status(500).json({ success: false, error: error?.message || 'Probe failed.' });
     }
   });
 
