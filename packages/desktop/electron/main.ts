@@ -5,7 +5,7 @@
  *  - Create the application window and load the web UI.
  *  - Bridge native capabilities to the renderer over IPC (local LLM access via
  *    LM Studio / Ollama, and the embedded Casper CLI for shell operations).
- *  - Drive auto-updates via electron-updater.
+ *  - Host Haunted Browser <webview> tabs (real Chromium) with chrome shortcuts.
  *
  * Security posture: context isolation on, node integration off, sandboxed
  * renderer, and an allowlist for which origins may load in-window.
@@ -60,6 +60,8 @@ function createWindow(): void {
       nodeIntegration: false,
       sandbox: true,
       spellcheck: true,
+      // Required for Haunted Browser's real Chromium <webview> tabs.
+      webviewTag: true,
     },
   });
 
@@ -140,6 +142,52 @@ function sendUpdateStatus(status: { state: string; version?: string; message?: s
   mainWindow?.webContents.send(IPC.updateStatus, status);
 }
 
+/**
+ * Browser shortcuts must be intercepted on the <webview> guest because the
+ * shell renderer's keydown cannot see keys typed while a page has focus.
+ * Matched combos are swallowed and forwarded to the shell as IPC.
+ */
+let shortcutsWired = false;
+function wireWebContentsShortcuts(): void {
+  if (shortcutsWired) return;
+  shortcutsWired = true;
+  app.on('web-contents-created', (_e, contents) => {
+    if (contents.getType() !== 'webview') return;
+    contents.on('before-input-event', (event, input) => {
+      if (!input || input.type !== 'keyDown') return;
+      const command = !!(input.control || input.meta);
+      const shift = !!input.shift;
+      const alt = !!input.alt;
+      const key = input.key;
+      const code = input.code;
+      let action: string | null = null;
+
+      const isZoomIn = ['=', '+', 'Equal', 'Add'].includes(key) || code === 'Equal' || code === 'NumpadAdd';
+      const isZoomOut = ['-', 'Minus', 'Subtract'].includes(key) || code === 'Minus' || code === 'NumpadSubtract';
+      const isZoomReset = ['0', 'Digit0', 'Numpad0'].includes(key);
+
+      if (command && key === 't' && !shift) action = 'new-tab';
+      else if (command && key === 'w' && !shift) action = 'close-tab';
+      else if (command && key === 'l' && !shift) action = 'focus-address';
+      else if (command && key === 'r' && !shift) action = 'reload';
+      else if (command && key === 'f' && !shift) action = 'find';
+      else if (command && shift && key === 'Tab') action = 'prev-tab';
+      else if (command && !shift && key === 'Tab') action = 'next-tab';
+      else if (alt && !shift && key === 'ArrowLeft') action = 'back';
+      else if (alt && !shift && key === 'ArrowRight') action = 'forward';
+      else if (command && isZoomIn) action = 'zoom-in';
+      else if (command && isZoomOut) action = 'zoom-out';
+      else if (command && isZoomReset) action = 'zoom-reset';
+
+      if (!action) return;
+      event.preventDefault();
+      const host = contents.hostWebContents;
+      const win = host ? BrowserWindow.fromWebContents(host) : mainWindow;
+      if (win && !win.isDestroyed()) win.webContents.send(IPC.browserShortcut, { action });
+    });
+  });
+}
+
 // Single-instance lock so the app doesn't spawn duplicate windows.
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -153,6 +201,7 @@ if (!gotLock) {
   });
 
   app.whenReady().then(() => {
+    wireWebContentsShortcuts();
     registerIpcHandlers();
     createWindow();
     setupAutoUpdater();
