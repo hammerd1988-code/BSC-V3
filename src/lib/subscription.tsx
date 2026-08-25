@@ -192,10 +192,10 @@ export const FEATURE_CONFIG: Record<PremiumFeature, {
     upgradeMessage: 'Upgrade to Architect to use Casper\'s 14 Dev Agent tools.',
   },
   ghost_browser: {
-    label: 'Ghost Browser',
+    label: 'Haunted Browser',
     requiredTier: 'architect',
     limits: { architect: null },
-    upgradeMessage: 'Upgrade to Architect for co-browsing with Casper.',
+    upgradeMessage: 'Upgrade to Architect for Casper\'s Haunted Browser.',
   },
   ghostops_dashboard: {
     label: 'GhostOps Dashboard',
@@ -269,7 +269,7 @@ export const SUBSCRIPTION_PLANS = [
     badge: 'Power User',
     features: [
       'Neural Terminal (14 Dev Agent tools)',
-      'Ghost Browser co-browsing',
+      'Haunted Browser with Casper',
       'GhostOps Dashboard + Missions & Routines',
       'Casper Integrations (connect APIs)',
       'Local Coder: unlimited NEO//OPS remote nodes',
