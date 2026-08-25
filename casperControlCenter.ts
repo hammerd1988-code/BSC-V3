@@ -1753,10 +1753,11 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
     if (casperMemory && userId && (source === 'admin' || source === 'user')) {
       // Strip page text excerpts injected by the Haunted Browser so that
       // private page content is never persisted into casper_memories.
-      // This removes both selected-text blocks and the page text section.
+      // This removes the UNTRUSTED PAGE CONTENT block (new format) and the
+      // trailing footnote, keeping only the user directive.
       const commandForMemory = command
-        .replace(/\n\nThe user has selected this text on the page[^\n]*\n"[^"]*"/, '')
-        .replace(/\n\nPage text:\n[\s\S]*?\n\nUser says:/, '\n\nUser says:');
+        .replace(/\n--- UNTRUSTED PAGE CONTENT [\s\S]*?--- END UNTRUSTED PAGE CONTENT ---/, '')
+        .replace(/\n\(Answer using the provided page text excerpt[^)]*\)/, '');
       // Store the exchange for conversation continuity (without page text)
       casperMemory.storeConversationExchange?.(userId, commandForMemory, executionText)?.catch?.((err: any) => {
         console.warn('[casper-control] exchange storage failed (non-blocking):', err?.message ?? err);
