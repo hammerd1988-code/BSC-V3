@@ -22,11 +22,13 @@ export interface AnsiTokenResult {
   style: AnsiStyle;
   remainder: string;
   discardingEscape: DiscardingEscape;
+  discardingEscapeBytes: number;
 }
 
 export type DiscardingEscape = 'csi' | 'osc' | 'osc-escape' | null;
 
 const MAX_INCOMPLETE_ESCAPE_LENGTH = 64;
+const MAX_DISCARDING_ESCAPE_BYTES = 4096;
 
 const COLORS: Record<number, string> = {
   30: '#111827', 31: '#f87171', 32: '#4ade80', 33: '#facc15',
@@ -89,16 +91,17 @@ function incompleteEscape(
   input: string,
   start: number,
   kind: 'csi' | 'osc',
-): { remainder: string; discardingEscape: DiscardingEscape } {
+): { remainder: string; discardingEscape: DiscardingEscape; discardingEscapeBytes: number } {
   const candidate = input.slice(start);
   if (candidate.length <= MAX_INCOMPLETE_ESCAPE_LENGTH) {
-    return { remainder: candidate, discardingEscape: null };
+    return { remainder: candidate, discardingEscape: null, discardingEscapeBytes: 0 };
   }
   return {
     remainder: '',
     discardingEscape: kind === 'osc' && candidate.endsWith('\u001b')
       ? 'osc-escape'
       : kind,
+    discardingEscapeBytes: candidate.length,
   };
 }
 
@@ -116,21 +119,29 @@ export function tokenizeAnsi(
   input: string,
   initialStyle: AnsiStyle = {},
   initialDiscardingEscape: DiscardingEscape = null,
+  initialDiscardingEscapeBytes: number = 0,
 ): AnsiTokenResult {
   const tokens: AnsiToken[] = [];
   let style = { ...initialStyle };
   let index = 0;
   let discardingEscape = initialDiscardingEscape;
+  let discardingEscapeBytes = initialDiscardingEscapeBytes;
 
   while (index < input.length) {
     if (discardingEscape === 'csi') {
       let end = index;
       while (end < input.length && !isCsiFinal(input[end])) end += 1;
       if (end >= input.length) {
-        return { tokens, style, remainder: '', discardingEscape };
+        discardingEscapeBytes += input.length - index;
+        if (discardingEscapeBytes > MAX_DISCARDING_ESCAPE_BYTES) {
+          discardingEscape = null;
+          discardingEscapeBytes = 0;
+        }
+        return { tokens, style, remainder: '', discardingEscape, discardingEscapeBytes };
       }
       index = end + 1;
       discardingEscape = null;
+      discardingEscapeBytes = 0;
       continue;
     }
 
@@ -138,6 +149,7 @@ export function tokenizeAnsi(
       if (input[index] === '\\') {
         index += 1;
         discardingEscape = null;
+        discardingEscapeBytes = 0;
         continue;
       }
       discardingEscape = 'osc';
@@ -149,15 +161,21 @@ export function tokenizeAnsi(
         if (input[end] === '\u0007') {
           index = end + 1;
           discardingEscape = null;
+          discardingEscapeBytes = 0;
           break;
         }
         if (input[end] === '\u001b') {
           if (end + 1 >= input.length) {
-            return { tokens, style, remainder: '', discardingEscape: 'osc-escape' };
+            discardingEscapeBytes += end - index + 1;
+            if (discardingEscapeBytes > MAX_DISCARDING_ESCAPE_BYTES) {
+              return { tokens, style, remainder: '', discardingEscape: null, discardingEscapeBytes: 0 };
+            }
+            return { tokens, style, remainder: '', discardingEscape: 'osc-escape', discardingEscapeBytes };
           }
           if (input[end + 1] === '\\') {
             index = end + 2;
             discardingEscape = null;
+            discardingEscapeBytes = 0;
             break;
           }
         }
@@ -166,12 +184,18 @@ export function tokenizeAnsi(
         if (code === 0x0a || code === 0x0d || code === 0x18 || code === 0x1a) {
           index = end;
           discardingEscape = null;
+          discardingEscapeBytes = 0;
           break;
         }
         end += 1;
       }
       if (discardingEscape === 'osc') {
-        return { tokens, style, remainder: '', discardingEscape };
+        discardingEscapeBytes += end - index;
+        if (discardingEscapeBytes > MAX_DISCARDING_ESCAPE_BYTES) {
+          discardingEscape = null;
+          discardingEscapeBytes = 0;
+        }
+        return { tokens, style, remainder: '', discardingEscape, discardingEscapeBytes };
       }
       continue;
     }
@@ -191,6 +215,7 @@ export function tokenizeAnsi(
         style,
         remainder: incomplete,
         discardingEscape: null,
+        discardingEscapeBytes: 0,
       };
     }
 
@@ -247,7 +272,7 @@ export function tokenizeAnsi(
 
     if (kind === '(' || kind === ')') {
       if (index + 2 >= input.length) {
-        return { tokens, style, remainder: input.slice(index), discardingEscape: null };
+        return { tokens, style, remainder: input.slice(index), discardingEscape: null, discardingEscapeBytes: 0 };
       }
       index += 3;
       continue;
@@ -256,5 +281,5 @@ export function tokenizeAnsi(
     index += 2;
   }
 
-  return { tokens, style, remainder: '', discardingEscape };
+  return { tokens, style, remainder: '', discardingEscape, discardingEscapeBytes };
 }
