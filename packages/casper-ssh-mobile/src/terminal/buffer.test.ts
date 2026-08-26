@@ -16,6 +16,7 @@ function append(state: TerminalBufferState, value: string): TerminalBufferState 
     style: result.style,
     escapeRemainder: result.escapeRemainder,
     discardingEscape: result.discardingEscape,
+    discardingEscapeBytes: result.discardingEscapeBytes,
     lines: result.lines.map(lineText),
   };
 }
@@ -26,6 +27,7 @@ const initialState: TerminalBufferState = {
   style: {},
   escapeRemainder: '',
   discardingEscape: null,
+  discardingEscapeBytes: 0,
 };
 
 it('renders text from a CRLF-terminated line', () => {
@@ -224,4 +226,23 @@ it('abandons OSC discard on a newline and resumes normal output', () => {
   const result = appendTerminalInput(first, '\nVISIBLE\n');
   expect(lineText(result.lines[0])).toBe('');
   expect(lineText(result.lines[1])).toBe('VISIBLE');
+});
+
+it('abandons OSC discard after the byte limit is exceeded across chunks', () => {
+  const binaryChunk = '\xFF'.repeat(512);
+  let state: ReturnType<typeof append> = append(initialState, `\u001b]0;${'window-title/'.repeat(8)}`);
+  expect(state.discardingEscape).toBe('osc');
+
+  // Feed binary chunks with no C0 controls or terminators until the limit is exceeded.
+  // Initial discardingEscapeBytes = 108; each chunk adds 512. Limit is 4096.
+  // After 8 chunks: 108 + 8 * 512 = 4204 > 4096 — the discard is abandoned.
+  for (let i = 0; i < 8; i += 1) {
+    state = append(state, binaryChunk);
+  }
+
+  expect(state.discardingEscape).toBeNull();
+
+  // Normal output after the limit must resume
+  const result = appendTerminalInput(state, 'VISIBLE\n');
+  expect(lineText(result.lines[0])).toBe('VISIBLE');
 });
