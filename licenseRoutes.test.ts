@@ -168,5 +168,6 @@ describe('registerLicenseRoutes', () => {
     expect(res.body).toMatchObject({ tier: 'operator', rotated: true });
     expect((res.body as { key: string }).key).not.toBe(existingRow.key);
     expect((res.body as { key: string }).key.startsWith('bsc_')).toBe(true);
+    expect((res.body as { key: string }).key).not.toBe(existingRow.key);
   });
 });
