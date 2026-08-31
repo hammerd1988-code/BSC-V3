@@ -143,7 +143,7 @@ export function SubscriptionOnboarding({
               billing === 'annual' ? 'bg-white/10 text-white' : 'text-zinc-500 hover:text-zinc-300'
             )}
           >
-            Annual <span className="text-emerald-400">save 20%</span>
+            Annual <span className="text-emerald-400">save 17%</span>
           </button>
         </div>
       </div>
