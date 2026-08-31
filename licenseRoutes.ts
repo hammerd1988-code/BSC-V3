@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Local Coder licensing — links external local-coder installs to a BSC account.
@@ -31,6 +31,10 @@ export function featuresForTier(tier: LicenseTier): LicenseFeatures {
 }
 
 const LICENSE_LABEL = 'local-coder';
+
+function hashKey(key: string): string {
+  return createHash('sha256').update(key).digest('hex');
+}
 
 function mintKey(): string {
   return `bsc_${randomBytes(24).toString('hex')}`;
@@ -79,14 +83,14 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
 
     const { data: row } = await supabase
       .from('license_keys')
-      .select('key, created_at')
+      .select('created_at')
       .eq('user_id', user.id)
       .eq('label', LICENSE_LABEL)
       .is('revoked_at', null)
       .maybeSingle();
 
     const tier = await resolveTier(supabase, user.id);
-    res.json({ key: row?.key ?? null, createdAt: row?.created_at ?? null, tier });
+    res.json({ key: null, hasKey: !!row, createdAt: row?.created_at ?? null, tier });
   });
 
   // ── POST /api/license/key ──
@@ -99,7 +103,7 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
 
     const { data: existing } = await supabase
       .from('license_keys')
-      .select('id, key')
+      .select('id')
       .eq('user_id', user.id)
       .eq('label', LICENSE_LABEL)
       .is('revoked_at', null)
@@ -107,7 +111,8 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
 
     if (existing && !rotate) {
       const tier = await resolveTier(supabase, user.id);
-      return res.json({ key: existing.key, tier, rotated: false });
+      // Key is hashed at rest and cannot be recovered; instruct the user to rotate if needed.
+      return res.json({ key: null, hasKey: true, tier, rotated: false });
     }
 
     if (existing) {
@@ -124,7 +129,7 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
     const key = mintKey();
     const { error: insertError } = await supabase
       .from('license_keys')
-      .insert({ user_id: user.id, key, label: LICENSE_LABEL });
+      .insert({ user_id: user.id, key: hashKey(key), label: LICENSE_LABEL });
     if (insertError) {
       console.error('[License] insert error:', insertError.message);
       return res.status(500).json({ error: 'Failed to create license key.' });
@@ -145,7 +150,7 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
     const { data: row } = await supabase
       .from('license_keys')
       .select('id, user_id, revoked_at')
-      .eq('key', key)
+      .eq('key', hashKey(key))
       .maybeSingle();
 
     if (!row || row.revoked_at) {
