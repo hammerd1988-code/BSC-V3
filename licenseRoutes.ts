@@ -90,7 +90,7 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
       .maybeSingle();
 
     const tier = await resolveTier(supabase, user.id);
-    res.json({ key: null, hasKey: !!row, createdAt: row?.created_at ?? null, tier });
+    res.json({ hasKey: !!row, createdAt: row?.created_at ?? null, tier });
   });
 
   // ── POST /api/license/key ──
@@ -111,8 +111,7 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
 
     if (existing && !rotate) {
       const tier = await resolveTier(supabase, user.id);
-      // Key is hashed at rest and cannot be recovered; instruct the user to rotate if needed.
-      return res.json({ key: null, hasKey: true, tier, rotated: false });
+      return res.json({ hasKey: true, tier, rotated: false });
     }
 
     if (existing) {
