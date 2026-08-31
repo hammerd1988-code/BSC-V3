@@ -44,6 +44,11 @@ function normalizeTier(raw: string | null | undefined): LicenseTier {
   return raw === 'operator' || raw === 'architect' ? raw : 'indie';
 }
 
+export function shouldRotateLicenseKey(body: unknown): boolean {
+  if (!body || typeof body !== 'object') return false;
+  return (body as { rotate?: unknown }).rotate === true;
+}
+
 async function authenticateRequest(
   req: Request,
   supabase: SupabaseClient,
@@ -99,6 +104,7 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
     const user = await authenticateRequest(req, supabase);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
+    const rotate = shouldRotateLicenseKey(req.body);
     const rotate = (req.body as { rotate?: boolean } | undefined)?.rotate === true;
 
     const { data: existing } = await supabase

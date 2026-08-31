@@ -1,4 +1,15 @@
 // @vitest-environment node
+import { describe, expect, it } from 'vitest';
+import { shouldRotateLicenseKey } from './licenseRoutes';
+
+describe('shouldRotateLicenseKey', () => {
+  it('only rotates when rotate is literal boolean true', () => {
+    expect(shouldRotateLicenseKey({ rotate: true })).toBe(true);
+    expect(shouldRotateLicenseKey({ rotate: false })).toBe(false);
+    expect(shouldRotateLicenseKey({ rotate: 'false' })).toBe(false);
+    expect(shouldRotateLicenseKey({ rotate: 1 })).toBe(false);
+    expect(shouldRotateLicenseKey({})).toBe(false);
+    expect(shouldRotateLicenseKey(undefined)).toBe(false);
 /**
  * licenseRoutes covers JWT-to-profile binding, key reuse/rotation,
  * revoked-key rejection, and admin/operator/indie feature mapping.
