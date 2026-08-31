@@ -113,4 +113,41 @@ describe('SubscriptionSettings', () => {
       );
     });
   });
+
+  it('uses authedFetch with rotate=true when rotating an existing key', async () => {
+    const mockedAuthedFetch = vi.mocked(authedFetch);
+    mockedAuthedFetch
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ key: 'existing-key' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ key: 'rotated-key' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+    const user = userEvent.setup();
+    render(<SubscriptionSettings />);
+
+    await waitFor(() => {
+      expect(mockedAuthedFetch).toHaveBeenCalledTimes(1);
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Rotate' }));
+
+    await waitFor(() => {
+      expect(mockedAuthedFetch).toHaveBeenNthCalledWith(
+        2,
+        '/api/license/key',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ rotate: true }),
+        }),
+      );
+    });
+  });
 });
