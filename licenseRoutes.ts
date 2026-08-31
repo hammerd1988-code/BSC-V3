@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Local Coder licensing — links external local-coder installs to a BSC account.
@@ -34,6 +34,10 @@ const LICENSE_LABEL = 'local-coder';
 
 function mintKey(): string {
   return `bsc_${randomBytes(24).toString('hex')}`;
+}
+
+export function hashLicenseKey(key: string): string {
+  return createHash('sha256').update(key).digest('hex');
 }
 
 function normalizeTier(raw: string | null | undefined): LicenseTier {
@@ -122,9 +126,10 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
     }
 
     const key = mintKey();
+    const keyHash = hashLicenseKey(key);
     const { error: insertError } = await supabase
       .from('license_keys')
-      .insert({ user_id: user.id, key, label: LICENSE_LABEL });
+      .insert({ user_id: user.id, key: keyHash, label: LICENSE_LABEL });
     if (insertError) {
       console.error('[License] insert error:', insertError.message);
       return res.status(500).json({ error: 'Failed to create license key.' });
@@ -141,11 +146,12 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
     if (typeof key !== 'string' || !key.startsWith('bsc_')) {
       return res.status(400).json({ valid: false, error: 'Missing or malformed x-license-key header.' });
     }
+    const keyHash = hashLicenseKey(key);
 
     const { data: row } = await supabase
       .from('license_keys')
       .select('id, user_id, revoked_at')
-      .eq('key', key)
+      .eq('key', keyHash)
       .maybeSingle();
 
     if (!row || row.revoked_at) {

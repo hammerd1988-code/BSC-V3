@@ -2,7 +2,7 @@
 import express from 'express';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { registerLicenseRoutes } from './licenseRoutes.js';
+import { hashLicenseKey, registerLicenseRoutes } from './licenseRoutes.js';
 
 type UserRow = {
   id: string;
@@ -141,8 +141,7 @@ async function startLicenseServer(state: DbState, tokenToAuthUid: Record<string,
 }
 
 function authHeader(token: string) {
-  const bearer = 'Bearer';
-  return { Authorization: `${bearer} ${token}` };
+  return { Authorization: 'Bearer ' + token };
 }
 
 const servers: Array<{ close: () => Promise<void> }> = [];
@@ -159,7 +158,7 @@ describe('license routes', () => {
           {
             id: 'lk-1',
             user_id: 'user-1',
-            key: 'bsc_existing_key',
+            key: hashLicenseKey('bsc_existing_key'),
             label: 'local-coder',
             created_at: '2026-01-01T00:00:00.000Z',
             revoked_at: null,
@@ -175,7 +174,7 @@ describe('license routes', () => {
     });
 
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toMatchObject({ key: 'bsc_existing_key', tier: 'operator' });
+    await expect(res.json()).resolves.toMatchObject({ key: hashLicenseKey('bsc_existing_key'), tier: 'operator' });
   });
 
   it('reuses an existing key by default and rotates only when rotate=true', async () => {
@@ -186,7 +185,7 @@ describe('license routes', () => {
           {
             id: 'lk-1',
             user_id: 'user-1',
-            key: 'bsc_old_key',
+            key: hashLicenseKey('bsc_old_key'),
             label: 'local-coder',
             created_at: '2026-01-01T00:00:00.000Z',
             revoked_at: null,
@@ -207,7 +206,11 @@ describe('license routes', () => {
     });
 
     expect(reuseRes.status).toBe(200);
-    await expect(reuseRes.json()).resolves.toMatchObject({ key: 'bsc_old_key', rotated: false, tier: 'operator' });
+    await expect(reuseRes.json()).resolves.toMatchObject({
+      key: hashLicenseKey('bsc_old_key'),
+      rotated: false,
+      tier: 'operator',
+    });
     expect(env.state.license_keys).toHaveLength(1);
 
     const stringFalseRes = await fetch(`${env.baseUrl}/api/license/key`, {
@@ -241,14 +244,41 @@ describe('license routes', () => {
     expect(rotateBody.tier).toBe('operator');
     expect(rotateBody.rotated).toBe(true);
     expect(rotateBody.key).toMatch(/^bsc_[0-9a-f]+$/);
-    expect(rotateBody.key).not.toBe('bsc_old_key');
+    expect(rotateBody.key).not.toBe(hashLicenseKey('bsc_old_key'));
 
     expect(env.state.license_keys).toHaveLength(2);
     const oldKey = env.state.license_keys.find((row) => row.id === 'lk-1');
     const activeKeys = env.state.license_keys.filter((row) => row.revoked_at == null);
     expect(oldKey?.revoked_at).toBeTruthy();
     expect(activeKeys).toHaveLength(1);
-    expect(activeKeys[0]?.key).toBe(rotateBody.key);
+    expect(activeKeys[0]?.key).toBe(hashLicenseKey(rotateBody.key));
+  });
+
+  it('rejects a hashed value passed as x-license-key', async () => {
+    const env = await startLicenseServer(
+      {
+        users: [{ id: 'user-1', auth_uid: 'auth-1', subscription_tier: 'operator', role: 'user' }],
+        license_keys: [
+          {
+            id: 'lk-1',
+            user_id: 'user-1',
+            key: hashLicenseKey('bsc_valid_key'),
+            label: 'local-coder',
+            created_at: '2026-01-01T00:00:00.000Z',
+            revoked_at: null,
+          },
+        ],
+      },
+      {},
+    );
+    servers.push(env);
+
+    const res = await fetch(`${env.baseUrl}/api/license/verify`, {
+      headers: { 'x-license-key': hashLicenseKey('bsc_valid_key') },
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ valid: false });
   });
 
   it('rejects revoked keys on /api/license/verify', async () => {
@@ -259,7 +289,7 @@ describe('license routes', () => {
           {
             id: 'lk-1',
             user_id: 'user-1',
-            key: 'bsc_revoked_key',
+            key: hashLicenseKey('bsc_revoked_key'),
             label: 'local-coder',
             created_at: '2026-01-01T00:00:00.000Z',
             revoked_at: '2026-02-01T00:00:00.000Z',
@@ -305,7 +335,7 @@ describe('license routes', () => {
           {
             id: 'lk-1',
             user_id: user.id,
-            key,
+            key: hashLicenseKey(key),
             label: 'local-coder',
             created_at: '2026-01-01T00:00:00.000Z',
             revoked_at: null,
