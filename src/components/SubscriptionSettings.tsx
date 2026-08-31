@@ -176,7 +176,7 @@ export function SubscriptionSettings() {
               onClick={() => setBilling('annual')}
               className={`rounded-full px-4 py-1.5 text-xs font-bold uppercase tracking-wider transition ${billing === 'annual' ? 'bg-white/10 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
-              Annual <span className="text-emerald-400">save 20%</span>
+              Annual <span className="text-emerald-400">save 17%</span>
             </button>
           </div>
         </div>
