@@ -1,6 +1,18 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest';
-import { shouldRotateLicenseKey } from './licenseRoutes';
+/**
+ * licenseRoutes covers JWT-to-profile binding, key reuse/rotation,
+ * revoked-key rejection, and admin/operator/indie feature mapping.
+ * All Supabase calls are mocked so the suite runs without a real database.
+ */
+import type { Request, Response } from 'express';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  featuresForTier,
+  hashLicenseKey,
+  registerLicenseRoutes,
+  shouldRotateLicenseKey,
+} from './licenseRoutes';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 describe('shouldRotateLicenseKey', () => {
   it('only rotates when rotate is literal boolean true', () => {
@@ -12,16 +24,6 @@ describe('shouldRotateLicenseKey', () => {
     expect(shouldRotateLicenseKey(undefined)).toBe(false);
   });
 });
-
-/**
- * licenseRoutes covers JWT-to-profile binding, key reuse/rotation,
- * revoked-key rejection, and admin/operator/indie feature mapping.
- * All Supabase calls are mocked so the suite runs without a real database.
- */
-import type { Request, Response } from 'express';
-import { vi } from 'vitest';
-import { featuresForTier, hashLicenseKey, registerLicenseRoutes } from './licenseRoutes';
-import type { SupabaseClient } from '@supabase/supabase-js';
 
 // ---------------------------------------------------------------------------
 // Helpers
