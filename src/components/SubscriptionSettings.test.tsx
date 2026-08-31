@@ -96,6 +96,10 @@ describe('SubscriptionSettings', () => {
     const user = userEvent.setup();
     render(<SubscriptionSettings />);
 
+    await waitFor(() => {
+      expect(mockedAuthedFetch).toHaveBeenCalledTimes(1);
+    });
+
     await user.click(screen.getByRole('button', { name: 'Generate License Key' }));
 
     await waitFor(() => {
