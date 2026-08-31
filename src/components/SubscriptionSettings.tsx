@@ -2,19 +2,10 @@ import { useEffect, useState } from 'react';
 import { Check, Copy, Crown, KeyRound, RefreshCw, Rocket, Shield } from 'lucide-react';
 import { SUBSCRIPTION_PLANS, useSubscription, TIER_RANK } from '../lib/subscription';
 import type { SubscriptionTier } from '../lib/subscription';
-import { supabase } from '../supabase';
+import { authedFetch } from '../lib/authSession';
 
 async function licenseFetch(path: string, opts: RequestInit = {}): Promise<Response> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token;
-  return fetch(path, {
-    ...opts,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(opts.headers || {}),
-    },
-  });
+  return authedFetch(path, opts);
 }
 
 function LocalCoderLicense() {
@@ -185,7 +176,7 @@ export function SubscriptionSettings() {
               onClick={() => setBilling('annual')}
               className={`rounded-full px-4 py-1.5 text-xs font-bold uppercase tracking-wider transition ${billing === 'annual' ? 'bg-white/10 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
-              Annual <span className="text-emerald-400">save 20%</span>
+              Annual <span className="text-emerald-400">save 17%</span>
             </button>
           </div>
         </div>
