@@ -17,6 +17,13 @@ async function licenseFetch(path: string, opts: RequestInit = {}): Promise<Respo
   });
 }
 
+export function maskLicenseKey(licenseKey: string): string {
+  if (licenseKey.length <= 4) return '••••';
+  const prefix = licenseKey.slice(0, 6);
+  const suffix = licenseKey.slice(-4);
+  return `${prefix}…${suffix}`;
+}
+
 function LocalCoderLicense() {
   const [licenseKey, setLicenseKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -72,7 +79,7 @@ function LocalCoderLicense() {
       {licenseKey ? (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <code className="flex-1 truncate rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-xs text-emerald-300">
-            {licenseKey}
+            {maskLicenseKey(licenseKey)}
           </code>
           <div className="flex gap-2">
             <button
