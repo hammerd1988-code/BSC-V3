@@ -3,6 +3,7 @@ import { maskLicenseKey } from './SubscriptionSettings';
 
 describe('maskLicenseKey', () => {
   it('shows only a prefix and suffix for long keys', () => {
+    expect(maskLicenseKey('abcdefghijk')).toBe('abcdef…hijk');
     expect(maskLicenseKey('abcdef1234567890xyz')).toBe('abcdef…0xyz');
   });
 
