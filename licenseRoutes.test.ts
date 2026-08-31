@@ -6,7 +6,7 @@
  */
 import type { Request, Response } from 'express';
 import { describe, expect, it, vi } from 'vitest';
-import { featuresForTier, registerLicenseRoutes } from './licenseRoutes';
+import { featuresForTier, hashLicenseKey, registerLicenseRoutes } from './licenseRoutes';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 // ---------------------------------------------------------------------------
@@ -33,7 +33,8 @@ function chainFor(result: MockResult) {
 /**
  * Builds a Supabase client mock.
  * `fromResponses` is a table → ordered list of results. Each `.from(table)`
- * call pops the first entry; missing entries default to `{ data: null, error: null }`.
+ * call pops the first entry. Calling `.from()` on an unknown table or an
+ * exhausted queue throws so unexpected queries are caught immediately.
  */
 function makeSupabase({
   getUserResult,
@@ -48,7 +49,13 @@ function makeSupabase({
 
   const from = (table: string) => {
     const q = queues[table];
-    const result: MockResult = q?.length ? q.shift()! : { data: null, error: null };
+    if (!q || q.length === 0) {
+      throw new Error(
+        `Unexpected or exhausted Supabase mock query: .from("${table}"). ` +
+        `Registered tables: [${Object.keys(queues).join(', ')}]`,
+      );
+    }
+    const result = q.shift()!;
     return chainFor(result);
   };
 
@@ -95,8 +102,7 @@ function buildRouteMap(supabase: SupabaseClient) {
 }
 
 const KEY = 'bsc_deadbeef1234deadbeef1234deadbeef1234deadbeef12';
-const AUTH_HEADER = 'Bearer test-token';
-
+const AUTH_HEADER = 'Bearer fake-test-jwt';
 // ---------------------------------------------------------------------------
 // featuresForTier — pure unit tests (no Supabase needed)
 // ---------------------------------------------------------------------------
@@ -318,6 +324,17 @@ describe('GET /api/license/verify — revoked-key rejection', () => {
     const supabase = makeSupabase({ getUserResult: { data: { user: null }, error: null }, fromResponses: {} });
     const routes = buildRouteMap(supabase);
     const req = mockReq({ headers: { 'x-license-key': 'bad_key_format' } });
+    const res = mockRes();
+    await routes['GET /api/license/verify'](req, res as Response);
+    expect(res.statusCode).toBe(400);
+    expect((res.body as Record<string, unknown>).valid).toBe(false);
+  });
+
+  it('rejects a hashed key value passed as x-license-key', async () => {
+    // hashLicenseKey produces a sha256 hex string — it does not start with bsc_
+    const supabase = makeSupabase({ getUserResult: { data: { user: null }, error: null }, fromResponses: {} });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { 'x-license-key': hashLicenseKey(KEY) } });
     const res = mockRes();
     await routes['GET /api/license/verify'](req, res as Response);
     expect(res.statusCode).toBe(400);
