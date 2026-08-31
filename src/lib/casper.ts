@@ -311,6 +311,7 @@ export async function sendCasperCommand(input: {
   pageContext?: { path?: string; feature?: string; description?: string };
   metadata?: Record<string, unknown>;
   conversationHistory?: CasperConversationTurn[];
+  enableTools?: boolean;
 }): Promise<CasperCommandResponse> {
   const headers = await authHeaders();
   let command = input.command.trim();
@@ -332,6 +333,7 @@ export async function sendCasperCommand(input: {
       surface: input.surface ?? 'control_center',
       source: input.source,
       metadata: input.metadata ?? {},
+      enableTools: input.enableTools,
       conversationHistory: (input.conversationHistory ?? [])
         .filter((turn) => turn && typeof turn.text === 'string' && turn.text.trim())
         .slice(-CASPER_HISTORY_WINDOW)

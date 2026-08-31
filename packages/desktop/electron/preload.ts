@@ -36,6 +36,19 @@ const api = {
     version: (): Promise<string> => ipcRenderer.invoke(IPC.casperVersion),
   },
 
+  /**
+   * Haunted Browser: the renderer may mount <webview> guests, and the main
+   * process forwards chrome shortcuts that fire while a page has focus.
+   */
+  browser: {
+    webview: true as const,
+    onShortcut: (cb: (event: { action: string }) => void): (() => void) => {
+      const listener = (_event: unknown, payload: { action: string }) => cb(payload);
+      ipcRenderer.on(IPC.browserShortcut, listener);
+      return () => ipcRenderer.removeListener(IPC.browserShortcut, listener);
+    },
+  },
+
   onUpdateStatus: (cb: (status: UpdateStatus) => void): (() => void) => {
     const listener = (_event: unknown, status: UpdateStatus) => cb(status);
     ipcRenderer.on(IPC.updateStatus, listener);

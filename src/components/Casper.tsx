@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { 
   ArrowLeft, Send, Loader2, RefreshCw, Trash2, Copy, Check, 
   AlertTriangle, Activity, Mic, MicOff, Volume2, X, Settings,
@@ -428,7 +428,8 @@ export const Casper: React.FC = () => {
   const { setSurfaceContext, clearSurfaceContext } = useAskCasper();
   const [upgradeGate, setUpgradeGate] = useState<FeatureGateResult | null>(null);
   const [aiSettings, setAiSettings] = useState<any>(currentUser?.ai_settings || {});
-  const [showAiCore, setShowAiCore] = useState(false);
+  const [searchParams] = useSearchParams();
+  const [showAiCore, setShowAiCore] = useState(() => searchParams.get('settings') === 'ai');
   const [showApiKey, setShowApiKey] = useState(false);
   const [savingAiCore, setSavingAiCore] = useState(false);
   const [aiCoreForm, setAiCoreForm] = useState(() => initialCasperCore(currentUser?.ai_settings, currentUser?.context_note));
@@ -1864,8 +1865,8 @@ export const Casper: React.FC = () => {
                   ? "bg-cyan-500/20 border-cyan-400/40 text-cyan-100 shadow-[0_0_16px_rgba(0,229,255,0.25)]"
                   : "bg-white/5 border-white/10 text-zinc-500 hover:text-white hover:border-cyan-500/30"
               )}
-              title={showCoBrowse ? 'Close Ghost Browser' : 'Open Ghost Browser (co-browse)'}
-              aria-label={showCoBrowse ? 'Close Ghost Browser' : 'Open Ghost Browser (co-browse)'}
+              title={showCoBrowse ? 'Close Haunted Browser' : 'Open Haunted Browser'}
+              aria-label={showCoBrowse ? 'Close Haunted Browser' : 'Open Haunted Browser'}
             >
               <Globe className="w-4 h-4" />
             </button>
@@ -2522,7 +2523,7 @@ export const Casper: React.FC = () => {
         )}
       </AnimatePresence>
 
-      {/* Co-Browse Panel */}
+      {/* Haunted Browser */}
       <AnimatePresence>
         {showCoBrowse && currentUser?.id && (
           <div className={cn("relative z-30", coBrowseExpanded ? "" : "border-b border-white/10", !coBrowseExpanded && "h-[500px]")}>

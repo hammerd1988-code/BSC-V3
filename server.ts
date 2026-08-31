@@ -47,6 +47,7 @@ import {
 } from './callRooms.js';
 import { registerCoBrowseSocket } from './casperCoBrowse.js';
 import { registerStripeRoutes } from './stripeRoutes.js';
+import { registerLicenseRoutes } from './licenseRoutes.js';
 import { findCredPackageByPrice, totalCred } from './shared/credPackages.js';
 import { registerCasperRelay } from './casperRelay.js';
 import {
@@ -143,7 +144,7 @@ async function startServer() {
     if (origin && allowedOrigins.includes(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, x-license-key');
       res.setHeader('Access-Control-Allow-Credentials', 'true');
     }
     if (req.method === 'OPTIONS') {
@@ -173,6 +174,7 @@ async function startServer() {
   registerColosseumRoutes(app, supabase);
   registerBotMayhemRoutes(app, supabase);
   registerStripeRoutes(app, supabase);
+  registerLicenseRoutes(app, supabase);
 
   const requireWebhookAuth = createWebhookAuthMiddleware({ isProd });
 
