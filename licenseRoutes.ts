@@ -99,7 +99,7 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
     const user = await authenticateRequest(req, supabase);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-    const rotate = Boolean((req.body as { rotate?: boolean } | undefined)?.rotate);
+    const rotate = (req.body as { rotate?: boolean } | undefined)?.rotate === true;
 
     const { data: existing } = await supabase
       .from('license_keys')
