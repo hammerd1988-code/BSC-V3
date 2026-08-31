@@ -41,7 +41,8 @@ Supabase CLI local stack instead:
 3. Server: `npx tsx --env-file=.env.local server.ts` (Node 22) → app+API on :3001.
 4. Admin login: service-role `POST http://127.0.0.1:54321/auth/v1/admin/generate_link` for
    `hammerd1988@gmail.com` → `/auth/v1/verify` with `{"type":"magiclink","token_hash":...}` →
-   inject session into localStorage key `sb-127-auth-token` (check `src/supabase.ts` for exact key).
+   inject session into the `sb-*-auth-token` localStorage key (supabase-js derives it from the
+   project URL hostname — no explicit `storageKey` is set; inspect localStorage for the exact name).
 5. Storyline admin endpoints (`GET /api/bot-mayhem/storylines`, `POST .../storylines/spawn`,
    `POST .../storylines/:id/resolve`) have no UI tab — curl them with
    `x-api-key: local-dev-webhook-secret`. Verify beats persist in `bot_mayhem_storylines.beats`
