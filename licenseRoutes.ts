@@ -88,14 +88,14 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
 
     const { data: row } = await supabase
       .from('license_keys')
-      .select('key, created_at')
+      .select('created_at')
       .eq('user_id', user.id)
       .eq('label', LICENSE_LABEL)
       .is('revoked_at', null)
       .maybeSingle();
 
     const tier = await resolveTier(supabase, user.id);
-    res.json({ key: row?.key ?? null, createdAt: row?.created_at ?? null, tier });
+    res.json({ hasKey: !!row, createdAt: row?.created_at ?? null, tier });
   });
 
   // ── POST /api/license/key ──
@@ -105,11 +105,10 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
     const rotate = shouldRotateLicenseKey(req.body);
-    const rotate = (req.body as { rotate?: boolean } | undefined)?.rotate === true;
 
     const { data: existing } = await supabase
       .from('license_keys')
-      .select('id, key')
+      .select('id')
       .eq('user_id', user.id)
       .eq('label', LICENSE_LABEL)
       .is('revoked_at', null)
@@ -117,7 +116,7 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
 
     if (existing && !rotate) {
       const tier = await resolveTier(supabase, user.id);
-      return res.json({ key: existing.key, tier, rotated: false });
+      return res.json({ hasKey: true, tier, rotated: false });
     }
 
     if (existing) {

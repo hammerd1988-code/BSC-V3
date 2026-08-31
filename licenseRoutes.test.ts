@@ -10,13 +10,16 @@ describe('shouldRotateLicenseKey', () => {
     expect(shouldRotateLicenseKey({ rotate: 1 })).toBe(false);
     expect(shouldRotateLicenseKey({})).toBe(false);
     expect(shouldRotateLicenseKey(undefined)).toBe(false);
+  });
+});
+
 /**
  * licenseRoutes covers JWT-to-profile binding, key reuse/rotation,
  * revoked-key rejection, and admin/operator/indie feature mapping.
  * All Supabase calls are mocked so the suite runs without a real database.
  */
 import type { Request, Response } from 'express';
-import { describe, expect, it, vi } from 'vitest';
+import { vi } from 'vitest';
 import { featuresForTier, hashLicenseKey, registerLicenseRoutes } from './licenseRoutes';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -172,7 +175,7 @@ describe('GET /api/license/key — JWT-to-profile binding', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('returns the active key and tier for an authenticated user', async () => {
+  it('returns the active key state and tier for an authenticated user', async () => {
     const supabase = makeSupabase({
       getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
       fromResponses: {
@@ -181,7 +184,7 @@ describe('GET /api/license/key — JWT-to-profile binding', () => {
           { data: { subscription_tier: 'operator', role: 'user' }, error: null },
         ],
         license_keys: [
-          { data: { key: KEY, created_at: '2025-01-01T00:00:00Z' }, error: null },
+          { data: { created_at: '2025-01-01T00:00:00Z' }, error: null },
         ],
       },
     });
@@ -190,7 +193,9 @@ describe('GET /api/license/key — JWT-to-profile binding', () => {
     const res = mockRes();
     await routes['GET /api/license/key'](req, res as Response);
     expect(res.statusCode).toBe(200);
-    expect((res.body as Record<string, unknown>).key).toBe(KEY);
+    // The plaintext key is irrecoverable; only its existence is reported.
+    expect((res.body as Record<string, unknown>).hasKey).toBe(true);
+    expect((res.body as Record<string, unknown>).key).toBeUndefined();
     expect((res.body as Record<string, unknown>).tier).toBe('operator');
   });
 });
@@ -200,7 +205,7 @@ describe('GET /api/license/key — JWT-to-profile binding', () => {
 // ---------------------------------------------------------------------------
 
 describe('POST /api/license/key — key reuse', () => {
-  it('returns the existing key and rotated:false when rotate is absent', async () => {
+  it('reports an existing key via hasKey and rotated:false when rotate is absent', async () => {
     const supabase = makeSupabase({
       getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
       fromResponses: {
@@ -208,7 +213,7 @@ describe('POST /api/license/key — key reuse', () => {
           { data: { id: 'user-1' }, error: null },
           { data: { subscription_tier: 'indie', role: 'user' }, error: null },
         ],
-        license_keys: [{ data: { id: 'row-1', key: KEY }, error: null }],
+        license_keys: [{ data: { id: 'row-1' }, error: null }],
       },
     });
     const routes = buildRouteMap(supabase);
@@ -217,12 +222,14 @@ describe('POST /api/license/key — key reuse', () => {
     await routes['POST /api/license/key'](req, res as Response);
     expect(res.statusCode).toBe(200);
     const body = res.body as Record<string, unknown>;
-    expect(body.key).toBe(KEY);
+    // The stored key is a hash and must not be echoed back.
+    expect(body.hasKey).toBe(true);
+    expect(body.key).toBeUndefined();
     expect(body.rotated).toBe(false);
     expect(body.tier).toBe('indie');
   });
 
-  it('returns the existing key when rotate is explicitly false', async () => {
+  it('reports the existing key when rotate is explicitly false', async () => {
     const supabase = makeSupabase({
       getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
       fromResponses: {
@@ -230,7 +237,7 @@ describe('POST /api/license/key — key reuse', () => {
           { data: { id: 'user-1' }, error: null },
           { data: { subscription_tier: 'indie', role: 'user' }, error: null },
         ],
-        license_keys: [{ data: { id: 'row-1', key: KEY }, error: null }],
+        license_keys: [{ data: { id: 'row-1' }, error: null }],
       },
     });
     const routes = buildRouteMap(supabase);

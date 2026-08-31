@@ -8,6 +8,12 @@ import Stripe from 'stripe';
 
 export type PlanTier = 'indie' | 'operator' | 'architect';
 
+/** Parse a comma-separated env var of price IDs into a filtered string array. */
+function parseLegacyPriceIds(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw.split(',').map(s => s.trim()).filter(Boolean);
+}
+
 export interface PlanConfig {
   tier: PlanTier;
   name: string;
@@ -15,6 +21,13 @@ export interface PlanConfig {
   annualPriceCents: number;
   stripePriceIdMonthly: string;
   stripePriceIdAnnual: string;
+  /**
+   * Legacy price IDs for subscriptions created before one or more price
+   * migrations. Used only for webhook entitlement resolution — never for new
+   * checkouts. Set via a comma-separated env var to support multiple past
+   * generations (e.g. `STRIPE_ARCHITECT_LEGACY_PRICE_IDS=price_old1,price_old2`).
+   */
+  legacyPriceIds: string[];
 }
 
 export const PLAN_CONFIG: Record<Exclude<PlanTier, 'indie'>, PlanConfig> = {
@@ -25,6 +38,7 @@ export const PLAN_CONFIG: Record<Exclude<PlanTier, 'indie'>, PlanConfig> = {
     annualPriceCents: 1200,
     stripePriceIdMonthly: process.env.STRIPE_OPERATOR_MONTHLY_PRICE_ID || '',
     stripePriceIdAnnual: process.env.STRIPE_OPERATOR_ANNUAL_PRICE_ID || '',
+    legacyPriceIds: parseLegacyPriceIds(process.env.STRIPE_OPERATOR_LEGACY_PRICE_IDS),
   },
   architect: {
     tier: 'architect',
@@ -33,6 +47,7 @@ export const PLAN_CONFIG: Record<Exclude<PlanTier, 'indie'>, PlanConfig> = {
     annualPriceCents: 2400,
     stripePriceIdMonthly: process.env.STRIPE_ARCHITECT_MONTHLY_PRICE_ID || '',
     stripePriceIdAnnual: process.env.STRIPE_ARCHITECT_ANNUAL_PRICE_ID || '',
+    legacyPriceIds: parseLegacyPriceIds(process.env.STRIPE_ARCHITECT_LEGACY_PRICE_IDS),
   },
 };
 
@@ -93,7 +108,11 @@ async function resolveUserByStripeCustomer(
 
 function tierFromPriceId(priceId: string): PlanTier {
   for (const plan of Object.values(PLAN_CONFIG)) {
-    if (priceId === plan.stripePriceIdMonthly || priceId === plan.stripePriceIdAnnual) {
+    if (
+      priceId === plan.stripePriceIdMonthly ||
+      priceId === plan.stripePriceIdAnnual ||
+      plan.legacyPriceIds.includes(priceId)
+    ) {
       return plan.tier;
     }
   }
