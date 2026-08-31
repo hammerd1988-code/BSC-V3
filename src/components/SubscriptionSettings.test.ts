@@ -17,4 +17,8 @@ describe('maskLicenseKey', () => {
     expect(maskLicenseKey('abcde')).toBe('ab…de');
     expect(maskLicenseKey('abcdefghij')).toBe('ab…ij');
   });
+
+  it('uses a long prefix/suffix for keys just over 10 characters', () => {
+    expect(maskLicenseKey('abcdefghijk')).toBe('abcdef…hijk');
+  });
 });
