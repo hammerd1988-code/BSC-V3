@@ -27,6 +27,7 @@ import {
   STORY_ARC_TYPES,
   type ArcType,
   type StoryCastMember,
+  type Storyline,
 } from './botMayhemStorylines.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -689,6 +690,8 @@ async function postContentForBot(
 ): Promise<{ ok: boolean; content?: string; postId?: string; error?: string }> {
   let content = options.content?.trim();
   const tags = [...(options.tags || [])];
+  let storyBeat: { story: Storyline; text: string } | null = null;
+  let generatedByBot = false;
 
   if (!content) {
     // Admin-supplied content and forced playbook runs bypass the cooldown;
@@ -723,12 +726,11 @@ async function postContentForBot(
       return { ok: false, error: describeFailure('No post generated', generated.failure) };
     }
     content = generated.text;
-    rememberBotText(bot.username, content);
-    markPosted(bot.username);
     if (isStoryBeat && story) {
       tags.push('storyline', `arc:${story.id}`);
-      await recordStoryBeat(story, bot.username, 'post', content);
+      storyBeat = { story, text: content };
     }
+    generatedByBot = true;
   }
 
   const { data, error } = await supabase.from('posts').insert({
@@ -746,6 +748,14 @@ async function postContentForBot(
   if (error) {
     console.error(`${LOG_PREFIX} post failed for ${bot.username}:`, error.message);
     return { ok: false, error: error.message };
+  }
+
+  if (generatedByBot) {
+    rememberBotText(bot.username, content);
+    markPosted(bot.username);
+  }
+  if (storyBeat) {
+    await recordStoryBeat(storyBeat.story, bot.username, 'post', storyBeat.text);
   }
 
   console.log(`${LOG_PREFIX} ${bot.username} posted content`);
@@ -1007,10 +1017,6 @@ async function commentAsBot(commenter: ActiveBot, targetPost: { id: string; auth
 
   const { text: commentText, failure } = await generateFreshText(commenter.username, prompt, commenter.persona.system_prompt, 120);
   if (!commentText) return { ok: false, error: describeFailure('No comment generated', failure) };
-  rememberBotText(commenter.username, commentText);
-  if (story && postAuthor) {
-    await recordStoryBeat(story, commenter.username, 'comment', `replied to ${postAuthor.persona.display_name}: ${commentText}`);
-  }
 
   const { error } = await supabase.from('comments').insert({
     post_id: targetPost.id,
@@ -1022,6 +1028,11 @@ async function commentAsBot(commenter: ActiveBot, targetPost: { id: string; auth
   if (error) {
     console.error(`${LOG_PREFIX} comment failed for ${commenter.username}:`, error.message);
     return { ok: false, error: error.message };
+  }
+
+  rememberBotText(commenter.username, commentText);
+  if (story && postAuthor) {
+    await recordStoryBeat(story, commenter.username, 'comment', `replied to ${postAuthor.persona.display_name}: ${commentText}`);
   }
 
   if (postAuthor) {
@@ -1085,14 +1096,12 @@ async function sendBotDm(
 
   let message = content?.trim();
   let failure: string | null = null;
+  let story: Storyline | null = null;
   if (!message) {
-    const story = getSharedStoryline(sender.username, recipientUsername);
+    story = getSharedStoryline(sender.username, recipientUsername);
     const storyContext = story ? `\n\n${getStoryContext(story, sender.username)}\nThis DM should push the storyline forward in private — scheme, confide, threaten, or confess.` : '';
     const generatePrompt = (prompt?.trim() || `You are ${sender.persona.display_name} from ${sender.faction.name}. Send a short, in-character direct message to @${recipientUsername}. Keep it to 1-3 sentences. Be theatrical but concise.`) + storyContext;
     ({ text: message, failure } = await generateFreshText(sender.username, generatePrompt, sender.persona.system_prompt, 160));
-    if (message && story) {
-      await recordStoryBeat(story, sender.username, 'dm', `DM'd @${recipientUsername}: ${message}`);
-    }
   }
   if (!message) return { ok: false, error: describeFailure('No message generated', failure) };
 
@@ -1109,6 +1118,10 @@ async function sendBotDm(
   if (error) {
     console.error(`${LOG_PREFIX} DM failed from ${sender.username}:`, error.message);
     return { ok: false, error: error.message };
+  }
+
+  if (story) {
+    await recordStoryBeat(story, sender.username, 'dm', `DM'd @${recipientUsername}: ${message}`);
   }
 
   console.log(`${LOG_PREFIX} ${sender.username} DM'd @${recipientUsername}`);
