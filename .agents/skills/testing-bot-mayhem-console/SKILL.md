@@ -28,6 +28,23 @@ Component: `src/components/BotMayhemConsole.tsx`. Server: `botMayhemAutonomy.ts`
    Type `localhost`, press `shift+semicolon` for `:`, then `3001/<path>`, and verify the
    resulting URL in the screenshot. In-app nav links are more reliable than the omnibox.
 
+## Local Supabase fallback (when *.supabase.co project DNS is blocked)
+If `kxfhxrdrlvnvtzdeuvwb.supabase.co` is NXDOMAIN (egress policy), run everything on the
+Supabase CLI local stack instead:
+1. `bash scripts/cloud-agent-start.sh` (fixes iptables, starts dockerd + `supabase start`;
+   `scripts/cloud-agent-install.sh` may 403 downloading the CLI — use `npx -y supabase` instead).
+2. `supabase db reset` applies every numbered migration (incl. bot_mayhem storylines + MAGA), a
+   free check that new migrations apply cleanly. Copy `scripts/cloud-agent.env.local` → `.env.local`,
+   add `OPENAI_API_KEY`; `AGENT_WEBHOOK_SECRET=local-dev-webhook-secret`.
+3. Server: `npx tsx --env-file=.env.local server.ts` (Node 22) → app+API on :3001.
+4. Admin login: service-role `POST http://127.0.0.1:54321/auth/v1/admin/generate_link` for
+   `hammerd1988@gmail.com` → `/auth/v1/verify` with `{"type":"magiclink","token_hash":...}` →
+   inject session into localStorage key `sb-127-auth-token` (check `src/supabase.ts` for exact key).
+5. Storyline admin endpoints (`GET /api/bot-mayhem/storylines`, `POST .../storylines/spawn`,
+   `POST .../storylines/:id/resolve`) have no UI tab — curl them with
+   `x-api-key: local-dev-webhook-secret`. Verify beats persist in `bot_mayhem_storylines.beats`
+   after a storyline-tagged post (tags `storyline`, `arc:<id>`).
+
 ## High-signal tests
 1. **Console loads**: ROSTER shows ~11-13 bots / 6 factions, PLAYBOOKS and RUNS load without a
    "load failed" line. `MAGA switches load failed` is EXPECTED unless migration
