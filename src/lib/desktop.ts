@@ -4,8 +4,9 @@
  * When the web app runs inside the Blood Sweat Code desktop shell
  * (packages/desktop), the preload script exposes native capabilities the
  * browser can't offer: direct access to local LLM servers (LM Studio / Ollama,
- * which browsers can't reach over HTTPS due to mixed-content/CORS) and the
- * embedded Casper CLI for shell-backed build/push/scrape operations.
+ * which browsers can't reach over HTTPS due to mixed-content/CORS), the
+ * embedded Casper CLI for shell-backed build/push/scrape operations, and
+ * Haunted Browser <webview> tabs with chrome shortcuts.
  *
  * In a normal browser these helpers are inert: `isDesktopApp()` returns false
  * and the typed bridge is `null`, so callers can cleanly fall back to cloud
@@ -62,9 +63,15 @@ export interface BscDesktopApi {
     probe(target: LocalLlmTarget): Promise<ProviderStatus>;
     chat(req: LocalChatRequest): Promise<unknown>;
   };
+  /** Casper CLI sidecar (build/push/scrape). Haunted Browser chat does not use this. */
   casper: {
     run(opts: CasperRunOptions): Promise<CasperRunResult>;
     version(): Promise<string>;
+  };
+  /** Native <webview> chrome: Haunted Browser maps onShortcut actions in the renderer. */
+  browser?: {
+    webview: true;
+    onShortcut(cb: (event: { action: string }) => void): () => void;
   };
   onUpdateStatus(cb: (status: DesktopUpdateStatus) => void): () => void;
 }
@@ -78,6 +85,11 @@ declare global {
 /** True only when running inside the Electron desktop shell. */
 export function isDesktopApp(): boolean {
   return typeof window !== 'undefined' && window.bscDesktop?.isDesktop === true;
+}
+
+/** True when the desktop shell has enabled Haunted Browser <webview> tabs. */
+export function isHauntedWebview(): boolean {
+  return typeof window !== 'undefined' && window.bscDesktop?.browser?.webview === true;
 }
 
 /** The desktop bridge, or null in a normal browser. */

@@ -10,4 +10,5 @@ export const IPC = {
   casperRun: 'bsc:casper:run',
   casperVersion: 'bsc:casper:version',
   updateStatus: 'bsc:update:status',
+  browserShortcut: 'bsc:browser:shortcut',
 } as const;

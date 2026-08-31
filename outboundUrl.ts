@@ -34,6 +34,14 @@ export function isPrivateAddress(address: string): boolean {
     // IPv4-mapped (::ffff:127.0.0.1) has to be checked as IPv4.
     const mapped = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
     if (mapped) return isPrivateAddress(mapped[1]);
+    // Hex IPv4-mapped IPv6 (::ffff:7f00:1 = 127.0.0.1)
+    const hexMapped = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (hexMapped) {
+      const hi = parseInt(hexMapped[1], 16);
+      const lo = parseInt(hexMapped[2], 16);
+      const ipv4 = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+      return isPrivateAddress(ipv4);
+    }
     return false;
   }
   return false;
@@ -61,7 +69,22 @@ export interface OutboundUrlOptions {
  * Resolution happens here rather than trusting the hostname, so pointing a public
  * domain at 127.0.0.1 does not get through either.
  */
-export async function assertPublicHttpUrl(rawUrl: string, options: OutboundUrlOptions = {}): Promise<URL> {
+export interface ResolvedUrl {
+  url: URL;
+  /** The validated IP address from DNS resolution (null when hostname is already an IP). */
+  resolvedAddress: string | null;
+}
+
+/**
+ * Resolves and validates a URL before the server requests it.
+ *
+ * Resolution happens here rather than trusting the hostname, so pointing a public
+ * domain at 127.0.0.1 does not get through either.
+ *
+ * Returns both the URL and the resolved IP so callers can pin the connection to
+ * the validated address and avoid DNS-rebinding (TOCTOU) attacks.
+ */
+export async function assertPublicHttpUrl(rawUrl: string, options: OutboundUrlOptions = {}): Promise<ResolvedUrl> {
   const label = options.label ?? 'URL';
   const allowedHttpHosts = options.allowedHttpHosts ?? new Set<string>();
 
@@ -79,12 +102,12 @@ export async function assertPublicHttpUrl(rawUrl: string, options: OutboundUrlOp
   }
   // An explicitly configured local integration is the one case where a private
   // target is the intent.
-  if (isAllowedLocalHost) return url;
+  if (isAllowedLocalHost) return { url, resolvedAddress: null };
 
   const hostname = url.hostname.replace(/^\[|\]$/g, '');
   if (isIP(hostname)) {
     if (isPrivateAddress(hostname)) throw new Error(`${label} is a private address: ${hostname}`);
-    return url;
+    return { url, resolvedAddress: hostname };
   }
 
   if (/(^|\.)localhost$/i.test(hostname) || /\.local$/i.test(hostname) || /\.internal$/i.test(hostname)) {
@@ -98,5 +121,5 @@ export async function assertPublicHttpUrl(rawUrl: string, options: OutboundUrlOp
     throw new Error(`${label} host resolves to a private address: ${hostname} -> ${privateHit.address}`);
   }
 
-  return url;
+  return { url, resolvedAddress: resolved[0].address };
 }

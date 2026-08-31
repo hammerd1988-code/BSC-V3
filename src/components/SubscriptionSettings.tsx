@@ -1,7 +1,138 @@
-import { useState } from 'react';
-import { Check, Crown, Rocket, Shield } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Check, Copy, Crown, KeyRound, RefreshCw, Rocket, Shield } from 'lucide-react';
 import { SUBSCRIPTION_PLANS, useSubscription, TIER_RANK } from '../lib/subscription';
 import type { SubscriptionTier } from '../lib/subscription';
+import { authedFetch } from '../lib/authSession';
+
+async function licenseFetch(path: string, opts: RequestInit = {}): Promise<Response> {
+  return authedFetch(path, opts);
+}
+
+export function maskLicenseKey(licenseKey: string): string {
+  if (licenseKey.length <= 4) return '•'.repeat(licenseKey.length);
+  if (licenseKey.length <= 10) {
+    const prefix = licenseKey.slice(0, 2);
+    const suffix = licenseKey.slice(-2);
+    return `${prefix}…${suffix}`;
+  }
+  const prefix = licenseKey.slice(0, 6);
+  const suffix = licenseKey.slice(-4);
+  return `${prefix}…${suffix}`;
+}
+
+function LocalCoderLicense() {
+  // The plaintext key is only available immediately after mint/rotate; the
+  // server stores only a SHA-256 hash. `hasKey` tracks whether one exists.
+  const [licenseKey, setLicenseKey] = useState<string | null>(null);
+  const [hasKey, setHasKey] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    licenseFetch('/api/license/key')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => setHasKey(Boolean(data?.hasKey)))
+      .catch(() => setHasKey(false));
+  }, []);
+
+  const mint = async (rotate: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await licenseFetch('/api/license/key', {
+        method: 'POST',
+        body: JSON.stringify({ rotate }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to generate key.');
+      // A fresh plaintext key is returned only when one was (re)minted.
+      if (data.key) setLicenseKey(data.key);
+      setHasKey(true);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copy = async () => {
+    if (!licenseKey) return;
+    await navigator.clipboard.writeText(licenseKey);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div className="mt-10 rounded-2xl border border-emerald-400/30 bg-emerald-950/20 p-6 backdrop-blur-xl">
+      <div className="mb-3 flex items-center gap-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-300">
+          <KeyRound className="h-5 w-5" />
+        </div>
+        <div>
+          <h3 className="text-lg font-black uppercase tracking-wider">Local Coder License</h3>
+          <p className="text-xs text-zinc-400">
+            Link your Local Coder install to this account. Your tier unlocks hosted AI and NEO//OPS remote nodes.
+          </p>
+        </div>
+      </div>
+
+      {licenseKey ? (
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <code className="flex-1 truncate rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-xs text-emerald-300">
+            {maskLicenseKey(licenseKey)}
+          </code>
+          <div className="flex gap-2">
+            <button
+              onClick={copy}
+              className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold uppercase tracking-wider text-zinc-300 transition hover:bg-white/10"
+            >
+              {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+            <button
+              onClick={() => mint(true)}
+              disabled={busy}
+              className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold uppercase tracking-wider text-zinc-300 transition hover:bg-white/10 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} />
+              Rotate
+            </button>
+          </div>
+        </div>
+      ) : hasKey ? (
+        <div className="flex flex-col gap-3">
+          <p className="text-xs text-zinc-400">
+            An active license key exists but is stored securely and cannot be displayed. Rotate to generate a new one.
+          </p>
+          <div>
+            <button
+              onClick={() => mint(true)}
+              disabled={busy}
+              className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold uppercase tracking-wider text-zinc-300 transition hover:bg-white/10 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} />
+              Rotate
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={() => mint(false)}
+          disabled={busy}
+          className="rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 px-5 py-2.5 text-sm font-bold uppercase tracking-wider text-black transition hover:from-emerald-400 hover:to-cyan-400 disabled:opacity-50"
+        >
+          {busy ? 'Generating…' : 'Generate License Key'}
+        </button>
+      )}
+
+      {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
+      <p className="mt-3 text-[11px] text-zinc-500">
+        Paste this key in Local Coder → Casper settings → BSC License. Rotating invalidates the previous key.
+      </p>
+    </div>
+  );
+}
 
 const tierIcons: Record<SubscriptionTier, typeof Shield> = {
   indie: Shield,
@@ -73,7 +204,7 @@ export function SubscriptionSettings() {
               onClick={() => setBilling('annual')}
               className={`rounded-full px-4 py-1.5 text-xs font-bold uppercase tracking-wider transition ${billing === 'annual' ? 'bg-white/10 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
-              Annual <span className="text-emerald-400">save 20%</span>
+              Annual <span className="text-emerald-400">save 17%</span>
             </button>
           </div>
         </div>
@@ -152,6 +283,8 @@ export function SubscriptionSettings() {
             );
           })}
         </div>
+
+        <LocalCoderLicense />
 
         {/* Manage subscription */}
         {subscription?.stripe_customer_id && (

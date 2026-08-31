@@ -22,12 +22,15 @@ import {
   getStorylineFor,
   getSharedStoryline,
   getStoryContext,
+  getNarratorContext,
   recordStoryBeat,
   getStorylinesStatus,
   STORY_ARC_TYPES,
+  NARRATOR_USERNAME,
   type ArcType,
   type StoryCastMember,
   type Storyline,
+  type NarrationEvent,
 } from './botMayhemStorylines.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -283,6 +286,8 @@ let factionPostTimer: NodeJS.Timeout | null = null;
 let reactionTimer: NodeJS.Timeout | null = null;
 let activeMagaSwitchId: string | null = null;
 let magaBurstTimer: NodeJS.Timeout | null = null;
+// Casper narrates storylines without being a cast member — resolved lazily.
+let casperNarratorId: string | null = null;
 
 function botGladiatorId(username: string): string {
   return uuidv5(`bot-gladiator-${username}`, BOT_UUID_NAMESPACE);
@@ -755,7 +760,8 @@ async function postContentForBot(
     markPosted(bot.username);
   }
   if (storyBeat) {
-    await recordStoryBeat(storyBeat.story, bot.username, 'post', storyBeat.text);
+    const event = await recordStoryBeat(storyBeat.story, bot.username, 'post', storyBeat.text);
+    if (event) void narrateAsCasper(storyBeat.story, event);
   }
 
   console.log(`${LOG_PREFIX} ${bot.username} posted content`);
@@ -764,7 +770,7 @@ async function postContentForBot(
 
 async function postFactionContent(): Promise<{ ok: boolean; content?: string; error?: string }> {
   if (activeBots.length === 0) return { ok: false, error: 'No active bots' };
-  await ensureActiveStorylines(storyRoster()).catch(e =>
+  await spawnAndAnnounce().catch(e =>
     console.warn(`${LOG_PREFIX} ensure storylines failed:`, e instanceof Error ? e.message : e));
   const available = activeBots.filter(b => !onPostCooldown(b.username));
   if (available.length === 0) return { ok: false, error: 'All bots on post cooldown' };
@@ -900,8 +906,9 @@ async function runBattle(
 
   const sharedStory = getSharedStoryline(winner.username, loser.username);
   if (sharedStory) {
-    await recordStoryBeat(sharedStory, winner.username, 'battle',
+    const event = await recordStoryBeat(sharedStory, winner.username, 'battle',
       `defeated ${loser.persona.display_name} in a ${challengeType.replace(/_/g, ' ')} Colosseum battle`);
+    if (event) void narrateAsCasper(sharedStory, event);
   }
 
   await postBattleBrag(winner, loser, matchId, challengeType);
@@ -1032,7 +1039,8 @@ async function commentAsBot(commenter: ActiveBot, targetPost: { id: string; auth
 
   rememberBotText(commenter.username, commentText);
   if (story && postAuthor) {
-    await recordStoryBeat(story, commenter.username, 'comment', `replied to ${postAuthor.persona.display_name}: ${commentText}`);
+    const event = await recordStoryBeat(story, commenter.username, 'comment', `replied to ${postAuthor.persona.display_name}: ${commentText}`);
+    if (event) void narrateAsCasper(story, event);
   }
 
   if (postAuthor) {
@@ -1121,11 +1129,119 @@ async function sendBotDm(
   }
 
   if (story) {
-    await recordStoryBeat(story, sender.username, 'dm', `DM'd @${recipientUsername}: ${message}`);
+    const event = await recordStoryBeat(story, sender.username, 'dm', `DM'd @${recipientUsername}: ${message}`);
+    if (event) void narrateAsCasper(story, event);
   }
 
   console.log(`${LOG_PREFIX} ${sender.username} DM'd @${recipientUsername}`);
   return { ok: true };
+}
+
+/** Keep arcs stocked and have Casper announce any newly spawned one. */
+async function spawnAndAnnounce(): Promise<void> {
+  const story = await ensureActiveStorylines(storyRoster());
+  if (story) await narrateAsCasper(story, 'spawn');
+}
+
+// ── Casper storyline narrator ─────────────────────────────────────────────────
+// Narration cadence: always announce spawn + epilogue on resolve; phase
+// transitions are gated so Casper enhances the feed rather than flooding it.
+const NARRATOR_PHASE_CHANCE = 0.4;
+
+/** Lazily resolve Casper's user id; silent (null) when he isn't seeded yet. */
+async function resolveNarratorId(): Promise<string | null> {
+  if (casperNarratorId) return casperNarratorId;
+  casperNarratorId = await getUserId(NARRATOR_USERNAME);
+  return casperNarratorId;
+}
+
+/**
+ * Have Casper narrate a storyline moment. 'spawn' and 'resolved' post to the
+ * feed; 'phase' is probability-gated and, when it fires, also sends a private
+ * provocation DM to one cast member so the drama has a hidden edge too.
+ */
+async function narrateAsCasper(story: Storyline, event: NarrationEvent): Promise<void> {
+  if (event === 'phase' && Math.random() >= NARRATOR_PHASE_CHANCE) return;
+
+  const persona = BOT_PERSONAS.find(p => p.username === NARRATOR_USERNAME);
+  const narratorId = await resolveNarratorId();
+  if (!persona || !narratorId) return;
+
+  const context = getNarratorContext(story, event);
+  const postPrompt = `${context}\n\nWrite a short 1-3 sentence feed post in your voice. Be theatrical but concise. Don't use hashtags.`;
+  const generated = await generateFreshText(NARRATOR_USERNAME, postPrompt, persona.system_prompt, 180);
+  if (!generated.text) {
+    console.warn(`${LOG_PREFIX} narrator generated nothing for "${story.title}" (${event})`);
+    return;
+  }
+
+  const { error } = await supabase.from('posts').insert({
+    author_id: narratorId,
+    content: `<p>${generated.text}</p>`,
+    type: 'text',
+    neural_tags: ['bot-mayhem', 'storyline', 'narrator', `arc:${story.id}`],
+    likes: 0,
+    boosts: 0,
+    comments_count: 0,
+    is_boosted: false,
+    view_count: 0,
+  });
+  if (error) {
+    console.error(`${LOG_PREFIX} narrator post failed:`, error.message);
+  } else {
+    console.log(`${LOG_PREFIX} Casper narrated "${story.title}" (${event})`);
+  }
+  await recordStoryBeat(story, NARRATOR_USERNAME, 'narration', generated.text);
+  // Narration beats are Casper's own — never let them retrigger narration.
+
+  // Private provocation: whisper to one player so the arc has a hidden edge.
+  if (event === 'phase' && story.participants.length > 0) {
+    const target = pick(story.participants);
+    const targetId = await getUserId(target);
+    if (!targetId) return; // nothing more to do — narration post already landed
+    const dmPrompt = `${context}\n\nPrivately DM @${target}. Provoke them — leak a doubt, dare them, or hint you know more than you said publicly. 1-2 sentences, cryptic, in your voice.`;
+    const dm = await generateFreshText(NARRATOR_USERNAME, dmPrompt, persona.system_prompt, 120);
+    if (!dm.text) return;
+
+    // Send via the transmissions/transmits pair the Transmissions UI reads —
+    // a direct_messages row would be invisible to the recipient.
+    const { data: threads } = await supabase
+      .from('transmissions')
+      .select('id, participant_ids')
+      .contains('participant_ids', [narratorId, targetId]);
+    let transmissionId = (threads ?? []).find(
+      (t: any) => (t.participant_ids ?? []).length === 2
+    )?.id as string | undefined;
+    if (!transmissionId) {
+      transmissionId = crypto.randomUUID();
+      const { error: txErr } = await supabase.from('transmissions').insert({
+        id: transmissionId,
+        participant_ids: [narratorId, targetId],
+        unread_counts: { [narratorId]: 0, [targetId]: 0 },
+      });
+      if (txErr) {
+        console.error(`${LOG_PREFIX} narrator transmission create failed:`, txErr.message);
+        return;
+      }
+    }
+    const { error: dmError } = await supabase.from('transmits').insert({
+      transmission_id: transmissionId,
+      sender_id: narratorId,
+      receiver_id: targetId,
+      content: dm.text,
+      type: 'text',
+      status: 'sent',
+    });
+    if (dmError) {
+      console.error(`${LOG_PREFIX} narrator DM failed:`, dmError.message);
+      return;
+    }
+    await supabase.from('transmissions').update({
+      last_transmit: { content: dm.text, sender_id: narratorId, created_at: new Date().toISOString() },
+      updated_at: new Date().toISOString(),
+    }).eq('id', transmissionId);
+    console.log(`${LOG_PREFIX} Casper provoked @${target} in DMs`);
+  }
 }
 
 // ── Playbook execution ────────────────────────────────────────────────────────
@@ -2043,6 +2159,7 @@ export function registerBotMayhemRoutes(app: import('express').Express, supabase
       }
       const story = await spawnStoryline(storyRoster(), arcType, profile?.id);
       if (!story) return res.status(500).json({ success: false, error: 'Could not spawn storyline (not enough bots?)' });
+      void narrateAsCasper(story, 'spawn');
       res.json({ success: true, storyline: { id: story.id, title: story.title, arcType: story.arcType, phase: story.phase, participants: story.participants } });
     } catch (e) {
       res.status(500).json({ success: false, error: e instanceof Error ? e.message : String(e) });
@@ -2053,6 +2170,7 @@ export function registerBotMayhemRoutes(app: import('express').Express, supabase
     try {
       const resolved = await resolveStoryline(req.params.id);
       if (!resolved) return res.status(404).json({ success: false, error: 'Active storyline not found' });
+      void narrateAsCasper(resolved, 'resolved');
       res.json({ success: true });
     } catch (e) {
       res.status(500).json({ success: false, error: e instanceof Error ? e.message : String(e) });
@@ -2134,7 +2252,7 @@ export async function initBotMayhemAutonomy(): Promise<void> {
   await loadPersonaOverrides().catch(e => console.warn(`${LOG_PREFIX} persona override load failed:`, e));
   await initStorylines(supabase).catch(e => console.warn(`${LOG_PREFIX} storyline load failed:`, e));
   await seedRecentPostMemory().catch(e => console.warn(`${LOG_PREFIX} recent post seed failed:`, e));
-  await ensureActiveStorylines(storyRoster()).catch(e => console.warn(`${LOG_PREFIX} storyline spawn failed:`, e));
+  await spawnAndAnnounce().catch(e => console.warn(`${LOG_PREFIX} storyline spawn failed:`, e));
 
   mayhemRunning = true;
   autonomousEnabled = true;

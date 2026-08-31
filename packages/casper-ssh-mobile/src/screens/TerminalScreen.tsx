@@ -42,6 +42,7 @@ export default function TerminalScreen({ transport, onDisconnect }: {
   const styleRef = useRef<AnsiStyle>({});
   const escapeRemainderRef = useRef('');
   const discardingEscapeRef = useRef<null | 'csi' | 'osc' | 'osc-escape'>(null);
+  const discardingEscapeBytesRef = useRef(0);
   const fallbackBytesRef = useRef<Uint8Array>(new Uint8Array());
   const decoderRef = useRef<TextDecoder | null>(
     typeof TextDecoder === 'function' ? new TextDecoder('utf-8', { fatal: false }) : null,
@@ -55,12 +56,14 @@ export default function TerminalScreen({ transport, onDisconnect }: {
       style: styleRef.current,
       escapeRemainder: escapeRemainderRef.current,
       discardingEscape: discardingEscapeRef.current,
+      discardingEscapeBytes: discardingEscapeBytesRef.current,
     }, value);
     styleRef.current = result.style;
     pendingLineRef.current = result.pendingLine;
     cursorColumnRef.current = result.cursorColumn;
     escapeRemainderRef.current = result.escapeRemainder;
     discardingEscapeRef.current = result.discardingEscape;
+    discardingEscapeBytesRef.current = result.discardingEscapeBytes;
     setPendingLine(pendingLineRef.current);
     if (result.lines.length) {
       setLines((current) => [...current, ...result.lines].slice(-MAX_LINES));
