@@ -7,6 +7,13 @@ describe('maskLicenseKey', () => {
   });
 
   it('fully masks very short keys', () => {
+    expect(maskLicenseKey('')).toBe('');
     expect(maskLicenseKey('abcd')).toBe('••••');
+    expect(maskLicenseKey('abc')).toBe('•••');
+  });
+
+  it('uses a short prefix/suffix for mid-length keys', () => {
+    expect(maskLicenseKey('abcde')).toBe('ab…de');
+    expect(maskLicenseKey('abcdefghij')).toBe('ab…ij');
   });
 });

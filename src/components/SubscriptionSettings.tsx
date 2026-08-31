@@ -18,7 +18,12 @@ async function licenseFetch(path: string, opts: RequestInit = {}): Promise<Respo
 }
 
 export function maskLicenseKey(licenseKey: string): string {
-  if (licenseKey.length <= 4) return '••••';
+  if (licenseKey.length <= 4) return '•'.repeat(licenseKey.length);
+  if (licenseKey.length <= 10) {
+    const prefix = licenseKey.slice(0, 2);
+    const suffix = licenseKey.slice(-2);
+    return `${prefix}…${suffix}`;
+  }
   const prefix = licenseKey.slice(0, 6);
   const suffix = licenseKey.slice(-4);
   return `${prefix}…${suffix}`;
