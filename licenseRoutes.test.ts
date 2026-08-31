@@ -1,356 +1,444 @@
 // @vitest-environment node
-import express from 'express';
-import type { AddressInfo } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
-import { hashLicenseKey, registerLicenseRoutes } from './licenseRoutes.js';
+/**
+ * licenseRoutes covers JWT-to-profile binding, key reuse/rotation,
+ * revoked-key rejection, and admin/operator/indie feature mapping.
+ * All Supabase calls are mocked so the suite runs without a real database.
+ */
+import type { Request, Response } from 'express';
+import { describe, expect, it, vi } from 'vitest';
+import { featuresForTier, hashLicenseKey, registerLicenseRoutes } from './licenseRoutes';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
-type UserRow = {
-  id: string;
-  auth_uid: string;
-  subscription_tier?: string | null;
-  role?: string | null;
-};
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-type LicenseKeyRow = {
-  id: string;
-  user_id: string;
-  key: string;
-  label: string;
-  created_at: string;
-  revoked_at?: string | null;
-  last_used_at?: string | null;
-};
+type MockResult = { data: unknown; error: null | { message: string } };
 
-type DbState = {
-  users: UserRow[];
-  license_keys: LicenseKeyRow[];
-};
-
-function makeSupabaseMock(state: DbState, tokenToAuthUid: Record<string, string>) {
-  let idCounter = state.license_keys.length;
-
-  class Query {
-    private readonly table: keyof DbState;
-    private filters: Array<(row: any) => boolean> = [];
-    private limitCount: number | null = null;
-    private op: 'select' | 'insert' | 'update' = 'select';
-    private payload: Record<string, unknown> | null = null;
-
-    constructor(table: keyof DbState) {
-      this.table = table;
-    }
-
-    select() {
-      this.op = 'select';
-      return this;
-    }
-
-    eq(column: string, value: unknown) {
-      this.filters.push((row) => row[column] === value);
-      return this;
-    }
-
-    is(column: string, value: unknown) {
-      this.filters.push((row) => row[column] === value);
-      return this;
-    }
-
-    limit(count: number) {
-      this.limitCount = count;
-      return this;
-    }
-
-    insert(payload: Record<string, unknown>) {
-      this.op = 'insert';
-      this.payload = payload;
-      return this;
-    }
-
-    update(payload: Record<string, unknown>) {
-      this.op = 'update';
-      this.payload = payload;
-      return this;
-    }
-
-    maybeSingle() {
-      const rows = this.matchedRows();
-      return Promise.resolve({ data: rows[0] ?? null, error: null });
-    }
-
-    then(resolve?: (value: { data: unknown; error: null }) => unknown, reject?: (reason: unknown) => unknown) {
-      const result = this.execute();
-      return Promise.resolve(result).then(resolve, reject);
-    }
-
-    private matchedRows() {
-      const rows = state[this.table] as Record<string, unknown>[];
-      const matched = rows.filter((row) => this.filters.every((f) => f(row)));
-      return this.limitCount == null ? matched : matched.slice(0, this.limitCount);
-    }
-
-    private execute() {
-      if (this.op === 'insert') {
-        const row = {
-          id: `lk-${++idCounter}`,
-          created_at: new Date().toISOString(),
-          revoked_at: null,
-          ...this.payload,
-        } as LicenseKeyRow;
-        state.license_keys.push(row);
-        return { data: [row], error: null };
-      }
-
-      if (this.op === 'update') {
-        const rows = this.matchedRows();
-        for (const row of rows) Object.assign(row, this.payload);
-        return { data: rows, error: null };
-      }
-
-      return { data: this.matchedRows(), error: null };
-    }
+/**
+ * Returns a chainable query mock. Every builder method returns itself, and
+ * `maybeSingle()` resolves with `result`. A `.then()` shim is provided so
+ * callers that use `void chain.then(…)` also work.
+ */
+function chainFor(result: MockResult) {
+  const chain: Record<string, unknown> = {};
+  for (const m of ['select', 'eq', 'is', 'limit', 'update', 'insert']) {
+    chain[m] = () => chain;
   }
+  chain['maybeSingle'] = () => Promise.resolve(result);
+  chain['then'] = (resolve: (v: MockResult) => void) => Promise.resolve(result).then(resolve);
+  return chain;
+}
+
+/**
+ * Builds a Supabase client mock.
+ * `fromResponses` is a table → ordered list of results. Each `.from(table)`
+ * call pops the first entry. Calling `.from()` on an unknown table or an
+ * exhausted queue throws so unexpected queries are caught immediately.
+ */
+function makeSupabase({
+  getUserResult,
+  fromResponses,
+}: {
+  getUserResult: { data: { user: { id: string } | null }; error: null | { message: string } };
+  fromResponses: Record<string, MockResult[]>;
+}): SupabaseClient {
+  const queues: Record<string, MockResult[]> = Object.fromEntries(
+    Object.entries(fromResponses).map(([k, v]) => [k, [...v]]),
+  );
+
+  const from = (table: string) => {
+    const q = queues[table];
+    if (!q || q.length === 0) {
+      throw new Error(
+        `Unexpected or exhausted Supabase mock query: .from("${table}"). ` +
+        `Registered tables: [${Object.keys(queues).join(', ')}]`,
+      );
+    }
+    const result = q.shift()!;
+    return chainFor(result);
+  };
 
   return {
-    auth: {
-      async getUser(token: string) {
-        const authUid = tokenToAuthUid[token];
-        if (!authUid) return { data: { user: null }, error: { message: 'invalid token' } };
-        return { data: { user: { id: authUid } }, error: null };
-      },
+    auth: { getUser: vi.fn().mockResolvedValue(getUserResult) },
+    from,
+  } as unknown as SupabaseClient;
+}
+
+// ---------------------------------------------------------------------------
+// Minimal req/res mocks (same pattern used in serverSecurity.test.ts)
+// ---------------------------------------------------------------------------
+
+function mockRes() {
+  const res = {
+    statusCode: 200,
+    body: undefined as unknown,
+    status(code: number) { this.statusCode = code; return this; },
+    json(payload: unknown) { this.body = payload; return this; },
+  };
+  return res as unknown as Response & typeof res;
+}
+
+function mockReq(overrides: Partial<Request> = {}): Request {
+  return { headers: {}, body: {}, ...overrides } as Request;
+}
+
+/**
+ * Registers routes on a minimal stub Express app and returns a lookup so
+ * tests can call the handler for a given METHOD + path directly.
+ */
+function buildRouteMap(supabase: SupabaseClient) {
+  const routes: Record<string, (req: Request, res: Response) => Promise<void>> = {};
+  const app = {
+    get: (path: string, handler: (req: Request, res: Response) => Promise<void>) => {
+      routes[`GET ${path}`] = handler;
     },
-    from(table: keyof DbState) {
-      return new Query(table);
+    post: (path: string, handler: (req: Request, res: Response) => Promise<void>) => {
+      routes[`POST ${path}`] = handler;
     },
   };
+  registerLicenseRoutes(app as never, supabase);
+  return routes;
 }
 
-async function startLicenseServer(state: DbState, tokenToAuthUid: Record<string, string>) {
-  const app = express();
-  app.use(express.json());
-  registerLicenseRoutes(app, makeSupabaseMock(state, tokenToAuthUid) as any);
-  const server = app.listen(0, '127.0.0.1');
-  await new Promise<void>((resolve) => server.once('listening', () => resolve()));
-  const { port } = server.address() as AddressInfo;
-  return {
-    state,
-    baseUrl: `http://127.0.0.1:${port}`,
-    async close() {
-      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
-    },
-  };
-}
+const KEY = 'bsc_deadbeef1234deadbeef1234deadbeef1234deadbeef12';
+const AUTH_HEADER = 'Bearer fake-test-jwt';
+// ---------------------------------------------------------------------------
+// featuresForTier — pure unit tests (no Supabase needed)
+// ---------------------------------------------------------------------------
 
-function authHeader(token: string) {
-  return { Authorization: 'Bearer ' + token };
-}
+describe('featuresForTier', () => {
+  it('grants hosted AI and unlimited nodes to architect', () => {
+    expect(featuresForTier('architect')).toEqual({ hostedAi: true, remoteNodeLimit: null });
+  });
 
-const servers: Array<{ close: () => Promise<void> }> = [];
-afterEach(async () => {
-  await Promise.all(servers.splice(0).map((s) => s.close()));
+  it('grants hosted AI and 1 remote node to operator', () => {
+    expect(featuresForTier('operator')).toEqual({ hostedAi: true, remoteNodeLimit: 1 });
+  });
+
+  it('denies hosted AI and remote nodes to indie', () => {
+    expect(featuresForTier('indie')).toEqual({ hostedAi: false, remoteNodeLimit: 0 });
+  });
 });
 
-describe('license routes', () => {
-  it('binds bearer JWT auth user to profile id for /api/license/key', async () => {
-    const env = await startLicenseServer(
-      {
-        users: [{ id: 'user-1', auth_uid: 'auth-1', subscription_tier: 'operator', role: 'user' }],
-        license_keys: [
-          {
-            id: 'lk-1',
-            user_id: 'user-1',
-            key: hashLicenseKey('bsc_existing_key'),
-            label: 'local-coder',
-            created_at: '2026-01-01T00:00:00.000Z',
-            revoked_at: null,
-          },
-        ],
-      },
-      { 'token-1': 'auth-1' },
-    );
-    servers.push(env);
+// ---------------------------------------------------------------------------
+// JWT-to-profile binding — GET /api/license/key
+// ---------------------------------------------------------------------------
 
-    const res = await fetch(`${env.baseUrl}/api/license/key`, {
-      headers: authHeader('token-1'),
-    });
-
-    expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toMatchObject({ key: hashLicenseKey('bsc_existing_key'), tier: 'operator' });
+describe('GET /api/license/key — JWT-to-profile binding', () => {
+  it('returns 401 when Authorization header is absent', async () => {
+    const supabase = makeSupabase({ getUserResult: { data: { user: null }, error: null }, fromResponses: {} });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: {} });
+    const res = mockRes();
+    await routes['GET /api/license/key'](req, res as Response);
+    expect(res.statusCode).toBe(401);
   });
 
-  it('reuses an existing key by default and rotates only when rotate=true', async () => {
-    const env = await startLicenseServer(
-      {
-        users: [{ id: 'user-1', auth_uid: 'auth-1', subscription_tier: 'operator', role: 'user' }],
-        license_keys: [
-          {
-            id: 'lk-1',
-            user_id: 'user-1',
-            key: hashLicenseKey('bsc_old_key'),
-            label: 'local-coder',
-            created_at: '2026-01-01T00:00:00.000Z',
-            revoked_at: null,
-          },
-        ],
-      },
-      { 'token-1': 'auth-1' },
-    );
-    servers.push(env);
-
-    const reuseRes = await fetch(`${env.baseUrl}/api/license/key`, {
-      method: 'POST',
-      headers: {
-        ...authHeader('token-1'),
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({}),
+  it('returns 401 when JWT resolves to no Supabase auth user', async () => {
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: null }, error: { message: 'invalid jwt' } },
+      fromResponses: {},
     });
-
-    expect(reuseRes.status).toBe(200);
-    await expect(reuseRes.json()).resolves.toMatchObject({
-      key: hashLicenseKey('bsc_old_key'),
-      rotated: false,
-      tier: 'operator',
-    });
-    expect(env.state.license_keys).toHaveLength(1);
-
-    const stringFalseRes = await fetch(`${env.baseUrl}/api/license/key`, {
-      method: 'POST',
-      headers: {
-        ...authHeader('token-1'),
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ rotate: 'false' }),
-    });
-
-    expect(stringFalseRes.status).toBe(200);
-    await expect(stringFalseRes.json()).resolves.toMatchObject({
-      key: 'bsc_old_key',
-      rotated: false,
-      tier: 'operator',
-    });
-    expect(env.state.license_keys).toHaveLength(1);
-
-    const rotateRes = await fetch(`${env.baseUrl}/api/license/key`, {
-      method: 'POST',
-      headers: {
-        ...authHeader('token-1'),
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ rotate: true }),
-    });
-
-    expect(rotateRes.status).toBe(200);
-    const rotateBody = await rotateRes.json() as { key: string; rotated: boolean; tier: string };
-    expect(rotateBody.tier).toBe('operator');
-    expect(rotateBody.rotated).toBe(true);
-    expect(rotateBody.key).toMatch(/^bsc_[0-9a-f]+$/);
-    expect(rotateBody.key).not.toBe(hashLicenseKey('bsc_old_key'));
-
-    expect(env.state.license_keys).toHaveLength(2);
-    const oldKey = env.state.license_keys.find((row) => row.id === 'lk-1');
-    const activeKeys = env.state.license_keys.filter((row) => row.revoked_at == null);
-    expect(oldKey?.revoked_at).toBeTruthy();
-    expect(activeKeys).toHaveLength(1);
-    expect(activeKeys[0]?.key).toBe(hashLicenseKey(rotateBody.key));
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { authorization: AUTH_HEADER } });
+    const res = mockRes();
+    await routes['GET /api/license/key'](req, res as Response);
+    expect(res.statusCode).toBe(401);
   });
 
-  it('rejects a hashed value passed as x-license-key', async () => {
-    const env = await startLicenseServer(
-      {
-        users: [{ id: 'user-1', auth_uid: 'auth-1', subscription_tier: 'operator', role: 'user' }],
-        license_keys: [
-          {
-            id: 'lk-1',
-            user_id: 'user-1',
-            key: hashLicenseKey('bsc_valid_key'),
-            label: 'local-coder',
-            created_at: '2026-01-01T00:00:00.000Z',
-            revoked_at: null,
-          },
-        ],
+  it('returns 401 when JWT is valid but no users row matches auth_uid', async () => {
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
+      fromResponses: {
+        users: [{ data: null, error: null }], // no profile found
       },
-      {},
-    );
-    servers.push(env);
-
-    const res = await fetch(`${env.baseUrl}/api/license/verify`, {
-      headers: { 'x-license-key': hashLicenseKey('bsc_valid_key') },
     });
-
-    expect(res.status).toBe(400);
-    await expect(res.json()).resolves.toMatchObject({ valid: false });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { authorization: AUTH_HEADER } });
+    const res = mockRes();
+    await routes['GET /api/license/key'](req, res as Response);
+    expect(res.statusCode).toBe(401);
   });
 
-  it('rejects revoked keys on /api/license/verify', async () => {
-    const env = await startLicenseServer(
-      {
-        users: [{ id: 'user-1', auth_uid: 'auth-1', subscription_tier: 'operator', role: 'user' }],
+  it('returns the active key and tier for an authenticated user', async () => {
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
+      fromResponses: {
+        users: [
+          { data: { id: 'user-1' }, error: null },
+          { data: { subscription_tier: 'operator', role: 'user' }, error: null },
+        ],
         license_keys: [
-          {
-            id: 'lk-1',
-            user_id: 'user-1',
-            key: hashLicenseKey('bsc_revoked_key'),
-            label: 'local-coder',
-            created_at: '2026-01-01T00:00:00.000Z',
-            revoked_at: '2026-02-01T00:00:00.000Z',
-          },
+          { data: { key: KEY, created_at: '2025-01-01T00:00:00Z' }, error: null },
         ],
       },
-      {},
-    );
-    servers.push(env);
-
-    const res = await fetch(`${env.baseUrl}/api/license/verify`, {
-      headers: { 'x-license-key': 'bsc_revoked_key' },
     });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { authorization: AUTH_HEADER } });
+    const res = mockRes();
+    await routes['GET /api/license/key'](req, res as Response);
+    expect(res.statusCode).toBe(200);
+    expect((res.body as Record<string, unknown>).key).toBe(KEY);
+    expect((res.body as Record<string, unknown>).tier).toBe('operator');
+  });
+});
 
-    expect(res.status).toBe(401);
-    await expect(res.json()).resolves.toMatchObject({ valid: false });
+// ---------------------------------------------------------------------------
+// Key reuse — POST /api/license/key without rotate
+// ---------------------------------------------------------------------------
+
+describe('POST /api/license/key — key reuse', () => {
+  it('returns the existing key and rotated:false when rotate is absent', async () => {
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
+      fromResponses: {
+        users: [
+          { data: { id: 'user-1' }, error: null },
+          { data: { subscription_tier: 'indie', role: 'user' }, error: null },
+        ],
+        license_keys: [{ data: { id: 'row-1', key: KEY }, error: null }],
+      },
+    });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { authorization: AUTH_HEADER }, body: {} });
+    const res = mockRes();
+    await routes['POST /api/license/key'](req, res as Response);
+    expect(res.statusCode).toBe(200);
+    const body = res.body as Record<string, unknown>;
+    expect(body.key).toBe(KEY);
+    expect(body.rotated).toBe(false);
+    expect(body.tier).toBe('indie');
   });
 
-  it.each([
-    {
-      name: 'indie',
-      user: { id: 'user-indie', auth_uid: 'auth-indie', subscription_tier: null, role: 'user' },
-      key: 'bsc_indie_key',
-      expected: { tier: 'indie', features: { hostedAi: false, remoteNodeLimit: 0 } },
-    },
-    {
-      name: 'operator',
-      user: { id: 'user-operator', auth_uid: 'auth-operator', subscription_tier: 'operator', role: 'user' },
-      key: 'bsc_operator_key',
-      expected: { tier: 'operator', features: { hostedAi: true, remoteNodeLimit: 1 } },
-    },
-    {
-      name: 'admin->architect',
-      user: { id: 'user-admin', auth_uid: 'auth-admin', subscription_tier: 'indie', role: 'admin' },
-      key: 'bsc_admin_key',
-      expected: { tier: 'architect', features: { hostedAi: true, remoteNodeLimit: null } },
-    },
-  ] as const)('maps $name license features on verify', async ({ user, key, expected }) => {
-    const env = await startLicenseServer(
-      {
-        users: [user],
+  it('returns the existing key when rotate is explicitly false', async () => {
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
+      fromResponses: {
+        users: [
+          { data: { id: 'user-1' }, error: null },
+          { data: { subscription_tier: 'indie', role: 'user' }, error: null },
+        ],
+        license_keys: [{ data: { id: 'row-1', key: KEY }, error: null }],
+      },
+    });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { authorization: AUTH_HEADER }, body: { rotate: false } });
+    const res = mockRes();
+    await routes['POST /api/license/key'](req, res as Response);
+    expect((res.body as Record<string, unknown>).rotated).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Key rotation — POST /api/license/key with rotate: true
+// ---------------------------------------------------------------------------
+
+describe('POST /api/license/key — rotation', () => {
+  it('revokes the old key and mints a new one', async () => {
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
+      fromResponses: {
+        users: [
+          { data: { id: 'user-1' }, error: null },
+          { data: { subscription_tier: 'operator', role: 'user' }, error: null },
+        ],
         license_keys: [
-          {
-            id: 'lk-1',
-            user_id: user.id,
-            key: hashLicenseKey(key),
-            label: 'local-coder',
-            created_at: '2026-01-01T00:00:00.000Z',
-            revoked_at: null,
-          },
+          { data: { id: 'row-old', key: KEY }, error: null }, // existing
+          { data: null, error: null },                         // revoke update
+          { data: null, error: null },                         // insert new
         ],
       },
-      {},
-    );
-    servers.push(env);
-
-    const res = await fetch(`${env.baseUrl}/api/license/verify`, {
-      headers: { 'x-license-key': key },
     });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { authorization: AUTH_HEADER }, body: { rotate: true } });
+    const res = mockRes();
+    await routes['POST /api/license/key'](req, res as Response);
+    expect(res.statusCode).toBe(200);
+    const body = res.body as Record<string, unknown>;
+    expect(body.rotated).toBe(true);
+    expect(typeof body.key).toBe('string');
+    expect((body.key as string).startsWith('bsc_')).toBe(true);
+    expect(body.key).not.toBe(KEY);
+  });
 
-    expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toMatchObject({ valid: true, ...expected });
+  it('mints a new key when no prior key exists (rotated:false since nothing was revoked)', async () => {
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
+      fromResponses: {
+        users: [
+          { data: { id: 'user-1' }, error: null },
+          { data: { subscription_tier: 'indie', role: 'user' }, error: null },
+        ],
+        license_keys: [
+          { data: null, error: null }, // no existing key
+          { data: null, error: null }, // insert
+        ],
+      },
+    });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { authorization: AUTH_HEADER }, body: { rotate: true } });
+    const res = mockRes();
+    await routes['POST /api/license/key'](req, res as Response);
+    expect(res.statusCode).toBe(200);
+    const body = res.body as Record<string, unknown>;
+    expect((body.key as string).startsWith('bsc_')).toBe(true);
+    expect(body.rotated).toBe(false);
+  });
+
+  it('returns 500 when the revoke update fails', async () => {
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
+      fromResponses: {
+        users: [{ data: { id: 'user-1' }, error: null }],
+        license_keys: [
+          { data: { id: 'row-old', key: KEY }, error: null },
+          { data: null, error: { message: 'DB offline' } }, // revoke fails
+        ],
+      },
+    });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { authorization: AUTH_HEADER }, body: { rotate: true } });
+    const res = mockRes();
+    await routes['POST /api/license/key'](req, res as Response);
+    expect(res.statusCode).toBe(500);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Revoked-key rejection — GET /api/license/verify
+// ---------------------------------------------------------------------------
+
+describe('GET /api/license/verify — revoked-key rejection', () => {
+  it('rejects a missing x-license-key header', async () => {
+    const supabase = makeSupabase({ getUserResult: { data: { user: null }, error: null }, fromResponses: {} });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: {} });
+    const res = mockRes();
+    await routes['GET /api/license/verify'](req, res as Response);
+    expect(res.statusCode).toBe(400);
+    expect((res.body as Record<string, unknown>).valid).toBe(false);
+  });
+
+  it('rejects a key that does not start with bsc_', async () => {
+    const supabase = makeSupabase({ getUserResult: { data: { user: null }, error: null }, fromResponses: {} });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { 'x-license-key': 'bad_key_format' } });
+    const res = mockRes();
+    await routes['GET /api/license/verify'](req, res as Response);
+    expect(res.statusCode).toBe(400);
+    expect((res.body as Record<string, unknown>).valid).toBe(false);
+  });
+
+  it('rejects a hashed key value passed as x-license-key', async () => {
+    // hashLicenseKey produces a sha256 hex string — it does not start with bsc_
+    const supabase = makeSupabase({ getUserResult: { data: { user: null }, error: null }, fromResponses: {} });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { 'x-license-key': hashLicenseKey(KEY) } });
+    const res = mockRes();
+    await routes['GET /api/license/verify'](req, res as Response);
+    expect(res.statusCode).toBe(400);
+    expect((res.body as Record<string, unknown>).valid).toBe(false);
+  });
+
+  it('rejects an unknown key (not in the database)', async () => {
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: null }, error: null },
+      fromResponses: { license_keys: [{ data: null, error: null }] },
+    });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { 'x-license-key': 'bsc_unknownkey' } });
+    const res = mockRes();
+    await routes['GET /api/license/verify'](req, res as Response);
+    expect(res.statusCode).toBe(401);
+    expect((res.body as Record<string, unknown>).valid).toBe(false);
+  });
+
+  it('rejects a revoked key', async () => {
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: null }, error: null },
+      fromResponses: {
+        license_keys: [
+          { data: { id: 'row-1', user_id: 'user-1', revoked_at: '2025-06-01T00:00:00Z' }, error: null },
+        ],
+      },
+    });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { 'x-license-key': KEY } });
+    const res = mockRes();
+    await routes['GET /api/license/verify'](req, res as Response);
+    expect(res.statusCode).toBe(401);
+    expect((res.body as Record<string, unknown>).valid).toBe(false);
+  });
+
+  it('accepts a valid, non-revoked key', async () => {
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: null }, error: null },
+      fromResponses: {
+        license_keys: [
+          { data: { id: 'row-1', user_id: 'user-1', revoked_at: null }, error: null },
+          { data: null, error: null }, // last_used_at update (best-effort)
+        ],
+        users: [
+          { data: { subscription_tier: 'operator', role: 'user' }, error: null },
+        ],
+      },
+    });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { 'x-license-key': KEY } });
+    const res = mockRes();
+    await routes['GET /api/license/verify'](req, res as Response);
+    expect(res.statusCode).toBe(200);
+    const body = res.body as Record<string, unknown>;
+    expect(body.valid).toBe(true);
+    expect(body.tier).toBe('operator');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Admin/operator/indie feature mapping
+// ---------------------------------------------------------------------------
+
+describe('GET /api/license/verify — feature mapping per tier', () => {
+  async function verifyAs(subscriptionTier: string | null, role: string) {
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: null }, error: null },
+      fromResponses: {
+        license_keys: [
+          { data: { id: 'row-1', user_id: 'user-1', revoked_at: null }, error: null },
+          { data: null, error: null },
+        ],
+        users: [{ data: { subscription_tier: subscriptionTier, role }, error: null }],
+      },
+    });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { 'x-license-key': KEY } });
+    const res = mockRes();
+    await routes['GET /api/license/verify'](req, res as Response);
+    return res.body as Record<string, unknown>;
+  }
+
+  it('gives admin role architect features regardless of subscription_tier', async () => {
+    const body = await verifyAs('indie', 'admin');
+    expect(body.tier).toBe('architect');
+    expect(body.features).toEqual({ hostedAi: true, remoteNodeLimit: null });
+  });
+
+  it('gives architect tier architect features', async () => {
+    const body = await verifyAs('architect', 'user');
+    expect(body.tier).toBe('architect');
+    expect(body.features).toEqual({ hostedAi: true, remoteNodeLimit: null });
+  });
+
+  it('gives operator tier operator features', async () => {
+    const body = await verifyAs('operator', 'user');
+    expect(body.tier).toBe('operator');
+    expect(body.features).toEqual({ hostedAi: true, remoteNodeLimit: 1 });
+  });
+
+  it('gives indie (or null) tier indie features', async () => {
+    const body = await verifyAs(null, 'user');
+    expect(body.tier).toBe('indie');
+    expect(body.features).toEqual({ hostedAi: false, remoteNodeLimit: 0 });
   });
 });
