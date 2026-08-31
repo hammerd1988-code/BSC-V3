@@ -141,8 +141,7 @@ async function startLicenseServer(state: DbState, tokenToAuthUid: Record<string,
 }
 
 function authHeader(token: string) {
-  const bearer = 'Bearer';
-  return { Authorization: `${bearer} ${token}` };
+  return { Authorization: 'Bearer ' + token };
 }
 
 const servers: Array<{ close: () => Promise<void> }> = [];
@@ -228,7 +227,7 @@ describe('license routes', () => {
     expect(rotateBody.tier).toBe('operator');
     expect(rotateBody.rotated).toBe(true);
     expect(rotateBody.key).toMatch(/^bsc_[0-9a-f]+$/);
-    expect(rotateBody.key).not.toBe('bsc_old_key');
+    expect(rotateBody.key).not.toBe(hashLicenseKey('bsc_old_key'));
 
     expect(env.state.license_keys).toHaveLength(2);
     const oldKey = env.state.license_keys.find((row) => row.id === 'lk-1');
@@ -236,6 +235,33 @@ describe('license routes', () => {
     expect(oldKey?.revoked_at).toBeTruthy();
     expect(activeKeys).toHaveLength(1);
     expect(activeKeys[0]?.key).toBe(hashLicenseKey(rotateBody.key));
+  });
+
+  it('rejects a hashed value passed as x-license-key', async () => {
+    const env = await startLicenseServer(
+      {
+        users: [{ id: 'user-1', auth_uid: 'auth-1', subscription_tier: 'operator', role: 'user' }],
+        license_keys: [
+          {
+            id: 'lk-1',
+            user_id: 'user-1',
+            key: hashLicenseKey('bsc_valid_key'),
+            label: 'local-coder',
+            created_at: '2026-01-01T00:00:00.000Z',
+            revoked_at: null,
+          },
+        ],
+      },
+      {},
+    );
+    servers.push(env);
+
+    const res = await fetch(`${env.baseUrl}/api/license/verify`, {
+      headers: { 'x-license-key': hashLicenseKey('bsc_valid_key') },
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ valid: false });
   });
 
   it('rejects revoked keys on /api/license/verify', async () => {
