@@ -163,6 +163,9 @@ describe('registerLicenseRoutes', () => {
     await handler!(req, res);
 
     expect(update).toHaveBeenCalledOnce();
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ revoked_at: expect.any(String) }),
+    );
     expect(insert).toHaveBeenCalledOnce();
     expect(res.statusCode).toBe(200);
     expect(res.body).toMatchObject({ tier: 'operator', rotated: true });

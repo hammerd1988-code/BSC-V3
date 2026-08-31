@@ -25,7 +25,7 @@ function LocalCoderLicense() {
   const maskedLicenseKey =
     licenseKey && licenseKey.length > 10
       ? `${licenseKey.slice(0, 6)}…${licenseKey.slice(-4)}`
-      : licenseKey;
+      : licenseKey ? '••••••••' : null;
 
   useEffect(() => {
     licenseFetch('/api/license/key')
