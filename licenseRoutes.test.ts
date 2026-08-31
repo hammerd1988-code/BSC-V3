@@ -210,6 +210,23 @@ describe('license routes', () => {
     await expect(reuseRes.json()).resolves.toMatchObject({ key: 'bsc_old_key', rotated: false, tier: 'operator' });
     expect(env.state.license_keys).toHaveLength(1);
 
+    const stringFalseRes = await fetch(`${env.baseUrl}/api/license/key`, {
+      method: 'POST',
+      headers: {
+        ...authHeader('token-1'),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ rotate: 'false' }),
+    });
+
+    expect(stringFalseRes.status).toBe(200);
+    await expect(stringFalseRes.json()).resolves.toMatchObject({
+      key: 'bsc_old_key',
+      rotated: false,
+      tier: 'operator',
+    });
+    expect(env.state.license_keys).toHaveLength(1);
+
     const rotateRes = await fetch(`${env.baseUrl}/api/license/key`, {
       method: 'POST',
       headers: {
