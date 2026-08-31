@@ -31,8 +31,10 @@ Component: `src/components/BotMayhemConsole.tsx`. Server: `botMayhemAutonomy.ts`
 ## Local Supabase fallback (when *.supabase.co project DNS is blocked)
 If `kxfhxrdrlvnvtzdeuvwb.supabase.co` is NXDOMAIN (egress policy), run everything on the
 Supabase CLI local stack instead:
-1. `bash scripts/cloud-agent-start.sh` (fixes iptables, starts dockerd + `supabase start`;
-   `scripts/cloud-agent-install.sh` may 403 downloading the CLI — use `npx -y supabase` instead).
+1. `bash scripts/cloud-agent-start.sh` (fixes iptables, starts dockerd + `supabase start`).
+   The script calls a bare `supabase`, so a real binary must be on PATH:
+   `scripts/cloud-agent-install.sh` may 403 downloading it — install via `npm i -g supabase`
+   (puts `supabase` on PATH; on this VM it lives at `/usr/bin/supabase`).
 2. `supabase db reset` applies every numbered migration (incl. bot_mayhem storylines + MAGA), a
    free check that new migrations apply cleanly. Copy `scripts/cloud-agent.env.local` → `.env.local`,
    add `OPENAI_API_KEY`; `AGENT_WEBHOOK_SECRET=local-dev-webhook-secret`.
