@@ -33,8 +33,9 @@ If `kxfhxrdrlvnvtzdeuvwb.supabase.co` is NXDOMAIN (egress policy), run everythin
 Supabase CLI local stack instead:
 1. `bash scripts/cloud-agent-start.sh` (fixes iptables, starts dockerd + `supabase start`).
    The script calls a bare `supabase`, so a real binary must be on PATH:
-   `scripts/cloud-agent-install.sh` may 403 downloading it — install via `npm i -g supabase`
-   (puts `supabase` on PATH; on this VM it lives at `/usr/bin/supabase`).
+   `scripts/cloud-agent-install.sh` may 403 downloading it — install via `npm i -g supabase`,
+   or if the global npm prefix isn't writable, `npm i -g --prefix ~/.local supabase` and ensure
+   `~/.local/bin` is on PATH (verified: gives a working `supabase` 2.x binary).
 2. `supabase db reset` applies every numbered migration (incl. bot_mayhem storylines + MAGA), a
    free check that new migrations apply cleanly. Copy `scripts/cloud-agent.env.local` → `.env.local`,
    add `OPENAI_API_KEY`; `AGENT_WEBHOOK_SECRET=local-dev-webhook-secret`.
