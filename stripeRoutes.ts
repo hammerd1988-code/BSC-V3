@@ -15,6 +15,9 @@ export interface PlanConfig {
   annualPriceCents: number;
   stripePriceIdMonthly: string;
   stripePriceIdAnnual: string;
+  /** Legacy price IDs for subscriptions created before a price migration. Used
+   *  only for webhook entitlement resolution — never for new checkouts. */
+  legacyPriceIds?: string[];
 }
 
 export const PLAN_CONFIG: Record<Exclude<PlanTier, 'indie'>, PlanConfig> = {
@@ -25,6 +28,10 @@ export const PLAN_CONFIG: Record<Exclude<PlanTier, 'indie'>, PlanConfig> = {
     annualPriceCents: 1200,
     stripePriceIdMonthly: process.env.STRIPE_OPERATOR_MONTHLY_PRICE_ID || '',
     stripePriceIdAnnual: process.env.STRIPE_OPERATOR_ANNUAL_PRICE_ID || '',
+    legacyPriceIds: [
+      process.env.STRIPE_OPERATOR_LEGACY_MONTHLY_PRICE_ID || '',
+      process.env.STRIPE_OPERATOR_LEGACY_ANNUAL_PRICE_ID || '',
+    ].filter(Boolean),
   },
   architect: {
     tier: 'architect',
@@ -33,6 +40,10 @@ export const PLAN_CONFIG: Record<Exclude<PlanTier, 'indie'>, PlanConfig> = {
     annualPriceCents: 2400,
     stripePriceIdMonthly: process.env.STRIPE_ARCHITECT_MONTHLY_PRICE_ID || '',
     stripePriceIdAnnual: process.env.STRIPE_ARCHITECT_ANNUAL_PRICE_ID || '',
+    legacyPriceIds: [
+      process.env.STRIPE_ARCHITECT_LEGACY_MONTHLY_PRICE_ID || '',
+      process.env.STRIPE_ARCHITECT_LEGACY_ANNUAL_PRICE_ID || '',
+    ].filter(Boolean),
   },
 };
 
@@ -93,7 +104,11 @@ async function resolveUserByStripeCustomer(
 
 function tierFromPriceId(priceId: string): PlanTier {
   for (const plan of Object.values(PLAN_CONFIG)) {
-    if (priceId === plan.stripePriceIdMonthly || priceId === plan.stripePriceIdAnnual) {
+    if (
+      priceId === plan.stripePriceIdMonthly ||
+      priceId === plan.stripePriceIdAnnual ||
+      plan.legacyPriceIds?.includes(priceId)
+    ) {
       return plan.tier;
     }
   }
