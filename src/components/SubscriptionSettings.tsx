@@ -2,19 +2,10 @@ import { useEffect, useState } from 'react';
 import { Check, Copy, Crown, KeyRound, RefreshCw, Rocket, Shield } from 'lucide-react';
 import { SUBSCRIPTION_PLANS, useSubscription, TIER_RANK } from '../lib/subscription';
 import type { SubscriptionTier } from '../lib/subscription';
-import { supabase } from '../supabase';
+import { authedFetch } from '../lib/authSession';
 
 async function licenseFetch(path: string, opts: RequestInit = {}): Promise<Response> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token;
-  return fetch(path, {
-    ...opts,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(opts.headers || {}),
-    },
-  });
+  return authedFetch(path, opts);
 }
 
 function LocalCoderLicense() {
@@ -22,6 +13,11 @@ function LocalCoderLicense() {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const maskedLicenseKey = licenseKey
+    ? licenseKey.length > 10
+      ? `${licenseKey.slice(0, 6)}••••••${licenseKey.slice(-4)}`
+      : '••••••••'
+    : null;
 
   useEffect(() => {
     licenseFetch('/api/license/key')
@@ -72,7 +68,7 @@ function LocalCoderLicense() {
       {licenseKey ? (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <code className="flex-1 truncate rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-xs text-emerald-300">
-            {licenseKey}
+            {maskedLicenseKey}
           </code>
           <div className="flex gap-2">
             <button
