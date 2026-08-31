@@ -21,21 +21,19 @@ export function maskLicenseKey(licenseKey: string): string {
 }
 
 function LocalCoderLicense() {
+  // The plaintext key is only available immediately after mint/rotate; the
+  // server stores only a SHA-256 hash. `hasKey` tracks whether one exists.
   const [licenseKey, setLicenseKey] = useState<string | null>(null);
+  const [hasKey, setHasKey] = useState(false);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const maskedLicenseKey = licenseKey
-    ? licenseKey.length > 10
-      ? `${licenseKey.slice(0, 6)}••••••${licenseKey.slice(-4)}`
-      : '••••••••'
-    : null;
 
   useEffect(() => {
     licenseFetch('/api/license/key')
       .then((r) => (r.ok ? r.json() : null))
-      .then((data) => setLicenseKey(data?.key ?? null))
-      .catch(() => setLicenseKey(null));
+      .then((data) => setHasKey(Boolean(data?.hasKey)))
+      .catch(() => setHasKey(false));
   }, []);
 
   const mint = async (rotate: boolean) => {
@@ -48,7 +46,9 @@ function LocalCoderLicense() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Failed to generate key.');
-      setLicenseKey(data.key);
+      // A fresh plaintext key is returned only when one was (re)minted.
+      if (data.key) setLicenseKey(data.key);
+      setHasKey(true);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -81,7 +81,6 @@ function LocalCoderLicense() {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <code className="flex-1 truncate rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-xs text-emerald-300">
             {maskLicenseKey(licenseKey)}
-            {maskedLicenseKey}
           </code>
           <div className="flex gap-2">
             <button
@@ -91,6 +90,22 @@ function LocalCoderLicense() {
               {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
               {copied ? 'Copied' : 'Copy'}
             </button>
+            <button
+              onClick={() => mint(true)}
+              disabled={busy}
+              className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold uppercase tracking-wider text-zinc-300 transition hover:bg-white/10 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} />
+              Rotate
+            </button>
+          </div>
+        </div>
+      ) : hasKey ? (
+        <div className="flex flex-col gap-3">
+          <p className="text-xs text-zinc-400">
+            An active license key exists but is stored securely and cannot be displayed. Rotate to generate a new one.
+          </p>
+          <div>
             <button
               onClick={() => mint(true)}
               disabled={busy}
