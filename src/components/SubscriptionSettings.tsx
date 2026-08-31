@@ -2,19 +2,10 @@ import { useEffect, useState } from 'react';
 import { Check, Copy, Crown, KeyRound, RefreshCw, Rocket, Shield } from 'lucide-react';
 import { SUBSCRIPTION_PLANS, useSubscription, TIER_RANK } from '../lib/subscription';
 import type { SubscriptionTier } from '../lib/subscription';
-import { supabase } from '../supabase';
+import { authedFetch } from '../lib/authSession';
 
 async function licenseFetch(path: string, opts: RequestInit = {}): Promise<Response> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token;
-  return fetch(path, {
-    ...opts,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(opts.headers || {}),
-    },
-  });
+  return authedFetch(path, opts);
 }
 
 function LocalCoderLicense() {
