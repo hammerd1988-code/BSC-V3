@@ -61,10 +61,10 @@ describe('SubscriptionSettings', () => {
     });
   });
 
-  it('loads the license key with authedFetch on mount', async () => {
+  it('loads the license key state with authedFetch on mount', async () => {
     const mockedAuthedFetch = vi.mocked(authedFetch);
     mockedAuthedFetch.mockResolvedValueOnce(
-      new Response(JSON.stringify({ key: null }), {
+      new Response(JSON.stringify({ hasKey: false }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }),
@@ -81,13 +81,13 @@ describe('SubscriptionSettings', () => {
     const mockedAuthedFetch = vi.mocked(authedFetch);
     mockedAuthedFetch
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ key: null }), {
+        new Response(JSON.stringify({ hasKey: false }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         }),
       )
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ key: 'new-key' }), {
+        new Response(JSON.stringify({ key: 'new-key', hasKey: true }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         }),
@@ -118,13 +118,13 @@ describe('SubscriptionSettings', () => {
     const mockedAuthedFetch = vi.mocked(authedFetch);
     mockedAuthedFetch
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ key: 'existing-key' }), {
+        new Response(JSON.stringify({ hasKey: true }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         }),
       )
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ key: 'rotated-key' }), {
+        new Response(JSON.stringify({ key: 'rotated-key', hasKey: true }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         }),
