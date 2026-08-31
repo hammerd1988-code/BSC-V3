@@ -256,7 +256,7 @@ describe('POST /api/license/key — rotation', () => {
     expect(body.key).not.toBe(KEY);
   });
 
-  it('mints a new key when no prior key exists', async () => {
+  it('mints a new key when no prior key exists (rotated:false since nothing was revoked)', async () => {
     const supabase = makeSupabase({
       getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
       fromResponses: {
