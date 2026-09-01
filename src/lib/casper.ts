@@ -373,12 +373,20 @@ export async function sendCasperCommand(input: {
       }).catch(() => {
         // ignore — we'll throw the original error anyway
       });
-      if (input.signal?.aborted) {
-        // Cancelled runs must exit promptly: leave the failure report
-        // in flight rather than waiting on it.
-        throw err;
+      // Cancelled runs must exit promptly: leave the failure report in
+      // flight rather than waiting on it, even if the abort lands while
+      // the report is already underway.
+      const signal = input.signal;
+      if (signal?.aborted) throw err;
+      if (signal) {
+        await Promise.race([
+          report,
+          new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true })),
+        ]);
+        if (signal.aborted) throw err;
+      } else {
+        await report;
       }
-      await report;
       const wrapped = new Error(
         `Local LLM execution failed (${desc.endpoint}): ${message}. Make sure your local LLM server is running and CORS is enabled.`,
       ) as Error & { cause?: unknown };
