@@ -385,7 +385,13 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
         closeTab: (index: number) => {
           const t = tabsRef.current[index];
           if (!t) return `ERROR: no tab at index ${index}.`;
-          closeTab(t.id);
+          if (t.id === activeIdRef.current) {
+            closeTab(t.id);
+          } else {
+            // Closing a background tab must not steal focus from the page
+            // the user (or agent) is currently on.
+            setTabs((prev) => prev.filter((x) => x.id !== t.id));
+          }
         },
         switchTab: (index: number) => {
           const t = tabsRef.current[index];
@@ -425,6 +431,7 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
               surface: 'control_center',
               enableTools: false,
               metadata: { client: 'haunted-browser-agent', native },
+              signal: ctrl.signal,
             });
             return { content: result.response || '' };
           },
