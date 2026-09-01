@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Send, X, Info, Sparkles, BookOpen, LifeBuoy, ListChecks, FileText } from 'lucide-react';
+import { Send, X, Info, Sparkles, BookOpen, LifeBuoy, ListChecks, FileText, Bot, Eye, Zap, FlaskConical, Square } from 'lucide-react';
+import type { AgentAction, AutonomyMode } from './agent';
 import type { ChatMessage } from './ghost';
 import { GhostMascot, NEWTAB, hostOf } from './ghost';
 import { cn } from '../../lib/utils';
@@ -8,6 +9,13 @@ export function CasperPanel({
   messages,
   streaming,
   onSend,
+  agentMode,
+  onAgentModeChange,
+  agentRunning,
+  onRunAgent,
+  onStopAgent,
+  pendingApproval,
+  onApprove,
   currentUrl,
   pageContextAvailable,
   pageReadingAllowed,
@@ -19,6 +27,13 @@ export function CasperPanel({
   messages: ChatMessage[];
   streaming: boolean;
   onSend: (text: string, opts?: { injectPage?: boolean }) => void;
+  agentMode: AutonomyMode;
+  onAgentModeChange: (m: AutonomyMode) => void;
+  agentRunning: boolean;
+  onRunAgent: (goal: string) => void;
+  onStopAgent: () => void;
+  pendingApproval: AgentAction | null;
+  onApprove: (ok: boolean) => void;
   currentUrl: string;
   pageContextAvailable: boolean;
   pageReadingAllowed: boolean;
@@ -28,7 +43,13 @@ export function CasperPanel({
   onOpenAbout: () => void;
 }) {
   const [input, setInput] = useState('');
+  const [agentOn, setAgentOn] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const busy = streaming || agentRunning;
+  const submit = (text: string) => {
+    if (agentOn) onRunAgent(text);
+    else onSend(text);
+  };
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -130,7 +151,7 @@ export function CasperPanel({
         {messages.map((m) => (
           <MessageBubble key={m.id} message={m} />
         ))}
-        {streaming && (
+        {(streaming || (agentRunning && !pendingApproval)) && (
           <div className="flex items-center gap-2 pl-1">
             <GhostMascot size={20} />
             <div className="flex items-center gap-1">
@@ -142,14 +163,98 @@ export function CasperPanel({
         )}
       </div>
 
+      {pendingApproval && (
+        <div className="space-y-2 border-t border-[var(--hb-border)] bg-[color-mix(in_srgb,var(--hb-primary)_10%,transparent)] px-4 py-3" data-testid="haunted-agent-approval">
+          <p className="text-xs text-[var(--hb-fg)]">
+            <span className="font-semibold text-[var(--hb-primary)]">Casper wants to:</span> {pendingApproval.describe}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              data-testid="haunted-button-approve"
+              onClick={() => onApprove(true)}
+              className="h-7 rounded-full bg-[var(--hb-primary)] px-3 text-xs font-medium text-[var(--hb-primary-fg)] hover:opacity-90"
+            >
+              Approve
+            </button>
+            <button
+              type="button"
+              data-testid="haunted-button-deny"
+              onClick={() => onApprove(false)}
+              className="h-7 rounded-full bg-[var(--hb-accent)] px-3 text-xs text-[var(--hb-muted)] hover:text-[var(--hb-fg)]"
+            >
+              Deny
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center gap-2 border-t border-[var(--hb-border)] px-3 py-2">
+        <button
+          type="button"
+          data-testid="haunted-agent-toggle"
+          aria-pressed={agentOn}
+          onClick={() => setAgentOn((v) => !v)}
+          className={cn(
+            'flex h-7 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition-colors',
+            agentOn
+              ? 'bg-[color-mix(in_srgb,var(--hb-primary)_20%,transparent)] text-[var(--hb-primary)]'
+              : 'bg-[var(--hb-accent)] text-[var(--hb-muted)] hover:text-[var(--hb-fg)]',
+          )}
+        >
+          <Bot className="h-3.5 w-3.5" />
+          Agent {agentOn ? 'on' : 'off'}
+        </button>
+        {agentOn && (
+          <div className="flex items-center gap-1">
+            {(
+              [
+                { mode: 'supervised' as const, icon: Eye, label: 'Supervised' },
+                { mode: 'auto' as const, icon: Zap, label: 'Auto' },
+                { mode: 'dryrun' as const, icon: FlaskConical, label: 'Dry run' },
+              ]
+            ).map((m) => (
+              <button
+                key={m.mode}
+                type="button"
+                data-testid={`haunted-mode-${m.mode}`}
+                title={m.label}
+                onClick={() => onAgentModeChange(m.mode)}
+                className={cn(
+                  'flex h-7 items-center gap-1 rounded-full px-2 text-[11px] transition-colors',
+                  agentMode === m.mode
+                    ? 'bg-[color-mix(in_srgb,var(--hb-primary)_15%,transparent)] text-[var(--hb-primary)]'
+                    : 'text-[var(--hb-muted)] hover:bg-[var(--hb-accent)] hover:text-[var(--hb-fg)]',
+                )}
+              >
+                <m.icon className="h-3 w-3" />
+                {m.label}
+              </button>
+            ))}
+          </div>
+        )}
+        {agentRunning && (
+          <button
+            type="button"
+            data-testid="haunted-agent-stop"
+            onClick={onStopAgent}
+            className="ml-auto flex h-7 items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--hb-danger)_15%,transparent)] px-2.5 text-xs text-[var(--hb-danger)] hover:bg-[color-mix(in_srgb,var(--hb-danger)_25%,transparent)]"
+          >
+            <Square className="h-3 w-3" />
+            Stop
+          </button>
+        )}
+      </div>
+
       <div className="hb-scroll flex flex-wrap items-center gap-1.5 border-t border-[var(--hb-border)] px-3 py-2">
         {quickActions.map((a) => (
           <button
             key={a.label}
             type="button"
+            disabled={busy}
             onClick={() => onSend(a.prompt, { injectPage: a.inject })}
             className={cn(
-              'flex h-8 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors',
+              'flex h-8 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors disabled:pointer-events-none disabled:opacity-40',
               a.inject
                 ? 'bg-[color-mix(in_srgb,var(--hb-primary)_15%,transparent)] text-[var(--hb-primary)] hover:bg-[color-mix(in_srgb,var(--hb-primary)_25%,transparent)]'
                 : 'bg-[var(--hb-accent)] text-[var(--hb-muted)] hover:bg-[color-mix(in_srgb,var(--hb-accent)_80%,var(--hb-fg))] hover:text-[var(--hb-fg)]',
@@ -165,8 +270,8 @@ export function CasperPanel({
         className="border-t border-[var(--hb-border)] p-3"
         onSubmit={(e) => {
           e.preventDefault();
-          if (input.trim() && !streaming) {
-            onSend(input.trim());
+          if (input.trim() && !busy) {
+            submit(input.trim());
             setInput('');
           }
         }}
@@ -175,13 +280,13 @@ export function CasperPanel({
           <textarea
             value={input}
             data-testid="haunted-casper-input"
-            placeholder="Ask Casper…"
+            placeholder={agentOn ? 'Give Casper a browsing goal…' : 'Ask Casper…'}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                if (input.trim() && !streaming) {
-                  onSend(input.trim());
+                if (input.trim() && !busy) {
+                  submit(input.trim());
                   setInput('');
                 }
               }
@@ -192,7 +297,7 @@ export function CasperPanel({
           <button
             type="submit"
             aria-label="Send"
-            disabled={!input.trim() || streaming}
+            disabled={!input.trim() || busy}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--hb-primary)] text-[var(--hb-primary-fg)] transition-opacity hover:opacity-90 disabled:opacity-40"
           >
             <Send className="h-4 w-4" />
@@ -203,8 +308,28 @@ export function CasperPanel({
   );
 }
 
+const KIND_STYLES: Record<string, { label: string; cls: string }> = {
+  thought: { label: 'thinking', cls: 'italic text-[var(--hb-muted)]' },
+  action: { label: 'action', cls: 'text-[var(--hb-primary)]' },
+  observation: { label: 'observed', cls: 'text-[var(--hb-muted)]' },
+  blocked: { label: 'blocked', cls: 'text-amber-500' },
+};
+
 function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === 'user';
+  if (!isUser && message.kind && KIND_STYLES[message.kind]) {
+    const k = KIND_STYLES[message.kind];
+    return (
+      <div className="flex gap-2.5 pl-7" data-testid={`haunted-agent-step-${message.kind}`}>
+        <div className={cn('max-w-[90%] border-l-2 border-[var(--hb-border)] pl-2.5 text-xs leading-relaxed', k.cls)}>
+          <span className="block text-[10px] uppercase tracking-wide opacity-70">{k.label}</span>
+          <span className="whitespace-pre-wrap break-words">
+            {message.content.length > 600 ? message.content.slice(0, 600) + '…' : message.content}
+          </span>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className={cn('flex gap-2.5', isUser ? 'flex-row-reverse' : 'flex-row')}>
       {!isUser && <GhostMascot size={22} className="mt-0.5 shrink-0" />}
