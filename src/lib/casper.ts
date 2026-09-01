@@ -379,10 +379,18 @@ export async function sendCasperCommand(input: {
       const signal = input.signal;
       if (signal?.aborted) throw err;
       if (signal) {
-        await Promise.race([
-          report,
-          new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true })),
-        ]);
+        let onAbort: (() => void) | undefined;
+        try {
+          await Promise.race([
+            report,
+            new Promise<void>((resolve) => {
+              onAbort = () => resolve();
+              signal.addEventListener('abort', onAbort, { once: true });
+            }),
+          ]);
+        } finally {
+          if (onAbort) signal.removeEventListener('abort', onAbort);
+        }
         if (signal.aborted) throw err;
       } else {
         await report;
