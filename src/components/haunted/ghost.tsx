@@ -126,6 +126,8 @@ export interface ChatMessage {
   content: string;
   pending?: boolean;
   error?: boolean;
+  /** Agent trace step type — set for tool-loop steps rendered inline in the panel. */
+  kind?: 'thought' | 'action' | 'observation' | 'blocked';
 }
 
 export interface PageContext {

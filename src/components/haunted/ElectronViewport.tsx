@@ -22,6 +22,7 @@ export function ElectronViewport({
   findOpen,
   onFindClose,
   onTabMeta,
+  onExecutor,
 }: {
   url: string;
   bookmarks: HauntedBookmark[];
@@ -33,6 +34,8 @@ export function ElectronViewport({
   findOpen?: boolean;
   onFindClose?: () => void;
   onTabMeta?: (meta: TabMeta) => void;
+  /** Registers a page-script executor (or null when no live page) with the parent. */
+  onExecutor?: (exec: ((code: string) => Promise<unknown>) | null) => void;
 }) {
   const wvRef = useRef<HTMLElement | null>(null);
   const lastReportedUrl = useRef<string>('');
@@ -48,6 +51,37 @@ export function ElectronViewport({
   });
   const findReqId = useRef<number>(0);
   const wired = useRef<HTMLElement | null>(null);
+  const urlRef = useRef(url);
+  urlRef.current = url;
+
+  // Expose a guarded executor so the agent can run fixed page scripts in the
+  // webview. Rejects while the guest is loading or showing a previous
+  // document so actions never hit the wrong page.
+  useEffect(() => {
+    if (!onExecutor) return;
+    if (url === NEWTAB) {
+      onExecutor(null);
+      return () => onExecutor(null);
+    }
+    onExecutor((code: string) => {
+      const wv = wvRef.current as WebviewGuest | null;
+      if (!wv || typeof wv.executeJavaScript !== 'function') {
+        return Promise.reject(new Error('page not ready'));
+      }
+      try {
+        const current = typeof wv.getURL === 'function' ? wv.getURL() : '';
+        const wanted = urlRef.current;
+        const same = current && (current === wanted || current.split('#')[0] === wanted.split('#')[0]);
+        if (!same || (typeof wv.isLoading === 'function' && wv.isLoading())) {
+          return Promise.reject(new Error('page is still loading — retry once it settles'));
+        }
+      } catch {
+        return Promise.reject(new Error('page not ready'));
+      }
+      return wv.executeJavaScript(code);
+    });
+    return () => onExecutor(null);
+  }, [onExecutor, url]);
 
   useEffect(() => {
     const wv = wvRef.current as WebviewGuest | null;
@@ -288,6 +322,7 @@ export function ElectronViewport({
 
 interface WebviewGuest extends HTMLElement {
   getURL?: () => string;
+  isLoading?: () => boolean;
   setZoomFactor?: (factor: number) => void;
   reload?: () => void;
   findInPage?: (query: string, opts?: { forward?: boolean; findNext?: boolean }) => number;
