@@ -160,6 +160,37 @@ describe('runAgent', () => {
     expect(obs?.text).toContain('ERROR: no live page');
   });
 
+  it('treats scroll as mutating (not executed in dry run)', async () => {
+    const toolbelt = makeToolbelt();
+    const events = await collectRun({
+      replies: ['TOOL: scroll {"direction": "down"}', 'Planned.'],
+      mode: 'dryrun',
+      toolbelt,
+    });
+    expect(toolbelt.calls).toHaveLength(0);
+    expect(events.some((e) => e.type === 'action' && e.text.startsWith('[dry run]'))).toBe(true);
+  });
+
+  it('rejects malformed tab indices instead of coercing to 0', async () => {
+    const toolbelt = makeToolbelt();
+    const events = await collectRun({
+      replies: ['TOOL: closeTab {"index": null}', 'Fine.'],
+      toolbelt,
+    });
+    expect(toolbelt.calls).toHaveLength(0);
+    expect(events.some((e) => e.type === 'blocked' && e.text.includes('non-negative integer'))).toBe(true);
+  });
+
+  it('rejects fill without a string value', async () => {
+    const toolbelt = makeToolbelt();
+    const events = await collectRun({
+      replies: ['TOOL: fill {"selector": "#name"}', 'Fine.'],
+      toolbelt,
+    });
+    expect(toolbelt.calls).toHaveLength(0);
+    expect(events.some((e) => e.type === 'blocked' && e.text.includes('string "value"'))).toBe(true);
+  });
+
   it('rejects unknown tools with a hint', async () => {
     const events = await collectRun({ replies: ['TOOL: hackPage {}', 'Fine.'] });
     expect(events.some((e) => e.type === 'blocked' && e.text.includes('Unknown tool'))).toBe(true);

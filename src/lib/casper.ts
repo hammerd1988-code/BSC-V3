@@ -367,14 +367,18 @@ export async function sendCasperCommand(input: {
       // Best-effort report-back so the task gets marked as failed
       // server-side, but we don't want to mask the original error
       // from the caller.
-      try {
-        await reportClientExecution(desc.taskId, {
-          error: message,
-          durationMs: Date.now() - startedAt,
-        });
-      } catch {
+      const report = reportClientExecution(desc.taskId, {
+        error: message,
+        durationMs: Date.now() - startedAt,
+      }).catch(() => {
         // ignore — we'll throw the original error anyway
+      });
+      if (input.signal?.aborted) {
+        // Cancelled runs must exit promptly: leave the failure report
+        // in flight rather than waiting on it.
+        throw err;
       }
+      await report;
       const wrapped = new Error(
         `Local LLM execution failed (${desc.endpoint}): ${message}. Make sure your local LLM server is running and CORS is enabled.`,
       ) as Error & { cause?: unknown };
