@@ -33,18 +33,22 @@ begin
   from information_schema.columns
   where table_schema = 'public' and table_name = 'users' and column_name = 'id';
 
+  if users_id_type is null then
+    raise exception 'public.users.id not found; apply the users migration before bot_mayhem_storylines';
+  end if;
+
   select data_type into created_by_type
   from information_schema.columns
   where table_schema = 'public' and table_name = 'bot_mayhem_storylines' and column_name = 'created_by';
 
+  execute 'alter table public.bot_mayhem_storylines drop constraint if exists bot_mayhem_storylines_created_by_fkey';
+
   if created_by_type is null then
     execute format('alter table public.bot_mayhem_storylines add column created_by %s', users_id_type);
   elsif created_by_type is distinct from users_id_type then
-    execute 'alter table public.bot_mayhem_storylines drop constraint if exists bot_mayhem_storylines_created_by_fkey';
     execute format('alter table public.bot_mayhem_storylines alter column created_by type %s using created_by::%s', users_id_type, users_id_type);
   end if;
 
-  execute 'alter table public.bot_mayhem_storylines drop constraint if exists bot_mayhem_storylines_created_by_fkey';
   execute 'alter table public.bot_mayhem_storylines
     add constraint bot_mayhem_storylines_created_by_fkey
     foreign key (created_by) references public.users(id) on delete set null';
@@ -52,6 +56,7 @@ end $$;
 
 create index if not exists bot_mayhem_storylines_status_idx on public.bot_mayhem_storylines(status);
 create index if not exists bot_mayhem_storylines_created_at_idx on public.bot_mayhem_storylines(created_at desc);
+create index if not exists bot_mayhem_storylines_created_by_idx on public.bot_mayhem_storylines(created_by);
 
 alter table public.bot_mayhem_storylines enable row level security;
 
