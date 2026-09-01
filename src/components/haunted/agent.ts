@@ -255,7 +255,7 @@ function resolveAction(call: ParsedToolCall): AgentAction | { error: string } {
     }
     case 'closeTab':
     case 'switchTab': {
-      const index = Number(args.index);
+      const index = typeof args.index === 'number' ? args.index : NaN;
       if (!Number.isInteger(index) || index < 0) return { error: `${tool} needs a non-negative integer "index".` };
       return {
         tool,
@@ -271,8 +271,9 @@ function resolveAction(call: ParsedToolCall): AgentAction | { error: string } {
     }
     case 'fill': {
       const selector = typeof args.selector === 'string' ? args.selector.trim() : '';
-      const value = typeof args.value === 'string' ? args.value : '';
       if (!selector || selector.length > 300) return { error: 'fill needs a css "selector" argument.' };
+      if (typeof args.value !== 'string') return { error: 'fill needs a string "value" argument.' };
+      const value = args.value;
       if (value.length > 2000) return { error: 'fill value is too long.' };
       return {
         tool,
@@ -284,7 +285,7 @@ function resolveAction(call: ParsedToolCall): AgentAction | { error: string } {
     case 'scroll': {
       const dir = typeof args.direction === 'string' ? args.direction : 'down';
       if (!['up', 'down', 'top', 'bottom'].includes(dir)) return { error: 'scroll direction must be up, down, top, or bottom.' };
-      return { tool, args: { direction: dir }, describe: `Scroll ${dir}`, mutating: false };
+      return { tool, args: { direction: dir }, describe: `Scroll ${dir}`, mutating: true };
     }
     default:
       return { error: `Unknown tool "${tool}". Use only the documented tools.` };
