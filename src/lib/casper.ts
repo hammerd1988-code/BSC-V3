@@ -231,7 +231,7 @@ async function loadLocalApiKey(): Promise<string | null> {
 // Run the directive against the user's local OpenAI-compatible
 // endpoint (LM Studio, Ollama, etc.). Both expose the same
 // /v1/chat/completions shape.
-async function runDirectiveOnLocalLLM(payload: ClientExecutionDescriptor): Promise<string> {
+async function runDirectiveOnLocalLLM(payload: ClientExecutionDescriptor, signal?: AbortSignal): Promise<string> {
   const url = payload.endpoint.replace(/\/$/, '') + '/chat/completions';
   // Some local servers (LM Studio especially) require a non-empty
   // bearer token even though they ignore the value. Default to a
@@ -253,6 +253,7 @@ async function runDirectiveOnLocalLLM(payload: ClientExecutionDescriptor): Promi
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(body),
+    signal,
   });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
@@ -312,6 +313,8 @@ export async function sendCasperCommand(input: {
   metadata?: Record<string, unknown>;
   conversationHistory?: CasperConversationTurn[];
   enableTools?: boolean;
+  /** Cancels the in-flight request(s), e.g. when the user hits Stop. */
+  signal?: AbortSignal;
 }): Promise<CasperCommandResponse> {
   const headers = await authHeaders();
   let command = input.command.trim();
@@ -328,6 +331,7 @@ export async function sendCasperCommand(input: {
   const response = await fetch(`${apiBaseUrl()}/api/casper/command`, {
     method: 'POST',
     headers,
+    signal: input.signal,
     body: JSON.stringify({
       command,
       surface: input.surface ?? 'control_center',
@@ -352,7 +356,7 @@ export async function sendCasperCommand(input: {
     }
     const startedAt = Date.now();
     try {
-      const text = await runDirectiveOnLocalLLM(desc);
+      const text = await runDirectiveOnLocalLLM(desc, input.signal);
       return reportClientExecution(desc.taskId, {
         response: text,
         model: desc.model,
@@ -363,13 +367,33 @@ export async function sendCasperCommand(input: {
       // Best-effort report-back so the task gets marked as failed
       // server-side, but we don't want to mask the original error
       // from the caller.
-      try {
-        await reportClientExecution(desc.taskId, {
-          error: message,
-          durationMs: Date.now() - startedAt,
-        });
-      } catch {
+      const report = reportClientExecution(desc.taskId, {
+        error: message,
+        durationMs: Date.now() - startedAt,
+      }).catch(() => {
         // ignore — we'll throw the original error anyway
+      });
+      // Cancelled runs must exit promptly: leave the failure report in
+      // flight rather than waiting on it, even if the abort lands while
+      // the report is already underway.
+      const signal = input.signal;
+      if (signal?.aborted) throw err;
+      if (signal) {
+        let onAbort: (() => void) | undefined;
+        try {
+          await Promise.race([
+            report,
+            new Promise<void>((resolve) => {
+              onAbort = () => resolve();
+              signal.addEventListener('abort', onAbort, { once: true });
+            }),
+          ]);
+        } finally {
+          if (onAbort) signal.removeEventListener('abort', onAbort);
+        }
+        if (signal.aborted) throw err;
+      } else {
+        await report;
       }
       const wrapped = new Error(
         `Local LLM execution failed (${desc.endpoint}): ${message}. Make sure your local LLM server is running and CORS is enabled.`,

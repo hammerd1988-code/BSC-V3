@@ -27,6 +27,14 @@ import {
 import { loadBookmarks, saveBookmarks, type HauntedBookmark } from './bookmarks';
 import { buildHauntedCasperCommand, isFreshPageContext, wantsPageInjection } from './pageContext';
 import { loadPageReading, savePageReading, type PageReadingPref } from './pageReading';
+import {
+  READ_PAGE_SCRIPT,
+  buildAgentStepCommand,
+  runAgent,
+  type AgentAction,
+  type AgentToolbelt,
+  type AutonomyMode,
+} from './agent';
 import { PageReadingConsent } from './PageReadingConsent';
 import { sendCasperCommand } from '../../lib/casper';
 import { getDesktopBridge, isHauntedWebview } from '../../lib/desktop';
@@ -64,6 +72,12 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
   const [pageReading, setPageReading] = useState<PageReadingPref>('unset');
   const [consentOpen, setConsentOpen] = useState(false);
   const pendingSendRef = useRef<{ text: string; injectPage?: boolean } | null>(null);
+  const [agentMode, setAgentMode] = useState<AutonomyMode>('supervised');
+  const [agentRunning, setAgentRunning] = useState(false);
+  const [pendingApproval, setPendingApproval] = useState<AgentAction | null>(null);
+  const approvalRef = useRef<((ok: boolean) => void) | null>(null);
+  const agentAbortRef = useRef<AbortController | null>(null);
+  const pageExecutorRef = useRef<((code: string) => Promise<unknown>) | null>(null);
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? tabs[0];
   const currentUrl = activeTab.url;
@@ -276,7 +290,7 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
       setStreaming(true);
       try {
         const conversationHistory = [...messages, userMsg]
-          .filter((m) => m.role !== 'system' && m.content.trim() && !m.pending)
+          .filter((m) => m.role !== 'system' && m.content.trim() && !m.pending && !m.kind)
           .map((m) => ({ role: m.role === 'user' ? 'user' as const : 'casper' as const, text: m.content }));
         const result = await sendCasperCommand({
           command: built.command,
@@ -330,6 +344,140 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
     },
     [userId, currentUrl],
   );
+
+  // ---- casper agent mode ----
+  // Latest-value refs so the agent toolbelt always sees current tab state even
+  // as the run mutates it (open/close/switch happen mid-run).
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+  const pageReadingRef = useRef(pageReading);
+  pageReadingRef.current = pageReading;
+
+  const registerExecutor = useCallback((exec: ((code: string) => Promise<unknown>) | null) => {
+    pageExecutorRef.current = exec;
+  }, []);
+
+  const runAgentGoal = useCallback(
+    async (goal: string) => {
+      if (agentRunning || streaming) return;
+      setMessages((prev) => [...prev, { id: uid(), role: 'user', content: goal }]);
+      setAgentRunning(true);
+      const ctrl = new AbortController();
+      agentAbortRef.current = ctrl;
+
+      const toolbelt: AgentToolbelt = {
+        listTabs: () =>
+          tabsRef.current.map((t, i) => ({
+            index: i,
+            title: t.title,
+            url: t.url,
+            active: t.id === activeIdRef.current,
+          })),
+        openTab: (url: string) => {
+          const t = makeTab(resolveAddress(url));
+          setTabs((prev) => [...prev, t]);
+          setActiveId(t.id);
+        },
+        closeTab: (index: number) => {
+          const t = tabsRef.current[index];
+          if (!t) return `ERROR: no tab at index ${index}.`;
+          if (t.id === activeIdRef.current) {
+            closeTab(t.id);
+          } else {
+            // Closing a background tab must not steal focus from the page
+            // the user (or agent) is currently on.
+            setTabs((prev) => prev.filter((x) => x.id !== t.id));
+          }
+        },
+        switchTab: (index: number) => {
+          const t = tabsRef.current[index];
+          if (!t) return `ERROR: no tab at index ${index}.`;
+          setActiveId(t.id);
+        },
+        navigate: (url: string) => navigateRef.current(url),
+        readPage: async () => {
+          if (!native) return { error: 'page reading needs the desktop app — embedded web mode only sees URLs.' };
+          if (pageReadingRef.current !== 'allow') {
+            return { error: 'page reading is off — turn on "Share page" in the Casper panel first.' };
+          }
+          const exec = pageExecutorRef.current;
+          if (!exec) return { error: 'no live page (New Tab) — navigate somewhere first.' };
+          try {
+            const r = (await exec(READ_PAGE_SCRIPT)) as { url?: string; title?: string; text?: string };
+            return { url: r?.url || '', title: r?.title || '', text: r?.text || '' };
+          } catch (err) {
+            return { error: err instanceof Error ? err.message : String(err) };
+          }
+        },
+        get executeInPage() {
+          return native ? pageExecutorRef.current : null;
+        },
+      };
+
+      try {
+        await runAgent({
+          goal,
+          mode: agentMode,
+          native,
+          toolbelt,
+          signal: ctrl.signal,
+          callAgentStep: async (msgs) => {
+            const result = await sendCasperCommand({
+              command: buildAgentStepCommand(msgs),
+              surface: 'control_center',
+              enableTools: false,
+              metadata: { client: 'haunted-browser-agent', native },
+              signal: ctrl.signal,
+            });
+            return { content: result.response || '' };
+          },
+          requestApproval: (action) =>
+            new Promise<boolean>((resolve) => {
+              setPendingApproval(action);
+              approvalRef.current = (ok: boolean) => {
+                setPendingApproval(null);
+                approvalRef.current = null;
+                resolve(ok);
+              };
+            }),
+          onEvent: (e) => {
+            if (e.type === 'final') {
+              setMessages((prev) => [...prev, { id: uid(), role: 'assistant', content: e.text }]);
+            } else {
+              const kind =
+                e.type === 'thought'
+                  ? ('thought' as const)
+                  : e.type === 'action'
+                    ? ('action' as const)
+                    : e.type === 'blocked' || e.type === 'error'
+                      ? ('blocked' as const)
+                      : ('observation' as const);
+              setMessages((prev) => [...prev, { id: uid(), role: 'assistant', content: e.text, kind }]);
+            }
+          },
+        });
+      } finally {
+        setAgentRunning(false);
+        setPendingApproval(null);
+        approvalRef.current = null;
+        agentAbortRef.current = null;
+      }
+    },
+    [agentRunning, streaming, agentMode, native, closeTab],
+  );
+
+  const resolveApproval = useCallback((ok: boolean) => {
+    approvalRef.current?.(ok);
+  }, []);
+
+  const stopAgent = useCallback(() => {
+    agentAbortRef.current?.abort();
+    approvalRef.current?.(false);
+  }, []);
 
   const askCasper = useCallback(
     (prompt: string) => {
@@ -424,6 +572,7 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
                 setHasPageContext(true);
               }}
               onTabMeta={(meta) => updateTabMeta(activeId, meta)}
+              onExecutor={registerExecutor}
             />
           ) : (
             <BrowserViewport
@@ -442,6 +591,13 @@ export function HauntedBrowser({ userId, onClose, isExpanded, onToggleExpand }: 
               messages={messages}
               streaming={streaming}
               onSend={sendToCasper}
+              agentMode={agentMode}
+              onAgentModeChange={setAgentMode}
+              agentRunning={agentRunning}
+              onRunAgent={runAgentGoal}
+              onStopAgent={stopAgent}
+              pendingApproval={pendingApproval}
+              onApprove={resolveApproval}
               currentUrl={currentUrl}
               pageContextAvailable={hasPageContext}
               pageReadingAllowed={pageReading === 'allow'}
