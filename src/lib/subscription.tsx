@@ -1,6 +1,10 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
+// A local authedFetch used to live here that read the raw session and did no
+// 401 retry, so after a backgrounded tab's token expired, clicking Upgrade
+// posted a dead JWT to /api/stripe/checkout and failed silently.
+import { authedFetch } from './authSession';
 
 export type SubscriptionTier = 'indie' | 'operator' | 'architect';
 export type SubscriptionStatus = 'active' | 'cancelled' | 'past_due';
@@ -286,19 +290,6 @@ const getCurrentPeriod = () => {
   const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
   return { start: start.toISOString(), end: end.toISOString() };
 };
-
-async function authedFetch(path: string, opts: RequestInit = {}): Promise<Response> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token;
-  return fetch(path, {
-    ...opts,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(opts.headers || {}),
-    },
-  });
-}
 
 export function SubscriptionProvider({ children }: { children: React.ReactNode }) {
   const { currentUser } = useAuth();
