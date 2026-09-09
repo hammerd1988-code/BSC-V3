@@ -541,13 +541,13 @@ async function gitOps(args: Record<string, any>, opts?: DevAgentToolOptions): Pr
     case 'branch': {
       const branchName = String(args.branch_name || '').trim();
       if (!branchName) return { ok: false, data: null, error: 'branch_name is required for branch operation.' };
-      command = `git checkout -b '${branchName}'`;
+      command = `git checkout -b '${shellQuote(branchName)}'`;
       break;
     }
     case 'checkout': {
       const ref = String(args.ref || '').trim();
       if (!ref) return { ok: false, data: null, error: 'ref is required for checkout operation.' };
-      command = `git checkout '${ref}'`;
+      command = `git checkout '${shellQuote(ref)}'`;
       break;
     }
     case 'add': {

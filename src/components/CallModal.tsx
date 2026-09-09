@@ -69,6 +69,11 @@ export const CallModal: React.FC<CallModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   
   const roomRef = useRef<Room | null>(null);
+  // LiveKit handlers are registered once, while connecting, and then outlive
+  // the render that created them. Reading `status` from that closure always
+  // saw CONNECTING, so the Disconnected guard below could never match.
+  const statusRef = useRef<CallStatus>(CallStatus.IDLE);
+  statusRef.current = status;
   const callRoomNameRef = useRef<string | null>(null);
   const remoteAudioElementsRef = useRef<HTMLMediaElement[]>([]);
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -255,7 +260,9 @@ export const CallModal: React.FC<CallModalProps> = ({
 
       room.on(RoomEvent.TrackSubscribed, (track) => attachLiveKitTrack(track));
       room.on(RoomEvent.Disconnected, () => {
-        if (status === CallStatus.CONNECTED) setStatus(CallStatus.ENDED);
+        // Without the ref this never fired, so a dropped LiveKit connection left
+        // the user on a live-looking call screen with the timer still running.
+        if (statusRef.current === CallStatus.CONNECTED) setStatus(CallStatus.ENDED);
       });
       room.on(RoomEvent.ParticipantDisconnected, () => {
         setStatus(CallStatus.ENDED);
