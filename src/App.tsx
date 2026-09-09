@@ -15,6 +15,7 @@ import { ImageLightboxProvider } from './components/ImageLightbox';
 import { updateDailyStreak } from './lib/achievements';
 import { isRecentlyCreatedAccount, shouldShowOnboarding } from './lib/onboarding';
 import { registerNativePush } from './lib/mobile';
+import { firstResultError } from './lib/errors';
 import { supabase } from './supabase';
 import { useSubscription } from './lib/subscription';
 
@@ -156,15 +157,28 @@ export default function App() {
 
       if (existing) return; // Already processed
 
-      // Record referral
-      await supabase.from('referrals').insert({
+      // Record the referral FIRST, and only award CRED if that row landed.
+      // `referrals` carries `unique (referred_id)`, so this insert is the only
+      // thing standing between one bonus and an unlimited one: the `existing`
+      // read above races with itself, and if the insert fails for any reason
+      // (the unique constraint, an RLS refusal) nothing ever records that the
+      // referral was processed. The error used to be discarded and the awards
+      // ran anyway, so every subsequent sign-in with the same code paid out
+      // another 100/50 CRED.
+      const { error: referralError } = await supabase.from('referrals').insert({
         referrer_id: referrer.id,
         referred_id: newUserId,
         referrer_username: referrerUsername,
       });
+      if (referralError) {
+        console.error('[Referral] Not awarding CRED — referral row was not recorded:', referralError.message);
+        return;
+      }
 
-      // Award CRED to both
-      await Promise.all([
+      // Award CRED to both. supabase-js resolves with `{ error }` instead of
+      // rejecting, so the catch below cannot see a failed award; the results
+      // have to be inspected directly.
+      const awardResults = await Promise.all([
         supabase.rpc('increment_counter', { p_table: 'users', p_id: referrer.id, p_field: 'cred_balance', p_amount: 100 }),
         supabase.rpc('increment_counter', { p_table: 'users', p_id: newUserId, p_field: 'cred_balance', p_amount: 50 }),
         supabase.from('transactions').insert([
@@ -178,6 +192,10 @@ export default function App() {
           read: false,
         }),
       ]);
+      const awardError = firstResultError(awardResults);
+      if (awardError) {
+        console.error('[Referral] Referral recorded but the award was incomplete:', awardError);
+      }
     } catch (err) {
       console.error('[Referral] Processing error:', err);
     }
