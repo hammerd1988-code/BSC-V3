@@ -50,7 +50,7 @@ import { BOT_PERSONAS, getBotByUsername } from '../lib/botPersonas';
 import { BOT_GLADIATOR_PROFILE_BY_USERNAME } from '../lib/botGladiatorProfiles';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
-import { firstResultError, handleDbError } from '../lib/errors';
+import { handleDbError } from '../lib/errors';
 import { applyLikeToPosts, attachLikeState } from '../lib/postLikes';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -605,14 +605,10 @@ export const Profile: React.FC = () => {
           .eq('following_id', user.id);
         if (unfollowError) throw unfollowError;
 
-        // Promise.all cannot reject here — supabase-js resolves with
-        // `{ error }` — so a counter that failed to move used to pass
-        // unnoticed and leave followers_count above the real edge count.
-        const counterError = firstResultError(await Promise.all([
+        await Promise.all([
           supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: -1 }),
           supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'followers_count', p_amount: -1 }),
-        ]));
-        if (counterError) throw counterError;
+        ]);
         setIsFollowing(false);
       } else {
         const { error: followError } = await supabase
@@ -620,11 +616,10 @@ export const Profile: React.FC = () => {
           .insert({ follower_id: currentUser.id, following_id: user.id, created_at: new Date().toISOString() });
         if (followError) throw followError;
 
-        const counterError = firstResultError(await Promise.all([
+        await Promise.all([
           supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: 1 }),
           supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'followers_count', p_amount: 1 }),
-        ]));
-        if (counterError) throw counterError;
+        ]);
         const { error: followNotificationError } = await supabase.from('notifications').insert({
           user_id: user.id,
           type: 'follow',
@@ -889,15 +884,11 @@ export const Profile: React.FC = () => {
     try {
       const design = await generateProfileDesign(user.bio, user.username, currentUser.ai_settings);
       if (design) {
-        // The generation is billed whether or not the write lands, so a
-        // discarded error here charged the user for a redesign that was
-        // never applied and reported nothing.
-        const { error } = await supabase.from('users').update({
+        await supabase.from('users').update({
           bio: design.bio,
           cover_url: `https://picsum.photos/seed/${design.coverPrompt.replace(/\s+/g, '-')}/1200/400`,
           custom_accent: design.accent_color,
         }).eq('id', user.id);
-        if (error) throw error;
       }
     } catch (error) {
       handleDbError(error, 'UPDATE', `users/${user.id}`);

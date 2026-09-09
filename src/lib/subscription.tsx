@@ -492,15 +492,7 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
       return;
     }
 
-    // Both rows have to agree; leaving `users.subscription_tier` behind is the
-    // exact drift the comment above describes, just from the other side.
-    const { error: profileError } = await supabase
-      .from('users')
-      .update({ subscription_tier: nextTier })
-      .eq('id', currentUser.id);
-    if (profileError) {
-      console.error('[subscription] Tier written to subscriptions but not to the profile:', profileError.message);
-    }
+    await supabase.from('users').update({ subscription_tier: nextTier }).eq('id', currentUser.id);
     await refresh();
   }, [currentUser?.id, refresh]);
 

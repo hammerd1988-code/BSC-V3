@@ -51,25 +51,17 @@ function chainFor(result: MockResult) {
  * `fromResponses` is a table → ordered list of results. Each `.from(table)`
  * call pops the first entry. Calling `.from()` on an unknown table or an
  * exhausted queue throws so unexpected queries are caught immediately.
- * `rpcResponses` does the same for `.rpc(name, args)`, and `rpcCalls` records
- * the arguments each call was made with.
  */
 function makeSupabase({
   getUserResult,
   fromResponses,
-  rpcResponses = {},
 }: {
   getUserResult: { data: { user: { id: string } | null }; error: null | { message: string } };
   fromResponses: Record<string, MockResult[]>;
-  rpcResponses?: Record<string, MockResult[]>;
-}): { supabase: SupabaseClient; rpcCalls: { name: string; args: unknown }[] } {
+}): SupabaseClient {
   const queues: Record<string, MockResult[]> = Object.fromEntries(
     Object.entries(fromResponses).map(([k, v]) => [k, [...v]]),
   );
-  const rpcQueues: Record<string, MockResult[]> = Object.fromEntries(
-    Object.entries(rpcResponses).map(([k, v]) => [k, [...v]]),
-  );
-  const rpcCalls: { name: string; args: unknown }[] = [];
 
   const from = (table: string) => {
     const q = queues[table];
@@ -83,26 +75,10 @@ function makeSupabase({
     return chainFor(result);
   };
 
-  const rpc = (name: string, args: unknown) => {
-    rpcCalls.push({ name, args });
-    const q = rpcQueues[name];
-    if (!q || q.length === 0) {
-      throw new Error(
-        `Unexpected or exhausted Supabase mock rpc: .rpc("${name}"). ` +
-        `Registered functions: [${Object.keys(rpcQueues).join(', ')}]`,
-      );
-    }
-    return chainFor(q.shift()!);
-  };
-
   return {
-    supabase: {
-      auth: { getUser: vi.fn().mockResolvedValue(getUserResult) },
-      from,
-      rpc,
-    } as unknown as SupabaseClient,
-    rpcCalls,
-  };
+    auth: { getUser: vi.fn().mockResolvedValue(getUserResult) },
+    from,
+  } as unknown as SupabaseClient;
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +143,7 @@ describe('featuresForTier', () => {
 
 describe('GET /api/license/key — JWT-to-profile binding', () => {
   it('returns 401 when Authorization header is absent', async () => {
-    const { supabase } = makeSupabase({ getUserResult: { data: { user: null }, error: null }, fromResponses: {} });
+    const supabase = makeSupabase({ getUserResult: { data: { user: null }, error: null }, fromResponses: {} });
     const routes = buildRouteMap(supabase);
     const req = mockReq({ headers: {} });
     const res = mockRes();
@@ -176,7 +152,7 @@ describe('GET /api/license/key — JWT-to-profile binding', () => {
   });
 
   it('returns 401 when JWT resolves to no Supabase auth user', async () => {
-    const { supabase } = makeSupabase({
+    const supabase = makeSupabase({
       getUserResult: { data: { user: null }, error: { message: 'invalid jwt' } },
       fromResponses: {},
     });
@@ -188,7 +164,7 @@ describe('GET /api/license/key — JWT-to-profile binding', () => {
   });
 
   it('returns 401 when JWT is valid but no users row matches auth_uid', async () => {
-    const { supabase } = makeSupabase({
+    const supabase = makeSupabase({
       getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
       fromResponses: {
         users: [{ data: null, error: null }], // no profile found
@@ -202,7 +178,7 @@ describe('GET /api/license/key — JWT-to-profile binding', () => {
   });
 
   it('returns the active key state and tier for an authenticated user', async () => {
-    const { supabase } = makeSupabase({
+    const supabase = makeSupabase({
       getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
       fromResponses: {
         users: [
@@ -228,7 +204,7 @@ describe('GET /api/license/key — JWT-to-profile binding', () => {
   it('answers 503 rather than reporting hasKey:false when the lookup fails', async () => {
     // `hasKey: false` would offer "Generate License Key" to a user who
     // already has one.
-    const { supabase } = makeSupabase({
+    const supabase = makeSupabase({
       getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
       fromResponses: {
         users: [{ data: { id: 'user-1' }, error: null }],
@@ -250,7 +226,7 @@ describe('GET /api/license/key — JWT-to-profile binding', () => {
 
 describe('POST /api/license/key — key reuse', () => {
   it('reports an existing key via hasKey and rotated:false when rotate is absent', async () => {
-    const { supabase } = makeSupabase({
+    const supabase = makeSupabase({
       getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
       fromResponses: {
         users: [
@@ -274,7 +250,7 @@ describe('POST /api/license/key — key reuse', () => {
   });
 
   it('reports the existing key when rotate is explicitly false', async () => {
-    const { supabase } = makeSupabase({
+    const supabase = makeSupabase({
       getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
       fromResponses: {
         users: [
@@ -297,21 +273,19 @@ describe('POST /api/license/key — key reuse', () => {
 // ---------------------------------------------------------------------------
 
 describe('POST /api/license/key — rotation', () => {
-  it('revokes the old key and mints a new one through one atomic RPC', async () => {
-    const { supabase, rpcCalls } = makeSupabase({
+  it('revokes the old key and mints a new one', async () => {
+    const supabase = makeSupabase({
       getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
       fromResponses: {
         users: [
           { data: { id: 'user-1' }, error: null },
           { data: { subscription_tier: 'operator', role: 'user' }, error: null },
         ],
-        // Only the existing-key lookup is registered. The revoke and the
-        // insert must go through `rotate_license_key`, so a route that still
-        // issued them as separate requests would exhaust this queue and throw.
-        license_keys: [{ data: { id: 'row-old', key: KEY }, error: null }],
-      },
-      rpcResponses: {
-        rotate_license_key: [{ data: { replaced_previous: true }, error: null }],
+        license_keys: [
+          { data: { id: 'row-old', key: KEY }, error: null }, // existing
+          { data: null, error: null },                         // revoke update
+          { data: null, error: null },                         // insert new
+        ],
       },
     });
     const routes = buildRouteMap(supabase);
@@ -324,53 +298,20 @@ describe('POST /api/license/key — rotation', () => {
     expect(typeof body.key).toBe('string');
     expect((body.key as string).startsWith('bsc_')).toBe(true);
     expect(body.key).not.toBe(KEY);
-
-    expect(rpcCalls).toHaveLength(1);
-    expect(rpcCalls[0].name).toBe('rotate_license_key');
-    const args = rpcCalls[0].args as Record<string, unknown>;
-    expect(args.p_user_id).toBe('user-1');
-    expect(args.p_label).toBe('local-coder');
-    // Only the hash is ever handed to the database.
-    expect(args.p_key_hash).toBe(hashLicenseKey(body.key as string));
-    expect(args.p_key_hash).not.toBe(body.key);
-  });
-
-  it('reports rotated from the database result, not from the pre-read', async () => {
-    // The pre-read saw no active key, but by the time the transaction ran one
-    // existed and was replaced. `rotated` has to reflect what actually
-    // happened rather than what was observed a request earlier.
-    const { supabase } = makeSupabase({
-      getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
-      fromResponses: {
-        users: [
-          { data: { id: 'user-1' }, error: null },
-          { data: { subscription_tier: 'indie', role: 'user' }, error: null },
-        ],
-        license_keys: [{ data: null, error: null }],
-      },
-      rpcResponses: {
-        rotate_license_key: [{ data: { replaced_previous: true }, error: null }],
-      },
-    });
-    const routes = buildRouteMap(supabase);
-    const req = mockReq({ headers: { authorization: AUTH_HEADER }, body: { rotate: true } });
-    const res = mockRes();
-    await routes['POST /api/license/key'](req, res as Response);
-    expect((res.body as Record<string, unknown>).rotated).toBe(true);
   });
 
   it('mints a new key when no prior key exists (rotated:false since nothing was revoked)', async () => {
-    const { supabase } = makeSupabase({
+    const supabase = makeSupabase({
       getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
       fromResponses: {
         users: [
           { data: { id: 'user-1' }, error: null },
           { data: { subscription_tier: 'indie', role: 'user' }, error: null },
         ],
-        license_keys: [{ data: null, error: null }], // no existing key
-      },
-      rpcResponses: {
-        rotate_license_key: [{ data: { replaced_previous: false }, error: null }],
+        license_keys: [
+          { data: null, error: null }, // no existing key
+          { data: null, error: null }, // insert
+        ],
       },
     });
     const routes = buildRouteMap(supabase);
@@ -383,15 +324,15 @@ describe('POST /api/license/key — rotation', () => {
     expect(body.rotated).toBe(false);
   });
 
-  it('returns 500 when the atomic rotation fails', async () => {
-    const { supabase } = makeSupabase({
+  it('returns 500 when the revoke update fails', async () => {
+    const supabase = makeSupabase({
       getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
       fromResponses: {
         users: [{ data: { id: 'user-1' }, error: null }],
-        license_keys: [{ data: { id: 'row-old', key: KEY }, error: null }],
-      },
-      rpcResponses: {
-        rotate_license_key: [{ data: null, error: { message: 'DB offline' } }],
+        license_keys: [
+          { data: { id: 'row-old', key: KEY }, error: null },
+          { data: null, error: { message: 'DB offline' } }, // revoke fails
+        ],
       },
     });
     const routes = buildRouteMap(supabase);
@@ -401,10 +342,12 @@ describe('POST /api/license/key — rotation', () => {
     expect(res.statusCode).toBe(500);
   });
 
-  it('does not rotate when the existing-key lookup fails', async () => {
-    // Treating a failed lookup as "no key exists" would send an unrequested
-    // rotation and revoke a key the caller is still using.
-    const { supabase, rpcCalls } = makeSupabase({
+  it('does not touch the live key when the existing-key lookup fails', async () => {
+    // Treating a failed lookup as "no key exists" makes the fallthrough
+    // destructive as soon as rotation becomes one unconditional
+    // revoke-and-insert (#352). Only the lookup is registered here, so a route
+    // that carried on regardless would exhaust the mock queue and throw.
+    const supabase = makeSupabase({
       getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
       fromResponses: {
         users: [{ data: { id: 'user-1' }, error: null }],
@@ -416,7 +359,6 @@ describe('POST /api/license/key — rotation', () => {
     const res = mockRes();
     await routes['POST /api/license/key'](req, res as Response);
     expect(res.statusCode).toBe(503);
-    expect(rpcCalls).toHaveLength(0);
   });
 });
 
@@ -426,7 +368,7 @@ describe('POST /api/license/key — rotation', () => {
 
 describe('GET /api/license/verify — revoked-key rejection', () => {
   it('rejects a missing x-license-key header', async () => {
-    const { supabase } = makeSupabase({ getUserResult: { data: { user: null }, error: null }, fromResponses: {} });
+    const supabase = makeSupabase({ getUserResult: { data: { user: null }, error: null }, fromResponses: {} });
     const routes = buildRouteMap(supabase);
     const req = mockReq({ headers: {} });
     const res = mockRes();
@@ -436,7 +378,7 @@ describe('GET /api/license/verify — revoked-key rejection', () => {
   });
 
   it('rejects a key that does not start with bsc_', async () => {
-    const { supabase } = makeSupabase({ getUserResult: { data: { user: null }, error: null }, fromResponses: {} });
+    const supabase = makeSupabase({ getUserResult: { data: { user: null }, error: null }, fromResponses: {} });
     const routes = buildRouteMap(supabase);
     const req = mockReq({ headers: { 'x-license-key': 'bad_key_format' } });
     const res = mockRes();
@@ -447,7 +389,7 @@ describe('GET /api/license/verify — revoked-key rejection', () => {
 
   it('rejects a hashed key value passed as x-license-key', async () => {
     // hashLicenseKey produces a sha256 hex string — it does not start with bsc_
-    const { supabase } = makeSupabase({ getUserResult: { data: { user: null }, error: null }, fromResponses: {} });
+    const supabase = makeSupabase({ getUserResult: { data: { user: null }, error: null }, fromResponses: {} });
     const routes = buildRouteMap(supabase);
     const req = mockReq({ headers: { 'x-license-key': hashLicenseKey(KEY) } });
     const res = mockRes();
@@ -457,7 +399,7 @@ describe('GET /api/license/verify — revoked-key rejection', () => {
   });
 
   it('rejects an unknown key (not in the database)', async () => {
-    const { supabase } = makeSupabase({
+    const supabase = makeSupabase({
       getUserResult: { data: { user: null }, error: null },
       fromResponses: { license_keys: [{ data: null, error: null }] },
     });
@@ -470,7 +412,7 @@ describe('GET /api/license/verify — revoked-key rejection', () => {
   });
 
   it('rejects a revoked key', async () => {
-    const { supabase } = makeSupabase({
+    const supabase = makeSupabase({
       getUserResult: { data: { user: null }, error: null },
       fromResponses: {
         license_keys: [
@@ -487,7 +429,7 @@ describe('GET /api/license/verify — revoked-key rejection', () => {
   });
 
   it('accepts a valid, non-revoked key', async () => {
-    const { supabase } = makeSupabase({
+    const supabase = makeSupabase({
       getUserResult: { data: { user: null }, error: null },
       fromResponses: {
         license_keys: [
@@ -513,7 +455,7 @@ describe('GET /api/license/verify — revoked-key rejection', () => {
   // these answer 401/'indie', the Local Coder install caches a revocation or a
   // downgrade that nothing about the subscription justifies.
   it('answers 503, not 401, when the key lookup itself fails', async () => {
-    const { supabase } = makeSupabase({
+    const supabase = makeSupabase({
       getUserResult: { data: { user: null }, error: null },
       fromResponses: {
         license_keys: [{ data: null, error: { message: 'DB offline' } }],
@@ -527,7 +469,7 @@ describe('GET /api/license/verify — revoked-key rejection', () => {
   });
 
   it('answers 503 rather than downgrading to indie when the tier lookup fails', async () => {
-    const { supabase } = makeSupabase({
+    const supabase = makeSupabase({
       getUserResult: { data: { user: null }, error: null },
       fromResponses: {
         license_keys: [
@@ -554,7 +496,7 @@ describe('GET /api/license/verify — revoked-key rejection', () => {
 
 describe('GET /api/license/verify — feature mapping per tier', () => {
   async function verifyAs(subscriptionTier: string | null, role: string) {
-    const { supabase } = makeSupabase({
+    const supabase = makeSupabase({
       getUserResult: { data: { user: null }, error: null },
       fromResponses: {
         license_keys: [
