@@ -119,29 +119,22 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
       return res.json({ hasKey: true, tier, rotated: false });
     }
 
-    if (existing) {
-      const { error: revokeError } = await supabase
-        .from('license_keys')
-        .update({ revoked_at: new Date().toISOString() })
-        .eq('id', existing.id);
-      if (revokeError) {
-        console.error('[License] revoke error:', revokeError.message);
-        return res.status(500).json({ error: 'Failed to rotate license key.' });
-      }
-    }
-
+    // Revoke and mint in one transaction. As two requests, a failure after the
+    // revoke left the account with no active key while the response said the
+    // rotation had failed.
     const key = mintKey();
-    const keyHash = hashLicenseKey(key);
-    const { error: insertError } = await supabase
-      .from('license_keys')
-      .insert({ user_id: user.id, key: keyHash, label: LICENSE_LABEL });
-    if (insertError) {
-      console.error('[License] insert error:', insertError.message);
+    const { data: rotated, error: rotateError } = await supabase.rpc('rotate_license_key', {
+      p_user_id: user.id,
+      p_label: LICENSE_LABEL,
+      p_key_hash: hashLicenseKey(key),
+    });
+    if (rotateError) {
+      console.error('[License] rotate error:', rotateError.message);
       return res.status(500).json({ error: 'Failed to create license key.' });
     }
 
     const tier = await resolveTier(supabase, user.id);
-    res.json({ key, tier, rotated: Boolean(existing) });
+    res.json({ key, tier, rotated: rotated === true });
   });
 
   // ── GET /api/license/verify ──

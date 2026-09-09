@@ -55,12 +55,17 @@ function chainFor(result: MockResult) {
 function makeSupabase({
   getUserResult,
   fromResponses,
+  rpcResponses,
 }: {
   getUserResult: { data: { user: { id: string } | null }; error: null | { message: string } };
   fromResponses: Record<string, MockResult[]>;
+  rpcResponses?: Record<string, MockResult[]>;
 }): SupabaseClient {
   const queues: Record<string, MockResult[]> = Object.fromEntries(
     Object.entries(fromResponses).map(([k, v]) => [k, [...v]]),
+  );
+  const rpcQueues: Record<string, MockResult[]> = Object.fromEntries(
+    Object.entries(rpcResponses ?? {}).map(([k, v]) => [k, [...v]]),
   );
 
   const from = (table: string) => {
@@ -75,9 +80,21 @@ function makeSupabase({
     return chainFor(result);
   };
 
+  const rpc = vi.fn((fn: string) => {
+    const q = rpcQueues[fn];
+    if (!q || q.length === 0) {
+      throw new Error(
+        `Unexpected or exhausted Supabase mock rpc: .rpc("${fn}"). ` +
+        `Registered functions: [${Object.keys(rpcQueues).join(', ')}]`,
+      );
+    }
+    return Promise.resolve(q.shift()!);
+  });
+
   return {
     auth: { getUser: vi.fn().mockResolvedValue(getUserResult) },
     from,
+    rpc,
   } as unknown as SupabaseClient;
 }
 
@@ -255,7 +272,7 @@ describe('POST /api/license/key — key reuse', () => {
 // ---------------------------------------------------------------------------
 
 describe('POST /api/license/key — rotation', () => {
-  it('revokes the old key and mints a new one', async () => {
+  it('revokes the old key and mints a new one in a single transaction', async () => {
     const supabase = makeSupabase({
       getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
       fromResponses: {
@@ -265,10 +282,9 @@ describe('POST /api/license/key — rotation', () => {
         ],
         license_keys: [
           { data: { id: 'row-old', key: KEY }, error: null }, // existing
-          { data: null, error: null },                         // revoke update
-          { data: null, error: null },                         // insert new
         ],
       },
+      rpcResponses: { rotate_license_key: [{ data: true, error: null }] },
     });
     const routes = buildRouteMap(supabase);
     const req = mockReq({ headers: { authorization: AUTH_HEADER }, body: { rotate: true } });
@@ -280,6 +296,17 @@ describe('POST /api/license/key — rotation', () => {
     expect(typeof body.key).toBe('string');
     expect((body.key as string).startsWith('bsc_')).toBe(true);
     expect(body.key).not.toBe(KEY);
+
+    // Revoke + mint must be one call: as two requests, a failure between them
+    // left the account with no active key while the response reported failure.
+    const rpc = (supabase as unknown as { rpc: ReturnType<typeof vi.fn> }).rpc;
+    expect(rpc).toHaveBeenCalledTimes(1);
+    const [fn, args] = rpc.mock.calls[0];
+    expect(fn).toBe('rotate_license_key');
+    expect(args).toMatchObject({ p_user_id: 'user-1', p_label: 'local-coder' });
+    // Only the hash goes to the database; the plaintext is returned once.
+    expect(args.p_key_hash).toBe(hashLicenseKey(body.key as string));
+    expect(args.p_key_hash).not.toBe(body.key);
   });
 
   it('mints a new key when no prior key exists (rotated:false since nothing was revoked)', async () => {
@@ -292,9 +319,9 @@ describe('POST /api/license/key — rotation', () => {
         ],
         license_keys: [
           { data: null, error: null }, // no existing key
-          { data: null, error: null }, // insert
         ],
       },
+      rpcResponses: { rotate_license_key: [{ data: false, error: null }] },
     });
     const routes = buildRouteMap(supabase);
     const req = mockReq({ headers: { authorization: AUTH_HEADER }, body: { rotate: true } });
@@ -306,22 +333,21 @@ describe('POST /api/license/key — rotation', () => {
     expect(body.rotated).toBe(false);
   });
 
-  it('returns 500 when the revoke update fails', async () => {
+  it('returns 500 without exposing a key when the rotation fails', async () => {
     const supabase = makeSupabase({
       getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
       fromResponses: {
         users: [{ data: { id: 'user-1' }, error: null }],
-        license_keys: [
-          { data: { id: 'row-old', key: KEY }, error: null },
-          { data: null, error: { message: 'DB offline' } }, // revoke fails
-        ],
+        license_keys: [{ data: { id: 'row-old', key: KEY }, error: null }],
       },
+      rpcResponses: { rotate_license_key: [{ data: null, error: { message: 'DB offline' } }] },
     });
     const routes = buildRouteMap(supabase);
     const req = mockReq({ headers: { authorization: AUTH_HEADER }, body: { rotate: true } });
     const res = mockRes();
     await routes['POST /api/license/key'](req, res as Response);
     expect(res.statusCode).toBe(500);
+    expect((res.body as Record<string, unknown>).key).toBeUndefined();
   });
 });
 
