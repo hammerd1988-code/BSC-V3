@@ -52,6 +52,17 @@ export function isCallRoomParticipant(roomName: string, userId: string): boolean
   return callRooms.get(roomName)?.participants.has(String(userId)) ?? false;
 }
 
+/**
+ * Whether the signalling server has registered `roomName` as a call room.
+ *
+ * Lets the token route decide which authorization a room needs from what it
+ * knows, rather than from the `roomType` the requester claims.
+ */
+export function isRegisteredCallRoom(roomName: string): boolean {
+  prune();
+  return callRooms.has(roomName);
+}
+
 export function releaseCallRoom(roomName: string): void {
   callRooms.delete(roomName);
 }

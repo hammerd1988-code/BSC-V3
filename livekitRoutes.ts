@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { AccessToken } from 'livekit-server-sdk';
-import { isCallRoomParticipant } from './callRooms.js';
+import { isCallRoomParticipant, isRegisteredCallRoom } from './callRooms.js';
 
 type LiveKitRoomType = 'stream' | 'call';
 type LiveKitRole = 'host' | 'viewer' | 'caller' | 'callee' | 'participant';
@@ -16,6 +16,30 @@ interface LiveKitTokenRequest {
 }
 
 const ROOM_NAME_PATTERN = /^[A-Za-z0-9:_=-]{3,128}$/;
+
+/**
+ * Which authorization a room requires.
+ *
+ * This used to be `body.roomType === 'call' ? 'call' : 'stream'`, so the
+ * requester chose which check applied to them. Call rooms are named
+ * `call:<uuid>` and the participant check ran only under the 'call' label, so
+ * omitting it — or sending `roomType: 'stream'` — took the viewer branch
+ * instead: no membership check, and a token granting `canSubscribe` on a
+ * private call to anyone who had learned the room name.
+ *
+ * A room registered by the signalling server is a call room whatever the
+ * request says, and an unregistered `call:` name still fails closed on the
+ * participant check rather than falling through to the viewer branch.
+ */
+export function resolveRoomKind(
+  roomName: string,
+  requestedType: LiveKitRoomType | undefined,
+  isKnownCallRoom: (roomName: string) => boolean = isRegisteredCallRoom,
+): LiveKitRoomType {
+  if (isKnownCallRoom(roomName) || roomName.startsWith('call:')) return 'call';
+  if (roomName.startsWith('stream:')) return 'stream';
+  return requestedType === 'call' ? 'call' : 'stream';
+}
 
 function getBearerToken(req: Request): string | null {
   const header = req.headers.authorization;
@@ -116,7 +140,7 @@ export function registerLiveKitRoutes(app: Express, supabase: SupabaseClient) {
         return res.status(400).json({ error: 'A valid roomName or roomType/resourceId pair is required.' });
       }
 
-      const roomType: LiveKitRoomType = body.roomType === 'call' ? 'call' : 'stream';
+      const roomType: LiveKitRoomType = resolveRoomKind(roomName, body.roomType);
       const requestedRole: LiveKitRole = body.role ?? (roomType === 'call' ? 'participant' : 'viewer');
       const profile = await resolveProfile(supabase, authData.user);
       const identity = String(profile.id ?? authData.user.id);
