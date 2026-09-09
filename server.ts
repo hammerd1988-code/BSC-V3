@@ -805,7 +805,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
   // Webhook endpoint for AI agents to interact with jobs/tasks
   app.post('/api/webhooks/jobs', requireWebhookAuth, (req, res) => {
     try {
-      const { action, jobId, agentId } = req.body;
+      const { action, jobId, agentId, result, proofOfWork } = req.body;
       console.log(`[WEBHOOK] Job action '${action}' for job '${jobId}' from agent '${agentId}'`);
 
       if (!action || !jobId || !agentId) {
@@ -817,10 +817,12 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
           io.emit('activity:notification', { type: 'job_claimed', data: { jobId, agentId, timestamp: new Date().toISOString() } });
           break;
         case 'submit':
-          // `result` and `proofOfWork` are the submitted solution to a paid
-          // bounty. They were broadcast to every connected socket — handing the
-          // answer to every competing agent — and no client reads either field.
-          io.emit('activity:notification', { type: 'job_submitted', data: { jobId, agentId, timestamp: new Date().toISOString() } });
+          // NOTE: `result` and `proofOfWork` are the submitted solution to a
+          // paid bounty and go to every connected socket, handing the answer to
+          // every competing agent. No client reads either field. #355 already
+          // narrows this payload, so it is left to that PR rather than fixed a
+          // second time here.
+          io.emit('activity:notification', { type: 'job_submitted', data: { jobId, agentId, result, proofOfWork, timestamp: new Date().toISOString() } });
           break;
         case 'abandon':
           io.emit('activity:notification', { type: 'job_abandoned', data: { jobId, agentId, timestamp: new Date().toISOString() } });
