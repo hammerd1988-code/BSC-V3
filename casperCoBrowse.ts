@@ -65,15 +65,19 @@ async function captureAndEmit(
   }
 }
 
-// Resolve the authenticated userId for this socket. The main Socket.IO
-// handler in server.ts stores userId on `user:register`; we
-// mirror that by stashing it on socket.data.
+/**
+ * The account this socket has actually proved it is.
+ *
+ * `user:register` in server.ts verifies a Supabase access token and resolves
+ * the profile id before storing it here, so this is the only identity this
+ * namespace trusts. It used to bind whatever `userId` the first
+ * `cobrowse:start` claimed, which is not a check at all: any client could send
+ * somebody else's id and then drive that user's Playwright session — navigate,
+ * click and type — through the events below.
+ */
 function getSocketUserId(socket: Socket): string | undefined {
-  return (socket.data as { cobrowseUserId?: string })?.cobrowseUserId;
-}
-
-function setSocketUserId(socket: Socket, userId: string): void {
-  (socket.data as Record<string, unknown>).cobrowseUserId = userId;
+  const verified = (socket.data as { userId?: unknown })?.userId;
+  return typeof verified === 'string' && verified ? verified : undefined;
 }
 
 function assertOwner(socket: Socket, claimedUserId: string): boolean {
@@ -85,20 +89,22 @@ export function registerCoBrowseSocket(io: SocketServer, supabase: SupabaseClien
   io.on('connection', (socket: Socket) => {
     // Bind this socket to a userId on the first cobrowse:start.
     // Subsequent events must match.
-    socket.on('cobrowse:start', async (data: { userId: string; url: string; pageId?: string }) => {
-      const { userId, url, pageId } = data;
-      if (!userId || !url) {
-        socket.emit('cobrowse:error', { error: 'userId and url are required.' });
+    socket.on('cobrowse:start', async (data: { userId?: string; url: string; pageId?: string }) => {
+      const { url, pageId } = data;
+      // Identity comes from the registered session, never from the payload.
+      const userId = getSocketUserId(socket);
+      if (!userId) {
+        socket.emit('cobrowse:error', { error: 'Register with a Supabase session before starting a co-browse.' });
         return;
       }
-
-      // Bind socket to this userId (first call wins)
-      const existingBound = getSocketUserId(socket);
-      if (existingBound && existingBound !== userId) {
-        socket.emit('cobrowse:error', { error: 'Socket already bound to a different user.' });
+      if (!url) {
+        socket.emit('cobrowse:error', { error: 'url is required.' });
         return;
       }
-      if (!existingBound) setSocketUserId(socket, userId);
+      if (data.userId && data.userId !== userId) {
+        socket.emit('cobrowse:error', { error: 'Cannot start a co-browse session for another user.' });
+        return;
+      }
 
       // Clean up any existing session for this user
       const existing = activeSessions.get(userId);
