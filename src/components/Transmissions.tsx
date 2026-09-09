@@ -41,6 +41,7 @@ import {
 import { useAuth } from '../AuthContext';
 import { useCall } from '../CallContext';
 import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { Transmission, Transmit, User as UserType } from '../types';
 import { format } from 'date-fns';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -97,6 +98,17 @@ const SIGNAL_TAB_ICONS: Record<TransmissionSignalTab, React.ComponentType<{ clas
   stickers: Sticker,
   kaomoji: Sparkles,
 };
+
+/**
+ * Deletes burn messages whose timer has run out. Both callers drop them from the
+ * local view first, so this delete is the only thing that makes the burn real —
+ * a failure here leaves a message the sender was told had self-destructed.
+ */
+async function purgeExpiredTransmits(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const { error } = await supabase.from('transmits').delete().in('id', ids);
+  if (error) handleDbError(error, 'DELETE', `transmits (${ids.length} expired)`);
+}
 
 declare global {
   interface Window {
@@ -504,10 +516,13 @@ export const Transmissions: React.FC = () => {
         // Filter out already-expired burn messages
         const now = Date.now();
         const live = rows.filter(t => !t.expires_at || new Date(t.expires_at).getTime() > now);
-        // Delete expired ones from DB silently
+        // Removed from the DB without blocking the render. Not silently, though:
+        // this is what actually makes a burn message burn, and supabase-js
+        // resolves with { error }, so a bare .then() left expired messages
+        // sitting in the table with nothing to show it had failed.
         const expired = rows.filter(t => t.expires_at && new Date(t.expires_at).getTime() <= now);
         if (expired.length > 0) {
-          supabase.from('transmits').delete().in('id', expired.map(t => t.id)).then();
+          void purgeExpiredTransmits(expired.map(t => t.id));
         }
 
         const seenAt = new Date().toISOString();
@@ -757,8 +772,8 @@ export const Transmissions: React.FC = () => {
             toDelete.forEach(id => delete c[id]);
             return c;
           });
-          // Delete from DB
-          supabase.from('transmits').delete().in('id', toDelete).then();
+          // The UI removal above is local only; this is the burn itself.
+          void purgeExpiredTransmits(toDelete);
         }
         return next;
       });
