@@ -303,35 +303,26 @@ export const BotMarketplace: React.FC = () => {
     setPurchasing(true);
     setPurchaseError(null);
     try {
-      // supabase-js resolves with { error } rather than rejecting, so this catch
-      // never saw a failed purchase: the buyer was told the bot was in their
-      // collection even when the bot_purchases insert had been rejected.
-      const results = await Promise.all([
-        supabase.from('bot_purchases').insert({ buyer_id: currentUser.id, bot_id: bot.id, price_paid: bot.price }),
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'cred_balance', p_amount: -bot.price }),
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: bot.creator_id, p_field: 'cred_balance', p_amount: Math.floor(bot.price * 0.8) }),
-        supabase.rpc('increment_counter', { p_table: 'bot_listings', p_id: bot.id, p_field: 'purchase_count', p_amount: 1 }),
-        supabase.from('transactions').insert([
-          { user_id: currentUser.id, amount: bot.price, type: 'spend', description: `Purchased bot: ${bot.name}`, created_at: new Date().toISOString() },
-          { user_id: bot.creator_id, amount: Math.floor(bot.price * 0.8), type: 'earn', description: `Bot sale: ${bot.name}`, created_at: new Date().toISOString() },
-        ]),
-        supabase.from('notifications').insert({
-          user_id: bot.creator_id,
-          type: 'bot_sale',
-          data: { bot_name: bot.name, buyer_id: currentUser.id, buyer_username: currentUser.username, cred_earned: Math.floor(bot.price * 0.8) },
-          read: false,
-        }),
-      ]);
+      // Ownership, payment, creator payout, ledger rows and the seller's
+      // notification commit together. Issuing them separately meant the
+      // bot_purchases row — which is what grants access — could land without
+      // the debit, and the seller notification was rejected outright by the
+      // owner-scoped policy on `notifications`, so a completed purchase still
+      // reported failure.
+      const { data, error } = await supabase.rpc('purchase_bot_listing', { p_bot_id: bot.id });
 
-      const failure = firstResultError(results);
-      if (failure) {
-        handleDbError(failure, 'CREATE', 'bot_purchases');
-        setPurchaseError('The purchase did not complete. Check your CRED balance before retrying.');
+      if (error) {
+        handleDbError(error, 'CREATE', 'bot_purchases');
+        setPurchaseError('The purchase did not complete. Your CRED has not been charged.');
         return;
       }
 
       setOwnedBotIds(prev => new Set([...prev, bot.id]));
-      setPurchaseSuccess(`✓ ${bot.name} is now in your collection!`);
+      setPurchaseSuccess(
+        (data as { purchased?: boolean } | null)?.purchased === false
+          ? 'You already own this bot!'
+          : `✓ ${bot.name} is now in your collection!`,
+      );
       setSelectedBot(null);
     } catch (err) {
       handleDbError(err, 'CREATE', 'bot_purchases');
