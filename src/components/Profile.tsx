@@ -50,7 +50,7 @@ import { BOT_PERSONAS, getBotByUsername } from '../lib/botPersonas';
 import { BOT_GLADIATOR_PROFILE_BY_USERNAME } from '../lib/botGladiatorProfiles';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
-import { handleDbError } from '../lib/errors';
+import { firstResultError, handleDbError } from '../lib/errors';
 import { applyLikeToPosts, attachLikeState } from '../lib/postLikes';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -61,6 +61,19 @@ import { AvatarBuilderModal } from './AvatarBuilderModal';
 import { CasperState } from './CasperState';
 import { ContributionHeatmap } from './ContributionHeatmap';
 import { ReportModal } from './ReportModal';
+
+/**
+ * The follows row is authoritative; followers_count/following_count are caches
+ * of it. Once the edge has moved, a failed counter RPC is drift to be noticed
+ * and reconciled, not a reason to tell the user the follow did not happen.
+ */
+function reportCounterDrift(
+  results: ReadonlyArray<{ error?: unknown } | null | undefined>,
+  path: string,
+): void {
+  const failure = firstResultError(results);
+  if (failure) handleDbError(failure, 'RPC increment_counter', path);
+}
 
 interface ProfileGladiator {
   id: string;
@@ -605,10 +618,14 @@ export const Profile: React.FC = () => {
           .eq('following_id', user.id);
         if (unfollowError) throw unfollowError;
 
-        await Promise.all([
+        // The edge is authoritative and has already moved, so a counter that
+        // fails to follow it is drift rather than a failed unfollow — but it was
+        // previously invisible, because these results were discarded and the
+        // catch below can only see a thrown exception.
+        reportCounterDrift(await Promise.all([
           supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: -1 }),
           supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'followers_count', p_amount: -1 }),
-        ]);
+        ]), `users/${user.id}`);
         setIsFollowing(false);
       } else {
         const { error: followError } = await supabase
@@ -616,10 +633,10 @@ export const Profile: React.FC = () => {
           .insert({ follower_id: currentUser.id, following_id: user.id, created_at: new Date().toISOString() });
         if (followError) throw followError;
 
-        await Promise.all([
+        reportCounterDrift(await Promise.all([
           supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: 1 }),
           supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'followers_count', p_amount: 1 }),
-        ]);
+        ]), `users/${user.id}`);
         const { error: followNotificationError } = await supabase.from('notifications').insert({
           user_id: user.id,
           type: 'follow',
@@ -715,19 +732,19 @@ export const Profile: React.FC = () => {
           .eq('follower_id', currentUser.id)
           .eq('following_id', target.id);
         if (error) throw error;
-        await Promise.all([
+        reportCounterDrift(await Promise.all([
           supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: -1 }),
           supabase.rpc('increment_counter', { p_table: 'users', p_id: target.id, p_field: 'followers_count', p_amount: -1 }),
-        ]);
+        ]), `users/${target.id}`);
       } else {
         const { error } = await supabase
           .from('follows')
           .insert({ follower_id: currentUser.id, following_id: target.id, created_at: new Date().toISOString() });
         if (error) throw error;
-        await Promise.all([
+        reportCounterDrift(await Promise.all([
           supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: 1 }),
           supabase.rpc('increment_counter', { p_table: 'users', p_id: target.id, p_field: 'followers_count', p_amount: 1 }),
-        ]);
+        ]), `users/${target.id}`);
         const { error: followNotificationError } = await supabase.from('notifications').insert({
           user_id: target.id,
           type: 'follow',
