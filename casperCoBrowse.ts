@@ -10,9 +10,9 @@
 // Storage upload per frame). The client can send mouse/keyboard events
 // back, creating a shared-control experience.
 //
-// Security: each co-browse event is authenticated by binding the socket
-// to the userId established during `user:register`. Events with a
-// mismatched userId are silently rejected.
+// Security: every co-browse event is authenticated against the userId the
+// socket proved during `user:register` (a verified Supabase access token).
+// Events from an anonymous socket, or naming a different account, are rejected.
 
 import type { Server as SocketServer, Socket } from 'socket.io';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -65,17 +65,22 @@ async function captureAndEmit(
   }
 }
 
-// Resolve the authenticated userId for this socket. The main Socket.IO
-// handler in server.ts stores userId on `user:register`; we
-// mirror that by stashing it on socket.data.
+// The authenticated userId for this socket, or undefined for an anonymous one.
+//
+// `registerSocketUser` in server.ts writes `socket.data.userId` only after
+// verifying a Supabase access token, so this is the sole identity on the socket
+// that a client cannot choose for itself. This module used to keep its own
+// `socket.data.cobrowseUserId`, seeded from the `cobrowse:start` payload on a
+// first-call-wins basis, which meant an unauthenticated socket could name any
+// account and then drive that account's Playwright session — list its tabs,
+// receive a 3fps screenshot stream of them, and click and type into them.
 function getSocketUserId(socket: Socket): string | undefined {
-  return (socket.data as { cobrowseUserId?: string })?.cobrowseUserId;
+  const id = (socket.data as { userId?: unknown })?.userId;
+  return typeof id === 'string' && id ? id : undefined;
 }
 
-function setSocketUserId(socket: Socket, userId: string): void {
-  (socket.data as Record<string, unknown>).cobrowseUserId = userId;
-}
-
+// Every co-browse event carries the userId it means to act on. It has to match
+// the verified session; the payload never establishes identity on its own.
 function assertOwner(socket: Socket, claimedUserId: string): boolean {
   const bound = getSocketUserId(socket);
   return !!bound && bound === claimedUserId;
@@ -83,8 +88,6 @@ function assertOwner(socket: Socket, claimedUserId: string): boolean {
 
 export function registerCoBrowseSocket(io: SocketServer, supabase: SupabaseClient): void {
   io.on('connection', (socket: Socket) => {
-    // Bind this socket to a userId on the first cobrowse:start.
-    // Subsequent events must match.
     socket.on('cobrowse:start', async (data: { userId: string; url: string; pageId?: string }) => {
       const { userId, url, pageId } = data;
       if (!userId || !url) {
@@ -92,13 +95,12 @@ export function registerCoBrowseSocket(io: SocketServer, supabase: SupabaseClien
         return;
       }
 
-      // Bind socket to this userId (first call wins)
-      const existingBound = getSocketUserId(socket);
-      if (existingBound && existingBound !== userId) {
-        socket.emit('cobrowse:error', { error: 'Socket already bound to a different user.' });
+      if (!assertOwner(socket, userId)) {
+        socket.emit('cobrowse:error', {
+          error: 'Co-browse requires a registered session for this account.',
+        });
         return;
       }
-      if (!existingBound) setSocketUserId(socket, userId);
 
       // Clean up any existing session for this user
       const existing = activeSessions.get(userId);
