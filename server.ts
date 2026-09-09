@@ -39,9 +39,12 @@ import { initBotMayhemAutonomy, registerBotMayhemRoutes } from './botMayhemAuton
 import { createServerSupabaseClient } from './serverSupabase.js';
 import {
   areCallPeers,
+  callSignallingSocket,
+  forgetCallSignallingSocket,
   isCallRoomParticipant,
   registerCallPeers,
   registerCallRoom,
+  registerCallSignallingSocket,
   releaseCallPeers,
   releaseCallRoom,
 } from './callRooms.js';
@@ -828,7 +831,17 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
   // =========================================================================
   const liveStreams = new Map<string, { username: string; displayName: string; avatarUrl: string; crowdSize: number }>();
   const userToStream = new Map<string, string>();
-  const connectedUsers = new Map<string, string>(); // userId -> socketId
+  // userId -> every live socket for that account.
+  //
+  // This was `Map<string, string>`, one socket per user. A second tab overwrote
+  // the first account entry, and closing that second tab deleted the entry
+  // outright — so a user who opened and closed a tab could no longer be reached
+  // at all, and `call:initiate` answered `call:unavailable` while their original
+  // tab sat there registered and idle. Only a reload restored it.
+  const connectedUsers = new Map<string, Set<string>>();
+
+  const socketsForUser = (userId: string): string[] => [...(connectedUsers.get(userId) ?? [])];
+  const userIsConnected = (userId: string): boolean => (connectedUsers.get(userId)?.size ?? 0) > 0;
   // Throttle call push notifications per caller→target pair: without it a
   // hostile account looping call:initiate could drive an endless stream of
   // persistent, vibrating call banners onto a victim's devices.
@@ -973,7 +986,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     // ---- User registration (matches client CallContext.tsx `user:register`) ----
     //
     // The identity comes from the Supabase access token, not from the argument:
-    // call signalling is routed through connectedUsers, so accepting a
+    // call signalling is routed by the id registered here, so accepting a
     // client-supplied id let anyone register as another account and receive that
     // account's incoming calls.
     const registerSocketUser = async (label: string, accessToken: unknown) => {
@@ -996,11 +1009,11 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
         .maybeSingle();
       const verifiedId = String(profile?.id ?? data.user.id);
 
-      connectedUsers.set(verifiedId, socket.id);
-      // `connectedUsers` holds one socket per user, so a second tab evicts the
-      // first and closing the second removes the entry while the first is still
-      // open. Notifications go through a per-user room instead, which tracks
-      // every live socket for the account.
+      const existingSockets = connectedUsers.get(verifiedId) ?? new Set<string>();
+      existingSockets.add(socket.id);
+      connectedUsers.set(verifiedId, existingSockets);
+      // Notifications go through a per-user room, which Socket.IO keeps in step
+      // with every live socket for the account.
       void socket.join(userRoom(verifiedId));
       socket.data.userId = verifiedId;
       socket.emit('user:registered', { userId: verifiedId });
@@ -1099,7 +1112,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
           socket.emit('call:unavailable', { targetUserId });
           return;
         }
-        const targetSocketId = connectedUsers.get(targetUserId);
+        const targetReachable = userIsConnected(targetUserId);
 
         // A ring push is a high-urgency, long-vibration, sticky banner on the
         // recipient's lock screen, so it must not reach an account that doesn't
@@ -1144,7 +1157,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
           }).catch((err) => console.warn('[socket] call push failed:', err));
         }
 
-        if (!targetSocketId) {
+        if (!targetReachable) {
           // Previously the caller just kept ringing an offline user forever.
           socket.emit('call:unavailable', { targetUserId });
           // The caller gives up immediately, but the push banner above may
@@ -1164,8 +1177,14 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
         // Also recorded without the room name, because the signalling events
         // that follow do not all carry one.
         registerCallPeers(callerId, targetUserId);
+        // The tab that placed the call is the one the answer has to come back
+        // to, so remember it rather than whichever socket registered last.
+        registerCallSignallingSocket(callerId, targetUserId, socket.id);
 
-        io.to(targetSocketId).emit('call:incoming', {
+        // Every tab and device the account has open rings, like a phone would.
+        // Only one of them was reached before, and it was not necessarily the
+        // one in front of the user.
+        io.to(userRoom(targetUserId)).emit('call:incoming', {
           callerId,
           callerName: caller?.display_name ?? 'Unknown caller',
           callerAvatar: caller?.avatar_url ?? null,
@@ -1191,7 +1210,27 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       const selfId = verifiedUserId();
       const otherId = typeof peerId === 'string' ? peerId : '';
       if (!selfId || !otherId || !areCallPeers(selfId, otherId)) return undefined;
-      return connectedUsers.get(otherId);
+      // The socket the peer is actually signalling this call over. Falling back
+      // to their newest socket keeps a mid-call reconnect working, which is all
+      // the old one-socket-per-user map could ever offer.
+      const recorded = callSignallingSocket(otherId, selfId);
+      if (recorded) return recorded;
+      const sockets = socketsForUser(otherId);
+      return sockets[sockets.length - 1];
+    };
+
+    /**
+     * Peers of `selfId` that may safely receive a fan-out.
+     *
+     * `call:rejected` and `call:ended` only ever clear ringing UI, so they go to
+     * every tab of the account — with all of them ringing now, delivering to one
+     * would leave the rest ringing after the call was already over.
+     */
+    const callPeerRoom = (peerId: unknown): string | undefined => {
+      const selfId = verifiedUserId();
+      const otherId = typeof peerId === 'string' ? peerId : '';
+      if (!selfId || !otherId || !areCallPeers(selfId, otherId)) return undefined;
+      return userRoom(otherId);
     };
 
     // The ringing push banner is sticky (requireInteraction) so devices that
@@ -1214,6 +1253,10 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     };
 
     socket.on('call:accept', (data) => {
+      // Single socket, deliberately: CallModal listens for `call:accepted`
+      // whether or not that tab has a call open, and its handler joins the
+      // LiveKit room. Fanning this out would pull the caller's other tabs into
+      // the call as publishers.
       const targetSocketId = callPeerSocket(data?.callerId);
       if (targetSocketId) {
         io.to(targetSocketId).emit('call:accepted', { answer: data.answer, roomName: data.roomName });
@@ -1222,6 +1265,11 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       // real pairing so an arbitrary socket can't fire cancel pushes at will.
       const selfId = verifiedUserId();
       if (selfId && typeof data?.callerId === 'string' && areCallPeers(selfId, data.callerId)) {
+        // This tab answered, so it is the one the remaining signalling for the
+        // call — ICE, filters, the hang-up — has to reach.
+        registerCallSignallingSocket(selfId, data.callerId, socket.id);
+        // Every other tab of this account is ringing too; stop them.
+        socket.to(userRoom(selfId)).emit('call:ended');
         cancelCallBanner(selfId, data.callerId);
         // Answering is consent, so this pair may ring again immediately.
         if (placedCallTo(data.callerId, selfId)) clearCallPushThrottle(data.callerId, selfId);
@@ -1229,12 +1277,16 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
     });
 
     socket.on('call:reject', (data) => {
-      const targetSocketId = callPeerSocket(data?.callerId);
-      if (targetSocketId) {
-        io.to(targetSocketId).emit('call:rejected');
+      // Safe to fan out: `call:rejected` only clears the caller's outgoing-call
+      // state, and the caller may have been ringing from more than one tab.
+      const targetRoom = callPeerRoom(data?.callerId);
+      if (targetRoom) {
+        io.to(targetRoom).emit('call:rejected');
       }
       const selfId = verifiedUserId();
       if (selfId && typeof data?.callerId === 'string' && areCallPeers(selfId, data.callerId)) {
+        // Stop this account's other tabs ringing for a call that was declined.
+        socket.to(userRoom(selfId)).emit('call:ended');
         releaseCallPeers(selfId, data.callerId);
         // Close the ringing banner on the rejecter's other devices.
         cancelCallBanner(selfId, data.callerId);
@@ -1259,15 +1311,18 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
 
     socket.on('call:end', (data) => {
       const selfId = verifiedUserId();
-      const targetSocketId = callPeerSocket(data?.targetUserId);
+      // Safe to fan out, and necessary: if the callee never picked up, every one
+      // of their tabs is ringing, and delivering the hang-up to just one of them
+      // left the rest ringing until the timeout.
+      const targetRoom = callPeerRoom(data?.targetUserId);
       // Releasing the room is what stops LiveKit minting more publish tokens for
       // it, so only a participant may do it.
       if (selfId && typeof data?.roomName === 'string' && data.roomName
           && isCallRoomParticipant(data.roomName, selfId)) {
         releaseCallRoom(data.roomName);
       }
-      if (targetSocketId) {
-        io.to(targetSocketId).emit('call:ended');
+      if (targetRoom) {
+        io.to(targetRoom).emit('call:ended');
       }
       // Only a genuinely paired peer may trigger a cancel push, otherwise any
       // socket could loop call:end to spray cancel pushes at arbitrary users.
@@ -1421,12 +1476,14 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       for (const key of joinedWorkspaceKeys) releaseWorkspaceState(key);
       joinedWorkspaceKeys.clear();
 
-      for (const [userId, socketId] of connectedUsers.entries()) {
-        if (socketId === socket.id) {
-          connectedUsers.delete(userId);
-          break;
-        }
+      // Remove only this socket. Deleting the whole user entry is what used to
+      // strand a still-open sibling tab with no way to receive a call.
+      for (const [userId, socketIds] of connectedUsers.entries()) {
+        if (!socketIds.delete(socket.id)) continue;
+        if (socketIds.size === 0) connectedUsers.delete(userId);
+        break;
       }
+      forgetCallSignallingSocket(socket.id);
 
       if (liveStreams.has(socket.id)) {
         liveStreams.delete(socket.id);
