@@ -426,6 +426,9 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
       // defect the server side already fixed in runwayRoutes.recordFeatureUsage.
       // `('feature_usage', 'usage_count')` is on the increment_counter allowlist
       // (migration 0065), so the read-modify-write happens inside one UPDATE.
+      //
+      // #355 fixes the discarded errors below in the same hunk but keeps the
+      // absolute write; this version supersedes it rather than competing.
       const { error } = await supabase.rpc('increment_counter', {
         p_table: 'feature_usage',
         p_id: existing.id,
