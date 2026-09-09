@@ -366,6 +366,7 @@ export const Feed: React.FC = () => {
     triggerOnce: false
   });
   const realtimeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recommendingRef = useRef(false);
   const { currentUser } = useAuth();
   // A stable dependency for the block list. The profile object is replaced on
   // every realtime update to the user's row (CRED, view_count, streak, ...), so
@@ -679,7 +680,15 @@ export const Feed: React.FC = () => {
 
   const getRecommendations = async () => {
     if (!currentUser || posts.length === 0) return;
-    
+
+    // Claimed before the first await, and not via isRecommending: that is state,
+    // so a second call in the same tick still sees the stale `false`. The effect
+    // below re-runs on both a tab switch and the first page landing, and this
+    // function starts a billed model request — overlapping runs paid twice and
+    // let an older ranking resolve last and overwrite a newer one.
+    if (recommendingRef.current) return;
+    recommendingRef.current = true;
+
     setIsRecommending(true);
     // Declare filtered outside try so catch block can use it as fallback
     let filtered: Post[] = posts;
@@ -732,6 +741,7 @@ export const Feed: React.FC = () => {
         .slice(0, 15);
       setRecommendedPosts(fallback.length > 0 ? fallback : posts.slice(0, 15));
     } finally {
+      recommendingRef.current = false;
       setIsRecommending(false);
     }
   };
