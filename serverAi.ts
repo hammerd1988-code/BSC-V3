@@ -511,6 +511,29 @@ export function clampRequestedMaxTokens(requested: unknown): number | undefined 
   return Math.min(floored, MAX_REQUESTED_MAX_TOKENS);
 }
 
+/**
+ * Decoded size of a base64 payload, in bytes.
+ *
+ * `/api/ai/vision` bounded neither its prompt nor its image: the only ceiling
+ * was the 12mb JSON body cap, and vision is the most expensive provider call in
+ * the app. Sizing the image by its base64 length would let a caller inflate the
+ * string with a data-URL prefix or embedded whitespace, so this normalises both
+ * before measuring — the same reason the check does not simply trust
+ * `image.length`.
+ *
+ * Matches the 8MB decoded ceiling `casperRelay` already applies to uploads.
+ */
+export const MAX_VISION_IMAGE_BYTES = 8 * 1024 * 1024;
+
+export function decodedBase64Bytes(value: string): number {
+  const commaIndex = value.indexOf(',');
+  const payload = value.slice(0, commaIndex).startsWith('data:') ? value.slice(commaIndex + 1) : value;
+  const cleaned = payload.replace(/\s+/g, '');
+  if (!cleaned) return 0;
+  const padding = cleaned.endsWith('==') ? 2 : cleaned.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((cleaned.length * 3) / 4) - padding);
+}
+
 async function requireSupabaseUser(req: Request, res: Response, supabase: SupabaseClient) {
   const token = bearerToken(req);
   if (!token) {
@@ -553,9 +576,16 @@ export function registerServerAiRoutes(app: Express, supabase: SupabaseClient) {
         res.status(413).json({ success: false, error: 'Prompt is too long.' });
         return;
       }
+      // systemPrompt reaches the same provider and is billed the same way, so
+      // capping only `prompt` left the whole 1mb body available as input.
+      const textSystemPrompt = typeof body.systemPrompt === 'string' ? body.systemPrompt : undefined;
+      if (textSystemPrompt && textSystemPrompt.length > MAX_PROMPT_CHARS) {
+        res.status(413).json({ success: false, error: 'System prompt is too long.' });
+        return;
+      }
 
       const result = await generateServerText(prompt, {
-        systemPrompt: typeof body.systemPrompt === 'string' ? body.systemPrompt : undefined,
+        systemPrompt: textSystemPrompt,
         temperature: typeof body.temperature === 'number' ? body.temperature : undefined,
         maxTokens: clampRequestedMaxTokens(body.maxTokens),
         jsonResponse: Boolean(body.jsonResponse),
@@ -600,6 +630,21 @@ export function registerServerAiRoutes(app: Express, supabase: SupabaseClient) {
 
       if (!image) {
         res.status(400).json({ success: false, error: 'Base64 image data is required in the "image" field.' });
+        return;
+      }
+      if (prompt.length > MAX_PROMPT_CHARS) {
+        res.status(413).json({ success: false, error: 'Prompt is too long.' });
+        return;
+      }
+      if (systemPrompt && systemPrompt.length > MAX_PROMPT_CHARS) {
+        res.status(413).json({ success: false, error: 'System prompt is too long.' });
+        return;
+      }
+      if (decodedBase64Bytes(image) > MAX_VISION_IMAGE_BYTES) {
+        res.status(413).json({
+          success: false,
+          error: `Image exceeds the ${Math.floor(MAX_VISION_IMAGE_BYTES / (1024 * 1024))}MB limit.`,
+        });
         return;
       }
 
