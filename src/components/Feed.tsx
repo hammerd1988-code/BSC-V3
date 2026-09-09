@@ -356,6 +356,9 @@ export const Feed: React.FC = () => {
   const [feedType, setFeedType] = useState<'latest' | 'foryou'>('latest');
   const [loading, setLoading] = useState(false);
   const [isRecommending, setIsRecommending] = useState(false);
+  // Claimed synchronously so overlapping tab switches cannot start a second
+  // billed recommendation run; `isRecommending` is for the spinner only.
+  const recommendingRef = useRef(false);
   const [hasMore, setHasMore] = useState(true);
   const [cursor, setCursor] = useState<string | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -679,7 +682,13 @@ export const Feed: React.FC = () => {
 
   const getRecommendations = async () => {
     if (!currentUser || posts.length === 0) return;
-    
+    // `isRecommending` only reaches this function on the next render, so it
+    // cannot gate a second call started in the same tick — a fast Latest/For You
+    // toggle used to stack billed generateText runs and let an older response
+    // overwrite a newer one. The ref is claimed before the first await.
+    if (recommendingRef.current) return;
+    recommendingRef.current = true;
+
     setIsRecommending(true);
     // Declare filtered outside try so catch block can use it as fallback
     let filtered: Post[] = posts;
@@ -732,6 +741,7 @@ export const Feed: React.FC = () => {
         .slice(0, 15);
       setRecommendedPosts(fallback.length > 0 ? fallback : posts.slice(0, 15));
     } finally {
+      recommendingRef.current = false;
       setIsRecommending(false);
     }
   };
