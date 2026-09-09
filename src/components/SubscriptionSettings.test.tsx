@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { SubscriptionSettings } from './SubscriptionSettings';
+import { SubscriptionSettings, maskLicenseKey } from './SubscriptionSettings';
 import { authedFetch } from '../lib/authSession';
 
 const mockUseSubscription = vi.fn();
@@ -149,5 +149,36 @@ describe('SubscriptionSettings', () => {
         }),
       );
     });
+  });
+
+  it('renders a masked generated license key', async () => {
+    const fullKey = 'abcdef1234567890xyz';
+    const mockedAuthedFetch = vi.mocked(authedFetch);
+    mockedAuthedFetch
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ hasKey: false }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ key: fullKey, hasKey: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+    const user = userEvent.setup();
+    render(<SubscriptionSettings />);
+
+    await waitFor(() => {
+      expect(mockedAuthedFetch).toHaveBeenCalledTimes(1);
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Generate License Key' }));
+
+    const maskedKey = maskLicenseKey(fullKey);
+    expect(await screen.findByText(maskedKey)).toBeInTheDocument();
+    expect(screen.queryByText(fullKey)).not.toBeInTheDocument();
   });
 });
