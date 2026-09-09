@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { maxTokensParam } from './src/lib/modelParams.js';
+import { maxTokensParam, reasoningParam, temperatureParam, type ReasoningEffort } from './src/lib/modelParams.js';
 import { assertPublicHttpUrl } from './outboundUrl.js';
 import { createConcurrencyGate, createRateLimiter, isCapacityError } from './serverSecurity.js';
 
@@ -72,6 +72,12 @@ export interface ServerAIOptions {
   maxTokens?: number;
   preferredModel?: string | null;
   jsonResponse?: boolean;
+  /**
+   * Reasoning budget hint for thinking models. Short-form callers (bot posts,
+   * comments) pass 'low' so hidden reasoning does not eat the small
+   * `maxTokens` they set for the visible reply.
+   */
+  reasoningEffort?: ReasoningEffort;
   /**
    * Optional per-user OpenAI-compatible API key override. When provided,
    * Gemini is skipped entirely (caller has explicitly chosen an
@@ -231,7 +237,7 @@ export async function generateServerText(
     // keep propagating, otherwise every upstream failure is reported to callers
     // as "no text generated" and the real cause never reaches the logs.
     if (isCapacityError(err)) {
-      const usesGemini = !options.apiKeyOverride && Boolean(GEMINI_API_KEY());
+      const usesGemini = !options.apiKeyOverride && !OPENAI_API_KEY() && Boolean(GEMINI_API_KEY());
       return {
         provider: usesGemini ? 'gemini' : 'openai-compatible',
         model: usesGemini ? geminiModel(options.preferredModel) : openAiModel(options.preferredModel),
@@ -254,14 +260,27 @@ async function generateServerTextUnlocked(
   const baseUrlOverride = (options.baseUrlOverride || '').trim();
   const errors: string[] = [];
 
-  // When the caller supplies a per-user OpenAI-compatible key/endpoint
-  // (e.g. user picked OpenRouter / Together / Groq / Anthropic-via-OAI),
-  // skip Gemini entirely. The user has explicitly opted into an
-  // OpenAI-compatible provider; falling back to Gemini would silently
-  // ignore that choice and bill the platform's key instead of theirs.
-  const skipGemini = Boolean(apiKeyOverride);
-  const geminiKey = skipGemini ? '' : GEMINI_API_KEY();
+  // The platform's OpenAI-compatible provider (OpenRouter by default) is the
+  // primary path. A direct Gemini key is only consulted when no OpenAI-
+  // compatible key exists at all — never as a fallback for a per-user key,
+  // which would silently bill the platform instead of the user.
+  const target = await resolveOpenAiTarget(apiKeyOverride, baseUrlOverride);
+  if (target.key) {
+    const model = openAiModel(options.preferredModel);
+    try {
+      const text = await callOpenAICompatible(target.key, target.baseUrl, model, prompt, systemPrompt, temperature, maxTokens, Boolean(options.jsonResponse), options.reasoningEffort);
+      if (text) return { provider: 'openai-compatible', model, text };
+      errors.push(`openai(${model}): empty response`);
+    } catch (err: any) {
+      const msg = String(err?.message ?? err ?? 'unknown openai error').slice(0, 240);
+      errors.push(`openai(${model}): ${msg}`);
+      console.warn('[serverAi] OpenAI-compatible call failed:', msg);
+    }
+  } else {
+    errors.push(target.reason);
+  }
 
+  const geminiKey = (apiKeyOverride || OPENAI_API_KEY()) ? '' : GEMINI_API_KEY();
   if (geminiKey && Date.now() > geminiCooldownUntil) {
     const model = geminiModel(options.preferredModel);
     try {
@@ -275,29 +294,11 @@ async function generateServerTextUnlocked(
         geminiCooldownUntil = Date.now() + 5 * 60_000;
         console.warn('[serverAi] Gemini 429 rate-limited — cooling down for 5 min');
       } else {
-        console.warn('[serverAi] Gemini call failed, trying OpenAI-compatible fallback:', msg);
+        console.warn('[serverAi] Gemini call failed:', msg);
       }
     }
   } else if (geminiKey) {
     errors.push('gemini: cooling down after recent 429');
-  } else if (!skipGemini) {
-    errors.push('gemini: GEMINI_API_KEY not set');
-  }
-
-  const target = await resolveOpenAiTarget(apiKeyOverride, baseUrlOverride);
-  if (target.key) {
-    const model = openAiModel(options.preferredModel);
-    try {
-      const text = await callOpenAICompatible(target.key, target.baseUrl, model, prompt, systemPrompt, temperature, maxTokens, Boolean(options.jsonResponse));
-      if (text) return { provider: 'openai-compatible', model, text };
-      errors.push(`openai(${model}): empty response`);
-    } catch (err: any) {
-      const msg = String(err?.message ?? err ?? 'unknown openai error').slice(0, 240);
-      errors.push(`openai(${model}): ${msg}`);
-      console.warn('[serverAi] OpenAI-compatible call failed:', msg);
-    }
-  } else {
-    errors.push(target.reason);
   }
 
   const lastError = errors.join(' | ');
@@ -452,7 +453,7 @@ async function callOpenAICompatibleWithTools(input: {
     const body: Record<string, any> = {
       model: input.model,
       messages: input.messages,
-      temperature: input.temperature,
+      ...temperatureParam(input.model, input.temperature),
       ...maxTokensParam(input.model, input.maxTokens, input.baseUrl),
     };
     if (input.tools.length > 0) {
@@ -650,6 +651,18 @@ async function generateVisionTextUnlocked(
 ): Promise<string> {
   const system = systemPrompt || 'You are Casper, the Blood Sweat Code AI assistant with vision capabilities — a warm, incisive principal engineer with a cyberpunk edge. Describe what you see concisely and helpfully.';
 
+  const oaiKey = OPENAI_API_KEY();
+  const oaiBase = OPENAI_BASE_URL();
+  if (oaiKey) {
+    try {
+      const text = await callOpenAIVision(oaiKey, oaiBase, imageBase64, prompt, system, mimeType);
+      if (text) return text;
+    } catch (err: any) {
+      console.warn('[serverAi] OpenAI vision failed:', String(err?.message ?? err).slice(0, 240));
+    }
+    return '';
+  }
+
   const geminiKey = GEMINI_API_KEY();
   if (geminiKey && Date.now() > geminiCooldownUntil) {
     try {
@@ -659,17 +672,6 @@ async function generateVisionTextUnlocked(
       const msg = String(err?.message ?? err).slice(0, 240);
       console.warn('[serverAi] Gemini vision failed:', msg);
       if (msg.includes('429')) geminiCooldownUntil = Date.now() + 5 * 60_000;
-    }
-  }
-
-  const oaiKey = OPENAI_API_KEY();
-  const oaiBase = OPENAI_BASE_URL();
-  if (oaiKey) {
-    try {
-      const text = await callOpenAIVision(oaiKey, oaiBase, imageBase64, prompt, system, mimeType);
-      if (text) return text;
-    } catch (err: any) {
-      console.warn('[serverAi] OpenAI vision failed:', String(err?.message ?? err).slice(0, 240));
     }
   }
 
@@ -817,7 +819,12 @@ async function callGemini(
     }
 
     const data = await response.json();
-    return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+    const candidate = data?.candidates?.[0];
+    const text = candidate?.content?.parts?.[0]?.text?.trim() || '';
+    if (!text && candidate?.finishReason === 'MAX_TOKENS') {
+      throw new Error(`hit maxOutputTokens=${maxTokens} before producing any text (thinking consumed the budget)`);
+    }
+    return text;
   } finally {
     clearTimeout(timeout);
   }
@@ -832,6 +839,7 @@ async function callOpenAICompatible(
   temperature: number,
   maxTokens: number,
   jsonResponse: boolean,
+  reasoningEffort?: ReasoningEffort,
 ): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 45_000);
@@ -854,8 +862,9 @@ async function callOpenAICompatible(
           { role: 'system', content: systemPrompt },
           { role: 'user', content: prompt },
         ],
-        temperature,
+        ...temperatureParam(model, temperature),
         ...maxTokensParam(model, maxTokens, baseUrl),
+        ...reasoningParam(model, reasoningEffort, baseUrl),
         ...(jsonResponse ? { response_format: { type: 'json_object' } } : {}),
       }),
       signal: controller.signal,
@@ -867,7 +876,12 @@ async function callOpenAICompatible(
     }
 
     const data = await response.json();
-    return data?.choices?.[0]?.message?.content?.trim() || '';
+    const choice = data?.choices?.[0];
+    const text = choice?.message?.content?.trim() || '';
+    if (!text && choice?.finish_reason === 'length') {
+      throw new Error(`hit max_tokens=${maxTokens} before producing any text (reasoning consumed the budget)`);
+    }
+    return text;
   } finally {
     clearTimeout(timeout);
   }
