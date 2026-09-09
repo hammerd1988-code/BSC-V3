@@ -128,6 +128,7 @@ const RPC_SIGNATURES: Array<[string, string[]]> = [
   ['remove_friend', ['p_friend_id']],
   ['resolve_colosseum_match_server', ['p_actor_auth_uid', 'p_judgement', 'p_match_id', 'p_replay_data', 'p_winner_id']],
   ['respond_friend_request', ['p_accept', 'p_from_id']],
+  ['rotate_license_key', ['p_key_hash', 'p_label', 'p_user_id']],
   ['search_casper_memories', ['p_limit', 'p_memory_types', 'p_user_id', 'query_text']],
   ['send_friend_request', ['p_target_id']],
   ['cancel_friend_request', ['p_target_id']],
@@ -149,6 +150,7 @@ const REQUIRED_FUNCTIONS = [
   'remove_friend',
   'convert_cred_to_compute',
   'complete_colosseum_match',
+  'rotate_license_key',
 ];
 
 describe('supabase migrations', () => {
@@ -644,5 +646,70 @@ describe('renamed migrations re-applied out of order', () => {
       `select public.bump_transmission_unread('t2', 'b', '{"content": "second"}'::jsonb)`,
     );
     expect(await lastTransmit()).toEqual({ content: 'second' });
+  });
+
+  /**
+   * License rotation used to revoke the live key in one request and insert the
+   * replacement in another, so an insert that failed after the revoke committed
+   * left the account with no live key at all — while the route answered 500,
+   * telling the caller the rotation had not happened.
+   */
+  it('rotates a license key atomically, or not at all', async () => {
+    await db.query(
+      `insert into public.users (id, username, display_name, email)
+       values ('lic-user', 'licuser', 'Lic User', 'lic@example.com')`,
+    );
+
+    const keys = async () => {
+      const { rows } = await db.query<{ key: string; active: boolean }>(
+        `select key, revoked_at is null as active
+           from public.license_keys
+          where user_id = 'lic-user'
+          order by created_at, key`,
+      );
+      return rows;
+    };
+
+    const first = await db.query<{ replaced_previous: boolean }>(
+      `select * from public.rotate_license_key('lic-user', 'hash-one')`,
+    );
+    expect(first.rows[0]?.replaced_previous).toBe(false);
+    expect(await keys()).toEqual([{ key: 'hash-one', active: true }]);
+
+    const second = await db.query<{ replaced_previous: boolean }>(
+      `select * from public.rotate_license_key('lic-user', 'hash-two')`,
+    );
+    expect(second.rows[0]?.replaced_previous).toBe(true);
+    expect(await keys()).toEqual([
+      { key: 'hash-one', active: false },
+      { key: 'hash-two', active: true },
+    ]);
+
+    // The case the function exists for: the insert half cannot succeed (this
+    // hash is already stored), so the revoke half must roll back with it and
+    // leave the live key untouched.
+    await expect(
+      db.query(`select * from public.rotate_license_key('lic-user', 'hash-two')`),
+    ).rejects.toThrow(/duplicate key value/i);
+    expect(await keys()).toEqual([
+      { key: 'hash-one', active: false },
+      { key: 'hash-two', active: true },
+    ]);
+
+    await expect(
+      db.query(`select * from public.rotate_license_key('lic-user', '')`),
+    ).rejects.toThrow(/requires a user id and a key hash/i);
+
+    // Only the server mints keys; a browser session must not be able to call
+    // this at all.
+    const { rows: privileges } = await db.query<{ role: string; ok: boolean }>(
+      `select role, has_function_privilege(role, 'public.rotate_license_key(text, text, text)', 'execute') as ok
+         from (values ('anon'), ('authenticated'), ('service_role')) as r(role)`,
+    );
+    expect(privileges).toEqual([
+      { role: 'anon', ok: false },
+      { role: 'authenticated', ok: false },
+      { role: 'service_role', ok: true },
+    ]);
   });
 });
