@@ -9,6 +9,9 @@ import crypto from 'crypto';
 import { SquareClient, SquareEnvironment } from 'square';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
+export const REST_CORS_ALLOW_METHODS = 'GET, POST, PUT, PATCH, DELETE, OPTIONS';
+export const REST_CORS_ALLOW_HEADERS = 'Content-Type, Authorization, x-api-key, x-license-key';
+
 export function parseAllowedOrigins(env: NodeJS.ProcessEnv = process.env): string[] {
   return [env.APP_URL, env.CLIENT_ORIGIN, env.VITE_APP_URL]
     .filter(Boolean)
@@ -24,6 +27,25 @@ export function parseAllowedOrigins(env: NodeJS.ProcessEnv = process.env): strin
  */
 export function resolveSocketCorsOrigin(allowedOrigins: string[], isProd: boolean): string[] | string {
   return allowedOrigins.length > 0 ? allowedOrigins : (isProd ? [] : '*');
+}
+
+export function handleRestCors(
+  req: Pick<Request, 'headers' | 'method'>,
+  res: Pick<Response, 'setHeader' | 'sendStatus'>,
+  allowedOrigins: string[],
+): boolean {
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', REST_CORS_ALLOW_METHODS);
+    res.setHeader('Access-Control-Allow-Headers', REST_CORS_ALLOW_HEADERS);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(204);
+    return true;
+  }
+  return false;
 }
 
 export class ProductionConfigError extends Error {
