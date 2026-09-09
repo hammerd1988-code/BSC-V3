@@ -78,7 +78,6 @@ interface SubscriptionContextValue {
   canAccess: (feature: PremiumFeature) => FeatureGateResult;
   recordUsage: (feature: PremiumFeature, amount?: number) => Promise<void>;
   refresh: () => Promise<void>;
-  setLocalTier: (tier: SubscriptionTier) => Promise<void>;
   usageMeters: UsageMeter[];
   openCheckout: (tier: 'operator' | 'architect', billing?: 'monthly' | 'annual') => Promise<void>;
   openPortal: () => Promise<void>;
@@ -435,44 +434,6 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     if (data) setUsage((prev) => [...prev, data as FeatureUsageRow]);
   }, [currentUser?.id, usage]);
 
-  const setLocalTier = useCallback(async (nextTier: SubscriptionTier) => {
-    if (!currentUser?.id) return;
-    const now = new Date().toISOString();
-
-    // Read-then-write rather than an upsert on user_id: subscriptions has no
-    // unique constraint on that column (only the partial index for status =
-    // 'active'), so `onConflict: 'user_id'` failed with 42P10 and the row was
-    // never written — the error was discarded, leaving users.subscription_tier
-    // saying one thing and the subscriptions table another.
-    const { data: existing } = await supabase
-      .from('subscriptions')
-      .select('id')
-      .eq('user_id', currentUser.id)
-      .eq('status', 'active')
-      .limit(1)
-      .maybeSingle();
-
-    const row = {
-      tier: nextTier,
-      status: 'active',
-      expires_at: nextTier === 'indie' ? now : null,
-      stripe_customer_id: null,
-      stripe_subscription_id: null,
-    };
-
-    const { error } = existing?.id
-      ? await supabase.from('subscriptions').update(row).eq('id', existing.id)
-      : await supabase.from('subscriptions').insert({ ...row, user_id: currentUser.id, started_at: now });
-
-    if (error) {
-      console.error('[subscription] Failed to set local tier:', error.message);
-      return;
-    }
-
-    await supabase.from('users').update({ subscription_tier: nextTier }).eq('id', currentUser.id);
-    await refresh();
-  }, [currentUser?.id, refresh]);
-
   const openCheckout = useCallback(async (planTier: 'operator' | 'architect', billing: 'monthly' | 'annual' = 'monthly') => {
     try {
       const res = await authedFetch('/api/stripe/checkout', {
@@ -532,11 +493,10 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     canAccess,
     recordUsage,
     refresh,
-    setLocalTier,
     usageMeters,
     openCheckout,
     openPortal,
-  }), [tier, isAdmin, subscription, usage, loading, canAccess, recordUsage, refresh, setLocalTier, usageMeters, openCheckout, openPortal]);
+  }), [tier, isAdmin, subscription, usage, loading, canAccess, recordUsage, refresh, usageMeters, openCheckout, openPortal]);
 
   return <SubscriptionContext.Provider value={value}>{children}</SubscriptionContext.Provider>;
 }
