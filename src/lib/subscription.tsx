@@ -420,17 +420,40 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     const existing = usage.find((row) => row.feature === feature);
 
     if (existing) {
-      const next = existing.usage_count + amount;
-      await supabase.from('feature_usage').update({ usage_count: next }).eq('id', existing.id);
-      setUsage((prev) => prev.map((row) => row.id === existing.id ? { ...row, usage_count: next } : row));
+      // `existing.usage_count` comes from React state, so writing the absolute
+      // `usage_count + amount` let two overlapping calls both store the same
+      // value and hand the user a free slot every time they raced — the same
+      // defect the server side already fixed in runwayRoutes.recordFeatureUsage.
+      // `('feature_usage', 'usage_count')` is on the increment_counter allowlist
+      // (migration 0065), so the read-modify-write happens inside one UPDATE.
+      const { error } = await supabase.rpc('increment_counter', {
+        p_table: 'feature_usage',
+        p_id: existing.id,
+        p_field: 'usage_count',
+        p_amount: amount,
+      });
+      if (error) {
+        // Do not advance local state: showing the quota as spent when nothing
+        // was recorded hides the fact that the limit is no longer enforced.
+        console.error('[subscription] Failed to record feature usage:', error.message);
+        return;
+      }
+      setUsage((prev) => prev.map((row) => row.id === existing.id
+        ? { ...row, usage_count: row.usage_count + amount }
+        : row));
       return;
     }
 
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('feature_usage')
       .insert({ user_id: currentUser.id, feature, usage_count: amount, period_start: start, period_end: end })
       .select('*')
       .maybeSingle();
+
+    if (error) {
+      console.error('[subscription] Failed to open a feature usage period:', error.message);
+      return;
+    }
 
     if (data) setUsage((prev) => [...prev, data as FeatureUsageRow]);
   }, [currentUser?.id, usage]);
@@ -469,7 +492,15 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
       return;
     }
 
-    await supabase.from('users').update({ subscription_tier: nextTier }).eq('id', currentUser.id);
+    // Both rows have to agree; leaving `users.subscription_tier` behind is the
+    // exact drift the comment above describes, just from the other side.
+    const { error: profileError } = await supabase
+      .from('users')
+      .update({ subscription_tier: nextTier })
+      .eq('id', currentUser.id);
+    if (profileError) {
+      console.error('[subscription] Tier written to subscriptions but not to the profile:', profileError.message);
+    }
     await refresh();
   }, [currentUser?.id, refresh]);
 

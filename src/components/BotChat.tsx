@@ -200,15 +200,19 @@ function saveConversation(botId: string, botName: string, messages: ChatMessage[
   convos[botId] = { botId, botName, messages: messages.slice(-100), lastActive: Date.now() };
   localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(convos));
 
-  // Also persist to Supabase (fire-and-forget)
+  // Also persist to Supabase (fire-and-forget). `.then(() => {})` used to
+  // discard the result entirely, so a conversation that only ever reached
+  // localStorage looked identical to one that synced.
   if (userId) {
-    supabase.from('bot_conversations').upsert({
+    void supabase.from('bot_conversations').upsert({
       user_id: userId,
       bot_id: botId,
       bot_name: botName,
       messages: messages.slice(-100),
       last_active: new Date().toISOString(),
-    }, { onConflict: 'user_id,bot_id' }).then(() => {});
+    }, { onConflict: 'user_id,bot_id' }).then(({ error }) => {
+      if (error) console.error('[BotChat] Failed to sync conversation:', error.message);
+    });
   }
 }
 
@@ -236,12 +240,14 @@ function saveInstruction(botId: string, msg: ChatMessage, userId?: string) {
 
   // Also persist to Supabase (fire-and-forget)
   if (userId) {
-    supabase.from('bot_instructions').insert({
+    void supabase.from('bot_instructions').insert({
       user_id: userId,
       bot_id: botId,
       instruction: msg.content,
       created_at: new Date(msg.timestamp).toISOString(),
-    }).then(() => {});
+    }).then(({ error }) => {
+      if (error) console.error('[BotChat] Failed to sync instruction:', error.message);
+    });
   }
 }
 
@@ -919,12 +925,16 @@ export function BotChat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Save conversation when messages change
+  // Save conversation when messages change. `currentUser?.id` belongs in the
+  // deps: saveConversation only writes to Supabase when it has a user id, so
+  // an auth session that resolved after the last message left the whole
+  // conversation in localStorage and nowhere else until the user happened to
+  // send another one.
   useEffect(() => {
     if (selectedBot && messages.length > 1) {
       saveConversation(selectedBot.id, selectedBot.name, messages, currentUser?.id);
     }
-  }, [messages, selectedBot]);
+  }, [messages, selectedBot, currentUser?.id]);
 
   // Build system prompt (includes battle memory when available)
   const systemPrompt = useMemo(() => {
