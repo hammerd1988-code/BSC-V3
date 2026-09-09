@@ -1240,7 +1240,11 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
         const existingReplay = (match.replay_data && typeof match.replay_data === 'object') ? match.replay_data : {};
         const existingLog = Array.isArray(existingReplay.log) ? existingReplay.log : [];
         const waitingIntercept = !sapphireInMatch;
-        await supabase
+        // The replay is the durable record of the intercept, and on a waiting
+        // battle this write is also what makes Sapphire the defender. Discarding
+        // its error answered `{ success: true }` for a move the match never
+        // recorded — and left the battle with its original defender.
+        const { error: matchUpdateError } = await supabase
           .from('matches')
           .update({
             defender_id: waitingIntercept ? sapphire.id : match.defender_id,
@@ -1263,6 +1267,8 @@ export function registerColosseumRoutes(app: Express, supabase: SupabaseClient) 
             },
           })
           .eq('id', match.id);
+        if (matchUpdateError) throw matchUpdateError;
+
         const { error: artifactError } = await supabase
           .from('match_solution_artifacts')
           .upsert({
