@@ -128,7 +128,12 @@ export const ProfileThemeEditor: React.FC<ProfileThemeEditorProps> = ({
   const handleSave = async () => {
     setSaving(true);
     try {
-      await supabase.from('users').update({
+      // supabase-js resolves with { error } rather than rejecting, so
+      // discarding this result let the editor close on onSaved()/onClose() with
+      // the theme never written — an RLS rejection or one unknown column in the
+      // payload (PostgREST rejects the whole payload for one) looked exactly
+      // like a successful save.
+      const { error } = await supabase.from('users').update({
         profile_theme: theme,
         profile_sections: sections,
         profile_music_url: musicUrl.trim() || null,
@@ -136,6 +141,7 @@ export const ProfileThemeEditor: React.FC<ProfileThemeEditorProps> = ({
         profile_music_artist: musicArtist.trim() || null,
         custom_accent: theme.accent_color,
       }).eq('id', userId);
+      if (error) throw error;
 
       await awardAchievement(userId, 'profile_customized');
       onSaved();
