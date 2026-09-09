@@ -456,7 +456,7 @@ describe('supabase migrations', () => {
     const migration = readMigration('20260909205507_atomic_license_key_rotation.sql');
     expect(migration).toContain(`update public.license_keys`);
     expect(migration).toContain(`where key like 'bsc\\_%' escape '\\';`);
-    expect(migration).toContain(`encode(digest(key, 'sha256'), 'hex')`);
+    expect(migration).toContain(`encode(sha256(convert_to(key, 'utf8')), 'hex')`);
   });
 
   it('rotates license keys atomically through the database function', async () => {

@@ -7,7 +7,7 @@
 -- single transaction so a failed insert cannot leave an account without a key.
 
 update public.license_keys
-   set key = encode(digest(key, 'sha256'), 'hex')
+   set key = encode(sha256(convert_to(key, 'utf8')), 'hex')
  where key like 'bsc\_%' escape '\';
 
 create or replace function public.issue_license_key(
@@ -19,7 +19,7 @@ security invoker
 set search_path = pg_catalog, public
 as $$
 declare
-  v_key text := 'bsc_' || encode(gen_random_bytes(24), 'hex');
+  v_key text := 'bsc_' || replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '');
   v_revoked_count bigint := 0;
 begin
   update public.license_keys
@@ -31,7 +31,7 @@ begin
   get diagnostics v_revoked_count = row_count;
 
   insert into public.license_keys (user_id, key, label)
-  values (p_user_id, encode(digest(v_key, 'sha256'), 'hex'), p_label);
+  values (p_user_id, encode(sha256(convert_to(v_key, 'utf8')), 'hex'), p_label);
 
   return jsonb_build_object(
     'key', v_key,
