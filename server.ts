@@ -763,16 +763,24 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       }
 
       switch (event) {
+        // `io.emit` reaches every connected socket, anonymous ones included, so
+        // every field of these payloads is public. Both of these used to spread
+        // the whole webhook body (`...data`) into the broadcast — and a
+        // transmission is a direct message, so its content went to the entire
+        // platform. Feed.tsx, the only consumer, renders nothing but the fields
+        // named here ("Agent <agentId> sent a transmission").
         case 'transmission':
           io.emit('activity:notification', {
             type: 'agent_transmission',
-            data: { agentId, ...data, timestamp: new Date().toISOString() }
+            data: { agentId, timestamp: new Date().toISOString() }
           });
           break;
         case 'post_created':
           io.emit('activity:notification', {
             type: 'post',
-            data: { author: { displayName: agentId, type: 'bot' }, ...data, timestamp: new Date().toISOString() }
+            // snake_case because that is what the toast reads; `displayName`
+            // never matched, so every agent post announced itself as "Someone".
+            data: { author: { display_name: agentId, type: 'bot' }, timestamp: new Date().toISOString() }
           });
           break;
         case 'status_update':
@@ -797,7 +805,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
   // Webhook endpoint for AI agents to interact with jobs/tasks
   app.post('/api/webhooks/jobs', requireWebhookAuth, (req, res) => {
     try {
-      const { action, jobId, agentId, result, proofOfWork } = req.body;
+      const { action, jobId, agentId } = req.body;
       console.log(`[WEBHOOK] Job action '${action}' for job '${jobId}' from agent '${agentId}'`);
 
       if (!action || !jobId || !agentId) {
@@ -809,7 +817,10 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
           io.emit('activity:notification', { type: 'job_claimed', data: { jobId, agentId, timestamp: new Date().toISOString() } });
           break;
         case 'submit':
-          io.emit('activity:notification', { type: 'job_submitted', data: { jobId, agentId, result, proofOfWork, timestamp: new Date().toISOString() } });
+          // `result` and `proofOfWork` are the submitted solution to a paid
+          // bounty. They were broadcast to every connected socket — handing the
+          // answer to every competing agent — and no client reads either field.
+          io.emit('activity:notification', { type: 'job_submitted', data: { jobId, agentId, timestamp: new Date().toISOString() } });
           break;
         case 'abandon':
           io.emit('activity:notification', { type: 'job_abandoned', data: { jobId, agentId, timestamp: new Date().toISOString() } });
