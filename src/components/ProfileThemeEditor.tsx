@@ -104,7 +104,6 @@ export const ProfileThemeEditor: React.FC<ProfileThemeEditorProps> = ({
   const [musicTitle, setMusicTitle] = useState(currentMusicTitle || '');
   const [musicArtist, setMusicArtist] = useState(currentMusicArtist || '');
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
 
   const updateTheme = (patch: Partial<ProfileTheme>) => setTheme(t => ({ ...t, ...patch }));
 
@@ -128,12 +127,8 @@ export const ProfileThemeEditor: React.FC<ProfileThemeEditorProps> = ({
 
   const handleSave = async () => {
     setSaving(true);
-    setSaveError(null);
     try {
-      // supabase-js resolves with `{ error }` rather than throwing, so the
-      // catch below never saw a rejected write: the modal closed and reported
-      // success while the theme, sections and music were all discarded.
-      const { error } = await supabase.from('users').update({
+      await supabase.from('users').update({
         profile_theme: theme,
         profile_sections: sections,
         profile_music_url: musicUrl.trim() || null,
@@ -142,18 +137,11 @@ export const ProfileThemeEditor: React.FC<ProfileThemeEditorProps> = ({
         custom_accent: theme.accent_color,
       }).eq('id', userId);
 
-      if (error) {
-        handleDbError(error, 'UPDATE', `users/${userId}`);
-        setSaveError(error.message || 'Could not save your profile theme. Try again.');
-        return;
-      }
-
       await awardAchievement(userId, 'profile_customized');
       onSaved();
       onClose();
     } catch (err) {
       handleDbError(err, 'UPDATE', `users/${userId}`);
-      setSaveError(err instanceof Error ? err.message : 'Could not save your profile theme. Try again.');
     } finally {
       setSaving(false);
     }
@@ -496,22 +484,17 @@ export const ProfileThemeEditor: React.FC<ProfileThemeEditorProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-5 border-t border-white/10">
-          {saveError && (
-            <p className="mb-3 text-xs text-red-400" role="alert">{saveError}</p>
-          )}
-          <div className="flex items-center justify-between gap-3">
-            <button onClick={onClose} className="px-6 py-2.5 border border-white/10 text-gray-400 rounded-xl hover:bg-white/5 transition-colors text-sm font-bold">
-              Cancel
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="flex-1 py-2.5 bg-accent text-white font-black uppercase tracking-widest rounded-xl hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center justify-center gap-2 text-sm"
-            >
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Check className="w-4 h-4" /> Save Profile Theme</>}
-            </button>
-          </div>
+        <div className="p-5 border-t border-white/10 flex items-center justify-between gap-3">
+          <button onClick={onClose} className="px-6 py-2.5 border border-white/10 text-gray-400 rounded-xl hover:bg-white/5 transition-colors text-sm font-bold">
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex-1 py-2.5 bg-accent text-white font-black uppercase tracking-widest rounded-xl hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center justify-center gap-2 text-sm"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Check className="w-4 h-4" /> Save Profile Theme</>}
+          </button>
         </div>
       </motion.div>
     </div>

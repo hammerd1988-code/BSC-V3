@@ -140,9 +140,11 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
       .is('revoked_at', null)
       .maybeSingle();
 
-    // A failed lookup must not be read as "no key exists": that would send an
-    // unasked-for rotation through the RPC below and revoke a key the caller
-    // is still using.
+    // A failed lookup must not be read as "no key exists". Today that falls
+    // through to an insert the partial unique index rejects, which is a
+    // confusing 500; once rotation becomes a single unconditional revoke-and-
+    // insert (see #352) the same fallthrough would revoke a key the caller
+    // never asked to rotate.
     if (existingError) {
       console.error('[License] existing key lookup failed:', existingError.message);
       return res.status(503).json({ error: 'License service unavailable. Try again.' });
@@ -153,26 +155,35 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
       return res.json({ hasKey: true, tier, rotated: false });
     }
 
-    // Revoke-then-insert has to be atomic. Done as two Supabase requests, an
-    // insert that failed after the revoke committed left the account with no
-    // live key while this route answered 500 — so the caller kept using a key
-    // that had just been invalidated. `rotate_license_key` does both in one
-    // transaction and reports whether it actually replaced anything.
+    // NOTE: revoke-then-insert is still two Supabase requests, so an insert
+    // that fails after the revoke commits leaves the account with no live key
+    // while this route answers 500 (review comment 3839712732). That is being
+    // fixed atomically in #352, which also backfills the plaintext keys minted
+    // between b2ed3ec and d840bb6 — deliberately left to that PR rather than
+    // implemented a second time here.
+    if (existing) {
+      const { error: revokeError } = await supabase
+        .from('license_keys')
+        .update({ revoked_at: new Date().toISOString() })
+        .eq('id', existing.id);
+      if (revokeError) {
+        console.error('[License] revoke error:', revokeError.message);
+        return res.status(500).json({ error: 'Failed to rotate license key.' });
+      }
+    }
+
     const key = mintKey();
-    const { data: rotation, error: rotateError } = await supabase
-      .rpc('rotate_license_key', {
-        p_user_id: user.id,
-        p_key_hash: hashLicenseKey(key),
-        p_label: LICENSE_LABEL,
-      })
-      .maybeSingle<{ replaced_previous: boolean }>();
-    if (rotateError) {
-      console.error('[License] rotate error:', rotateError.message);
+    const keyHash = hashLicenseKey(key);
+    const { error: insertError } = await supabase
+      .from('license_keys')
+      .insert({ user_id: user.id, key: keyHash, label: LICENSE_LABEL });
+    if (insertError) {
+      console.error('[License] insert error:', insertError.message);
       return res.status(500).json({ error: 'Failed to create license key.' });
     }
 
     const tier = await resolveTier(supabase, user.id);
-    res.json({ key, tier, rotated: Boolean(rotation?.replaced_previous) });
+    res.json({ key, tier, rotated: Boolean(existing) });
   });
 
   // ── GET /api/license/verify ──
