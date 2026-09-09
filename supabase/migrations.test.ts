@@ -646,3 +646,232 @@ describe('renamed migrations re-applied out of order', () => {
     expect(await lastTransmit()).toEqual({ content: 'second' });
   });
 });
+
+/**
+ * `users self-insert` (0001) is `with check (auth.uid() = auth_uid)` and says
+ * nothing about the other columns, and 0060 pins `role` on UPDATE only. So a
+ * signed-in account could INSERT a *second* profile row carrying its own
+ * auth_uid and `role = 'admin'` — and `is_admin_user()` (0068) only asks
+ * whether such a row exists, which made `users_admin_update` grant write access
+ * to every other account's row.
+ *
+ * The sibling of that hole is entitlement: 00231 let clients write their own
+ * `subscriptions` row, whose tier 0040's trigger copies onto
+ * `users.subscription_tier` — the column `GET /api/license/verify` turns into
+ * the feature set an external Local Coder install unlocks.
+ *
+ * These run against a database of their own because they need to act as
+ * `authenticated` with a JWT, which the shared instance above never does.
+ */
+describe('privileges a client must not be able to grant itself', () => {
+  let db: PgLiteLike;
+
+  const ATTACKER = '11111111-1111-1111-1111-111111111111';
+  const VICTIM = '22222222-2222-2222-2222-222222222222';
+  const SELF_INSERTER = '33333333-3333-3333-3333-333333333333';
+
+  /** Runs `fn` as `authenticated` carrying `uid`'s JWT, as PostgREST would. */
+  async function asUser<T>(uid: string, fn: () => Promise<T>): Promise<T> {
+    await db.query(`select set_config('request.jwt.claim.sub', $1, false)`, [uid]);
+    await db.query(`select set_config('request.jwt.claim.role', 'authenticated', false)`);
+    await db.query('set role authenticated');
+    try {
+      return await fn();
+    } finally {
+      await db.query('reset role');
+    }
+  }
+
+  /**
+   * Runs `fn` with no end-user JWT — the Stripe webhook, the seeding scripts and
+   * the migration chain itself. Clearing the claim matters: a leftover `sub`
+   * makes `auth.uid()` non-null and the guards then treat the write as a
+   * client's.
+   */
+  async function asServiceRole<T>(fn: () => Promise<T>): Promise<T> {
+    await db.query(`select set_config('request.jwt.claim.sub', '', false)`);
+    return fn();
+  }
+
+  const roleOf = async (id: string) =>
+    (await db.query<{ role: string }>(`select role from public.users where id = $1`, [id])).rows[0]?.role;
+  const tierOf = async (id: string) =>
+    (await db.query<{ t: string }>(`select subscription_tier as t from public.users where id = $1`, [id])).rows[0]?.t;
+
+  beforeAll(async () => {
+    db = await createDatabase();
+    const failures = await applyMigrations(db);
+    expect(failures.map((failure) => `${failure.file}: ${failure.message}`)).toEqual([]);
+
+    // 0007's on_auth_user_created trigger builds the profile, which is how a
+    // real sign-up produces one (id = auth uuid, auth_uid = auth uuid).
+    await db.query(
+      `insert into auth.users (id, email) values ($1, 'attacker@example.com'), ($2, 'victim@example.com')`,
+      [ATTACKER, VICTIM],
+    );
+
+    // The unique index and the role trigger are independent defences, and the
+    // index is skipped on a project that already carries duplicate auth_uid
+    // rows. Withholding 0007's profile row for one identity leaves the client
+    // INSERT path reachable on its own — which is also how it runs for real
+    // when that trigger did not produce the row (ensureUserProfile's insert
+    // branch in AuthContext).
+    await db.query(`alter table auth.users disable trigger on_auth_user_created`);
+    await db.query(`insert into auth.users (id, email) values ($1, 'inserter@example.com')`, [SELF_INSERTER]);
+    await db.query(`alter table auth.users enable trigger on_auth_user_created`);
+  }, 120_000);
+
+  it('pins role on a client INSERT, independently of the unique index', async () => {
+    await asUser(SELF_INSERTER, async () => {
+      await db.query(
+        `insert into public.users (id, username, display_name, email, auth_uid, role, subscription_tier)
+         values ($1, 'inserter', 'Inserter', 'inserter@example.com', $2, 'admin', 'architect')`,
+        [SELF_INSERTER, SELF_INSERTER],
+      );
+    });
+
+    expect(await roleOf(SELF_INSERTER)).toBe('user');
+    expect(await tierOf(SELF_INSERTER)).toBe('indie');
+
+    const admin = await asUser(SELF_INSERTER, () =>
+      db.query<{ is_admin: boolean }>(`select public.is_admin_user() as is_admin`),
+    );
+    expect(admin.rows[0]?.is_admin).toBe(false);
+  });
+
+  it('refuses a second profile row for an identity that already has one', async () => {
+    await expect(
+      asUser(ATTACKER, () =>
+        db.query(
+          `insert into public.users (id, username, display_name, email, auth_uid, role)
+           values ('planted', 'planted', 'Planted', 'attacker@example.com', $1, 'admin')`,
+          [ATTACKER],
+        ),
+      ),
+    ).rejects.toThrow(/users_auth_uid_key|duplicate key/i);
+
+    const admin = await asUser(ATTACKER, () =>
+      db.query<{ is_admin: boolean }>(`select public.is_admin_user() as is_admin`),
+    );
+    expect(admin.rows[0]?.is_admin).toBe(false);
+  });
+
+  it('keeps another account\'s row out of reach without that admin row', async () => {
+    await asUser(ATTACKER, async () => {
+      // RLS matches no row, so this is a silent zero-row update rather than an
+      // error — the assertion has to be on the data, not on a rejection.
+      await db.query(`update public.users set cred_balance = 999999 where id = $1`, [VICTIM]);
+    });
+
+    const { rows } = await db.query<{ cred_balance: number }>(
+      `select cred_balance from public.users where id = $1`,
+      [VICTIM],
+    );
+    expect(Number(rows[0]?.cred_balance)).toBe(500);
+  });
+
+  it('still pins role on UPDATE (0060 regression guard)', async () => {
+    await asUser(ATTACKER, async () => {
+      await db.query(`update public.users set role = 'admin' where id = $1`, [ATTACKER]);
+    });
+    expect(await roleOf(ATTACKER)).toBe('user');
+  });
+
+  it('refuses client writes to subscriptions outright', async () => {
+    await expect(
+      asUser(ATTACKER, () =>
+        db.query(
+          `insert into public.subscriptions (user_id, tier, status, started_at)
+           values ($1, 'architect', 'active', now())`,
+          [ATTACKER],
+        ),
+      ),
+    ).rejects.toThrow(/permission denied/i);
+
+    await expect(
+      asUser(ATTACKER, () =>
+        db.query(`update public.subscriptions set tier = 'architect' where user_id = $1`, [ATTACKER]),
+      ),
+    ).rejects.toThrow(/permission denied/i);
+
+    // Reading its own row is still how the client renders the billing state.
+    await expect(
+      asUser(ATTACKER, () => db.query(`select 1 from public.subscriptions where user_id = $1`, [ATTACKER])),
+    ).resolves.toBeDefined();
+  });
+
+  it('pins users.subscription_tier against a direct client write', async () => {
+    await asUser(ATTACKER, async () => {
+      await db.query(`update public.users set subscription_tier = 'architect' where id = $1`, [ATTACKER]);
+    });
+    expect(await tierOf(ATTACKER)).toBe('indie');
+  });
+
+  it('lets the Stripe webhook grant and revoke the entitlement', async () => {
+    await asServiceRole(async () => {
+      await db.query(
+        `insert into public.subscriptions (user_id, tier, status, started_at)
+         values ($1, 'architect', 'active', now())`,
+        [ATTACKER],
+      );
+    });
+    expect(await tierOf(ATTACKER)).toBe('architect');
+
+    await asServiceRole(async () => {
+      await db.query(`update public.subscriptions set status = 'cancelled' where user_id = $1`, [ATTACKER]);
+    });
+    expect(await tierOf(ATTACKER)).toBe('indie');
+
+    // stripeRoutes.ts also writes users.subscription_tier directly.
+    await asServiceRole(async () => {
+      await db.query(`update public.users set subscription_tier = 'operator' where id = $1`, [ATTACKER]);
+    });
+    expect(await tierOf(ATTACKER)).toBe('operator');
+  });
+
+  it('lets a real admin still set another account\'s tier', async () => {
+    await asServiceRole(async () => {
+      await db.query(`update public.users set role = 'admin' where id = $1`, [VICTIM]);
+    });
+    expect(await roleOf(VICTIM)).toBe('admin');
+
+    await asUser(VICTIM, async () => {
+      await db.query(`update public.users set subscription_tier = 'architect' where id = $1`, [ATTACKER]);
+    });
+    expect(await tierOf(ATTACKER)).toBe('architect');
+  });
+
+  it('gives one auth identity at most one profile row, service role included', async () => {
+    await expect(
+      asServiceRole(() =>
+        db.query(
+          `insert into public.users (id, username, display_name, auth_uid)
+           values ('second-profile', 'second', 'Second', $1)`,
+          [ATTACKER],
+        ),
+      ),
+    ).rejects.toThrow(/users_auth_uid_key|duplicate key/i);
+
+    // Persona bots carry no auth_uid, and the partial index must keep letting
+    // any number of them exist.
+    await asServiceRole(async () => {
+      await db.query(
+        `insert into public.users (id, username, display_name, auth_uid, type)
+         values ('bot-one', 'bot_one', 'Bot One', null, 'bot'),
+                ('bot-two', 'bot_two', 'Bot Two', null, 'bot')`,
+      );
+    });
+    const { rows } = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.users where auth_uid is null`,
+    );
+    expect(Number(rows[0]?.n)).toBeGreaterThanOrEqual(2);
+  });
+
+  it('keeps active_subscription_tier out of client reach', async () => {
+    const { rows } = await db.query<{ anon: boolean; authed: boolean }>(
+      `select has_function_privilege('anon', 'public.active_subscription_tier(text)', 'execute') as anon,
+              has_function_privilege('authenticated', 'public.active_subscription_tier(text)', 'execute') as authed`,
+    );
+    expect(rows[0]).toEqual({ anon: false, authed: false });
+  });
+});
