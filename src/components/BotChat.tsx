@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
+import { handleDbError } from '../lib/errors';
 import { generateText } from '../lib/ai';
 import { getValidSession, authedFetch } from '../lib/authSession';
 import { cn } from '../lib/utils';
@@ -200,15 +201,20 @@ function saveConversation(botId: string, botName: string, messages: ChatMessage[
   convos[botId] = { botId, botName, messages: messages.slice(-100), lastActive: Date.now() };
   localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(convos));
 
-  // Also persist to Supabase (fire-and-forget)
+  // Also persist to Supabase (fire-and-forget). supabase-js resolves with
+  // { error } rather than rejecting, so an empty .then() swallowed every
+  // failure — the conversation lived only in this browser's localStorage and
+  // nothing said so.
   if (userId) {
-    supabase.from('bot_conversations').upsert({
+    void supabase.from('bot_conversations').upsert({
       user_id: userId,
       bot_id: botId,
       bot_name: botName,
       messages: messages.slice(-100),
       last_active: new Date().toISOString(),
-    }, { onConflict: 'user_id,bot_id' }).then(() => {});
+    }, { onConflict: 'user_id,bot_id' }).then(({ error }) => {
+      if (error) handleDbError(error, 'UPSERT', `bot_conversations/${botId}`);
+    });
   }
 }
 
@@ -236,12 +242,14 @@ function saveInstruction(botId: string, msg: ChatMessage, userId?: string) {
 
   // Also persist to Supabase (fire-and-forget)
   if (userId) {
-    supabase.from('bot_instructions').insert({
+    void supabase.from('bot_instructions').insert({
       user_id: userId,
       bot_id: botId,
       instruction: msg.content,
       created_at: new Date(msg.timestamp).toISOString(),
-    }).then(() => {});
+    }).then(({ error }) => {
+      if (error) handleDbError(error, 'INSERT', `bot_instructions/${botId}`);
+    });
   }
 }
 
@@ -919,12 +927,18 @@ export function BotChat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Save conversation when messages change
+  // Save conversation when messages change.
+  //
+  // currentUser?.id belongs in the deps: it decides whether saveConversation
+  // reaches Supabase at all, and AuthContext resolves the profile
+  // asynchronously. Without it, a chat whose messages settled before auth
+  // resolved was written to localStorage and never to the database, so it did
+  // not survive a change of browser.
   useEffect(() => {
     if (selectedBot && messages.length > 1) {
       saveConversation(selectedBot.id, selectedBot.name, messages, currentUser?.id);
     }
-  }, [messages, selectedBot]);
+  }, [messages, selectedBot, currentUser?.id]);
 
   // Build system prompt (includes battle memory when available)
   const systemPrompt = useMemo(() => {

@@ -106,17 +106,59 @@ async function resolveUserByStripeCustomer(
   return null;
 }
 
-function tierFromPriceId(priceId: string): PlanTier {
+/** An unset `STRIPE_*_PRICE_ID` is '', which must never match anything. */
+function samePrice(priceId: string, configured: string): boolean {
+  return configured !== '' && priceId === configured;
+}
+
+/**
+ * The tier a Stripe price id entitles, or null when it matches no configured
+ * plan.
+ *
+ * Null is deliberately not 'indie'. This used to fall back to the free tier,
+ * which conflated "this price is not one of ours" with "this customer is
+ * entitled to nothing" — so a price id rotated in Stripe but not yet added to
+ * `STRIPE_*_PRICE_ID`/`STRIPE_*_LEGACY_PRICE_IDS` downgraded every affected
+ * subscriber to free on their next `customer.subscription.updated` event, which
+ * a plain renewal emits. With both env vars unset the comparison was `'' ===
+ * ''`, so an empty price id matched the first plan in the map and handed out
+ * `operator` instead.
+ */
+export function tierFromPriceId(priceId: string): PlanTier | null {
+  if (!priceId) return null;
   for (const plan of Object.values(PLAN_CONFIG)) {
     if (
-      priceId === plan.stripePriceIdMonthly ||
-      priceId === plan.stripePriceIdAnnual ||
+      samePrice(priceId, plan.stripePriceIdMonthly) ||
+      samePrice(priceId, plan.stripePriceIdAnnual) ||
       plan.legacyPriceIds.includes(priceId)
     ) {
       return plan.tier;
     }
   }
-  return 'indie';
+  return null;
+}
+
+/** Narrows a value that came from Stripe metadata rather than our own config. */
+export function paidTierOrNull(value: unknown): Exclude<PlanTier, 'indie'> | null {
+  return value === 'operator' || value === 'architect' ? value : null;
+}
+
+/**
+ * The paid tier already recorded for a user, used to hold an entitlement steady
+ * when a price id resolves to nothing. 'indie' reads as "nothing to preserve".
+ */
+async function recordedPaidTier(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<Exclude<PlanTier, 'indie'> | null> {
+  const { data } = await supabase
+    .from('subscriptions')
+    .select('tier')
+    .eq('user_id', userId)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return paidTierOrNull(data?.tier);
 }
 
 // ---------------------------------------------------------------------------
@@ -426,12 +468,19 @@ async function handleStripeEvent(
       if (session.mode !== 'subscription') break;
 
       const userId = session.metadata?.bsc_user_id;
-      const tier = session.metadata?.tier as PlanTier | undefined;
       const customerId = session.customer as string;
       const subscriptionId = session.subscription as string;
 
+      // Metadata is editable in the Stripe dashboard, and an unexpected value
+      // would fail users_subscription_tier_check inside mustSucceed — a 500 that
+      // Stripe then retries for days over a payload that can never succeed.
+      const tier = paidTierOrNull(session.metadata?.tier);
+
       if (!userId || !tier) {
-        console.warn('[Stripe Webhook] checkout.session.completed missing metadata');
+        console.warn(
+          `[Stripe Webhook] checkout.session.completed ${session.id} has unusable metadata ` +
+          `(bsc_user_id=${userId ?? '(absent)'}, tier=${session.metadata?.tier ?? '(absent)'})`,
+        );
         break;
       }
 
@@ -457,7 +506,6 @@ async function handleStripeEvent(
       const customerId = subscription.customer as string;
       const status = subscription.status;
       const priceId = subscription.items.data[0]?.price?.id || '';
-      const tier = tierFromPriceId(priceId);
 
       const user = await resolveUserByStripeCustomer(supabase, customerId, subscription.metadata?.bsc_user_id);
       if (!user) break;
@@ -472,6 +520,35 @@ async function handleStripeEvent(
         ? new Date(subscription.items.data[0].current_period_end * 1000).toISOString()
         : null;
 
+      if (mappedStatus === 'cancelled') {
+        await closeSubscription(supabase, {
+          userId: user.id,
+          tier: 'indie',
+          status: 'cancelled',
+          customerId,
+          subscriptionId: subscription.id,
+          expiresAt: periodEnd,
+        });
+        mustSucceed('customer.subscription.updated user tier sync', await supabase
+          .from('users')
+          .update({ subscription_tier: 'indie', updated_at: new Date().toISOString() })
+          .eq('id', user.id));
+        console.log(`[Stripe] Subscription cancelled for user ${user.id}`);
+        break;
+      }
+
+      // `active` and `past_due` both keep the paid tier; only the status differs.
+      // An unrecognised price must not be read as "entitled to nothing", so hold
+      // whatever tier is already recorded and make the misconfiguration loud.
+      const tier = tierFromPriceId(priceId) ?? await recordedPaidTier(supabase, user.id);
+      if (!tier) {
+        console.error(
+          `[Stripe Webhook] price ${priceId || '(absent)'} matches no configured plan and user ${user.id} has no recorded paid tier, so event ${event.id} changed nothing. ` +
+          'Add the price id to STRIPE_OPERATOR_*/STRIPE_ARCHITECT_* and redeliver the event.',
+        );
+        break;
+      }
+
       if (mappedStatus === 'active') {
         await activateSubscription(supabase, {
           userId: user.id,
@@ -483,7 +560,7 @@ async function handleStripeEvent(
       } else {
         await closeSubscription(supabase, {
           userId: user.id,
-          tier: mappedStatus === 'cancelled' ? 'indie' : tier,
+          tier,
           status: mappedStatus,
           customerId,
           subscriptionId: subscription.id,
@@ -494,10 +571,7 @@ async function handleStripeEvent(
       // Sync user tier
       mustSucceed('customer.subscription.updated user tier sync', await supabase
         .from('users')
-        .update({
-          subscription_tier: mappedStatus === 'cancelled' ? 'indie' : tier,
-          updated_at: new Date().toISOString(),
-        })
+        .update({ subscription_tier: tier, updated_at: new Date().toISOString() })
         .eq('id', user.id));
 
       console.log(`[Stripe] Subscription updated for user ${user.id}: ${tier} (${mappedStatus})`);

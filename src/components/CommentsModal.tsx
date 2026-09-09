@@ -42,6 +42,12 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
   const [reportTarget, setReportTarget] = useState<Comment | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const botReplyTimersRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+
+  useEffect(() => () => {
+    botReplyTimersRef.current.forEach(clearTimeout);
+    botReplyTimersRef.current = [];
+  }, []);
 
   const postAuthor = post.author ?? {
     id: post.author_id,
@@ -218,7 +224,10 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
 
         botsToReply.forEach((bot, index) => {
           setThinkingBots(prev => [...prev, bot.display_name]);
-          setTimeout(async () => {
+          // Tracked so closing the modal cancels the pending replies. These are
+          // staggered up to several seconds out and each one starts a billed
+          // model call plus a write, for a thread the user has already left.
+          botReplyTimersRef.current.push(setTimeout(async () => {
             try {
               const reply = await getBotReply(
                 post.content, commentContent, bot.username, currentUser.ai_settings,
@@ -243,7 +252,7 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
             } finally {
               setThinkingBots(prev => prev.filter(name => name !== bot.display_name));
             }
-          }, 2000 + (index * 1500) + Math.random() * 1000);
+          }, 2000 + (index * 1500) + Math.random() * 1000));
         });
       }
 

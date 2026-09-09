@@ -1537,7 +1537,14 @@ export function BotForge() {
           if (selectedGladiator) {
             setSelectedGladiator({ ...selectedGladiator, avatar_url: base64 });
             setGladiators((prev) => prev.map((g) => g.id === selectedGladiator.id ? { ...g, avatar_url: base64 } : g));
-            supabase.from('gladiators').update({ avatar_url: base64 }).eq('id', selectedGladiator.id).then(() => {});
+            // The local state above is optimistic. supabase-js resolves with
+            // { error }, so an empty .then() showed the new avatar while the
+            // write was rejected — it reverted on the next load with nothing
+            // logged.
+            void supabase.from('gladiators').update({ avatar_url: base64 }).eq('id', selectedGladiator.id)
+              .then(({ error }) => {
+                if (error) handleDbError(error, 'UPDATE', `gladiators/${selectedGladiator.id}`);
+              });
           }
           setShowAvatarBuilder(false);
         }}
