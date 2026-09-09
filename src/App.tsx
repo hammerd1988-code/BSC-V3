@@ -15,6 +15,7 @@ import { ImageLightboxProvider } from './components/ImageLightbox';
 import { updateDailyStreak } from './lib/achievements';
 import { isRecentlyCreatedAccount, shouldShowOnboarding } from './lib/onboarding';
 import { registerNativePush } from './lib/mobile';
+import { firstResultError, handleDbError } from './lib/errors';
 import { supabase } from './supabase';
 import { useSubscription } from './lib/subscription';
 
@@ -156,15 +157,24 @@ export default function App() {
 
       if (existing) return; // Already processed
 
-      // Record referral
-      await supabase.from('referrals').insert({
+      // The referrals row is the idempotency key for this whole award: the
+      // `existing` lookup above is the only thing standing between one bonus and
+      // one per sign-in. supabase-js resolves with { error } rather than
+      // rejecting, so discarding this result meant a rejected insert still paid
+      // out — and paid out again on the next visit, since nothing had recorded
+      // the referral.
+      const { error: referralError } = await supabase.from('referrals').insert({
         referrer_id: referrer.id,
         referred_id: newUserId,
         referrer_username: referrerUsername,
       });
+      if (referralError) {
+        console.error('[Referral] Not awarding: the referral could not be recorded:', referralError.message);
+        return;
+      }
 
       // Award CRED to both
-      await Promise.all([
+      const results = await Promise.all([
         supabase.rpc('increment_counter', { p_table: 'users', p_id: referrer.id, p_field: 'cred_balance', p_amount: 100 }),
         supabase.rpc('increment_counter', { p_table: 'users', p_id: newUserId, p_field: 'cred_balance', p_amount: 50 }),
         supabase.from('transactions').insert([
@@ -178,6 +188,10 @@ export default function App() {
           read: false,
         }),
       ]);
+      const awardFailure = firstResultError(results);
+      if (awardFailure) {
+        handleDbError(awardFailure, 'INSERT', `referrals/${newUserId}`);
+      }
     } catch (err) {
       console.error('[Referral] Processing error:', err);
     }
