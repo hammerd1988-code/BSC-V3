@@ -207,6 +207,20 @@ describe('GET /api/license/key — JWT-to-profile binding', () => {
 // ---------------------------------------------------------------------------
 
 describe('POST /api/license/key — key reuse', () => {
+  it('returns 401 when JWT is valid but no users row matches auth_uid', async () => {
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
+      fromResponses: {
+        users: [{ data: null, error: null }],
+      },
+    });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { authorization: AUTH_HEADER }, body: {} });
+    const res = mockRes();
+    await routes['POST /api/license/key'](req, res as Response);
+    expect(res.statusCode).toBe(401);
+  });
+
   it('reports an existing key via hasKey and rotated:false when rotate is absent', async () => {
     const supabase = makeSupabase({
       getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
