@@ -213,9 +213,10 @@ export async function spawnStoryline(
     beats: [],
     phaseBeats: 0,
   };
-  storylines.push(story);
-  lastSpawnAt = Date.now();
-
+  // Persist before publishing to the in-memory list. The insert used to run
+  // after the push and only warn on failure, so an arc that was never written
+  // still drove bot behaviour, was announced by the narrator, and was reported
+  // to the admin console as `{ success: true }` — then vanished on restart.
   const { error } = await supabase.from('bot_mayhem_storylines').insert({
     id: story.id,
     title: story.title,
@@ -228,7 +229,13 @@ export async function spawnStoryline(
     phase_beats: story.phaseBeats,
     created_by: createdBy || null,
   });
-  if (error) console.warn(`${LOG_PREFIX} insert storyline failed:`, error.message);
+  if (error) {
+    console.error(`${LOG_PREFIX} insert storyline failed:`, error.message);
+    return null;
+  }
+
+  storylines.push(story);
+  lastSpawnAt = Date.now();
 
   console.log(`${LOG_PREFIX} spawned "${story.title}" (${story.arcType}) with ${story.participants.join(', ')}`);
   return story;
