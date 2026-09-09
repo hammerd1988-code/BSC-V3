@@ -3,9 +3,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   areCallPeers,
   callRoomCount,
+  callSignallingSocket,
+  forgetCallSignallingSocket,
   isCallRoomParticipant,
   registerCallPeers,
   registerCallRoom,
+  registerCallSignallingSocket,
   releaseCallPeers,
   releaseCallRoom,
 } from './callRooms';
@@ -83,5 +86,73 @@ describe('call peers', () => {
     registerCallPeers('caller', 'caller');
     expect(areCallPeers('caller', '')).toBe(false);
     expect(areCallPeers('caller', 'caller')).toBe(false);
+  });
+});
+
+/**
+ * An account can hold several live sockets at once — one per tab or device — but
+ * only one of them is in any given call. `call:accepted`, `call:ice-candidate`
+ * and `call:filter` must reach that socket alone: CallModal registers its
+ * listeners whether or not the tab has a call open, and its `call:accepted`
+ * handler joins the LiveKit room, so a fan-out would pull an uninvolved tab of
+ * the same account into the call as a publisher.
+ */
+describe('call signalling sockets', () => {
+  beforeEach(() => {
+    releaseCallPeers('caller', 'callee');
+    forgetCallSignallingSocket('socket-caller-tab-a');
+    forgetCallSignallingSocket('socket-caller-tab-b');
+    forgetCallSignallingSocket('socket-callee-tab-a');
+  });
+
+  it('routes the answer back to the tab that placed the call', () => {
+    registerCallSignallingSocket('caller', 'callee', 'socket-caller-tab-a');
+    expect(callSignallingSocket('caller', 'callee')).toBe('socket-caller-tab-a');
+  });
+
+  it('keeps the two directions of one call apart', () => {
+    registerCallSignallingSocket('caller', 'callee', 'socket-caller-tab-a');
+    registerCallSignallingSocket('callee', 'caller', 'socket-callee-tab-a');
+
+    expect(callSignallingSocket('caller', 'callee')).toBe('socket-caller-tab-a');
+    expect(callSignallingSocket('callee', 'caller')).toBe('socket-callee-tab-a');
+  });
+
+  it('does not confuse a second tab of the same account with the one in the call', () => {
+    // Opening another tab used to overwrite the account's only socket entry, so
+    // the answer went to whichever tab had registered most recently.
+    registerCallSignallingSocket('caller', 'callee', 'socket-caller-tab-a');
+    expect(callSignallingSocket('caller', 'callee')).toBe('socket-caller-tab-a');
+
+    // A second tab registering for a *different* peer must not move this call.
+    registerCallSignallingSocket('caller', 'someone-else', 'socket-caller-tab-b');
+    expect(callSignallingSocket('caller', 'callee')).toBe('socket-caller-tab-a');
+  });
+
+  it('knows nothing about a pair that never signalled', () => {
+    expect(callSignallingSocket('caller', 'callee')).toBeUndefined();
+  });
+
+  it('drops a disconnected socket rather than keeping a stale target', () => {
+    registerCallSignallingSocket('caller', 'callee', 'socket-caller-tab-a');
+    forgetCallSignallingSocket('socket-caller-tab-a');
+    expect(callSignallingSocket('caller', 'callee')).toBeUndefined();
+  });
+
+  it('forgets both directions when the call is released', () => {
+    registerCallSignallingSocket('caller', 'callee', 'socket-caller-tab-a');
+    registerCallSignallingSocket('callee', 'caller', 'socket-callee-tab-a');
+
+    releaseCallPeers('caller', 'callee');
+
+    expect(callSignallingSocket('caller', 'callee')).toBeUndefined();
+    expect(callSignallingSocket('callee', 'caller')).toBeUndefined();
+  });
+
+  it('ignores incomplete registrations', () => {
+    registerCallSignallingSocket('caller', 'callee', '');
+    expect(callSignallingSocket('caller', 'callee')).toBeUndefined();
+    registerCallSignallingSocket('', 'callee', 'socket-caller-tab-a');
+    expect(callSignallingSocket('', 'callee')).toBeUndefined();
   });
 });

@@ -102,6 +102,57 @@ export function releaseCallPeers(a: string, b: string): void {
   callPeers.get(String(a))?.delete(String(b));
   callPeers.get(String(b))?.delete(String(a));
   prunePeers();
+  callSignallingSockets.delete(signallingKey(a, b));
+  callSignallingSockets.delete(signallingKey(b, a));
+}
+
+/**
+ * Which socket each side of a call is signalling over.
+ *
+ * A user's account can hold several live sockets at once — one per browser tab
+ * or device — but exactly one of them is in any given call. `call:incoming`,
+ * `call:rejected` and `call:ended` are safe to fan out to all of them (they only
+ * raise or clear the ringing UI), but `call:accepted`, `call:ice-candidate` and
+ * `call:filter` are not: `CallModal` registers its listeners whether or not that
+ * tab has a call open, so a broadcast `call:accepted` would make an uninvolved
+ * tab of the same account join the LiveKit room and start publishing.
+ *
+ * So the socket that placed the call, and the socket that answered it, are
+ * recorded here and those three events are delivered to that socket alone.
+ */
+const callSignallingSockets = new Map<string, { socketId: string; expiresAt: number }>();
+
+function signallingKey(userId: string, peerId: string): string {
+  return `${String(userId)}\u0000${String(peerId)}`;
+}
+
+function pruneSignallingSockets(now = Date.now()): void {
+  for (const [key, entry] of callSignallingSockets) {
+    if (entry.expiresAt <= now) callSignallingSockets.delete(key);
+  }
+}
+
+/** Records that `userId` is signalling its call with `peerId` over `socketId`. */
+export function registerCallSignallingSocket(userId: string, peerId: string, socketId: string): void {
+  pruneSignallingSockets();
+  if (!userId || !peerId || !socketId) return;
+  callSignallingSockets.set(signallingKey(userId, peerId), {
+    socketId: String(socketId),
+    expiresAt: Date.now() + CALL_ROOM_TTL_MS,
+  });
+}
+
+/** The socket `userId` is signalling its call with `peerId` over, if recorded. */
+export function callSignallingSocket(userId: string, peerId: string): string | undefined {
+  pruneSignallingSockets();
+  return callSignallingSockets.get(signallingKey(userId, peerId))?.socketId;
+}
+
+/** Drops a disconnected socket so a stale id is never used as a target. */
+export function forgetCallSignallingSocket(socketId: string): void {
+  for (const [key, entry] of callSignallingSockets) {
+    if (entry.socketId === socketId) callSignallingSockets.delete(key);
+  }
 }
 
 /** Test seam. */
