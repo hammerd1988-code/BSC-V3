@@ -118,7 +118,7 @@ export function useRemoteOps(): RemoteOpsController {
   }, []);
 
 const refreshMachines = useCallback(async () => {
-  if (!currentUser) {
+  if (!currentUser?.id) {
     setMachines([]);
     setSelectedMachineId(null);
     setError(null);
@@ -139,7 +139,10 @@ const refreshMachines = useCallback(async () => {
   } finally {
     setLoadingMachines(false);
   }
-}, [currentUser]);
+  // Keyed on the id, not the object: AuthContext replaces `currentUser` on any
+  // realtime change to that row (CRED, view_count, online flag), which re-ran
+  // the effect below and refetched the machine list on every one of them.
+}, [currentUser?.id]);
 
   useEffect(() => {
     refreshMachines();

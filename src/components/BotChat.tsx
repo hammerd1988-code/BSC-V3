@@ -919,12 +919,16 @@ export function BotChat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Save conversation when messages change
+  // Save conversation when messages change.
+  //
+  // `currentUser?.id` belongs in the deps because `saveConversation` skips the
+  // Supabase write entirely when it is falsy. Without it, a conversation that
+  // started before auth resolved was only ever written to localStorage.
   useEffect(() => {
     if (selectedBot && messages.length > 1) {
       saveConversation(selectedBot.id, selectedBot.name, messages, currentUser?.id);
     }
-  }, [messages, selectedBot]);
+  }, [messages, selectedBot, currentUser?.id]);
 
   // Build system prompt (includes battle memory when available)
   const systemPrompt = useMemo(() => {

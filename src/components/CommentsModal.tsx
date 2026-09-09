@@ -42,6 +42,20 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
   const [reportTarget, setReportTarget] = useState<Comment | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // Bot replies are scheduled a few seconds out, so closing the modal in that
+  // window used to leave the timers running: they still paid for a getBotReply
+  // generation and then called setState on an unmounted component.
+  const botReplyTimersRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+  const unmountedRef = useRef(false);
+
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+      botReplyTimersRef.current.forEach(clearTimeout);
+      botReplyTimersRef.current = [];
+    };
+  }, []);
 
   const postAuthor = post.author ?? {
     id: post.author_id,
@@ -218,7 +232,8 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
 
         botsToReply.forEach((bot, index) => {
           setThinkingBots(prev => [...prev, bot.display_name]);
-          setTimeout(async () => {
+          const timer = setTimeout(async () => {
+            botReplyTimersRef.current = botReplyTimersRef.current.filter(t => t !== timer);
             try {
               const reply = await getBotReply(
                 post.content, commentContent, bot.username, currentUser.ai_settings,
@@ -241,9 +256,12 @@ export const CommentsModal: React.FC<CommentsModalProps> = ({ post, isOpen, onCl
             } catch (err) {
               console.error(`Bot Reply Error (${bot.username}):`, err);
             } finally {
-              setThinkingBots(prev => prev.filter(name => name !== bot.display_name));
+              if (!unmountedRef.current) {
+                setThinkingBots(prev => prev.filter(name => name !== bot.display_name));
+              }
             }
           }, 2000 + (index * 1500) + Math.random() * 1000);
+          botReplyTimersRef.current.push(timer);
         });
       }
 
