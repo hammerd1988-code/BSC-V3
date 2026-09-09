@@ -421,17 +421,28 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
 
     if (existing) {
       const next = existing.usage_count + amount;
-      await supabase.from('feature_usage').update({ usage_count: next }).eq('id', existing.id);
+      // The meter is the quota. Advancing it in memory after a write Postgres
+      // rejected let the session keep spending against a limit that never moved,
+      // and supabase-js reports that rejection in `error` rather than throwing.
+      const { error } = await supabase.from('feature_usage').update({ usage_count: next }).eq('id', existing.id);
+      if (error) {
+        console.error('[subscription] Failed to record feature usage:', error.message);
+        return;
+      }
       setUsage((prev) => prev.map((row) => row.id === existing.id ? { ...row, usage_count: next } : row));
       return;
     }
 
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('feature_usage')
       .insert({ user_id: currentUser.id, feature, usage_count: amount, period_start: start, period_end: end })
       .select('*')
       .maybeSingle();
 
+    if (error) {
+      console.error('[subscription] Failed to open a feature usage period:', error.message);
+      return;
+    }
     if (data) setUsage((prev) => [...prev, data as FeatureUsageRow]);
   }, [currentUser?.id, usage]);
 
@@ -469,7 +480,16 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
       return;
     }
 
-    await supabase.from('users').update({ subscription_tier: nextTier }).eq('id', currentUser.id);
+    // Feature gates read the cached profile, not the subscriptions table, so a
+    // silent failure here is what actually decides what the user can do.
+    const { error: profileError } = await supabase
+      .from('users')
+      .update({ subscription_tier: nextTier })
+      .eq('id', currentUser.id);
+    if (profileError) {
+      console.error('[subscription] Failed to sync the profile tier:', profileError.message);
+      return;
+    }
     await refresh();
   }, [currentUser?.id, refresh]);
 
