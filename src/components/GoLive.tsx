@@ -694,12 +694,22 @@ export const GoLive: React.FC = () => {
   const toggleFollow = async () => {
     const streamerId = streamData?.user_id || streamData?.host_id;
     if (!currentUser || !streamerId || currentUser.id === streamerId) return;
+    // Only move the button once the row moved. The delete result was discarded
+    // entirely and the insert error was logged but ignored, so a rejected write
+    // still flipped the label — leaving "Following" with no row behind it.
     if (followed) {
-      await supabase.from('stream_followers').delete().eq('streamer_id', streamerId).eq('follower_id', currentUser.id);
+      const { error } = await supabase.from('stream_followers').delete().eq('streamer_id', streamerId).eq('follower_id', currentUser.id);
+      if (error) {
+        handleDbError(error, 'DELETE', 'stream_followers');
+        return;
+      }
       setFollowed(false);
     } else {
       const { error } = await supabase.from('stream_followers').insert({ streamer_id: streamerId, follower_id: currentUser.id });
-      if (error) handleDbError(error, 'CREATE', 'stream_followers');
+      if (error) {
+        handleDbError(error, 'CREATE', 'stream_followers');
+        return;
+      }
       setFollowed(true);
     }
   };

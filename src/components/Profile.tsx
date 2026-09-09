@@ -50,7 +50,7 @@ import { BOT_PERSONAS, getBotByUsername } from '../lib/botPersonas';
 import { BOT_GLADIATOR_PROFILE_BY_USERNAME } from '../lib/botGladiatorProfiles';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
-import { handleDbError } from '../lib/errors';
+import { handleDbError, firstResultError } from '../lib/errors';
 import { applyLikeToPosts, attachLikeState } from '../lib/postLikes';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -605,10 +605,15 @@ export const Profile: React.FC = () => {
           .eq('following_id', user.id);
         if (unfollowError) throw unfollowError;
 
-        await Promise.all([
+        // The edge moved, so the counters have to follow it. `Promise.all` over
+        // supabase-js calls always resolves — the errors come back in the
+        // results — so an unchecked batch silently left the counts describing a
+        // graph that no longer exists.
+        const counterError = firstResultError(await Promise.all([
           supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: -1 }),
           supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'followers_count', p_amount: -1 }),
-        ]);
+        ]));
+        if (counterError) throw counterError;
         setIsFollowing(false);
       } else {
         const { error: followError } = await supabase
@@ -616,10 +621,11 @@ export const Profile: React.FC = () => {
           .insert({ follower_id: currentUser.id, following_id: user.id, created_at: new Date().toISOString() });
         if (followError) throw followError;
 
-        await Promise.all([
+        const counterError = firstResultError(await Promise.all([
           supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: 1 }),
           supabase.rpc('increment_counter', { p_table: 'users', p_id: user.id, p_field: 'followers_count', p_amount: 1 }),
-        ]);
+        ]));
+        if (counterError) throw counterError;
         const { error: followNotificationError } = await supabase.from('notifications').insert({
           user_id: user.id,
           type: 'follow',
@@ -715,19 +721,21 @@ export const Profile: React.FC = () => {
           .eq('follower_id', currentUser.id)
           .eq('following_id', target.id);
         if (error) throw error;
-        await Promise.all([
+        const counterError = firstResultError(await Promise.all([
           supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: -1 }),
           supabase.rpc('increment_counter', { p_table: 'users', p_id: target.id, p_field: 'followers_count', p_amount: -1 }),
-        ]);
+        ]));
+        if (counterError) throw counterError;
       } else {
         const { error } = await supabase
           .from('follows')
           .insert({ follower_id: currentUser.id, following_id: target.id, created_at: new Date().toISOString() });
         if (error) throw error;
-        await Promise.all([
+        const counterError = firstResultError(await Promise.all([
           supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'following_count', p_amount: 1 }),
           supabase.rpc('increment_counter', { p_table: 'users', p_id: target.id, p_field: 'followers_count', p_amount: 1 }),
-        ]);
+        ]));
+        if (counterError) throw counterError;
         const { error: followNotificationError } = await supabase.from('notifications').insert({
           user_id: target.id,
           type: 'follow',
@@ -884,11 +892,14 @@ export const Profile: React.FC = () => {
     try {
       const design = await generateProfileDesign(user.bio, user.username, currentUser.ai_settings);
       if (design) {
-        await supabase.from('users').update({
+        // The generation is already paid for by the time we get here, so a
+        // discarded write spends the call and shows the user nothing.
+        const { error } = await supabase.from('users').update({
           bio: design.bio,
           cover_url: `https://picsum.photos/seed/${design.coverPrompt.replace(/\s+/g, '-')}/1200/400`,
           custom_accent: design.accent_color,
         }).eq('id', user.id);
+        if (error) handleDbError(error, 'UPDATE', `users/${user.id}`);
       }
     } catch (error) {
       handleDbError(error, 'UPDATE', `users/${user.id}`);

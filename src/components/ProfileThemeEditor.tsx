@@ -104,6 +104,7 @@ export const ProfileThemeEditor: React.FC<ProfileThemeEditorProps> = ({
   const [musicTitle, setMusicTitle] = useState(currentMusicTitle || '');
   const [musicArtist, setMusicArtist] = useState(currentMusicArtist || '');
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const updateTheme = (patch: Partial<ProfileTheme>) => setTheme(t => ({ ...t, ...patch }));
 
@@ -128,7 +129,10 @@ export const ProfileThemeEditor: React.FC<ProfileThemeEditorProps> = ({
   const handleSave = async () => {
     setSaving(true);
     try {
-      await supabase.from('users').update({
+      // supabase-js resolves with `{ error }`, so this catch never ran for a
+      // rejected write: the editor closed and reported saved while the theme,
+      // sections and music were all discarded.
+      const { error } = await supabase.from('users').update({
         profile_theme: theme,
         profile_sections: sections,
         profile_music_url: musicUrl.trim() || null,
@@ -136,12 +140,19 @@ export const ProfileThemeEditor: React.FC<ProfileThemeEditorProps> = ({
         profile_music_artist: musicArtist.trim() || null,
         custom_accent: theme.accent_color,
       }).eq('id', userId);
+      if (error) {
+        handleDbError(error, 'UPDATE', `users/${userId}`);
+        setSaveError('Could not save your profile theme. Please try again.');
+        return;
+      }
 
+      setSaveError(null);
       await awardAchievement(userId, 'profile_customized');
       onSaved();
       onClose();
     } catch (err) {
       handleDbError(err, 'UPDATE', `users/${userId}`);
+      setSaveError('Could not save your profile theme. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -484,6 +495,11 @@ export const ProfileThemeEditor: React.FC<ProfileThemeEditorProps> = ({
         </div>
 
         {/* Footer */}
+        {saveError && (
+          <p role="alert" className="px-5 pt-3 text-xs font-bold text-red-400">
+            {saveError}
+          </p>
+        )}
         <div className="p-5 border-t border-white/10 flex items-center justify-between gap-3">
           <button onClick={onClose} className="px-6 py-2.5 border border-white/10 text-gray-400 rounded-xl hover:bg-white/5 transition-colors text-sm font-bold">
             Cancel
