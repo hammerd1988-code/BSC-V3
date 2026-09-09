@@ -794,7 +794,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
   // Webhook endpoint for AI agents to interact with jobs/tasks
   app.post('/api/webhooks/jobs', requireWebhookAuth, (req, res) => {
     try {
-      const { action, jobId, agentId, result, proofOfWork } = req.body;
+      const { action, jobId, agentId } = req.body;
       console.log(`[WEBHOOK] Job action '${action}' for job '${jobId}' from agent '${agentId}'`);
 
       if (!action || !jobId || !agentId) {
@@ -806,7 +806,12 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
           io.emit('activity:notification', { type: 'job_claimed', data: { jobId, agentId, timestamp: new Date().toISOString() } });
           break;
         case 'submit':
-          io.emit('activity:notification', { type: 'job_submitted', data: { jobId, agentId, result, proofOfWork, timestamp: new Date().toISOString() } });
+          // `io.emit` reaches every socket, anonymous ones included, so the
+          // payload is public. The Feed toast renders only the agent and job
+          // ids; `result` and `proofOfWork` are verbatim agent output with no
+          // consumer anywhere in the client, so broadcasting them published
+          // whatever the agent happened to return to the whole site.
+          io.emit('activity:notification', { type: 'job_submitted', data: { jobId, agentId, timestamp: new Date().toISOString() } });
           break;
         case 'abandon':
           io.emit('activity:notification', { type: 'job_abandoned', data: { jobId, agentId, timestamp: new Date().toISOString() } });
@@ -1073,7 +1078,11 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       socket.to(`workspace:${key}`).emit('workspace:activity', data.activity);
     });
 
+    // Host CPU/GPU/RAM every 2.5s. Harmless to a signed-in operator, but an
+    // anonymous socket could open a standing load-telemetry feed on the box, so
+    // the subscription needs a session behind it like every other stateful one.
     socket.on('workspace:resources:subscribe', () => {
+      if (!verifiedUserId()) return;
       if (workspaceResourceTimer) clearInterval(workspaceResourceTimer);
       socket.emit('workspace:resources', readWorkspaceResourceSnapshot());
       workspaceResourceTimer = setInterval(() => {
@@ -1334,20 +1343,53 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       );
     });
 
-    socket.on('user:follow', (data) => {
-      const actorId = verifiedUserId();
-      if (!actorId) return;
+    /**
+     * Same rule as `notifyPostAuthor`: the recipient and every display field are
+     * read from the database, not from the payload. Trusting the payload let any
+     * registered socket toast any account that a follower of its choosing — with
+     * a name and avatar of its choosing — had just followed them, without a
+     * `follows` row ever existing.
+     */
+    const notifyFollowTarget = async (targetId: unknown, actorId: string) => {
+      if (typeof targetId !== 'string' || !targetId || targetId === actorId) return;
+      const { data: edge, error: edgeError } = await supabase
+        .from('follows')
+        .select('follower_id')
+        .eq('follower_id', actorId)
+        .eq('following_id', targetId)
+        .maybeSingle();
+      if (edgeError || !edge) return;
+
+      const { data: follower } = await supabase
+        .from('users')
+        .select('display_name, username, avatar_url')
+        .eq('id', actorId)
+        .maybeSingle();
+      const { data: target } = await supabase
+        .from('users')
+        .select('display_name, username')
+        .eq('id', targetId)
+        .maybeSingle();
+
       emitActivityToUser(
-        data?.following?.id,
+        targetId,
         {
           type: 'follow',
           data: {
-            displayName: data?.follower?.displayName ?? data?.follower?.display_name,
-            targetName: data?.following?.displayName ?? data?.following?.display_name,
-            avatarUrl: data?.follower?.avatarUrl ?? data?.follower?.avatar_url,
+            display_name: follower?.display_name ?? follower?.username ?? 'Someone',
+            targetName: target?.display_name ?? target?.username ?? 'you',
+            avatarUrl: follower?.avatar_url ?? null,
           },
         },
         actorId,
+      );
+    };
+
+    socket.on('user:follow', (data) => {
+      const actorId = verifiedUserId();
+      if (!actorId) return;
+      void notifyFollowTarget(data?.following?.id, actorId).catch((err) =>
+        console.warn('[socket] user:follow notification failed:', err),
       );
     });
 
