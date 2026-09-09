@@ -78,7 +78,6 @@ interface SubscriptionContextValue {
   canAccess: (feature: PremiumFeature) => FeatureGateResult;
   recordUsage: (feature: PremiumFeature, amount?: number) => Promise<void>;
   refresh: () => Promise<void>;
-  setLocalTier: (tier: SubscriptionTier) => Promise<void>;
   usageMeters: UsageMeter[];
   openCheckout: (tier: 'operator' | 'architect', billing?: 'monthly' | 'annual') => Promise<void>;
   openPortal: () => Promise<void>;
@@ -414,64 +413,43 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     };
   }, [getUsageForFeature, tier, isAdmin]);
 
+  // One upsert that adds to whatever is stored, rather than reading the count
+  // into the client and writing back a total: two meters recorded in quick
+  // succession both used to read the same value and write the same total, so
+  // one of them was never counted. The row is also no longer client-writable,
+  // which is what let a user set their own usage_count back to zero.
   const recordUsage = useCallback(async (feature: PremiumFeature, amount = 1) => {
     if (!currentUser?.id || amount <= 0) return;
     const { start, end } = getCurrentPeriod();
-    const existing = usage.find((row) => row.feature === feature);
 
-    if (existing) {
-      const next = existing.usage_count + amount;
-      await supabase.from('feature_usage').update({ usage_count: next }).eq('id', existing.id);
-      setUsage((prev) => prev.map((row) => row.id === existing.id ? { ...row, usage_count: next } : row));
-      return;
-    }
-
-    const { data } = await supabase
-      .from('feature_usage')
-      .insert({ user_id: currentUser.id, feature, usage_count: amount, period_start: start, period_end: end })
-      .select('*')
-      .maybeSingle();
-
-    if (data) setUsage((prev) => [...prev, data as FeatureUsageRow]);
-  }, [currentUser?.id, usage]);
-
-  const setLocalTier = useCallback(async (nextTier: SubscriptionTier) => {
-    if (!currentUser?.id) return;
-    const now = new Date().toISOString();
-
-    // Read-then-write rather than an upsert on user_id: subscriptions has no
-    // unique constraint on that column (only the partial index for status =
-    // 'active'), so `onConflict: 'user_id'` failed with 42P10 and the row was
-    // never written — the error was discarded, leaving users.subscription_tier
-    // saying one thing and the subscriptions table another.
-    const { data: existing } = await supabase
-      .from('subscriptions')
-      .select('id')
-      .eq('user_id', currentUser.id)
-      .eq('status', 'active')
-      .limit(1)
-      .maybeSingle();
-
-    const row = {
-      tier: nextTier,
-      status: 'active',
-      expires_at: nextTier === 'indie' ? now : null,
-      stripe_customer_id: null,
-      stripe_subscription_id: null,
-    };
-
-    const { error } = existing?.id
-      ? await supabase.from('subscriptions').update(row).eq('id', existing.id)
-      : await supabase.from('subscriptions').insert({ ...row, user_id: currentUser.id, started_at: now });
+    const { data, error } = await supabase.rpc('record_feature_usage', {
+      p_feature: feature,
+      p_amount: amount,
+      p_period_start: start,
+      p_period_end: end,
+    });
 
     if (error) {
-      console.error('[subscription] Failed to set local tier:', error.message);
+      console.error('[subscription] Failed to record feature usage:', error.message);
       return;
     }
 
-    await supabase.from('users').update({ subscription_tier: nextTier }).eq('id', currentUser.id);
-    await refresh();
-  }, [currentUser?.id, refresh]);
+    const row = data as FeatureUsageRow | null;
+    if (!row) return;
+    setUsage((prev) => {
+      const index = prev.findIndex((existing) => existing.id === row.id);
+      if (index === -1) return [...prev, row];
+      const next = [...prev];
+      next[index] = row;
+      return next;
+    });
+  }, [currentUser?.id]);
+
+  // There was a setLocalTier() here that wrote an active `subscriptions` row
+  // and users.subscription_tier straight from the browser. Nothing called it,
+  // and the policies it relied on were exactly the ones that let any account
+  // hand itself the architect tier without paying. Tier changes now arrive
+  // only from the Stripe webhook, which runs with the service role.
 
   const openCheckout = useCallback(async (planTier: 'operator' | 'architect', billing: 'monthly' | 'annual' = 'monthly') => {
     try {
@@ -532,11 +510,10 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     canAccess,
     recordUsage,
     refresh,
-    setLocalTier,
     usageMeters,
     openCheckout,
     openPortal,
-  }), [tier, isAdmin, subscription, usage, loading, canAccess, recordUsage, refresh, setLocalTier, usageMeters, openCheckout, openPortal]);
+  }), [tier, isAdmin, subscription, usage, loading, canAccess, recordUsage, refresh, usageMeters, openCheckout, openPortal]);
 
   return <SubscriptionContext.Provider value={value}>{children}</SubscriptionContext.Provider>;
 }
