@@ -261,12 +261,20 @@ async function generateServerTextUnlocked(
   const errors: string[] = [];
 
   // The platform's OpenAI-compatible provider (OpenRouter by default) is the
-  // primary path. A direct Gemini key is only consulted when no OpenAI-
-  // compatible key exists at all — never as a fallback for a per-user key,
-  // which would silently bill the platform instead of the user.
+  // primary path. A direct Gemini key is used first only when the caller
+  // explicitly asked for a gemini-* model, or when no OpenAI-compatible key
+  // exists at all — never for a per-user key, which would silently bill the
+  // platform instead of the user.
   const target = await resolveOpenAiTarget(apiKeyOverride, baseUrlOverride);
-  if (target.key) {
-    const model = openAiModel(options.preferredModel);
+  const geminiKey = apiKeyOverride ? '' : GEMINI_API_KEY();
+  const geminiFirst = Boolean(geminiKey) && (wantsGemini(options.preferredModel) || !OPENAI_API_KEY());
+
+  const tryOpenAi = async (): Promise<ServerAIResult | null> => {
+    if (!target.key) {
+      errors.push(target.reason);
+      return null;
+    }
+    const model = openAiModel(options.preferredModel, target.baseUrl);
     try {
       const text = await callOpenAICompatible(target.key, target.baseUrl, model, prompt, systemPrompt, temperature, maxTokens, Boolean(options.jsonResponse), options.reasoningEffort);
       if (text) return { provider: 'openai-compatible', model, text };
@@ -276,12 +284,14 @@ async function generateServerTextUnlocked(
       errors.push(`openai(${model}): ${msg}`);
       console.warn('[serverAi] OpenAI-compatible call failed:', msg);
     }
-  } else {
-    errors.push(target.reason);
-  }
+    return null;
+  };
 
-  const geminiKey = (apiKeyOverride || OPENAI_API_KEY()) ? '' : GEMINI_API_KEY();
-  if (geminiKey && Date.now() > geminiCooldownUntil) {
+  const tryGemini = async (): Promise<ServerAIResult | null> => {
+    if (Date.now() <= geminiCooldownUntil) {
+      errors.push('gemini: cooling down after recent 429');
+      return null;
+    }
     const model = geminiModel(options.preferredModel);
     try {
       const text = await callGemini(geminiKey, model, prompt, systemPrompt, temperature, maxTokens, Boolean(options.jsonResponse));
@@ -297,15 +307,19 @@ async function generateServerTextUnlocked(
         console.warn('[serverAi] Gemini call failed:', msg);
       }
     }
-  } else if (geminiKey) {
-    errors.push('gemini: cooling down after recent 429');
-  }
+    return null;
+  };
+
+  const result = geminiFirst
+    ? (await tryGemini()) ?? (await tryOpenAi())
+    : await tryOpenAi();
+  if (result) return result;
 
   const lastError = errors.join(' | ');
   console.warn('[serverAi] All providers failed, returning empty text. Errors:', lastError);
   return {
-    provider: geminiKey ? 'gemini' : 'openai-compatible',
-    model: geminiKey ? geminiModel(options.preferredModel) : openAiModel(options.preferredModel),
+    provider: geminiFirst ? 'gemini' : 'openai-compatible',
+    model: geminiFirst ? geminiModel(options.preferredModel) : openAiModel(options.preferredModel, target.baseUrl),
     text: '',
     lastError,
   };
@@ -334,14 +348,14 @@ export async function generateServerToolTurn(
   const baseUrlOverride = (options.baseUrlOverride || '').trim();
   const errors: string[] = [];
 
-  const skipGemini = Boolean(apiKeyOverride);
   const target = await resolveOpenAiTarget(apiKeyOverride, baseUrlOverride);
 
   // Tool-calling requires the OpenAI-compatible path. If that's
-  // available, prefer it. Otherwise fall back to a text-only Gemini
-  // call (no tool_calls returned, caller's loop terminates).
+  // available, prefer it. Only when the platform has no OpenAI-compatible
+  // key at all (same rule as generateServerText) fall back to a text-only
+  // Gemini call (no tool_calls returned, caller's loop terminates).
   if (target.key) {
-    const model = openAiModel(options.preferredModel);
+    const model = openAiModel(options.preferredModel, target.baseUrl);
     try {
       const result = await callOpenAICompatibleWithTools({
         apiKey: target.key,
@@ -363,7 +377,7 @@ export async function generateServerToolTurn(
     errors.push(target.reason);
   }
 
-  const geminiKey = skipGemini ? '' : GEMINI_API_KEY();
+  const geminiKey = (apiKeyOverride || OPENAI_API_KEY()) ? '' : GEMINI_API_KEY();
   if (geminiKey && Date.now() > geminiCooldownUntil) {
     const model = geminiModel(options.preferredModel);
     try {
@@ -755,7 +769,7 @@ async function callOpenAIVision(
             ],
           },
         ],
-        temperature: 0.7,
+        ...temperatureParam(VISION_MODEL(), 0.7),
         ...maxTokensParam(VISION_MODEL(), 2048, baseUrl),
       }),
       signal: controller.signal,
@@ -773,14 +787,24 @@ async function callOpenAIVision(
   }
 }
 
-function geminiModel(preferredModel?: string | null) {
-  const model = preferredModel?.trim();
-  return model?.startsWith('gemini-') ? model : GEMINI_MODEL();
+function wantsGemini(preferredModel?: string | null): boolean {
+  return Boolean(preferredModel?.trim().startsWith('gemini-'));
 }
 
-function openAiModel(preferredModel?: string | null) {
+function geminiModel(preferredModel?: string | null) {
   const model = preferredModel?.trim();
-  if (!model || model === 'platform_default' || model.startsWith('gemini-')) return OPENAI_MODEL();
+  return model && wantsGemini(model) ? model : GEMINI_MODEL();
+}
+
+/**
+ * Model id to send to the OpenAI-compatible endpoint. A bare `gemini-*`
+ * selection is served by OpenRouter under the `google/` prefix; a direct
+ * OpenAI endpoint cannot serve it, so the platform default is used there.
+ */
+export function openAiModel(preferredModel?: string | null, baseUrl: string = OPENAI_BASE_URL()) {
+  const model = preferredModel?.trim();
+  if (!model || model === 'platform_default') return OPENAI_MODEL();
+  if (wantsGemini(model)) return isOpenRouterBaseUrl(baseUrl) ? `google/${model}` : OPENAI_MODEL();
   return model;
 }
 

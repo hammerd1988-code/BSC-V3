@@ -137,7 +137,7 @@ const CASPER_MODEL_GROUPS = [
   { 
     provider: 'Platform Default', 
     models: [
-      { value: 'platform_default', label: 'Casper Standard (platform OpenRouter model)' }
+      { value: 'platform_default', label: 'Casper Standard (platform default model)' }
     ] 
   },
   { 

@@ -2224,7 +2224,7 @@ export async function initBotMayhemAutonomy(): Promise<void> {
   }
 
   if (!isServerAiConfigured()) {
-    console.warn(`${LOG_PREFIX} Missing AI provider — Bot Mayhem disabled (set OPENROUTER_API_KEY or OPENAI_API_KEY)`);
+    console.warn(`${LOG_PREFIX} Missing AI provider — Bot Mayhem disabled (set OPENROUTER_API_KEY or OPENAI_API_KEY; GEMINI_API_KEY alone also works as a last resort)`);
     return;
   }
 
