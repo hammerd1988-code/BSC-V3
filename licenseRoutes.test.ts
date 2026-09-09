@@ -36,15 +36,24 @@ type MockResult = { data: unknown; error: null | { message: string } };
  * `maybeSingle()` resolves with `result`. A `.then()` shim is provided so
  * callers that use `void chain.then(…)` also work.
  */
-function chainFor(result: MockResult) {
+function chainFor(result: MockResult, onWrite?: (write: RecordedWrite) => void, table?: string) {
   const chain: Record<string, unknown> = {};
-  for (const m of ['select', 'eq', 'is', 'limit', 'update', 'insert']) {
+  for (const m of ['select', 'eq', 'is', 'limit']) {
     chain[m] = () => chain;
+  }
+  for (const m of ['update', 'insert'] as const) {
+    chain[m] = (payload: unknown) => {
+      onWrite?.({ table: table ?? '', op: m, payload });
+      return chain;
+    };
   }
   chain['maybeSingle'] = () => Promise.resolve(result);
   chain['then'] = (resolve: (v: MockResult) => void) => Promise.resolve(result).then(resolve);
   return chain;
 }
+
+/** Recorded so a test can assert *what* was written, not just that it resolved. */
+type RecordedWrite = { table: string; op: 'update' | 'insert'; payload: unknown };
 
 /**
  * Builds a Supabase client mock.
@@ -55,9 +64,11 @@ function chainFor(result: MockResult) {
 function makeSupabase({
   getUserResult,
   fromResponses,
+  writes,
 }: {
   getUserResult: { data: { user: { id: string } | null }; error: null | { message: string } };
   fromResponses: Record<string, MockResult[]>;
+  writes?: RecordedWrite[];
 }): SupabaseClient {
   const queues: Record<string, MockResult[]> = Object.fromEntries(
     Object.entries(fromResponses).map(([k, v]) => [k, [...v]]),
@@ -72,7 +83,7 @@ function makeSupabase({
       );
     }
     const result = q.shift()!;
-    return chainFor(result);
+    return chainFor(result, writes ? (write) => writes.push(write) : undefined, table);
   };
 
   return {
@@ -322,6 +333,85 @@ describe('POST /api/license/key — rotation', () => {
     const res = mockRes();
     await routes['POST /api/license/key'](req, res as Response);
     expect(res.statusCode).toBe(500);
+  });
+
+  /**
+   * The old key has to be revoked before the new one is inserted, because the
+   * partial unique index forbids two live rows. So a failed insert used to
+   * leave the caller with no active key at all — their Local Coder install
+   * stopped authenticating over a request that only reported a failure to
+   * rotate. The revoke is now put back.
+   */
+  it('restores the previous key when minting the replacement fails', async () => {
+    const writes: RecordedWrite[] = [];
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
+      fromResponses: {
+        users: [{ data: { id: 'user-1' }, error: null }],
+        license_keys: [
+          { data: { id: 'row-old', key: KEY }, error: null },  // existing
+          { data: null, error: null },                          // revoke succeeds
+          { data: null, error: { message: 'DB offline' } },     // insert fails
+          { data: null, error: null },                          // restore succeeds
+        ],
+      },
+      writes,
+    });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { authorization: AUTH_HEADER }, body: { rotate: true } });
+    const res = mockRes();
+    await routes['POST /api/license/key'](req, res as Response);
+
+    expect(res.statusCode).toBe(500);
+
+    const updates = writes.filter((write) => write.op === 'update');
+    expect(updates).toHaveLength(2);
+    expect((updates[0].payload as { revoked_at: string }).revoked_at).toEqual(expect.any(String));
+    expect(updates[1].payload).toEqual({ revoked_at: null });
+  });
+
+  it('says so explicitly when the previous key cannot be restored either', async () => {
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
+      fromResponses: {
+        users: [{ data: { id: 'user-1' }, error: null }],
+        license_keys: [
+          { data: { id: 'row-old', key: KEY }, error: null },
+          { data: null, error: null },                       // revoke succeeds
+          { data: null, error: { message: 'DB offline' } },   // insert fails
+          { data: null, error: { message: 'DB offline' } },   // restore fails too
+        ],
+      },
+    });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { authorization: AUTH_HEADER }, body: { rotate: true } });
+    const res = mockRes();
+    await routes['POST /api/license/key'](req, res as Response);
+
+    expect(res.statusCode).toBe(500);
+    expect((res.body as { error: string }).error).toMatch(/could not be restored/i);
+  });
+
+  it('does not attempt a restore when there was no prior key to revoke', async () => {
+    const writes: RecordedWrite[] = [];
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
+      fromResponses: {
+        users: [{ data: { id: 'user-1' }, error: null }],
+        license_keys: [
+          { data: null, error: null },                       // no existing key
+          { data: null, error: { message: 'DB offline' } },   // insert fails
+        ],
+      },
+      writes,
+    });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { authorization: AUTH_HEADER }, body: { rotate: true } });
+    const res = mockRes();
+    await routes['POST /api/license/key'](req, res as Response);
+
+    expect(res.statusCode).toBe(500);
+    expect(writes.filter((write) => write.op === 'update')).toHaveLength(0);
   });
 });
 

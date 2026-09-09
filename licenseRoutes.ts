@@ -119,6 +119,10 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
       return res.json({ hasKey: true, tier, rotated: false });
     }
 
+    // The old key has to be revoked before the new one is inserted:
+    // license_keys_one_active_per_user_label_idx is a unique index over
+    // (user_id, label) where revoked_at is null, so two live rows cannot
+    // coexist even briefly.
     if (existing) {
       const { error: revokeError } = await supabase
         .from('license_keys')
@@ -137,6 +141,23 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
       .insert({ user_id: user.id, key: keyHash, label: LICENSE_LABEL });
     if (insertError) {
       console.error('[License] insert error:', insertError.message);
+      // That ordering means a failed insert would otherwise leave the caller
+      // with no active key at all -- their Local Coder install stops
+      // authenticating over a request that reported only a failure to rotate.
+      // Put the old key back so the rotation is a no-op rather than a
+      // revocation.
+      if (existing) {
+        const { error: restoreError } = await supabase
+          .from('license_keys')
+          .update({ revoked_at: null })
+          .eq('id', existing.id);
+        if (restoreError) {
+          console.error('[License] failed to restore the revoked key:', restoreError.message);
+          return res.status(500).json({
+            error: 'Failed to create a new license key, and the previous key could not be restored. Generate a new key to continue.',
+          });
+        }
+      }
       return res.status(500).json({ error: 'Failed to create license key.' });
     }
 
