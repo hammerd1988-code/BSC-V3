@@ -176,7 +176,9 @@ async function generateAITextWithDiagnostics(prompt: string, systemPrompt: strin
   }
 
   try {
-    const result = await generateServerText(prompt, { systemPrompt, temperature: 0.9, maxTokens: 200 });
+    // Casper's autonomous posts are short, but the platform models reason
+    // before answering and that thinking is billed from the same budget.
+    const result = await generateServerText(prompt, { systemPrompt, temperature: 0.9, maxTokens: 700, reasoningEffort: 'low' });
     const text = result.text.trim();
     if (!text) {
       return { text: '', error: result.lastError || 'AI provider returned an empty response.' };
