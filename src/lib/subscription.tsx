@@ -303,9 +303,10 @@ async function openStripeSession(path: string, body?: unknown): Promise<void> {
     res = await sessionFetch(path, { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   } catch (err) {
     console.error('[Stripe] Request failed:', err);
-    // fetch() rejects with a TypeError on network failure; anything else came
-    // from the session refresh and means the user has to sign in again.
-    throw err instanceof TypeError
+    // Only a missing local session means the user must sign in; a failed
+    // refresh or fetch with a session still present is a transport problem.
+    const { data: { session } } = await supabase.auth.getSession();
+    throw session
       ? new CheckoutError('Network error. Check your connection and try again.', 0)
       : new CheckoutError(checkoutErrorMessage(401), 401);
   }
