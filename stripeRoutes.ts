@@ -141,13 +141,36 @@ async function authenticateRequest(
 // Route registration
 // ---------------------------------------------------------------------------
 
+/** Env vars that must be present for checkout to work; empty when fully configured. */
+export function missingStripeConfig(env: NodeJS.ProcessEnv = process.env): string[] {
+  return [
+    'STRIPE_SECRET_KEY',
+    'STRIPE_WEBHOOK_SECRET',
+    'STRIPE_OPERATOR_MONTHLY_PRICE_ID',
+    'STRIPE_OPERATOR_ANNUAL_PRICE_ID',
+    'STRIPE_ARCHITECT_MONTHLY_PRICE_ID',
+    'STRIPE_ARCHITECT_ANNUAL_PRICE_ID',
+  ].filter((name) => !env[name]);
+}
+
 export function registerStripeRoutes(app: Express, supabase: SupabaseClient): void {
   const stripe = getStripe();
+
+  const missing = missingStripeConfig();
+  if (missing.length > 0) {
+    console.error(
+      `[Stripe] Subscriptions are DISABLED — missing env: ${missing.join(', ')}. ` +
+      'Upgrade buttons will fail until these are set.',
+    );
+  } else {
+    console.log('[Stripe] Checkout configured.');
+  }
 
   // ── GET /api/stripe/plans ──
   // Public endpoint returning available plans + prices
   app.get('/api/stripe/plans', (_req: Request, res: Response) => {
     res.json({
+      configured: missingStripeConfig().length === 0,
       plans: [
         { tier: 'indie', name: 'Indie', monthlyPrice: 0, annualPrice: 0 },
         {

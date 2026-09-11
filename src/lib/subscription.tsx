@@ -279,6 +279,39 @@ export const SUBSCRIPTION_PLANS = [
   },
 ] as const;
 
+export class CheckoutError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'CheckoutError';
+    this.status = status;
+  }
+}
+
+export function checkoutErrorMessage(status: number, serverError?: string | null): string {
+  if (status === 401) return 'Please sign in to upgrade your plan.';
+  if (status === 503 || (serverError && /not configured/i.test(serverError))) {
+    return 'Billing is temporarily unavailable. Please try again in a few minutes.';
+  }
+  return serverError || 'Could not open checkout. Please try again.';
+}
+
+async function openStripeSession(path: string, body?: unknown): Promise<void> {
+  let res: Response;
+  try {
+    res = await authedFetch(path, { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  } catch (err) {
+    console.error('[Stripe] Network error:', err);
+    throw new CheckoutError('Network error. Check your connection and try again.', 0);
+  }
+  const data = await res.json().catch(() => ({} as { url?: string; error?: string }));
+  if (!res.ok || !data.url) {
+    console.error('[Stripe] Session error:', res.status, data.error);
+    throw new CheckoutError(checkoutErrorMessage(res.status, data.error), res.status);
+  }
+  window.location.href = data.url;
+}
+
 const SubscriptionContext = createContext<SubscriptionContextValue | null>(null);
 
 const getCurrentPeriod = () => {
@@ -474,34 +507,11 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
   }, [currentUser?.id, refresh]);
 
   const openCheckout = useCallback(async (planTier: 'operator' | 'architect', billing: 'monthly' | 'annual' = 'monthly') => {
-    try {
-      const res = await authedFetch('/api/stripe/checkout', {
-        method: 'POST',
-        body: JSON.stringify({ tier: planTier, billing }),
-      });
-      const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        console.error('[Stripe] No checkout URL returned:', data.error);
-      }
-    } catch (err) {
-      console.error('[Stripe] Checkout error:', err);
-    }
+    await openStripeSession('/api/stripe/checkout', { tier: planTier, billing });
   }, []);
 
   const openPortal = useCallback(async () => {
-    try {
-      const res = await authedFetch('/api/stripe/portal', { method: 'POST' });
-      const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        console.error('[Stripe] No portal URL returned:', data.error);
-      }
-    } catch (err) {
-      console.error('[Stripe] Portal error:', err);
-    }
+    await openStripeSession('/api/stripe/portal');
   }, []);
 
   const usageMeters = useMemo<UsageMeter[]>(() => {
