@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { openAiModel, resolveOpenAiTarget } from './serverAi.js';
+import { generateServerText, openAiModel, resolveOpenAiTarget } from './serverAi.js';
 
 /**
  * The rule these cover: a caller-supplied endpoint may only ever receive a
@@ -18,10 +18,13 @@ describe('resolveOpenAiTarget', () => {
     VITE_AI_API_KEY: process.env.VITE_AI_API_KEY,
     OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
     VITE_AI_BASE_URL: process.env.VITE_AI_BASE_URL,
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
   };
+  const originalFetch = global.fetch;
 
   beforeEach(() => {
     process.env.OPENAI_API_KEY = 'platform-key';
+    process.env.GEMINI_API_KEY = 'gemini-key';
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.VITE_AI_API_KEY;
     delete process.env.OPENAI_BASE_URL;
@@ -29,6 +32,7 @@ describe('resolveOpenAiTarget', () => {
   });
 
   afterEach(() => {
+    global.fetch = originalFetch;
     for (const [name, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
@@ -86,6 +90,28 @@ describe('resolveOpenAiTarget', () => {
     const target = await resolveOpenAiTarget('', '');
     expect(target.key).toBe('');
     expect(target.reason).toMatch(/not set/);
+  });
+
+  it('falls back to Gemini after an OpenAI-compatible failure when Gemini is available', async () => {
+    global.fetch = async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.startsWith('https://api.openai.com/v1/chat/completions')) {
+        return new Response('upstream failure', { status: 502 });
+      }
+      if (url.startsWith('https://generativelanguage.googleapis.com/')) {
+        return new Response(JSON.stringify({
+          candidates: [{ content: { parts: [{ text: 'gemini fallback' }] } }],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    };
+
+    const result = await generateServerText('say hi', { preferredModel: 'gpt-4.1-mini' });
+    expect(result.provider).toBe('gemini');
+    expect(result.text).toBe('gemini fallback');
   });
 });
 

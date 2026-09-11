@@ -312,7 +312,7 @@ async function generateServerTextUnlocked(
 
   const result = geminiFirst
     ? (await tryGemini()) ?? (await tryOpenAi())
-    : await tryOpenAi();
+    : (await tryOpenAi()) ?? (geminiKey ? await tryGemini() : null);
   if (result) return result;
 
   const lastError = errors.join(' | ');

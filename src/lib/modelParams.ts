@@ -40,6 +40,15 @@ export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high';
 // is sent to them.
 const OPENROUTER_REASONING_MODELS = /(?:^|\/)(?:gpt-5|o[1-4]|gemini-(?:2\.5|3))(?:$|[-.])/i;
 
+function isDirectOpenAiBaseUrl(baseUrl?: string): boolean {
+  if (!baseUrl) return true;
+  try {
+    return new URL(baseUrl).hostname.toLowerCase() === 'api.openai.com';
+  } catch {
+    return false;
+  }
+}
+
 export function reasoningParam(
   model: string,
   effort: ReasoningEffort | undefined,
@@ -50,7 +59,7 @@ export function reasoningParam(
   if (baseUrl && baseUrl.includes('openrouter.ai')) {
     return OPENROUTER_REASONING_MODELS.test(trimmed) ? { reasoning: { effort } } : {};
   }
-  const isOpenAiDirect = !baseUrl || baseUrl.includes('api.openai.com');
+  const isOpenAiDirect = isDirectOpenAiBaseUrl(baseUrl);
   if (isOpenAiDirect && MAX_COMPLETION_TOKENS_MODELS.test(trimmed)) {
     return { reasoning_effort: effort };
   }

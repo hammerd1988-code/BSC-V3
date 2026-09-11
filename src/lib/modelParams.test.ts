@@ -68,4 +68,9 @@ describe('reasoningParam', () => {
     expect(reasoningParam('gpt-5.4-mini', 'low', 'https://api.together.xyz/v1')).toEqual({});
     expect(reasoningParam('qwen3', 'low', 'http://localhost:1234/v1')).toEqual({});
   });
+
+  it('does not trust api.openai.com appearing outside the hostname', () => {
+    expect(reasoningParam('gpt-5.4-mini', 'low', 'https://api.openai.com.attacker.example/v1')).toEqual({});
+    expect(reasoningParam('gpt-5.4-mini', 'low', 'https://attacker.example/api.openai.com/v1')).toEqual({});
+  });
 });
