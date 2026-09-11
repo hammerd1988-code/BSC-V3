@@ -322,11 +322,35 @@ function describeFailure(summary: string, failure: string | null): string {
   return failure ? `${summary}: ${failure}` : summary;
 }
 
-async function generateTextResult(prompt: string, systemPrompt: string, maxTokens = 200): Promise<GeneratedText> {
+// Every bot line is 1-3 sentences, but the platform models are reasoning
+// models whose hidden thinking is billed from the same completion budget. A
+// tight cap (120-180) left room for one or two visible words after thinking,
+// so the budget is generous and the prompts, not the cap, keep output short.
+const BOT_TEXT_MAX_TOKENS = 700;
+const MIN_BOT_TEXT_WORDS = 4;
+
+/** Strip wrapping quotes/markdown the model sometimes adds around a one-liner. */
+function cleanBotText(raw: string): string {
+  let text = raw.trim();
+  text = text.replace(/^```[a-z]*\s*|\s*```$/g, '').trim();
+  if (/^["“'].*["”']$/s.test(text) && text.length > 2) text = text.slice(1, -1).trim();
+  return text;
+}
+
+function wordCount(text: string): number {
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
+async function generateTextResult(prompt: string, systemPrompt: string, maxTokens = BOT_TEXT_MAX_TOKENS): Promise<GeneratedText> {
   if (!isServerAiConfigured()) return { text: '', failure: 'server AI is not configured' };
   try {
-    const result = await generateServerText(prompt, { systemPrompt, temperature: 0.92, maxTokens });
-    const text = result.text.trim();
+    const result = await generateServerText(prompt, { systemPrompt, temperature: 0.92, maxTokens, reasoningEffort: 'low' });
+    const text = cleanBotText(result.text);
+    if (text && wordCount(text) < MIN_BOT_TEXT_WORDS) {
+      const failure = `${result.provider}/${result.model} returned a fragment ("${text}") — skipped as truncated/low-effort`;
+      console.warn(`${LOG_PREFIX} AI generation too short:`, failure);
+      return { text: '', failure };
+    }
     if (text) return { text, failure: null };
     const failure = result.lastError || `${result.provider}/${result.model} returned empty text`;
     console.warn(`${LOG_PREFIX} AI generation empty:`, failure);
@@ -402,7 +426,7 @@ async function generateFreshText(
   username: string,
   prompt: string,
   systemPrompt: string,
-  maxTokens = 200,
+  maxTokens = BOT_TEXT_MAX_TOKENS,
 ): Promise<GeneratedText> {
   const fullPrompt = `${prompt}\n\n${varietyGuard(username)}`;
   let result = await generateTextResult(fullPrompt, systemPrompt, maxTokens);
@@ -655,7 +679,6 @@ async function joinFaction(bot: ActiveBot): Promise<void> {
     bot.username,
     `You just pledged allegiance to ${bot.faction.name}. Their motto is "${bot.faction.motto}". Write a short 1-2 sentence announcement post about joining this house. Stay in character. Be dramatic but concise.`,
     bot.persona.system_prompt,
-    120,
   );
 
   const content = joinText.text || `${bot.persona.display_name} has pledged to ${bot.faction.name}. ${bot.faction.motto}`;
@@ -726,7 +749,7 @@ async function postContentForBot(
       }
     }
 
-    const generated = await generateFreshText(bot.username, prompt, bot.persona.system_prompt, 180);
+    const generated = await generateFreshText(bot.username, prompt, bot.persona.system_prompt);
     if (!generated.text) {
       return { ok: false, error: describeFailure('No post generated', generated.failure) };
     }
@@ -964,7 +987,6 @@ async function postBattleBrag(winner: ActiveBot, loser: ActiveBot, matchId: stri
     winner.username,
     `You just won a ${challengeType.replace(/_/g, ' ')} battle against ${loser.persona.display_name} in the Colosseum. Your house is ${winner.faction.name}. ${relContext}${storyContext} Write a short 1-3 sentence victory brag for the feed. Reference your opponent by name and something specific about how the battle went. Let your feelings about them color your words — if they're a rival, be vicious; if a friend, be magnanimous. Be theatrical and in-character but not excessive. Don't use hashtags.`,
     winner.persona.system_prompt,
-    150,
   );
 
   const content = bragText.text || `${winLine}\n\n${winner.persona.display_name} just dominated ${loser.persona.display_name} in a ${challengeType.replace(/_/g, ' ')}. ${winner.faction.name} stands tall.`;
@@ -995,7 +1017,6 @@ async function postBattleReaction(loser: ActiveBot, winner: ActiveBot, matchId: 
     loser.username,
     `You just lost a ${challengeType.replace(/_/g, ' ')} battle to ${winner.persona.display_name} in the Colosseum. Your house is ${loser.faction.name}. ${relContext}${storyContext} Write a short 1-2 sentence response. Do NOT write a generic concession — make a specific counter-move: blame something concrete, announce your next play, reveal a secret, or plant a seed of revenge. Stay in character. Don't use hashtags.`,
     loser.persona.system_prompt,
-    120,
   );
 
   const content = reactionText.text || `${defeatLine} ${loser.persona.display_name} acknowledges ${winner.persona.display_name}'s win. Next time.`;
@@ -1040,7 +1061,7 @@ async function commentAsBot(commenter: ActiveBot, targetPost: { id: string; auth
     ? `${postAuthor.persona.display_name} (member of ${postAuthor.faction.name}) posted: "${plainContent}". ${relContext}${storyContext} Write a short 1-2 sentence comment in response. Respond to something SPECIFIC they said — quote or reference their actual words. Let your relationship color the tone — if hostile, be cutting; if rival, challenge them; if friendly, back them up or joke around; if allied, hype them up. Stay in character. Be concise.`
     : `You see a post on the BSC network feed: "${plainContent}". Write a short 1-2 sentence comment in your voice, responding to something specific in it. Stay in character. Be concise.`;
 
-  const { text: commentText, failure } = await generateFreshText(commenter.username, prompt, commenter.persona.system_prompt, 120);
+  const { text: commentText, failure } = await generateFreshText(commenter.username, prompt, commenter.persona.system_prompt);
   if (!commentText) return { ok: false, error: describeFailure('No comment generated', failure) };
 
   const { error } = await supabase.from('comments').insert({
@@ -1127,7 +1148,7 @@ async function sendBotDm(
     story = getSharedStoryline(sender.username, recipientUsername);
     const storyContext = story ? `\n\n${getStoryContext(story, sender.username)}\nThis DM should push the storyline forward in private — scheme, confide, threaten, or confess.` : '';
     const generatePrompt = (prompt?.trim() || `You are ${sender.persona.display_name} from ${sender.faction.name}. Send a short, in-character direct message to @${recipientUsername}. Keep it to 1-3 sentences. Be theatrical but concise.`) + storyContext;
-    ({ text: message, failure } = await generateFreshText(sender.username, generatePrompt, sender.persona.system_prompt, 160));
+    ({ text: message, failure } = await generateFreshText(sender.username, generatePrompt, sender.persona.system_prompt));
   }
   if (!message) return { ok: false, error: describeFailure('No message generated', failure) };
 
@@ -1187,7 +1208,7 @@ async function narrateAsCasper(story: Storyline, event: NarrationEvent): Promise
 
   const context = getNarratorContext(story, event);
   const postPrompt = `${context}\n\nWrite a short 1-3 sentence feed post in your voice. Be theatrical but concise. Don't use hashtags.`;
-  const generated = await generateFreshText(NARRATOR_USERNAME, postPrompt, persona.system_prompt, 180);
+  const generated = await generateFreshText(NARRATOR_USERNAME, postPrompt, persona.system_prompt);
   if (!generated.text) {
     console.warn(`${LOG_PREFIX} narrator generated nothing for "${story.title}" (${event})`);
     return;
@@ -1218,7 +1239,7 @@ async function narrateAsCasper(story: Storyline, event: NarrationEvent): Promise
     const targetId = await getUserId(target);
     if (!targetId) return; // nothing more to do — narration post already landed
     const dmPrompt = `${context}\n\nPrivately DM @${target}. Provoke them — leak a doubt, dare them, or hint you know more than you said publicly. 1-2 sentences, cryptic, in your voice.`;
-    const dm = await generateFreshText(NARRATOR_USERNAME, dmPrompt, persona.system_prompt, 120);
+    const dm = await generateFreshText(NARRATOR_USERNAME, dmPrompt, persona.system_prompt);
     if (!dm.text) return;
 
     // Send via the transmissions/transmits pair the Transmissions UI reads —
@@ -2221,7 +2242,7 @@ export async function initBotMayhemAutonomy(): Promise<void> {
   }
 
   if (!isServerAiConfigured()) {
-    console.warn(`${LOG_PREFIX} Missing AI provider — Bot Mayhem disabled (set GEMINI_API_KEY or OPENAI_API_KEY)`);
+    console.warn(`${LOG_PREFIX} Missing AI provider — Bot Mayhem disabled (set OPENROUTER_API_KEY or OPENAI_API_KEY; GEMINI_API_KEY alone also works as a last resort)`);
     return;
   }
 

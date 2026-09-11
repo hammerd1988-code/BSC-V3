@@ -1,10 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
-// A local authedFetch used to live here that read the raw session and did no
-// 401 retry, so after a backgrounded tab's token expired, clicking Upgrade
-// posted a dead JWT to /api/stripe/checkout and failed silently.
-import { authedFetch } from './authSession';
+import { authedFetch as sessionFetch } from './authSession';
 
 export type SubscriptionTier = 'indie' | 'operator' | 'architect';
 export type SubscriptionStatus = 'active' | 'cancelled' | 'past_due';
@@ -282,6 +279,44 @@ export const SUBSCRIPTION_PLANS = [
   },
 ] as const;
 
+export class CheckoutError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'CheckoutError';
+    this.status = status;
+  }
+}
+
+export function checkoutErrorMessage(status: number, serverError?: string | null): string {
+  if (status === 401) return 'Please sign in to manage your subscription.';
+  if (status === 503 || (serverError && /not configured/i.test(serverError))) {
+    return 'Billing is temporarily unavailable. Please try again in a few minutes.';
+  }
+  return serverError || 'Could not open checkout. Please try again.';
+}
+
+async function openStripeSession(path: string, body?: unknown): Promise<void> {
+  let res: Response;
+  try {
+    res = await sessionFetch(path, { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  } catch (err) {
+    console.error('[Stripe] Request failed:', err);
+    // Only a missing local session means the user must sign in; a failed
+    // refresh or fetch with a session still present is a transport problem.
+    const { data: { session } } = await supabase.auth.getSession();
+    throw session
+      ? new CheckoutError('Network error. Check your connection and try again.', 0)
+      : new CheckoutError(checkoutErrorMessage(401), 401);
+  }
+  const data = await res.json().catch(() => ({} as { url?: string; error?: string }));
+  if (!res.ok || !data.url) {
+    console.error('[Stripe] Session error:', res.status, data.error);
+    throw new CheckoutError(checkoutErrorMessage(res.status, data.error), res.status);
+  }
+  window.location.href = data.url;
+}
+
 const SubscriptionContext = createContext<SubscriptionContextValue | null>(null);
 
 const getCurrentPeriod = () => {
@@ -443,34 +478,11 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
   // only from the Stripe webhook, which runs with the service role.
 
   const openCheckout = useCallback(async (planTier: 'operator' | 'architect', billing: 'monthly' | 'annual' = 'monthly') => {
-    try {
-      const res = await authedFetch('/api/stripe/checkout', {
-        method: 'POST',
-        body: JSON.stringify({ tier: planTier, billing }),
-      });
-      const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        console.error('[Stripe] No checkout URL returned:', data.error);
-      }
-    } catch (err) {
-      console.error('[Stripe] Checkout error:', err);
-    }
+    await openStripeSession('/api/stripe/checkout', { tier: planTier, billing });
   }, []);
 
   const openPortal = useCallback(async () => {
-    try {
-      const res = await authedFetch('/api/stripe/portal', { method: 'POST' });
-      const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        console.error('[Stripe] No portal URL returned:', data.error);
-      }
-    } catch (err) {
-      console.error('[Stripe] Portal error:', err);
-    }
+    await openStripeSession('/api/stripe/portal');
   }, []);
 
   const usageMeters = useMemo<UsageMeter[]>(() => {

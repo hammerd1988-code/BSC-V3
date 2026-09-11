@@ -1,14 +1,42 @@
+import { useState } from 'react';
 import { Zap, X } from 'lucide-react';
 import type { FeatureGateResult } from '../lib/subscription';
 import { useSubscription } from '../lib/subscription';
 
-export function UpgradePromptModal({ gate, open, onClose }: { gate: FeatureGateResult | null; open: boolean; onClose: () => void }) {
+function useUpgradeAction(targetTier: 'operator' | 'architect') {
   const { openCheckout } = useSubscription();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
+  const upgrade = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await openCheckout(targetTier);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not open checkout. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return { upgrade, busy, error };
+}
+
+function tierLabel(tier: 'operator' | 'architect'): string {
+  return tier.charAt(0).toUpperCase() + tier.slice(1);
+}
+
+export function UpgradePromptModal({ gate, open, onClose }: { gate: FeatureGateResult | null; open: boolean; onClose: () => void }) {
   if (!open || !gate) return null;
-
-  const isLimitHit = gate.reason === 'limit';
   const targetTier = gate.requiredTier === 'operator' ? 'operator' : 'architect';
+  return <UpgradePromptDialog key={targetTier} gate={gate} targetTier={targetTier} onClose={onClose} />;
+}
+
+function UpgradePromptDialog({ gate, targetTier, onClose }: { gate: FeatureGateResult; targetTier: 'operator' | 'architect'; onClose: () => void }) {
+  const { upgrade, busy, error } = useUpgradeAction(targetTier);
+  const isLimitHit = gate.reason === 'limit';
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
@@ -38,10 +66,11 @@ export function UpgradePromptModal({ gate, open, onClose }: { gate: FeatureGateR
 
         <div className="flex gap-3">
           <button
-            onClick={() => openCheckout(targetTier as 'operator' | 'architect')}
-            className="flex-1 rounded-xl bg-gradient-to-r from-cyan-500 to-fuchsia-500 py-2.5 text-sm font-bold uppercase tracking-wider text-white transition hover:from-cyan-400 hover:to-fuchsia-400"
+            onClick={upgrade}
+            disabled={busy}
+            className="flex-1 rounded-xl bg-gradient-to-r from-cyan-500 to-fuchsia-500 py-2.5 text-sm font-bold uppercase tracking-wider text-white transition hover:from-cyan-400 hover:to-fuchsia-400 disabled:opacity-60"
           >
-            Upgrade to {targetTier.charAt(0).toUpperCase() + targetTier.slice(1)}
+            {busy ? 'Opening checkout…' : `Upgrade to ${tierLabel(targetTier)}`}
           </button>
           <button
             onClick={onClose}
@@ -50,26 +79,31 @@ export function UpgradePromptModal({ gate, open, onClose }: { gate: FeatureGateR
             Later
           </button>
         </div>
+        {error && <p role="alert" className="mt-3 text-xs font-bold text-red-300">{error}</p>}
       </div>
     </div>
   );
 }
 
 export function UpgradeInlineCard({ gate, compact }: { gate: FeatureGateResult; compact?: boolean }) {
-  const { openCheckout } = useSubscription();
   const targetTier = gate.requiredTier === 'operator' ? 'operator' : 'architect';
+  const { upgrade, busy, error } = useUpgradeAction(targetTier);
 
   if (compact) {
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-        <Zap className="h-3.5 w-3.5 shrink-0" />
-        <span className="flex-1">{gate.upgradeMessage}</span>
-        <button
-          onClick={() => openCheckout(targetTier as 'operator' | 'architect')}
-          className="shrink-0 rounded-md bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-100 transition hover:bg-amber-500/30"
-        >
-          Upgrade
-        </button>
+      <div className="flex flex-col gap-1 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+        <div className="flex items-center gap-2">
+          <Zap className="h-3.5 w-3.5 shrink-0" />
+          <span className="flex-1">{gate.upgradeMessage}</span>
+          <button
+            onClick={upgrade}
+            disabled={busy}
+            className="shrink-0 rounded-md bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-100 transition hover:bg-amber-500/30 disabled:opacity-60"
+          >
+            {busy ? '…' : 'Upgrade'}
+          </button>
+        </div>
+        {error && <p role="alert" className="text-[11px] font-bold text-red-300">{error}</p>}
       </div>
     );
   }
@@ -82,11 +116,13 @@ export function UpgradeInlineCard({ gate, compact }: { gate: FeatureGateResult; 
       </div>
       <p className="mb-4 text-sm text-zinc-400">{gate.upgradeMessage}</p>
       <button
-        onClick={() => openCheckout(targetTier as 'operator' | 'architect')}
-        className="rounded-lg bg-gradient-to-r from-cyan-500 to-fuchsia-500 px-4 py-2 text-xs font-bold uppercase tracking-wider text-white transition hover:from-cyan-400 hover:to-fuchsia-400"
+        onClick={upgrade}
+        disabled={busy}
+        className="rounded-lg bg-gradient-to-r from-cyan-500 to-fuchsia-500 px-4 py-2 text-xs font-bold uppercase tracking-wider text-white transition hover:from-cyan-400 hover:to-fuchsia-400 disabled:opacity-60"
       >
-        Upgrade to {targetTier.charAt(0).toUpperCase() + targetTier.slice(1)}
+        {busy ? 'Opening checkout…' : `Upgrade to ${tierLabel(targetTier)}`}
       </button>
+      {error && <p role="alert" className="mt-3 text-xs font-bold text-red-300">{error}</p>}
     </div>
   );
 }
