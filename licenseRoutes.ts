@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Local Coder licensing — links external local-coder installs to a BSC account.
@@ -31,10 +31,6 @@ export function featuresForTier(tier: LicenseTier): LicenseFeatures {
 }
 
 const LICENSE_LABEL = 'local-coder';
-
-function mintKey(): string {
-  return `bsc_${randomBytes(24).toString('hex')}`;
-}
 
 export function hashLicenseKey(key: string): string {
   return createHash('sha256').update(key).digest('hex');
@@ -119,29 +115,31 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
       return res.json({ hasKey: true, tier, rotated: false });
     }
 
-    if (existing) {
-      const { error: revokeError } = await supabase
-        .from('license_keys')
-        .update({ revoked_at: new Date().toISOString() })
-        .eq('id', existing.id);
-      if (revokeError) {
-        console.error('[License] revoke error:', revokeError.message);
-        return res.status(500).json({ error: 'Failed to rotate license key.' });
-      }
+    const { data: issued, error: issueError } = await supabase.rpc('issue_license_key', {
+      p_user_id: user.id,
+      p_label: LICENSE_LABEL,
+    });
+    if (issueError) {
+      console.error('[License] issue error:', issueError.message);
+      return res.status(500).json({ error: 'Failed to create license key.' });
     }
 
-    const key = mintKey();
-    const keyHash = hashLicenseKey(key);
-    const { error: insertError } = await supabase
-      .from('license_keys')
-      .insert({ user_id: user.id, key: keyHash, label: LICENSE_LABEL });
-    if (insertError) {
-      console.error('[License] insert error:', insertError.message);
+    const payload = Array.isArray(issued) ? issued[0] : issued;
+    if (
+      !payload
+      || typeof payload !== 'object'
+      || typeof (payload as { key?: unknown }).key !== 'string'
+    ) {
+      console.error('[License] issue_license_key returned an invalid payload');
       return res.status(500).json({ error: 'Failed to create license key.' });
     }
 
     const tier = await resolveTier(supabase, user.id);
-    res.json({ key, tier, rotated: Boolean(existing) });
+    res.json({
+      key: (payload as { key: string }).key,
+      tier,
+      rotated: Boolean((payload as { rotated?: unknown }).rotated),
+    });
   });
 
   // ── GET /api/license/verify ──

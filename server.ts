@@ -54,6 +54,7 @@ import {
   assertProductionConfig,
   createRateLimiter,
   createSquareClient,
+  handleRestCors,
   createWebhookAuthMiddleware,
   getSquareLocationId,
   parseAllowedOrigins,
@@ -140,16 +141,7 @@ async function startServer() {
 
   // CORS middleware for REST endpoints, including Bot API Bearer-token calls.
   app.use((req, res, next) => {
-    const origin = req.headers.origin;
-    if (origin && allowedOrigins.includes(origin)) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, x-license-key');
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
-    }
-    if (req.method === 'OPTIONS') {
-      return res.sendStatus(204);
-    }
+    if (handleRestCors(req, res, allowedOrigins)) return;
     next();
   });
 

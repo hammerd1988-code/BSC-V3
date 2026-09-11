@@ -106,8 +106,11 @@ async function resolveUserByStripeCustomer(
   return null;
 }
 
-function tierFromPriceId(priceId: string): PlanTier {
-  for (const plan of Object.values(PLAN_CONFIG)) {
+export function tierFromPriceId(
+  priceId: string,
+  plans: readonly PlanConfig[] = Object.values(PLAN_CONFIG),
+): PlanTier {
+  for (const plan of plans) {
     if (
       priceId === plan.stripePriceIdMonthly ||
       priceId === plan.stripePriceIdAnnual ||
