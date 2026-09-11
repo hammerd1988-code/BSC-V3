@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
+import { authedFetch as sessionFetch } from './authSession';
 
 export type SubscriptionTier = 'indie' | 'operator' | 'architect';
 export type SubscriptionStatus = 'active' | 'cancelled' | 'past_due';
@@ -289,7 +290,7 @@ export class CheckoutError extends Error {
 }
 
 export function checkoutErrorMessage(status: number, serverError?: string | null): string {
-  if (status === 401) return 'Please sign in to upgrade your plan.';
+  if (status === 401) return 'Please sign in to manage your subscription.';
   if (status === 503 || (serverError && /not configured/i.test(serverError))) {
     return 'Billing is temporarily unavailable. Please try again in a few minutes.';
   }
@@ -299,10 +300,14 @@ export function checkoutErrorMessage(status: number, serverError?: string | null
 async function openStripeSession(path: string, body?: unknown): Promise<void> {
   let res: Response;
   try {
-    res = await authedFetch(path, { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    res = await sessionFetch(path, { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   } catch (err) {
-    console.error('[Stripe] Network error:', err);
-    throw new CheckoutError('Network error. Check your connection and try again.', 0);
+    console.error('[Stripe] Request failed:', err);
+    // fetch() rejects with a TypeError on network failure; anything else came
+    // from the session refresh and means the user has to sign in again.
+    throw err instanceof TypeError
+      ? new CheckoutError('Network error. Check your connection and try again.', 0)
+      : new CheckoutError(checkoutErrorMessage(401), 401);
   }
   const data = await res.json().catch(() => ({} as { url?: string; error?: string }));
   if (!res.ok || !data.url) {

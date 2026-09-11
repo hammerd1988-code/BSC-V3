@@ -29,11 +29,13 @@ function tierLabel(tier: 'operator' | 'architect'): string {
 }
 
 export function UpgradePromptModal({ gate, open, onClose }: { gate: FeatureGateResult | null; open: boolean; onClose: () => void }) {
-  const targetTier = gate?.requiredTier === 'operator' ? 'operator' : 'architect';
-  const { upgrade, busy, error } = useUpgradeAction(targetTier);
-
   if (!open || !gate) return null;
+  const targetTier = gate.requiredTier === 'operator' ? 'operator' : 'architect';
+  return <UpgradePromptDialog key={targetTier} gate={gate} targetTier={targetTier} onClose={onClose} />;
+}
 
+function UpgradePromptDialog({ gate, targetTier, onClose }: { gate: FeatureGateResult; targetTier: 'operator' | 'architect'; onClose: () => void }) {
+  const { upgrade, busy, error } = useUpgradeAction(targetTier);
   const isLimitHit = gate.reason === 'limit';
 
   return (

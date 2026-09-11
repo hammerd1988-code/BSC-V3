@@ -548,7 +548,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
               onSelectPlan={handlePlanSelect}
             />
             {saveError && (
-              <p className="mx-auto mt-4 max-w-md rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-center text-xs font-bold text-red-200">
+              <p role="alert" className="mx-auto mt-4 max-w-md rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-center text-xs font-bold text-red-200">
                 {saveError}
               </p>
             )}

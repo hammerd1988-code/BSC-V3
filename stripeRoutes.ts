@@ -192,7 +192,9 @@ export function registerStripeRoutes(app: Express, supabase: SupabaseClient): vo
   // ── POST /api/stripe/checkout ──
   // Creates a Stripe Checkout session for upgrading to a paid plan
   app.post('/api/stripe/checkout', async (req: Request, res: Response) => {
-    if (!stripe) return res.status(503).json({ error: 'Stripe is not configured.' });
+    if (!stripe || missingStripeConfig().length > 0) {
+      return res.status(503).json({ error: 'Stripe is not configured.' });
+    }
 
     const user = await authenticateRequest(req, supabase);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
@@ -202,7 +204,7 @@ export function registerStripeRoutes(app: Express, supabase: SupabaseClient): vo
     if (!plan) return res.status(400).json({ error: 'Invalid plan tier.' });
 
     const priceId = billing === 'annual' ? plan.stripePriceIdAnnual : plan.stripePriceIdMonthly;
-    if (!priceId) return res.status(400).json({ error: 'Price not configured for this billing cycle.' });
+    if (!priceId) return res.status(503).json({ error: 'Price not configured for this billing cycle.' });
 
     try {
       // Find or create Stripe customer
