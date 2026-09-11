@@ -173,7 +173,11 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
     } catch (err) {
       // Without this the rejection was unhandled and the plan step just sat there.
       console.error('[Onboarding] Checkout failed:', err);
-      setSaveError('Could not open checkout. You can upgrade any time from Settings.');
+      setSaveError(
+        err instanceof Error && err.message
+          ? `${err.message} You can upgrade any time from Settings.`
+          : 'Could not open checkout. You can upgrade any time from Settings.',
+      );
     }
   };
 
@@ -544,7 +548,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
               onSelectPlan={handlePlanSelect}
             />
             {saveError && (
-              <p className="mx-auto mt-4 max-w-md rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-center text-xs font-bold text-red-200">
+              <p role="alert" className="mx-auto mt-4 max-w-md rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-center text-xs font-bold text-red-200">
                 {saveError}
               </p>
             )}

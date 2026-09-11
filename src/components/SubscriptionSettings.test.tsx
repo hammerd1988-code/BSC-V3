@@ -77,6 +77,31 @@ describe('SubscriptionSettings', () => {
     });
   });
 
+  it('shows the checkout error when opening checkout fails', async () => {
+    const openCheckout = vi.fn().mockRejectedValue(new Error('Billing is temporarily unavailable. Please try again in a few minutes.'));
+    mockUseSubscription.mockReturnValue({
+      tier: 'indie',
+      openCheckout,
+      openPortal: vi.fn().mockResolvedValue(undefined),
+      subscription: null,
+    });
+    vi.mocked(authedFetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ hasKey: false }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const user = userEvent.setup();
+    render(<SubscriptionSettings />);
+
+    await user.click(screen.getAllByRole('button', { name: 'Upgrade' })[0]);
+
+    expect(openCheckout).toHaveBeenCalledWith('operator', 'annual');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Billing is temporarily unavailable');
+    expect(screen.getAllByRole('button', { name: 'Upgrade' })[0]).not.toBeDisabled();
+  });
+
   it('uses authedFetch when generating a new key', async () => {
     const mockedAuthedFetch = vi.mocked(authedFetch);
     mockedAuthedFetch
