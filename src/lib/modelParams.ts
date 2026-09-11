@@ -19,3 +19,40 @@ export function maxTokensParam(
     ? { max_completion_tokens: maxTokens }
     : { max_tokens: maxTokens };
 }
+
+// The same GPT-5/o-series models reject any `temperature` other than the
+// default ("Unsupported value: 'temperature' does not support 0.92 with this
+// model"), whether called directly or through OpenRouter, which forwards the
+// field. Omitting it lets the provider use its default.
+export function temperatureParam(model: string, temperature: number | undefined): Record<string, number> {
+  if (temperature === undefined) return {};
+  return MAX_COMPLETION_TOKENS_MODELS.test(model.trim()) ? {} : { temperature };
+}
+
+export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high';
+
+// Reasoning models spend hidden thinking tokens out of the same completion
+// budget as the visible answer, so a small `max_tokens` on a "write one
+// sentence" prompt can come back truncated or empty. Callers that only want a
+// short reply ask for low effort. OpenRouter takes a unified `reasoning`
+// object; OpenAI's own endpoint takes `reasoning_effort` on the GPT-5/o-series
+// only. Other OpenAI-compatible servers may reject unknown fields, so nothing
+// is sent to them.
+const OPENROUTER_REASONING_MODELS = /(?:^|\/)(?:gpt-5|o[1-4]|gemini-(?:2\.5|3))(?:$|[-.])/i;
+
+export function reasoningParam(
+  model: string,
+  effort: ReasoningEffort | undefined,
+  baseUrl?: string,
+): Record<string, unknown> {
+  if (!effort) return {};
+  const trimmed = model.trim();
+  if (baseUrl && baseUrl.includes('openrouter.ai')) {
+    return OPENROUTER_REASONING_MODELS.test(trimmed) ? { reasoning: { effort } } : {};
+  }
+  const isOpenAiDirect = !baseUrl || baseUrl.includes('api.openai.com');
+  if (isOpenAiDirect && MAX_COMPLETION_TOKENS_MODELS.test(trimmed)) {
+    return { reasoning_effort: effort };
+  }
+  return {};
+}

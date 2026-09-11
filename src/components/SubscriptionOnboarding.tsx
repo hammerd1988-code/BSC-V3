@@ -58,7 +58,9 @@ export function SubscriptionOnboarding({
     try {
       await onSelectPlan(planTier, billing);
     } catch (err) {
-      setError('Something went wrong. Please try again or choose the free plan.');
+      setError(err instanceof Error && err.message
+        ? err.message
+        : 'Something went wrong. Please try again or choose the free plan.');
     } finally {
       setLoadingTier(null);
     }
