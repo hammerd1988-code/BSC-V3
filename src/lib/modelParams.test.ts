@@ -18,6 +18,11 @@ describe('usesMaxCompletionTokens', () => {
     expect(usesMaxCompletionTokens('openai/gpt-5.4-mini', 'https://openrouter.ai/api/v1')).toBe(false);
     expect(usesMaxCompletionTokens('openai/gpt-5.4-mini', 'https://api.openai.com/v1')).toBe(true);
   });
+
+  it('does not trust substring-matched hosts', () => {
+    expect(usesMaxCompletionTokens('gpt-5.4-mini', 'https://api.openai.com.evil.tld/v1')).toBe(true);
+    expect(reasoningParam('gpt-5.4-mini', 'low', 'https://api.openai.com.evil.tld/v1')).toEqual({});
+  });
 });
 
 describe('maxTokensParam', () => {
