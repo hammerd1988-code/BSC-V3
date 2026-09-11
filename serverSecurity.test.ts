@@ -11,9 +11,11 @@ import {
   createSquareClient,
   createWebhookAuthMiddleware,
   getSquareLocationId,
+  handleRestCors,
   internalCallHeaders,
   isInternalRequest,
   parseAllowedOrigins,
+  REST_CORS_ALLOW_HEADERS,
   resolveSocketCorsOrigin,
 } from './serverSecurity.js';
 
@@ -32,6 +34,10 @@ function mockRes() {
     },
     setHeader(name: string, value: string) {
       this.headers[name] = value;
+    },
+    sendStatus(code: number) {
+      this.statusCode = code;
+      return this;
     },
   };
   return res as unknown as Response & typeof res;
@@ -63,6 +69,22 @@ describe('resolveSocketCorsOrigin', () => {
 
   it('uses the explicit allowlist when present', () => {
     expect(resolveSocketCorsOrigin(['https://a.example'], true)).toEqual(['https://a.example']);
+  });
+});
+
+describe('handleRestCors', () => {
+  it('answers allowed preflights with the license header in the allow-list', () => {
+    const res = mockRes();
+    const handled = handleRestCors(
+      mockReq({ method: 'OPTIONS', headers: { origin: 'https://app.example' } }),
+      res,
+      ['https://app.example'],
+    );
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(204);
+    expect(res.headers['Access-Control-Allow-Headers']).toBe(REST_CORS_ALLOW_HEADERS);
+    expect(res.headers['Access-Control-Allow-Headers']).toContain('x-license-key');
   });
 });
 

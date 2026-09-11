@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Local Coder licensing — links external local-coder installs to a BSC account.
@@ -31,10 +31,6 @@ export function featuresForTier(tier: LicenseTier): LicenseFeatures {
 }
 
 const LICENSE_LABEL = 'local-coder';
-
-function mintKey(): string {
-  return `bsc_${randomBytes(24).toString('hex')}`;
-}
 
 export function hashLicenseKey(key: string): string {
   return createHash('sha256').update(key).digest('hex');
@@ -119,22 +115,31 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
       return res.json({ hasKey: true, tier, rotated: false });
     }
 
-    // Revoke and mint in one transaction. As two requests, a failure after the
-    // revoke left the account with no active key while the response said the
-    // rotation had failed.
-    const key = mintKey();
-    const { data: rotated, error: rotateError } = await supabase.rpc('rotate_license_key', {
+    const { data: issued, error: issueError } = await supabase.rpc('issue_license_key', {
       p_user_id: user.id,
       p_label: LICENSE_LABEL,
-      p_key_hash: hashLicenseKey(key),
     });
-    if (rotateError) {
-      console.error('[License] rotate error:', rotateError.message);
+    if (issueError) {
+      console.error('[License] issue error:', issueError.message);
+      return res.status(500).json({ error: 'Failed to create license key.' });
+    }
+
+    const payload = Array.isArray(issued) ? issued[0] : issued;
+    if (
+      !payload
+      || typeof payload !== 'object'
+      || typeof (payload as { key?: unknown }).key !== 'string'
+    ) {
+      console.error('[License] issue_license_key returned an invalid payload');
       return res.status(500).json({ error: 'Failed to create license key.' });
     }
 
     const tier = await resolveTier(supabase, user.id);
-    res.json({ key, tier, rotated: rotated === true });
+    res.json({
+      key: (payload as { key: string }).key,
+      tier,
+      rotated: Boolean((payload as { rotated?: unknown }).rotated),
+    });
   });
 
   // ── GET /api/license/verify ──
