@@ -4,8 +4,26 @@
 // normalises the parameter itself — expects `max_tokens`.
 const MAX_COMPLETION_TOKENS_MODELS = /(?:^|\/)(?:gpt-5|o[1-4])(?:$|[-.])/i;
 
+function hostFor(baseUrl?: string): string | null {
+  if (!baseUrl) return null;
+  try {
+    return new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function isOpenRouterUrl(baseUrl?: string): boolean {
+  return hostFor(baseUrl) === 'openrouter.ai';
+}
+
+function isOpenAiDirectUrl(baseUrl?: string): boolean {
+  if (!baseUrl) return true;
+  return hostFor(baseUrl) === 'api.openai.com';
+}
+
 export function usesMaxCompletionTokens(model: string, baseUrl?: string): boolean {
-  if (baseUrl && baseUrl.includes('openrouter.ai')) return false;
+  if (isOpenRouterUrl(baseUrl)) return false;
   return MAX_COMPLETION_TOKENS_MODELS.test(model.trim());
 }
 
@@ -47,10 +65,10 @@ export function reasoningParam(
 ): Record<string, unknown> {
   if (!effort) return {};
   const trimmed = model.trim();
-  if (baseUrl && baseUrl.includes('openrouter.ai')) {
+  if (isOpenRouterUrl(baseUrl)) {
     return OPENROUTER_REASONING_MODELS.test(trimmed) ? { reasoning: { effort } } : {};
   }
-  const isOpenAiDirect = !baseUrl || baseUrl.includes('api.openai.com');
+  const isOpenAiDirect = isOpenAiDirectUrl(baseUrl);
   if (isOpenAiDirect && MAX_COMPLETION_TOKENS_MODELS.test(trimmed)) {
     return { reasoning_effort: effort };
   }
