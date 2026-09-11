@@ -54,7 +54,6 @@ import {
   assertProductionConfig,
   createRateLimiter,
   createSquareClient,
-  handleRestCors,
   createWebhookAuthMiddleware,
   getSquareLocationId,
   parseAllowedOrigins,
@@ -139,9 +138,28 @@ async function startServer() {
     return next(err);
   });
 
+  // Preflights answer 204 and return before the /api limiter below ever runs,
+  // so `OPTIONS /api/*` was unmetered: a flood of them against an expensive
+  // path cost the process work without touching the 300/min budget. They get
+  // their own, looser budget rather than the API one — a cross-origin client
+  // emits a preflight alongside real requests, and charging both to the same
+  // bucket would halve its effective request budget.
+  const preflightRateLimit = createRateLimiter({ name: 'CORS preflight', windowMs: 60_000, max: 600 });
+
   // CORS middleware for REST endpoints, including Bot API Bearer-token calls.
   app.use((req, res, next) => {
-    if (handleRestCors(req, res, allowedOrigins)) return;
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, x-license-key');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      // Let the browser reuse the preflight instead of repeating it per request.
+      res.setHeader('Access-Control-Max-Age', '600');
+    }
+    if (req.method === 'OPTIONS') {
+      return preflightRateLimit(req, res, () => { res.sendStatus(204); });
+    }
     next();
   });
 
@@ -1091,8 +1109,6 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
           socket.emit('call:unavailable', { targetUserId });
           return;
         }
-        const targetSocketId = connectedUsers.get(targetUserId);
-
         // A ring push is a high-urgency, long-vibration, sticky banner on the
         // recipient's lock screen, so it must not reach an account that doesn't
         // exist or one that blocked the caller. Checked before any signalling or
@@ -1136,6 +1152,12 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
           }).catch((err) => console.warn('[socket] call push failed:', err));
         }
 
+        // Read after the two lookups above, not before them: a target who
+        // disconnected while they were in flight left a stale socket id here,
+        // so the caller was never told the call could not be delivered and the
+        // room and peer registrations were made for a signalling path that no
+        // longer existed.
+        const targetSocketId = connectedUsers.get(targetUserId);
         if (!targetSocketId) {
           // Previously the caller just kept ringing an offline user forever.
           socket.emit('call:unavailable', { targetUserId });
@@ -1205,6 +1227,25 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       }).catch((err) => console.warn('[socket] call cancel push failed:', err));
     };
 
+    /**
+     * Dismiss the ring for this pair, whichever side is asking.
+     *
+     * The ring push always lands on the party that was rung and is tagged with
+     * the *caller's* id. `call:end` cancelled `(data.targetUserId, selfId)`,
+     * which is right when the caller hangs up and backwards when the callee
+     * does: it fired at the caller's devices — which were never ringing — under
+     * a tag no banner used, leaving the callee's sticky banner up until they
+     * dismissed it by hand. The direction lives in activeCallIds, so read it
+     * from there instead of from whoever sent the event.
+     */
+    const cancelRingForPair = (selfId: string, otherId: string) => {
+      if (placedCallTo(otherId, selfId)) {
+        cancelCallBanner(selfId, otherId);
+      } else {
+        cancelCallBanner(otherId, selfId);
+      }
+    };
+
     socket.on('call:accept', (data) => {
       const targetSocketId = callPeerSocket(data?.callerId);
       if (targetSocketId) {
@@ -1214,7 +1255,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       // real pairing so an arbitrary socket can't fire cancel pushes at will.
       const selfId = verifiedUserId();
       if (selfId && typeof data?.callerId === 'string' && areCallPeers(selfId, data.callerId)) {
-        cancelCallBanner(selfId, data.callerId);
+        cancelRingForPair(selfId, data.callerId);
         // Answering is consent, so this pair may ring again immediately.
         if (placedCallTo(data.callerId, selfId)) clearCallPushThrottle(data.callerId, selfId);
       }
@@ -1229,7 +1270,7 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       if (selfId && typeof data?.callerId === 'string' && areCallPeers(selfId, data.callerId)) {
         releaseCallPeers(selfId, data.callerId);
         // Close the ringing banner on the rejecter's other devices.
-        cancelCallBanner(selfId, data.callerId);
+        cancelRingForPair(selfId, data.callerId);
         // Released by the rejecter's own action, so a call back rings at once.
         if (placedCallTo(data.callerId, selfId)) clearCallPushThrottle(data.callerId, selfId);
       }
@@ -1265,8 +1306,9 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       // socket could loop call:end to spray cancel pushes at arbitrary users.
       if (selfId && typeof data?.targetUserId === 'string' && areCallPeers(selfId, data.targetUserId)) {
         releaseCallPeers(selfId, data.targetUserId);
-        // The other party may still have a ringing banner on push-only devices.
-        cancelCallBanner(data.targetUserId, selfId);
+        // Whichever side hung up, the banner to dismiss is the one on the party
+        // that was rung.
+        cancelRingForPair(selfId, data.targetUserId);
         // Only when the party that was rung hangs up: a caller clearing its own
         // throttle would turn call:initiate → call:end into an unlimited ringer.
         if (placedCallTo(data.targetUserId, selfId)) clearCallPushThrottle(selfId, data.targetUserId);
@@ -1326,21 +1368,46 @@ app.post("/api/cred/exchange", paymentRateLimit, async (req, res) => {
       );
     });
 
+    /**
+     * Both the recipient and the follower's display fields used to come out of
+     * the payload, so any registered socket could tell any account that a
+     * follower of its choosing had just locked onto them — the same
+     * notification-spoofing primitive `notifyPostAuthor` exists to avoid. The
+     * follow edge has to be in the database before its notification is real.
+     */
     socket.on('user:follow', (data) => {
       const actorId = verifiedUserId();
       if (!actorId) return;
-      emitActivityToUser(
-        data?.following?.id,
-        {
-          type: 'follow',
-          data: {
-            displayName: data?.follower?.displayName ?? data?.follower?.display_name,
-            targetName: data?.following?.displayName ?? data?.following?.display_name,
-            avatarUrl: data?.follower?.avatarUrl ?? data?.follower?.avatar_url,
+      const targetId = typeof data?.following?.id === 'string' ? data.following.id : '';
+      if (!targetId) return;
+
+      void (async () => {
+        const { data: edge } = await supabase
+          .from('follows')
+          .select('following_id')
+          .eq('follower_id', actorId)
+          .eq('following_id', targetId)
+          .maybeSingle();
+        if (!edge) return;
+
+        const [{ data: actor }, { data: target }] = await Promise.all([
+          supabase.from('users').select('display_name, username, avatar_url').eq('id', actorId).maybeSingle(),
+          supabase.from('users').select('display_name').eq('id', targetId).maybeSingle(),
+        ]);
+
+        emitActivityToUser(
+          targetId,
+          {
+            type: 'follow',
+            data: {
+              displayName: actor?.display_name ?? actor?.username ?? 'Someone',
+              targetName: target?.display_name ?? null,
+              avatarUrl: actor?.avatar_url ?? null,
+            },
           },
-        },
-        actorId,
-      );
+          actorId,
+        );
+      })().catch((err) => console.warn('[socket] user:follow notification failed:', err));
     });
 
     // ---- Live Streaming events ----

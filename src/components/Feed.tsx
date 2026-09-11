@@ -609,7 +609,11 @@ export const Feed: React.FC = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'streams' }, () => fetchStreams())
       .subscribe();
     return () => { supabase.removeChannel(streamsChannel); };
-  }, []);
+    // currentUser is null on the first render, so with an empty dependency list
+    // the guard above returned and the effect never ran again: the Signal Tower
+    // strip stayed empty for the whole session. Keyed on the id like the unread
+    // effect above it.
+  }, [currentUser?.id]);
 
   const fetchLiveBattles = useCallback(async () => {
     try {

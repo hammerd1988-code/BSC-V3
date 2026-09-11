@@ -1,7 +1,10 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../AuthContext';
 import { supabase } from '../supabase';
-import { authedFetch as sessionFetch } from './authSession';
+// A local authedFetch used to live here that read the raw session and did no
+// 401 retry, so after a backgrounded tab's token expired, clicking Upgrade
+// posted a dead JWT to /api/stripe/checkout and failed silently.
+import { authedFetch } from './authSession';
 
 export type SubscriptionTier = 'indie' | 'operator' | 'architect';
 export type SubscriptionStatus = 'active' | 'cancelled' | 'past_due';
@@ -79,7 +82,6 @@ interface SubscriptionContextValue {
   canAccess: (feature: PremiumFeature) => FeatureGateResult;
   recordUsage: (feature: PremiumFeature, amount?: number) => Promise<void>;
   refresh: () => Promise<void>;
-  setLocalTier: (tier: SubscriptionTier) => Promise<void>;
   usageMeters: UsageMeter[];
   openCheckout: (tier: 'operator' | 'architect', billing?: 'monthly' | 'annual') => Promise<void>;
   openPortal: () => Promise<void>;
@@ -280,42 +282,12 @@ export const SUBSCRIPTION_PLANS = [
   },
 ] as const;
 
-export class CheckoutError extends Error {
-  status: number;
-  constructor(message: string, status: number) {
-    super(message);
-    this.name = 'CheckoutError';
-    this.status = status;
-  }
-}
-
 export function checkoutErrorMessage(status: number, serverError?: string | null): string {
   if (status === 401) return 'Please sign in to manage your subscription.';
   if (status === 503 || (serverError && /not configured/i.test(serverError))) {
     return 'Billing is temporarily unavailable. Please try again in a few minutes.';
   }
   return serverError || 'Could not open checkout. Please try again.';
-}
-
-async function openStripeSession(path: string, body?: unknown): Promise<void> {
-  let res: Response;
-  try {
-    res = await sessionFetch(path, { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  } catch (err) {
-    console.error('[Stripe] Request failed:', err);
-    // Only a missing local session means the user must sign in; a failed
-    // refresh or fetch with a session still present is a transport problem.
-    const { data: { session } } = await supabase.auth.getSession();
-    throw session
-      ? new CheckoutError('Network error. Check your connection and try again.', 0)
-      : new CheckoutError(checkoutErrorMessage(401), 401);
-  }
-  const data = await res.json().catch(() => ({} as { url?: string; error?: string }));
-  if (!res.ok || !data.url) {
-    console.error('[Stripe] Session error:', res.status, data.error);
-    throw new CheckoutError(checkoutErrorMessage(res.status, data.error), res.status);
-  }
-  window.location.href = data.url;
 }
 
 const SubscriptionContext = createContext<SubscriptionContextValue | null>(null);
@@ -326,19 +298,6 @@ const getCurrentPeriod = () => {
   const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
   return { start: start.toISOString(), end: end.toISOString() };
 };
-
-async function authedFetch(path: string, opts: RequestInit = {}): Promise<Response> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token;
-  return fetch(path, {
-    ...opts,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(opts.headers || {}),
-    },
-  });
-}
 
 export function SubscriptionProvider({ children }: { children: React.ReactNode }) {
   const { currentUser } = useAuth();
@@ -453,71 +412,73 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     };
   }, [getUsageForFeature, tier, isAdmin]);
 
+  // One upsert that adds to whatever is stored, rather than reading the count
+  // into the client and writing back a total: two meters recorded in quick
+  // succession both used to read the same value and write the same total, so
+  // one of them was never counted. The row is also no longer client-writable,
+  // which is what let a user set their own usage_count back to zero.
   const recordUsage = useCallback(async (feature: PremiumFeature, amount = 1) => {
     if (!currentUser?.id || amount <= 0) return;
     const { start, end } = getCurrentPeriod();
-    const existing = usage.find((row) => row.feature === feature);
 
-    if (existing) {
-      const next = existing.usage_count + amount;
-      await supabase.from('feature_usage').update({ usage_count: next }).eq('id', existing.id);
-      setUsage((prev) => prev.map((row) => row.id === existing.id ? { ...row, usage_count: next } : row));
-      return;
-    }
-
-    const { data } = await supabase
-      .from('feature_usage')
-      .insert({ user_id: currentUser.id, feature, usage_count: amount, period_start: start, period_end: end })
-      .select('*')
-      .maybeSingle();
-
-    if (data) setUsage((prev) => [...prev, data as FeatureUsageRow]);
-  }, [currentUser?.id, usage]);
-
-  const setLocalTier = useCallback(async (nextTier: SubscriptionTier) => {
-    if (!currentUser?.id) return;
-    const now = new Date().toISOString();
-
-    // Read-then-write rather than an upsert on user_id: subscriptions has no
-    // unique constraint on that column (only the partial index for status =
-    // 'active'), so `onConflict: 'user_id'` failed with 42P10 and the row was
-    // never written — the error was discarded, leaving users.subscription_tier
-    // saying one thing and the subscriptions table another.
-    const { data: existing } = await supabase
-      .from('subscriptions')
-      .select('id')
-      .eq('user_id', currentUser.id)
-      .eq('status', 'active')
-      .limit(1)
-      .maybeSingle();
-
-    const row = {
-      tier: nextTier,
-      status: 'active',
-      expires_at: nextTier === 'indie' ? now : null,
-      stripe_customer_id: null,
-      stripe_subscription_id: null,
-    };
-
-    const { error } = existing?.id
-      ? await supabase.from('subscriptions').update(row).eq('id', existing.id)
-      : await supabase.from('subscriptions').insert({ ...row, user_id: currentUser.id, started_at: now });
+    const { data, error } = await supabase.rpc('record_feature_usage', {
+      p_feature: feature,
+      p_amount: amount,
+      p_period_start: start,
+      p_period_end: end,
+    });
 
     if (error) {
-      console.error('[subscription] Failed to set local tier:', error.message);
+      console.error('[subscription] Failed to record feature usage:', error.message);
       return;
     }
 
-    await supabase.from('users').update({ subscription_tier: nextTier }).eq('id', currentUser.id);
-    await refresh();
-  }, [currentUser?.id, refresh]);
+    const row = data as FeatureUsageRow | null;
+    if (!row) return;
+    setUsage((prev) => {
+      const index = prev.findIndex((existing) => existing.id === row.id);
+      if (index === -1) return [...prev, row];
+      const next = [...prev];
+      next[index] = row;
+      return next;
+    });
+  }, [currentUser?.id]);
+
+  // There was a setLocalTier() here that wrote an active `subscriptions` row
+  // and users.subscription_tier straight from the browser. Nothing called it,
+  // and the policies it relied on were exactly the ones that let any account
+  // hand itself the architect tier without paying. Tier changes now arrive
+  // only from the Stripe webhook, which runs with the service role.
 
   const openCheckout = useCallback(async (planTier: 'operator' | 'architect', billing: 'monthly' | 'annual' = 'monthly') => {
-    await openStripeSession('/api/stripe/checkout', { tier: planTier, billing });
+    try {
+      const res = await authedFetch('/api/stripe/checkout', {
+        method: 'POST',
+        body: JSON.stringify({ tier: planTier, billing }),
+      });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        console.error('[Stripe] No checkout URL returned:', data.error);
+      }
+    } catch (err) {
+      console.error('[Stripe] Checkout error:', err);
+    }
   }, []);
 
   const openPortal = useCallback(async () => {
-    await openStripeSession('/api/stripe/portal');
+    try {
+      const res = await authedFetch('/api/stripe/portal', { method: 'POST' });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        console.error('[Stripe] No portal URL returned:', data.error);
+      }
+    } catch (err) {
+      console.error('[Stripe] Portal error:', err);
+    }
   }, []);
 
   const usageMeters = useMemo<UsageMeter[]>(() => {
@@ -548,11 +509,10 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     canAccess,
     recordUsage,
     refresh,
-    setLocalTier,
     usageMeters,
     openCheckout,
     openPortal,
-  }), [tier, isAdmin, subscription, usage, loading, canAccess, recordUsage, refresh, setLocalTier, usageMeters, openCheckout, openPortal]);
+  }), [tier, isAdmin, subscription, usage, loading, canAccess, recordUsage, refresh, usageMeters, openCheckout, openPortal]);
 
   return <SubscriptionContext.Provider value={value}>{children}</SubscriptionContext.Provider>;
 }

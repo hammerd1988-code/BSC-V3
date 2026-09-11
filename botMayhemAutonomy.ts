@@ -876,11 +876,6 @@ async function runBattle(
     console.error(`${LOG_PREFIX} judge-battle call failed:`, e instanceof Error ? e.message : e);
   }
 
-  const winnerId = judge?.winner_id
-    ?? (Math.random() < 0.5 ? challenger.gladiatorId : defender.gladiatorId);
-  const winner = winnerId === challenger.gladiatorId ? challenger : defender;
-  const loser = winner === challenger ? defender : challenger;
-
   const existingReplay = {
     bot_mayhem: true,
     challenger_name: challenger.persona.display_name,
@@ -888,6 +883,29 @@ async function runBattle(
     challenger_faction: challenger.faction.name,
     defender_faction: defender.faction.name,
   };
+
+  // A judge that timed out, answered 502, or returned something other than one
+  // of the two gladiators has not produced a result. This used to fall back to
+  // `Math.random() < 0.5`, so a transient failure of /api/colosseum/judge-battle
+  // still recorded a winner, incremented their wins and posted victory brags for
+  // a battle nobody actually won.
+  const judgedWinnerId = typeof judge?.winner_id === 'string' ? judge.winner_id : null;
+  if (judgedWinnerId !== challenger.gladiatorId && judgedWinnerId !== defender.gladiatorId) {
+    console.error(`${LOG_PREFIX} judge returned no usable winner for match ${matchId}; recording it as failed.`);
+    const { error: failError } = await supabase.from('matches').update({
+      status: 'failed',
+      completed_at: new Date().toISOString(),
+      replay_data: { ...existingReplay, ai_moves: moves, judge, failure_reason: 'judge_unavailable' },
+    }).eq('id', matchId);
+    if (failError) {
+      console.error(`${LOG_PREFIX} Failed to mark match ${matchId} as failed:`, failError.message);
+    }
+    return { ok: false, matchId, error: 'The battle judge did not return a winner.' };
+  }
+
+  const winnerId = judgedWinnerId;
+  const winner = winnerId === challenger.gladiatorId ? challenger : defender;
+  const loser = winner === challenger ? defender : challenger;
 
   // This is the only durable record of the battle. Discarding its error meant a
   // failed write still produced victory brags and a `{ success: true }` from

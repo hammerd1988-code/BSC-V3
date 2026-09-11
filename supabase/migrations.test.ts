@@ -133,6 +133,10 @@ const RPC_SIGNATURES: Array<[string, string[]]> = [
   ['send_friend_request', ['p_target_id']],
   ['cancel_friend_request', ['p_target_id']],
   ['start_due_tournaments', []],
+  ['spend_cred', ['p_amount', 'p_reason', 'p_recipient_id', 'p_recipient_amount', 'p_recipient_notification']],
+  ['purchase_bot_listing', ['p_bot_id']],
+  ['claim_referral_bonus', ['p_referrer_username']],
+  ['record_feature_usage', ['p_feature', 'p_amount', 'p_period_start', 'p_period_end']],
 ];
 
 /** Functions called via supabase.rpc(...) somewhere in the app. */
@@ -151,6 +155,10 @@ const REQUIRED_FUNCTIONS = [
   'remove_friend',
   'convert_cred_to_compute',
   'complete_colosseum_match',
+  'spend_cred',
+  'purchase_bot_listing',
+  'claim_referral_bonus',
+  'record_feature_usage',
 ];
 
 describe('supabase migrations', () => {
@@ -565,6 +573,260 @@ describe('supabase migrations', () => {
       `select count(*)::text as count from public.transactions where external_id = 'sq-payment-2'`,
     );
     expect(ledger.rows[0].count).toBe('0');
+  });
+});
+
+/**
+ * The CRED economy and the paid tiers used to be writable straight from the
+ * browser. Against a fresh database, an ordinary signed-in session could run
+ *
+ *   select increment_counter('users','<self>','cred_balance', 1000000);
+ *   select increment_counter('users','<victim>','cred_balance', -1000000);
+ *   update users set subscription_tier = 'architect' where auth_uid = auth.uid();
+ *   insert into subscriptions (user_id, tier, status) values (self,'architect','active');
+ *   insert into transactions (user_id, amount, type) values (self, 999999, 'earn');
+ *   insert into bot_purchases (buyer_id, bot_id, price_paid) values (self, any, 0);
+ *
+ * Each assertion below pins one of those shut. `auth.uid()` is what separates a
+ * browser session from the server here: the service role presents no `sub`
+ * claim, so a null uid means the call did not come from an end user.
+ */
+describe('server-authoritative CRED economy', () => {
+  let db: PgLiteLike;
+
+  const PAYER_UID = '11111111-1111-1111-1111-111111111111';
+  const AUTHOR_UID = '22222222-2222-2222-2222-222222222222';
+  const ADMIN_UID = '33333333-3333-3333-3333-333333333333';
+
+  /** Runs `sql` as if it arrived from that account's browser session. */
+  async function asUser<T = Record<string, unknown>>(authUid: string, sql: string) {
+    await db.query(`select set_config('request.jwt.claim.sub', $1, false)`, [authUid]);
+    try {
+      return await db.query<T>(sql);
+    } finally {
+      await db.query(`select set_config('request.jwt.claim.sub', '', false)`);
+    }
+  }
+
+  async function balances() {
+    const { rows } = await db.query<{ id: string; cred_balance: number }>(
+      `select id, cred_balance from public.users where id in ($1,$2)`,
+      [PAYER_UID, AUTHOR_UID],
+    );
+    const byId = Object.fromEntries(rows.map((row) => [row.id, Number(row.cred_balance)]));
+    return { payer: byId[PAYER_UID], author: byId[AUTHOR_UID] };
+  }
+
+  beforeAll(async () => {
+    db = await createDatabase();
+    const failures = await applyMigrations(db);
+    expect(failures.map((failure) => `${failure.file}: ${failure.message}`)).toEqual([]);
+
+    // 0007's on_auth_user_created trigger owns profile creation, so seed the
+    // auth rows and adjust the profiles it makes rather than inserting a second
+    // profile for the same account.
+    await db.query(`insert into auth.users (id, email) values ($1,'payer@x'), ($2,'author@x'), ($3,'boss@x')`,
+      [PAYER_UID, AUTHOR_UID, ADMIN_UID]);
+    await db.query(`update public.users set cred_balance = 500, role = 'user' where id = $1`, [PAYER_UID]);
+    await db.query(`update public.users set cred_balance = 100, role = 'user' where id = $1`, [AUTHOR_UID]);
+    await db.query(`update public.users set cred_balance = 0, role = 'admin' where id = $1`, [ADMIN_UID]);
+  }, 120_000);
+
+  afterAll(async () => {
+    await db?.close();
+  });
+
+  it('refuses to move a balance through increment_counter for a browser session', async () => {
+    await expect(
+      asUser(PAYER_UID, `select public.increment_counter('users','${PAYER_UID}','cred_balance', 1000000)`),
+    ).rejects.toThrow(/server-authoritative function/i);
+
+    await expect(
+      asUser(PAYER_UID, `select public.increment_counter('users','${AUTHOR_UID}','cred_balance', -1000000)`),
+    ).rejects.toThrow(/server-authoritative function/i);
+
+    expect(await balances()).toEqual({ payer: 500, author: 100 });
+  });
+
+  it('still lets the server move a balance and a browser move a social counter', async () => {
+    await db.query(`select public.increment_counter('users','${PAYER_UID}','cred_balance', 25)`);
+    await asUser(PAYER_UID, `select public.increment_counter('users','${AUTHOR_UID}','followers_count', 1)`);
+
+    const { rows } = await db.query<{ cred_balance: number; followers_count: number }>(
+      `select (select cred_balance from public.users where id='${PAYER_UID}') as cred_balance,
+              (select followers_count from public.users where id='${AUTHOR_UID}') as followers_count`,
+    );
+    expect(Number(rows[0].cred_balance)).toBe(525);
+    expect(Number(rows[0].followers_count)).toBe(1);
+
+    await db.query(`update public.users set cred_balance = 500 where id = '${PAYER_UID}'`);
+  });
+
+  it('pins the economy and entitlement columns against a direct self-update', async () => {
+    await asUser(
+      PAYER_UID,
+      `update public.users
+          set cred_balance = 999999, compute_tokens = 999999,
+              subscription_tier = 'architect', reputation_score = 999999,
+              bio = 'still editable'
+        where id = '${PAYER_UID}'`,
+    );
+
+    const { rows } = await db.query<{
+      cred_balance: number; compute_tokens: number; subscription_tier: string;
+      reputation_score: number; bio: string;
+    }>(`select cred_balance, compute_tokens, subscription_tier, reputation_score, bio
+          from public.users where id = '${PAYER_UID}'`);
+
+    expect(Number(rows[0].cred_balance)).toBe(500);
+    expect(Number(rows[0].compute_tokens)).toBe(0);
+    expect(rows[0].subscription_tier).toBe('indie');
+    expect(Number(rows[0].reputation_score)).toBe(0);
+    // Only the protected columns are pinned; the rest of the profile is not.
+    expect(rows[0].bio).toBe('still editable');
+  });
+
+  it('lets an admin edit the columns it pins for everyone else', async () => {
+    await asUser(ADMIN_UID, `update public.users set reputation_score = 42 where id = '${AUTHOR_UID}'`);
+    const { rows } = await db.query<{ reputation_score: number }>(
+      `select reputation_score from public.users where id = '${AUTHOR_UID}'`,
+    );
+    expect(Number(rows[0].reputation_score)).toBe(42);
+  });
+
+  it('moves a tip, both ledger rows and the author notification in one call', async () => {
+    await asUser(
+      PAYER_UID,
+      `select public.spend_cred(40, 'Tipped post author for a transmission', '${AUTHOR_UID}', 40,
+         '{"type":"tip","payload":{"amount":40}}'::jsonb)`,
+    );
+
+    expect(await balances()).toEqual({ payer: 460, author: 140 });
+
+    const { rows: ledger } = await db.query<{ user_id: string; type: string; amount: number }>(
+      `select user_id, type, amount from public.transactions order by user_id`,
+    );
+    expect(ledger).toEqual([
+      { user_id: PAYER_UID, type: 'spend', amount: 40 },
+      { user_id: AUTHOR_UID, type: 'earn', amount: 40 },
+    ]);
+
+    // The payer cannot insert this row directly — the owner-scoped policy on
+    // notifications rejects it — which is why a tip that had already moved the
+    // CRED reported itself as failed.
+    const { rows: notified } = await db.query<{ user_id: string; type: string }>(
+      `select user_id, type from public.notifications`,
+    );
+    expect(notified).toEqual([{ user_id: AUTHOR_UID, type: 'tip' }]);
+  });
+
+  it('caps the credit at the debit, so a transfer cannot mint CRED', async () => {
+    const before = await balances();
+    await asUser(PAYER_UID, `select public.spend_cred(10, 'mint attempt', '${AUTHOR_UID}', 1000000)`);
+    const after = await balances();
+
+    expect(after.payer).toBe(before.payer - 10);
+    expect(after.author).toBe(before.author + 10);
+  });
+
+  it('refuses to overdraw and leaves the balance untouched', async () => {
+    const before = await balances();
+    await expect(
+      asUser(PAYER_UID, `select public.spend_cred(1000000, 'overdraft', '${AUTHOR_UID}')`),
+    ).rejects.toThrow(/insufficient CRED/i);
+    expect(await balances()).toEqual(before);
+  });
+
+  it('charges a marketplace purchase once and pays the seller 80%', async () => {
+    await db.query(
+      `insert into public.bot_listings (id, creator_id, name, username, price, status, is_published)
+       values ('listing-1','${AUTHOR_UID}','Author Bot','authorbot', 60, 'published', true)`,
+    );
+    const before = await balances();
+
+    const first = await asUser<{ result: { purchased: boolean } }>(
+      PAYER_UID, `select public.purchase_bot_listing('listing-1') as result`,
+    );
+    expect(first.rows[0].result.purchased).toBe(true);
+
+    const replay = await asUser<{ result: { purchased: boolean; reason: string } }>(
+      PAYER_UID, `select public.purchase_bot_listing('listing-1') as result`,
+    );
+    expect(replay.rows[0].result).toMatchObject({ purchased: false, reason: 'already_owned' });
+
+    const after = await balances();
+    expect(after.payer).toBe(before.payer - 60);
+    expect(after.author).toBe(before.author + 48);
+
+    const { rows } = await db.query<{ count: string; purchase_count: number }>(
+      `select (select count(*)::text from public.bot_purchases where bot_id='listing-1') as count,
+              (select purchase_count from public.bot_listings where id='listing-1') as purchase_count`,
+    );
+    expect(rows[0].count).toBe('1');
+    expect(Number(rows[0].purchase_count)).toBe(1);
+  });
+
+  it('awards a referral bonus once per referred account', async () => {
+    const before = await balances();
+
+    const first = await asUser<{ result: { claimed: boolean } }>(
+      PAYER_UID, `select public.claim_referral_bonus('author') as result`,
+    );
+    expect(first.rows[0].result.claimed).toBe(true);
+
+    const replay = await asUser<{ result: { claimed: boolean; reason: string } }>(
+      PAYER_UID, `select public.claim_referral_bonus('author') as result`,
+    );
+    expect(replay.rows[0].result).toMatchObject({ claimed: false, reason: 'already_claimed' });
+
+    const after = await balances();
+    expect(after.payer).toBe(before.payer + 50);
+    expect(after.author).toBe(before.author + 100);
+  });
+
+  it('accumulates a usage meter instead of overwriting it', async () => {
+    const record = () => asUser<{ usage_count: number }>(
+      PAYER_UID,
+      `select usage_count from public.record_feature_usage('casper_chat', 1,
+         date_trunc('month', now()), date_trunc('month', now()) + interval '1 month')`,
+    );
+
+    expect(Number((await record()).rows[0].usage_count)).toBe(1);
+    expect(Number((await record()).rows[0].usage_count)).toBe(2);
+    expect(Number((await record()).rows[0].usage_count)).toBe(3);
+  });
+
+  it('leaves no client-writable policy on the tables those functions own', async () => {
+    const { rows } = await db.query<{ tablename: string; policyname: string; cmd: string; roles: string[] }>(
+      `select tablename, policyname, cmd, roles
+         from pg_policies
+        where schemaname = 'public'
+          and tablename in ('transactions','subscriptions','feature_usage','bot_purchases')
+          and cmd <> 'SELECT'`,
+    );
+    // Writes to all four now happen only through the SECURITY DEFINER functions
+    // above (or the Stripe webhook, which runs as the service role).
+    expect(rows.map((row) => `${row.tablename}.${row.policyname} (${row.cmd})`)).toEqual([]);
+  });
+
+  it('binds a stream chat message to the account that sent it', async () => {
+    const { rows } = await db.query<{ withcheck: string | null }>(
+      `select with_check as withcheck from pg_policies
+        where schemaname='public' and tablename='stream_chat' and cmd='INSERT'`,
+    );
+    expect(rows).toHaveLength(1);
+    // The original policy asked only whether the caller was signed in, so
+    // sender_id and sender_name could name anybody.
+    expect(rows[0].withcheck).toMatch(/sender_id/);
+    expect(rows[0].withcheck).toMatch(/auth_uid/);
+  });
+
+  it('no longer lets any signed-in account delete any void post', async () => {
+    const { rows } = await db.query<{ policyname: string; cmd: string }>(
+      `select policyname, cmd from pg_policies
+        where schemaname='public' and tablename='void_posts' and cmd in ('ALL','DELETE')`,
+    );
+    expect(rows).toEqual([]);
   });
 });
 

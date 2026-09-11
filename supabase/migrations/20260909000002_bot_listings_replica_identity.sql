@@ -1,0 +1,20 @@
+-- Keep bot_listings updatable on Postgres 18.
+--
+-- `bot_listings` is published to supabase_realtime, carries the stored
+-- generated column `is_free`, and 0022 set its replica identity to FULL —
+-- which means the identity includes every column, generated ones included.
+-- Postgres 18 added replication of generated columns and, with it, a check
+-- that refuses the write outright:
+--
+--   ERROR: cannot update table "bot_listings"
+--   DETAIL: Replica identity must not contain unpublished generated columns.
+--
+-- Every UPDATE fails, so bumping purchase_count on a sale takes the whole
+-- marketplace purchase down with it. Postgres 17 has no such check, which is
+-- why this is invisible today and would surface as a total marketplace outage
+-- on the first major-version upgrade. Caught by the PGlite migration harness,
+-- which already runs 18.
+--
+-- The primary key is identity enough here: `is_free` is `price = 0`, and no
+-- subscriber reads an old record off this table.
+alter table public.bot_listings replica identity default;

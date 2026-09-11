@@ -173,7 +173,7 @@ export function registerStripeRoutes(app: Express, supabase: SupabaseClient): vo
   // Public endpoint returning available plans + prices
   app.get('/api/stripe/plans', (_req: Request, res: Response) => {
     res.json({
-      configured: missingStripeConfig().length === 0,
+      configured: missing.length === 0,
       plans: [
         { tier: 'indie', name: 'Indie', monthlyPrice: 0, annualPrice: 0 },
         {
@@ -195,7 +195,7 @@ export function registerStripeRoutes(app: Express, supabase: SupabaseClient): vo
   // ── POST /api/stripe/checkout ──
   // Creates a Stripe Checkout session for upgrading to a paid plan
   app.post('/api/stripe/checkout', async (req: Request, res: Response) => {
-    if (!stripe || missingStripeConfig().length > 0) {
+    if (!stripe || missing.length > 0) {
       return res.status(503).json({ error: 'Stripe is not configured.' });
     }
 
@@ -458,9 +458,14 @@ async function handleStripeEvent(
       const customerId = session.customer as string;
       const subscriptionId = session.subscription as string;
 
+      // Breaking here answered 200, so Stripe never retried: the customer had
+      // paid and the entitlement was simply never applied, with nothing but a
+      // warning line to find it by. Throwing turns it into a 500 and Stripe
+      // redelivers.
       if (!userId || !tier) {
-        console.warn('[Stripe Webhook] checkout.session.completed missing metadata');
-        break;
+        throw new Error(
+          `checkout.session.completed ${session.id} is missing bsc_user_id/tier metadata; refusing to drop a paid checkout.`,
+        );
       }
 
       await activateSubscription(supabase, {
@@ -487,14 +492,34 @@ async function handleStripeEvent(
       const priceId = subscription.items.data[0]?.price?.id || '';
       const tier = tierFromPriceId(priceId);
 
+      // An unresolvable customer used to answer 200, so a renewal or a
+      // cancellation could be dropped for good — including the case where this
+      // event simply overtook the checkout.session.completed that creates the
+      // mapping. Let Stripe redeliver instead.
       const user = await resolveUserByStripeCustomer(supabase, customerId, subscription.metadata?.bsc_user_id);
-      if (!user) break;
+      if (!user) {
+        throw new Error(
+          `customer.subscription.updated ${subscription.id}: no BSC user for Stripe customer ${customerId}.`,
+        );
+      }
 
       const mappedStatus = status === 'active' || status === 'trialing'
         ? 'active'
         : status === 'past_due'
           ? 'past_due'
           : 'cancelled';
+
+      // tierFromPriceId falls back to 'indie' for anything it does not
+      // recognise. On a live subscription that is a downgrade of a paying
+      // customer — every rotated price id that nobody added to
+      // STRIPE_*_LEGACY_PRICE_IDS would revoke their features on the next
+      // renewal event, while Stripe kept charging them.
+      if (mappedStatus === 'active' && tier === 'indie') {
+        throw new Error(
+          `customer.subscription.updated ${subscription.id}: price ${priceId} maps to no configured plan; ` +
+          'refusing to downgrade an active subscriber. Add it to STRIPE_<TIER>_LEGACY_PRICE_IDS.',
+        );
+      }
 
       const periodEnd = subscription.items.data[0]?.current_period_end
         ? new Date(subscription.items.data[0].current_period_end * 1000).toISOString()
@@ -536,8 +561,13 @@ async function handleStripeEvent(
       const subscription = event.data.object as Stripe.Subscription;
       const customerId = subscription.customer as string;
 
+      // Dropping this one leaves a cancelled customer on a paid tier forever.
       const user = await resolveUserByStripeCustomer(supabase, customerId, subscription.metadata?.bsc_user_id);
-      if (!user) break;
+      if (!user) {
+        throw new Error(
+          `customer.subscription.deleted ${subscription.id}: no BSC user for Stripe customer ${customerId}.`,
+        );
+      }
 
       await closeSubscription(supabase, {
         userId: user.id,

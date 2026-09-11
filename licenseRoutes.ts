@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Local Coder licensing — links external local-coder installs to a BSC account.
@@ -31,6 +31,10 @@ export function featuresForTier(tier: LicenseTier): LicenseFeatures {
 }
 
 const LICENSE_LABEL = 'local-coder';
+
+function mintKey(): string {
+  return `bsc_${randomBytes(24).toString('hex')}`;
+}
 
 export function hashLicenseKey(key: string): string {
   return createHash('sha256').update(key).digest('hex');
@@ -101,45 +105,34 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
     const rotate = shouldRotateLicenseKey(req.body);
+    const key = mintKey();
 
-    const { data: existing } = await supabase
-      .from('license_keys')
-      .select('id')
-      .eq('user_id', user.id)
-      .eq('label', LICENSE_LABEL)
-      .is('revoked_at', null)
-      .maybeSingle();
+    // Revoking the old row and inserting its replacement happen inside one
+    // Postgres transaction. Doing it as two Supabase requests meant a failure
+    // between them left the account with no active key while reporting the
+    // rotation as failed.
+    const { data, error } = await supabase.rpc('mint_license_key', {
+      p_user_id: user.id,
+      p_label: LICENSE_LABEL,
+      p_key_hash: hashLicenseKey(key),
+      p_rotate: rotate,
+    });
 
-    if (existing && !rotate) {
-      const tier = await resolveTier(supabase, user.id);
+    if (error) {
+      console.error('[License] mint_license_key error:', error.message);
+      return res.status(500).json({ error: 'Failed to create license key.' });
+    }
+
+    const outcome = (data ?? {}) as { minted?: boolean; rotated?: boolean };
+    const tier = await resolveTier(supabase, user.id);
+
+    // Nothing was minted, so there is no plaintext to hand back — only the
+    // existing key's presence.
+    if (!outcome.minted) {
       return res.json({ hasKey: true, tier, rotated: false });
     }
 
-    const { data: issued, error: issueError } = await supabase.rpc('issue_license_key', {
-      p_user_id: user.id,
-      p_label: LICENSE_LABEL,
-    });
-    if (issueError) {
-      console.error('[License] issue error:', issueError.message);
-      return res.status(500).json({ error: 'Failed to create license key.' });
-    }
-
-    const payload = Array.isArray(issued) ? issued[0] : issued;
-    if (
-      !payload
-      || typeof payload !== 'object'
-      || typeof (payload as { key?: unknown }).key !== 'string'
-    ) {
-      console.error('[License] issue_license_key returned an invalid payload');
-      return res.status(500).json({ error: 'Failed to create license key.' });
-    }
-
-    const tier = await resolveTier(supabase, user.id);
-    res.json({
-      key: (payload as { key: string }).key,
-      tier,
-      rotated: Boolean((payload as { rotated?: unknown }).rotated),
-    });
+    res.json({ key, tier, rotated: outcome.rotated === true });
   });
 
   // ── GET /api/license/verify ──

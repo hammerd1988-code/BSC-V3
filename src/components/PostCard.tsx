@@ -176,25 +176,30 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     }
     setIsBoosting(true);
     try {
+      // The debit and its ledger row move together inside spend_cred; the
+      // balance is read under a row lock there, so the client no longer
+      // decides whether the caller can afford this.
+      const { error: spendError } = await supabase.rpc('spend_cred', {
+        p_amount: 50,
+        p_reason: 'Boosted a transmission',
+      });
+      if (spendError) {
+        handleDbError(spendError, 'UPDATE', `posts/${post.id}`);
+        showNotice('Boost failed. Your CRED has not been charged — please retry.');
+        return;
+      }
+
       // supabase-js resolves with { error } rather than rejecting, so the catch
-      // below only covers a thrown exception; without firstResultError a failed
-      // debit or a blocked update looked exactly like a successful boost.
+      // below only covers a thrown exception; without firstResultError a
+      // blocked update looked exactly like a successful boost.
       const results = await Promise.all([
         supabase.from('posts').update({ is_boosted: true }).eq('id', post.id),
         supabase.rpc('increment_counter', { p_table: 'posts', p_id: post.id, p_field: 'boosts', p_amount: 1 }),
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'cred_balance', p_amount: -50 }),
-        supabase.from('transactions').insert({
-          user_id: currentUser.id,
-          amount: 50,
-          type: 'spend',
-          description: 'Boosted a transmission',
-          created_at: new Date().toISOString(),
-        }),
       ]);
       const failure = firstResultError(results);
       if (failure) {
         handleDbError(failure, 'UPDATE', `posts/${post.id}`);
-        showNotice('Boost failed. Your CRED has not been charged in full — please retry.');
+        showNotice('The CRED was charged but the boost did not apply. Contact support.');
       }
     } catch (error) {
       handleDbError(error, 'UPDATE', `posts/${post.id}`);
@@ -214,29 +219,30 @@ export const PostCard: React.FC<PostCardProps> = ({ post, onLike, onDelete }) =>
     }
 
     try {
-      const results = await Promise.all([
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: currentUser.id, p_field: 'cred_balance', p_amount: -amount }),
-        supabase.rpc('increment_counter', { p_table: 'users', p_id: post.author_id, p_field: 'cred_balance', p_amount: amount }),
-        supabase.from('transactions').insert([
-          { user_id: currentUser.id, amount, type: 'spend', description: 'Tipped post author for a transmission', created_at: new Date().toISOString() },
-          { user_id: post.author_id, amount, type: 'earn', description: `Tip from ${currentUser.username}`, created_at: new Date().toISOString() },
-        ]),
-        supabase.from('notifications').insert({
-          user_id: post.author_id,
+      // Debit, credit, both ledger rows and the author's notification commit as
+      // one transaction. As four independent statements the debit and credit
+      // could half-succeed, and the notification insert was rejected outright by
+      // the owner-scoped policy on `notifications` — so a tip that had already
+      // moved the CRED always reported itself as failed.
+      const { error } = await supabase.rpc('spend_cred', {
+        p_amount: amount,
+        p_reason: 'Tipped post author for a transmission',
+        p_recipient_id: post.author_id,
+        p_recipient_amount: amount,
+        p_recipient_notification: {
           type: 'tip',
-          payload: { amount, senderName: currentUser.display_name, senderUsername: currentUser.username, message: tipMessage, postId: post.id },
-          is_read: false,
-          created_at: new Date().toISOString(),
-        }),
-      ]);
-      // The debit and the credit are separate statements with no transaction
-      // around them, so a partial failure moves CRED that the other half never
-      // accounted for. That cannot be fixed here, but it must not be reported
-      // as a completed tip.
-      const failure = firstResultError(results);
-      if (failure) {
-        handleDbError(failure, 'CREATE', 'tips');
-        showNotice('The tip did not go through completely. Check your CRED balance before retrying.');
+          payload: {
+            amount,
+            senderName: currentUser.display_name,
+            senderUsername: currentUser.username,
+            message: tipMessage,
+            postId: post.id,
+          },
+        },
+      });
+      if (error) {
+        handleDbError(error, 'CREATE', 'tips');
+        showNotice('The tip did not go through. Your CRED has not been charged.');
         return;
       }
       setShowTipModal(false);
