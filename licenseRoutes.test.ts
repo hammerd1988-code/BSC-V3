@@ -200,6 +200,24 @@ describe('GET /api/license/key — JWT-to-profile binding', () => {
     expect((res.body as Record<string, unknown>).key).toBeUndefined();
     expect((res.body as Record<string, unknown>).tier).toBe('operator');
   });
+
+  it('answers 503 rather than reporting hasKey:false when the lookup fails', async () => {
+    // `hasKey: false` would offer "Generate License Key" to a user who
+    // already has one.
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
+      fromResponses: {
+        users: [{ data: { id: 'user-1' }, error: null }],
+        license_keys: [{ data: null, error: { message: 'DB offline' } }],
+      },
+    });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { authorization: AUTH_HEADER } });
+    const res = mockRes();
+    await routes['GET /api/license/key'](req, res as Response);
+    expect(res.statusCode).toBe(503);
+    expect((res.body as Record<string, unknown>).hasKey).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -323,6 +341,25 @@ describe('POST /api/license/key — rotation', () => {
     await routes['POST /api/license/key'](req, res as Response);
     expect(res.statusCode).toBe(500);
   });
+
+  it('does not touch the live key when the existing-key lookup fails', async () => {
+    // Treating a failed lookup as "no key exists" makes the fallthrough
+    // destructive as soon as rotation becomes one unconditional
+    // revoke-and-insert (#352). Only the lookup is registered here, so a route
+    // that carried on regardless would exhaust the mock queue and throw.
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
+      fromResponses: {
+        users: [{ data: { id: 'user-1' }, error: null }],
+        license_keys: [{ data: null, error: { message: 'DB offline' } }],
+      },
+    });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { authorization: AUTH_HEADER }, body: {} });
+    const res = mockRes();
+    await routes['POST /api/license/key'](req, res as Response);
+    expect(res.statusCode).toBe(503);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -412,6 +449,44 @@ describe('GET /api/license/verify — revoked-key rejection', () => {
     const body = res.body as Record<string, unknown>;
     expect(body.valid).toBe(true);
     expect(body.tier).toBe('operator');
+  });
+
+  // A transient database failure is not evidence that a key was revoked. If
+  // these answer 401/'indie', the Local Coder install caches a revocation or a
+  // downgrade that nothing about the subscription justifies.
+  it('answers 503, not 401, when the key lookup itself fails', async () => {
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: null }, error: null },
+      fromResponses: {
+        license_keys: [{ data: null, error: { message: 'DB offline' } }],
+      },
+    });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { 'x-license-key': KEY } });
+    const res = mockRes();
+    await routes['GET /api/license/verify'](req, res as Response);
+    expect(res.statusCode).toBe(503);
+  });
+
+  it('answers 503 rather than downgrading to indie when the tier lookup fails', async () => {
+    const supabase = makeSupabase({
+      getUserResult: { data: { user: null }, error: null },
+      fromResponses: {
+        license_keys: [
+          { data: { id: 'row-1', user_id: 'user-1', revoked_at: null }, error: null },
+          { data: null, error: null }, // last_used_at update (best-effort)
+        ],
+        users: [{ data: null, error: { message: 'DB offline' } }],
+      },
+    });
+    const routes = buildRouteMap(supabase);
+    const req = mockReq({ headers: { 'x-license-key': KEY } });
+    const res = mockRes();
+    await routes['GET /api/license/verify'](req, res as Response);
+    expect(res.statusCode).toBe(503);
+    const body = res.body as Record<string, unknown>;
+    expect(body.valid).toBe(false);
+    expect(body.features).toBeUndefined();
   });
 });
 

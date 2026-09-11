@@ -69,12 +69,31 @@ async function authenticateRequest(
   return data;
 }
 
-async function resolveTier(supabase: SupabaseClient, userId: string): Promise<LicenseTier> {
-  const { data } = await supabase
+/**
+ * Resolves the owner's entitlement tier, or `null` when the lookup itself
+ * failed.
+ *
+ * The distinction matters: a swallowed error used to fall through to
+ * `normalizeTier(undefined)` === 'indie', so a transient database blip
+ * downgraded a paying Operator/Architect to the free feature set. On
+ * `/api/license/verify` that reply is what the Local Coder install caches, so
+ * the customer lost hosted AI and remote nodes without anything changing about
+ * their subscription. Callers must treat `null` as "unknown, try again" rather
+ * than as a tier.
+ */
+async function resolveTier(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<LicenseTier | null> {
+  const { data, error } = await supabase
     .from('users')
     .select('subscription_tier, role')
     .eq('id', userId)
     .maybeSingle();
+  if (error) {
+    console.error('[License] tier lookup failed:', error.message);
+    return null;
+  }
   if (data?.role === 'admin') return 'architect';
   return normalizeTier(data?.subscription_tier);
 }
@@ -86,13 +105,20 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
     const user = await authenticateRequest(req, supabase);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-    const { data: row } = await supabase
+    const { data: row, error: lookupError } = await supabase
       .from('license_keys')
       .select('created_at')
       .eq('user_id', user.id)
       .eq('label', LICENSE_LABEL)
       .is('revoked_at', null)
       .maybeSingle();
+
+    // Reporting `hasKey: false` because the lookup failed tells the settings
+    // card to offer "Generate License Key" to someone who already has one.
+    if (lookupError) {
+      console.error('[License] key lookup failed:', lookupError.message);
+      return res.status(503).json({ error: 'License service unavailable. Try again.' });
+    }
 
     const tier = await resolveTier(supabase, user.id);
     res.json({ hasKey: !!row, createdAt: row?.created_at ?? null, tier });
@@ -106,7 +132,7 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
 
     const rotate = shouldRotateLicenseKey(req.body);
 
-    const { data: existing } = await supabase
+    const { data: existing, error: existingError } = await supabase
       .from('license_keys')
       .select('id')
       .eq('user_id', user.id)
@@ -114,11 +140,27 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
       .is('revoked_at', null)
       .maybeSingle();
 
+    // A failed lookup must not be read as "no key exists". Today that falls
+    // through to an insert the partial unique index rejects, which is a
+    // confusing 500; once rotation becomes a single unconditional revoke-and-
+    // insert (see #352) the same fallthrough would revoke a key the caller
+    // never asked to rotate.
+    if (existingError) {
+      console.error('[License] existing key lookup failed:', existingError.message);
+      return res.status(503).json({ error: 'License service unavailable. Try again.' });
+    }
+
     if (existing && !rotate) {
       const tier = await resolveTier(supabase, user.id);
       return res.json({ hasKey: true, tier, rotated: false });
     }
 
+    // NOTE: revoke-then-insert is still two Supabase requests, so an insert
+    // that fails after the revoke commits leaves the account with no live key
+    // while this route answers 500 (review comment 3839712732). That is being
+    // fixed atomically in #352, which also backfills the plaintext keys minted
+    // between b2ed3ec and d840bb6 — deliberately left to that PR rather than
+    // implemented a second time here.
     if (existing) {
       const { error: revokeError } = await supabase
         .from('license_keys')
@@ -153,17 +195,30 @@ export function registerLicenseRoutes(app: Express, supabase: SupabaseClient): v
     }
     const keyHash = hashLicenseKey(key);
 
-    const { data: row } = await supabase
+    const { data: row, error: lookupError } = await supabase
       .from('license_keys')
       .select('id, user_id, revoked_at')
       .eq('key', keyHash)
       .maybeSingle();
+
+    // "We could not check" is not "this key is invalid". Answering 401 on a
+    // transient failure tells a paying install its key was revoked; 503 tells
+    // it to retry.
+    if (lookupError) {
+      console.error('[License] verify lookup failed:', lookupError.message);
+      return res.status(503).json({ valid: false, error: 'License service unavailable. Try again.' });
+    }
 
     if (!row || row.revoked_at) {
       return res.status(401).json({ valid: false, error: 'Unknown or revoked license key.' });
     }
 
     const tier = await resolveTier(supabase, row.user_id);
+    // Same reasoning: never downgrade an unresolved tier to the free feature
+    // set, which is what the caller would cache as the account's entitlement.
+    if (!tier) {
+      return res.status(503).json({ valid: false, error: 'License service unavailable. Try again.' });
+    }
 
     // Best-effort usage stamp; verification result does not depend on it.
     void supabase
