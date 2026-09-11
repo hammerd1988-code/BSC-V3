@@ -182,6 +182,7 @@ export function SubscriptionSettings() {
   };
 
   const handlePortal = async () => {
+    if (portalBusy) return;
     setPortalBusy(true);
     setCheckoutError(null);
     try {

@@ -173,7 +173,7 @@ export function registerStripeRoutes(app: Express, supabase: SupabaseClient): vo
   // Public endpoint returning available plans + prices
   app.get('/api/stripe/plans', (_req: Request, res: Response) => {
     res.json({
-      configured: missingStripeConfig().length === 0,
+      configured: missing.length === 0,
       plans: [
         { tier: 'indie', name: 'Indie', monthlyPrice: 0, annualPrice: 0 },
         {
@@ -195,7 +195,7 @@ export function registerStripeRoutes(app: Express, supabase: SupabaseClient): vo
   // ── POST /api/stripe/checkout ──
   // Creates a Stripe Checkout session for upgrading to a paid plan
   app.post('/api/stripe/checkout', async (req: Request, res: Response) => {
-    if (!stripe || missingStripeConfig().length > 0) {
+    if (!stripe || missing.length > 0) {
       return res.status(503).json({ error: 'Stripe is not configured.' });
     }
 
