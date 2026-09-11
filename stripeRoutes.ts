@@ -141,13 +141,36 @@ async function authenticateRequest(
 // Route registration
 // ---------------------------------------------------------------------------
 
+/** Env vars that must be present for checkout to work; empty when fully configured. */
+export function missingStripeConfig(env: NodeJS.ProcessEnv = process.env): string[] {
+  return [
+    'STRIPE_SECRET_KEY',
+    'STRIPE_WEBHOOK_SECRET',
+    'STRIPE_OPERATOR_MONTHLY_PRICE_ID',
+    'STRIPE_OPERATOR_ANNUAL_PRICE_ID',
+    'STRIPE_ARCHITECT_MONTHLY_PRICE_ID',
+    'STRIPE_ARCHITECT_ANNUAL_PRICE_ID',
+  ].filter((name) => !env[name]);
+}
+
 export function registerStripeRoutes(app: Express, supabase: SupabaseClient): void {
   const stripe = getStripe();
+
+  const missing = missingStripeConfig();
+  if (missing.length > 0) {
+    console.error(
+      `[Stripe] Subscriptions are DISABLED — missing env: ${missing.join(', ')}. ` +
+      'Upgrade buttons will fail until these are set.',
+    );
+  } else {
+    console.log('[Stripe] Checkout configured.');
+  }
 
   // ── GET /api/stripe/plans ──
   // Public endpoint returning available plans + prices
   app.get('/api/stripe/plans', (_req: Request, res: Response) => {
     res.json({
+      configured: missingStripeConfig().length === 0,
       plans: [
         { tier: 'indie', name: 'Indie', monthlyPrice: 0, annualPrice: 0 },
         {
@@ -169,7 +192,9 @@ export function registerStripeRoutes(app: Express, supabase: SupabaseClient): vo
   // ── POST /api/stripe/checkout ──
   // Creates a Stripe Checkout session for upgrading to a paid plan
   app.post('/api/stripe/checkout', async (req: Request, res: Response) => {
-    if (!stripe) return res.status(503).json({ error: 'Stripe is not configured.' });
+    if (!stripe || missingStripeConfig().length > 0) {
+      return res.status(503).json({ error: 'Stripe is not configured.' });
+    }
 
     const user = await authenticateRequest(req, supabase);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
@@ -179,7 +204,7 @@ export function registerStripeRoutes(app: Express, supabase: SupabaseClient): vo
     if (!plan) return res.status(400).json({ error: 'Invalid plan tier.' });
 
     const priceId = billing === 'annual' ? plan.stripePriceIdAnnual : plan.stripePriceIdMonthly;
-    if (!priceId) return res.status(400).json({ error: 'Price not configured for this billing cycle.' });
+    if (!priceId) return res.status(503).json({ error: 'Price not configured for this billing cycle.' });
 
     try {
       // Find or create Stripe customer
