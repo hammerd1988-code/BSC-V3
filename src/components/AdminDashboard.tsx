@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { fromDb, supabase, toDb } from '../supabase';
 import { handleDbError } from '../lib/errors';
+import { authedFetch } from '../lib/authSession';
 import { ContentReport, ReportStatus, User } from '../types';
 import { Shield, Users, Activity, Edit2, Trash2, X, Check, Search, ShieldAlert, Clock, ExternalLink, Bot, Swords, Ghost, Wand2 } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
@@ -109,11 +110,15 @@ export const AdminDashboard: React.FC = () => {
 
     const fetchAiStatus = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session?.access_token) return;
-        const res = await fetch('/api/casper/status', { headers: { Authorization: `Bearer ${session.access_token}` } });
+        // The raw session here meant a token that expired behind a backgrounded
+        // dashboard produced a 401 with nothing to retry it, and the empty catch
+        // left the panel blank with no indication why.
+        const res = await authedFetch('/api/casper/status');
         if (res.ok) { const json = await res.json(); setAiStatus(json.status ?? null); }
-      } catch { /* non-critical */ }
+        else console.warn('[admin] Casper status unavailable:', res.status);
+      } catch (err) {
+        console.warn('[admin] Casper status request failed:', err);
+      }
     };
     fetchAiStatus();
 

@@ -75,22 +75,24 @@ const READONLY_BINARY_ALLOWLIST = new Set<string>([
   'ps', 'top', 'htop', 'lsof', 'netstat', 'ss',
   'which', 'type', 'command', 'whereis',
   'env', 'printenv',
-  'node', 'npm', 'npx', 'pnpm', 'yarn',
+  'node', 'npm', 'pnpm', 'yarn',
   'git',
   'curl', 'wget',
   'python', 'python3', 'pip', 'pip3',
   'ffmpeg', 'ffprobe',
-  'docker', 'docker-compose',
   'jq', 'yq',
 ]);
 
 // Additional binaries unlocked in elevated mode (admin + EXECUTION_MODE=elevated).
+// `npx`/`docker` run arbitrary third-party code by design, so they are not part
+// of a read-only diagnostic surface however the arguments are validated.
 const ELEVATED_BINARY_ALLOWLIST = new Set<string>([
   ...READONLY_BINARY_ALLOWLIST,
   'mkdir', 'touch', 'mv', 'cp', 'rm',
   'chmod', 'chown',
   'tar', 'zip', 'unzip', 'gzip', 'gunzip',
   'tsc', 'eslint', 'prettier', 'vitest', 'jest',
+  'npx', 'docker', 'docker-compose',
 ]);
 
 // Dangerous patterns blocked even when the binary is allowlisted.
@@ -114,6 +116,100 @@ const DENY_PATTERNS: RegExp[] = [
   /\beval\s+["`'$]/,
   /\bexec\s+["`'$]/,
 ];
+
+// Validating only the binary name is not enough: several allowlisted binaries
+// take an argument that turns them into a general-purpose interpreter, so
+// `node -e "require('child_process').execSync('...')"`, `python3 -c '...'`,
+// `env sh -c '...'` and `find . -exec sh {} +` all satisfied the allowlist and
+// were then handed to `bash -c` verbatim. These rules run against each pipe
+// segment whose binary matches, in BOTH modes — elevation widens which binaries
+// may run, not whether the allowlist can be stepped around.
+interface ArgumentRule {
+  pattern: RegExp;
+  reason: string;
+}
+
+const EXECUTION_ESCAPE_RULES: Record<string, ArgumentRule[]> = {
+  node: [
+    { pattern: /(?:^|\s)-(?:e|p|-eval|-print|-input-type)(?:=|\s|$)/, reason: 'inline script evaluation' },
+    { pattern: /(?:^|\s)-(?:r|-require)(?:=|\s|$)/, reason: 'module preloading' },
+  ],
+  python: [{ pattern: /(?:^|\s)-[A-Za-z]*[cm](?:\s|$)/, reason: 'inline script or module execution' }],
+  git: [
+    { pattern: /(?:^|\s)-c(?:=|\s)/, reason: 'config override (core.pager and friends run commands)' },
+    { pattern: /(?:^|\s)--(?:exec-path|upload-pack|receive-pack|config-env)(?:=|\s|$)/, reason: 'external command override' },
+  ],
+  find: [{ pattern: /(?:^|\s)-(?:exec|execdir|ok|okdir)(?:\s|$)/, reason: 'command execution' }],
+  awk: [
+    { pattern: /\bsystem\s*\(/, reason: 'system() call' },
+    { pattern: /\|\s*&|\|\s*["']/, reason: 'piping into a shell command' },
+  ],
+  sed: [{ pattern: /(?:^|[;{\s'"])\d*(?:,\s*\d+)?\s*[ewW](?:\s|$)/, reason: 'execute/write command' }],
+  npm: [{ pattern: /(?:^|\s)(?:run|run-script|exec|start|test|explore|install|i|ci|add|link|rebuild)(?:\s|$)/, reason: 'script execution' }],
+  pip: [{ pattern: /(?:^|\s)(?:install|download|wheel)(?:\s|$)/, reason: 'package build scripts run arbitrary code' }],
+};
+// Aliases that resolve to the same interpreter.
+EXECUTION_ESCAPE_RULES.nodejs = EXECUTION_ESCAPE_RULES.node;
+EXECUTION_ESCAPE_RULES.python3 = EXECUTION_ESCAPE_RULES.python;
+EXECUTION_ESCAPE_RULES.pip3 = EXECUTION_ESCAPE_RULES.pip;
+EXECUTION_ESCAPE_RULES.gawk = EXECUTION_ESCAPE_RULES.awk;
+EXECUTION_ESCAPE_RULES.mawk = EXECUTION_ESCAPE_RULES.awk;
+EXECUTION_ESCAPE_RULES.pnpm = EXECUTION_ESCAPE_RULES.npm;
+EXECUTION_ESCAPE_RULES.yarn = EXECUTION_ESCAPE_RULES.npm;
+
+// `env` and `command` exist to launch another binary, so anything past their own
+// flags/assignments is a command that never went through the allowlist.
+const COMMAND_LAUNCHERS = new Set(['env', 'command', 'nohup', 'timeout', 'setsid', 'stdbuf', 'nice', 'ionice']);
+
+// Write primitives. Read-only mode may inspect the host; it may not modify it.
+const READONLY_WRITE_RULES: Record<string, ArgumentRule[]> = {
+  tee: [{ pattern: /(?:^|\s)(?!-)\S/, reason: 'writes to a file' }],
+  curl: [{ pattern: /(?:^|\s)-(?:o|O|D|K|[A-Za-z]*o)(?:=|\s|$)|(?:^|\s)--(?:output|remote-name|dump-header|config|output-dir)(?:=|\s|$)/, reason: 'writes the response to a file' }],
+  wget: [{ pattern: /(?:^|\s)-(?:O|P)(?:=|\s|$)|(?:^|\s)--(?:output-document|output-file|directory-prefix|config)(?:=|\s|$)/, reason: 'writes the response to a file' }],
+};
+
+/**
+ * Check one pipe segment's arguments against the rules for its binary.
+ * Returns a rejection reason, or null when the segment is acceptable.
+ */
+function checkSegmentArguments(binary: string, segment: string, mode: CasperShellMode): string | null {
+  const args = stripBinaryToken(segment);
+
+  for (const rule of EXECUTION_ESCAPE_RULES[binary] ?? []) {
+    if (rule.pattern.test(args)) {
+      return `"${binary}" argument rejected: ${rule.reason} would bypass the binary allowlist.`;
+    }
+  }
+
+  if (COMMAND_LAUNCHERS.has(binary)) {
+    // `command -v foo` and a bare `env` only report; anything else runs a binary
+    // the allowlist never saw.
+    const remainder = args.replace(/^(?:\s*[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*))*\s*/, '').trim();
+    const reporting = remainder === '' || /^-[vV](?:\s|$)/.test(remainder) || /^--?(?:help|version)(?:\s|$)/.test(remainder);
+    if (!reporting) {
+      return `"${binary}" argument rejected: it launches another binary, which would bypass the allowlist.`;
+    }
+  }
+
+  if (mode === 'readonly') {
+    for (const rule of READONLY_WRITE_RULES[binary] ?? []) {
+      if (rule.pattern.test(args)) {
+        return `"${binary}" argument rejected in readonly mode: ${rule.reason}.`;
+      }
+    }
+  }
+
+  return null;
+}
+
+/** Drop the leading env assignments and the binary token, leaving the arguments. */
+function stripBinaryToken(segment: string): string {
+  const trimmed = segment.trim();
+  const tokens = trimmed.split(/\s+/);
+  let idx = 0;
+  while (idx < tokens.length && /^[A-Z_][A-Z0-9_]*=/i.test(tokens[idx])) idx += 1;
+  return tokens.slice(idx + 1).join(' ');
+}
 
 // Pull out the first real binary token from a single command segment.
 // Skips leading env-var prefixes like FOO=bar BAR=baz <binary> ...
@@ -147,8 +243,14 @@ function extractBinaryName(segment: string): string | null {
 //
 // Returned `forbidden` is the offending metacharacter, or null if only
 // pipes (or no metas) are present. `pipeSegments` is the command split on
-// top-level pipes (already trimmed).
-function analyzeCommandStructure(command: string): { forbidden: string | null; pipeSegments: string[] } {
+// top-level pipes (already trimmed). `redirectsToFile` reports a top-level
+// `>`/`>>` whose target is a path rather than an existing descriptor (`2>&1`),
+// which readonly mode rejects because it is a write to the host.
+function analyzeCommandStructure(command: string): {
+  forbidden: string | null;
+  pipeSegments: string[];
+  redirectsToFile: boolean;
+} {
   const segments: string[] = [];
   let current = '';
   let i = 0;
@@ -156,6 +258,7 @@ function analyzeCommandStructure(command: string): { forbidden: string | null; p
   let double = false;
   let backtick = false;
   let parenDepth = 0;
+  let redirectsToFile = false;
 
   const push = () => {
     segments.push(current);
@@ -181,24 +284,30 @@ function analyzeCommandStructure(command: string): { forbidden: string | null; p
 
     if (!literalContext) {
       // Substitution markers expand inside double quotes too — always reject.
-      if (ch === '`') return { forbidden: '`', pipeSegments: [] };
-      if (ch === '$' && next === '(') return { forbidden: '$(', pipeSegments: [] };
-      if (ch === '$' && next === '{') return { forbidden: '${', pipeSegments: [] };
+      if (ch === '`') return { forbidden: '`', pipeSegments: [], redirectsToFile };
+      if (ch === '$' && next === '(') return { forbidden: '$(', pipeSegments: [], redirectsToFile };
+      if (ch === '$' && next === '{') return { forbidden: '${', pipeSegments: [], redirectsToFile };
     }
 
     if (!expansionUnsafe && !literalContext && parenDepth === 0) {
       // Top-level command separators / structural operators. These are not
       // expanded inside any quote context, so we only check them when fully
       // outside quotes/parens.
-      if (ch === '\n') return { forbidden: 'newline', pipeSegments: [] };
-      if (ch === ';') return { forbidden: ';', pipeSegments: [] };
-      if (ch === '&' && next === '&') return { forbidden: '&&', pipeSegments: [] };
-      if (ch === '|' && next === '|') return { forbidden: '||', pipeSegments: [] };
-      if (ch === '&') return { forbidden: '&', pipeSegments: [] };
-      if (ch === '<' && next === '(') return { forbidden: '<(', pipeSegments: [] };
-      if (ch === '>' && next === '(') return { forbidden: '>(', pipeSegments: [] };
+      if (ch === '\n') return { forbidden: 'newline', pipeSegments: [], redirectsToFile };
+      if (ch === ';') return { forbidden: ';', pipeSegments: [], redirectsToFile };
+      if (ch === '&' && next === '&') return { forbidden: '&&', pipeSegments: [], redirectsToFile };
+      if (ch === '|' && next === '|') return { forbidden: '||', pipeSegments: [], redirectsToFile };
+      if (ch === '&') return { forbidden: '&', pipeSegments: [], redirectsToFile };
+      if (ch === '<' && next === '(') return { forbidden: '<(', pipeSegments: [], redirectsToFile };
+      if (ch === '>' && next === '(') return { forbidden: '>(', pipeSegments: [], redirectsToFile };
       if (ch === '(' && (current.trim() === '' || /[\s|]$/.test(current))) {
-        return { forbidden: '(', pipeSegments: [] };
+        return { forbidden: '(', pipeSegments: [], redirectsToFile };
+      }
+      // `>`/`>>` to a path writes the host; `>&1`, `2>&1` only rebind a
+      // descriptor that is already open.
+      if (ch === '>') {
+        const after = next === '>' ? command[i + 2] : next;
+        if (after !== '&') redirectsToFile = true;
       }
       // Top-level pipe — split here.
       if (ch === '|') {
@@ -228,11 +337,12 @@ function analyzeCommandStructure(command: string): { forbidden: string | null; p
   }
   push();
 
-  if (single || double || backtick) return { forbidden: 'unterminated_quote', pipeSegments: [] };
+  if (single || double || backtick) return { forbidden: 'unterminated_quote', pipeSegments: [], redirectsToFile };
 
   return {
     forbidden: null,
     pipeSegments: segments.map((s) => s.trim()).filter((s) => s.length > 0),
+    redirectsToFile,
   };
 }
 
@@ -350,7 +460,38 @@ export async function runCasperShell(
         reason: 'binary_not_allowlisted',
       };
     }
+    // The binary alone does not decide what runs: several allowlisted tools take
+    // an argument that evaluates arbitrary code.
+    const argumentReason = checkSegmentArguments(binary, segment, mode);
+    if (argumentReason) {
+      return {
+        ok: false,
+        command: trimmed,
+        exitCode: null,
+        signal: null,
+        stdout: '',
+        stderr: argumentReason,
+        durationMs: Date.now() - start,
+        truncated: false,
+        reason: 'argument_not_permitted',
+      };
+    }
     if (!firstBinary) firstBinary = binary;
+  }
+
+  if (mode === 'readonly' && structure.redirectsToFile) {
+    const reason = 'Command rejected: output redirection to a file is not permitted in readonly mode.';
+    return {
+      ok: false,
+      command: trimmed,
+      exitCode: null,
+      signal: null,
+      stdout: '',
+      stderr: reason,
+      durationMs: Date.now() - start,
+      truncated: false,
+      reason: 'readonly_write_blocked',
+    };
   }
 
   const cwd = options.cwd ?? defaultCwd();
