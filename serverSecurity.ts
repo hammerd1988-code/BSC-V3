@@ -35,13 +35,18 @@ export function handleRestCors(
   allowedOrigins: string[],
 ): boolean {
   const origin = req.headers.origin;
-  if (origin && allowedOrigins.includes(origin)) {
+  const originAllowed = Boolean(origin && allowedOrigins.includes(origin));
+  if (originAllowed && origin) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Methods', REST_CORS_ALLOW_METHODS);
     res.setHeader('Access-Control-Allow-Headers', REST_CORS_ALLOW_HEADERS);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
   if (req.method === 'OPTIONS') {
+    if (origin && !originAllowed) {
+      res.sendStatus(403);
+      return true;
+    }
     res.sendStatus(204);
     return true;
   }

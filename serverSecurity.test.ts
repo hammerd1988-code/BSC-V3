@@ -86,6 +86,19 @@ describe('handleRestCors', () => {
     expect(res.headers['Access-Control-Allow-Headers']).toBe(REST_CORS_ALLOW_HEADERS);
     expect(res.headers['Access-Control-Allow-Headers']).toContain('x-license-key');
   });
+
+  it('rejects disallowed cross-origin preflights instead of acknowledging them', () => {
+    const res = mockRes();
+    const handled = handleRestCors(
+      mockReq({ method: 'OPTIONS', headers: { origin: 'https://evil.example' } }),
+      res,
+      ['https://app.example'],
+    );
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(403);
+    expect(res.headers['Access-Control-Allow-Origin']).toBeUndefined();
+  });
 });
 
 describe('assertProductionConfig', () => {

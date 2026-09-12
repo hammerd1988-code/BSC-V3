@@ -327,18 +327,10 @@ const getCurrentPeriod = () => {
   return { start: start.toISOString(), end: end.toISOString() };
 };
 
-async function authedFetch(path: string, opts: RequestInit = {}): Promise<Response> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token;
-  return fetch(path, {
-    ...opts,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(opts.headers || {}),
-    },
-  });
-}
+// Checkout and portal go through the shared helper in src/lib/authSession.ts.
+// The local copy read the raw session, so it neither refreshed a token that was
+// about to expire nor retried a 401 — the exact failure a backgrounded tab hits,
+// and here it meant "Upgrade" silently did nothing.
 
 export function SubscriptionProvider({ children }: { children: React.ReactNode }) {
   const { currentUser } = useAuth();
