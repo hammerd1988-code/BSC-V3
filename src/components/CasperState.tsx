@@ -90,9 +90,12 @@ export const CasperState: React.FC<CasperStateProps> = ({ context = 'feed', prof
     }
   };
 
+  // `fetchAndAnalyze` returns early without a signed-in user, so the id has to
+  // be a dependency: mounting while auth was still resolving left the panel on
+  // its default state until a full remount.
   useEffect(() => {
     fetchAndAnalyze();
-  }, [context, profileUsername]);
+  }, [context, profileUsername, currentUser?.id]);
 
   useEffect(() => {
     return () => {

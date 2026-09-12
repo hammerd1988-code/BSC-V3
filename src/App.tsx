@@ -16,6 +16,7 @@ import { updateDailyStreak } from './lib/achievements';
 import { isRecentlyCreatedAccount, shouldShowOnboarding } from './lib/onboarding';
 import { registerNativePush } from './lib/mobile';
 import { supabase } from './supabase';
+import { firstResultError } from './lib/errors';
 import { useSubscription } from './lib/subscription';
 
 const Feed = lazy(() => import('./components/Feed').then((m) => ({ default: m.Feed })));
@@ -156,15 +157,22 @@ export default function App() {
 
       if (existing) return; // Already processed
 
-      // Record referral
-      await supabase.from('referrals').insert({
+      // Record referral. The insert is what makes this idempotent — the
+      // `existing` check above reads the row it writes — so awarding CRED after
+      // a failed insert would re-award it on every subsequent sign-in.
+      const { error: referralError } = await supabase.from('referrals').insert({
         referrer_id: referrer.id,
         referred_id: newUserId,
         referrer_username: referrerUsername,
       });
+      if (referralError) {
+        console.error('[Referral] Could not record the referral, skipping the award:', referralError.message);
+        return;
+      }
 
-      // Award CRED to both
-      await Promise.all([
+      // Award CRED to both. supabase-js resolves with `{ error }` rather than
+      // rejecting, so the catch below never saw a failed award.
+      const awardError = firstResultError(await Promise.all([
         supabase.rpc('increment_counter', { p_table: 'users', p_id: referrer.id, p_field: 'cred_balance', p_amount: 100 }),
         supabase.rpc('increment_counter', { p_table: 'users', p_id: newUserId, p_field: 'cred_balance', p_amount: 50 }),
         supabase.from('transactions').insert([
@@ -177,7 +185,10 @@ export default function App() {
           data: { referred_id: newUserId, cred_awarded: 100 },
           read: false,
         }),
-      ]);
+      ]));
+      if (awardError) {
+        console.error('[Referral] Award partially failed:', awardError);
+      }
     } catch (err) {
       console.error('[Referral] Processing error:', err);
     }
