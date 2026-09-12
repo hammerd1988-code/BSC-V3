@@ -34,6 +34,13 @@ interface CoBrowseSession {
   streaming: boolean;
   intervalHandle: ReturnType<typeof setInterval> | null;
   socketId: string;
+  /**
+   * A capture takes a Playwright screenshot plus two round-trips for the title
+   * and URL, which regularly outruns the ~333ms tick. Without this the timer
+   * stacked overlapping captures on one page, so frames arrived out of order and
+   * a slow page grew an unbounded backlog of in-flight screenshots.
+   */
+  capturing: boolean;
 }
 
 const activeSessions = new Map<string, CoBrowseSession>();
@@ -44,7 +51,8 @@ async function captureAndEmit(
   socket: Socket,
   session: CoBrowseSession,
 ): Promise<void> {
-  if (!session.streaming) return;
+  if (!session.streaming || session.capturing) return;
+  session.capturing = true;
   try {
     const page = getCoBrowsePage(session.userId, session.pageId);
     if (!page) return;
@@ -52,6 +60,9 @@ async function captureAndEmit(
     const base64 = `data:image/jpeg;base64,${(buf as Buffer).toString('base64')}`;
     const title = await page.title();
     const url = page.url();
+    // The session can be stopped while the screenshot is in flight; emitting
+    // then delivers a frame after `cobrowse:stopped`.
+    if (!session.streaming) return;
     socket.emit('cobrowse:frame', {
       pageId: session.pageId,
       url,
@@ -62,6 +73,8 @@ async function captureAndEmit(
     });
   } catch (err) {
     console.warn('[cobrowse] Frame capture failed:', err);
+  } finally {
+    session.capturing = false;
   }
 }
 
@@ -100,10 +113,13 @@ export function registerCoBrowseSocket(io: SocketServer, supabase: SupabaseClien
       }
       if (!existingBound) setSocketUserId(socket, userId);
 
-      // Clean up any existing session for this user
+      // Clean up any existing session for this user. Clearing the interval is
+      // not enough on its own: a capture already in flight resolves afterwards
+      // and emits a frame for the replaced page.
       const existing = activeSessions.get(userId);
-      if (existing?.intervalHandle) {
-        clearInterval(existing.intervalHandle);
+      if (existing) {
+        existing.streaming = false;
+        if (existing.intervalHandle) clearInterval(existing.intervalHandle);
       }
 
       try {
@@ -125,6 +141,7 @@ export function registerCoBrowseSocket(io: SocketServer, supabase: SupabaseClien
           streaming: true,
           intervalHandle: null,
           socketId: socket.id,
+          capturing: false,
         };
 
         // Send the initial frame (this one comes from browserNavigate which

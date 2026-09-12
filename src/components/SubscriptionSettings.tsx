@@ -4,10 +4,6 @@ import { SUBSCRIPTION_PLANS, useSubscription, TIER_RANK } from '../lib/subscript
 import type { SubscriptionTier } from '../lib/subscription';
 import { authedFetch } from '../lib/authSession';
 
-async function licenseFetch(path: string, opts: RequestInit = {}): Promise<Response> {
-  return authedFetch(path, opts);
-}
-
 export function maskLicenseKey(licenseKey: string): string {
   if (licenseKey.length <= 4) return '•'.repeat(licenseKey.length);
   if (licenseKey.length <= 10) {
@@ -30,7 +26,7 @@ function LocalCoderLicense() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    licenseFetch('/api/license/key')
+    authedFetch('/api/license/key')
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => setHasKey(Boolean(data?.hasKey)))
       .catch(() => setHasKey(false));
@@ -40,7 +36,7 @@ function LocalCoderLicense() {
     setBusy(true);
     setError(null);
     try {
-      const res = await licenseFetch('/api/license/key', {
+      const res = await authedFetch('/api/license/key', {
         method: 'POST',
         body: JSON.stringify({ rotate }),
       });
@@ -165,14 +161,31 @@ export function SubscriptionSettings() {
   const { tier: currentTier, openCheckout, openPortal, subscription } = useSubscription();
   const [billing, setBilling] = useState<'monthly' | 'annual'>('annual');
   const [loadingTier, setLoadingTier] = useState<string | null>(null);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [portalBusy, setPortalBusy] = useState(false);
 
   const handleUpgrade = async (planTier: SubscriptionTier) => {
     if (planTier === 'indie' || planTier === currentTier) return;
     setLoadingTier(planTier);
+    setCheckoutError(null);
     try {
       await openCheckout(planTier as 'operator' | 'architect', billing);
+    } catch (err) {
+      setCheckoutError(err instanceof Error ? err.message : 'Could not open checkout. Please try again.');
     } finally {
       setLoadingTier(null);
+    }
+  };
+
+  const handlePortal = async () => {
+    setPortalBusy(true);
+    setCheckoutError(null);
+    try {
+      await openPortal();
+    } catch (err) {
+      setCheckoutError(err instanceof Error ? err.message : 'Could not open the billing portal. Please try again.');
+    } finally {
+      setPortalBusy(false);
     }
   };
 
@@ -284,16 +297,26 @@ export function SubscriptionSettings() {
           })}
         </div>
 
+        {checkoutError && (
+          <div
+            role="alert"
+            className="mt-6 rounded-xl border border-red-500/30 bg-red-950/40 px-4 py-3 text-center text-sm font-bold text-red-200"
+          >
+            {checkoutError}
+          </div>
+        )}
+
         <LocalCoderLicense />
 
         {/* Manage subscription */}
         {subscription?.stripe_customer_id && (
           <div className="mt-8 text-center">
             <button
-              onClick={() => openPortal()}
-              className="rounded-xl border border-white/10 bg-white/5 px-6 py-2.5 text-sm font-bold uppercase tracking-wider text-zinc-300 transition hover:bg-white/10"
+              onClick={handlePortal}
+              disabled={portalBusy}
+              className="rounded-xl border border-white/10 bg-white/5 px-6 py-2.5 text-sm font-bold uppercase tracking-wider text-zinc-300 transition hover:bg-white/10 disabled:opacity-50"
             >
-              Manage Billing & Invoices
+              {portalBusy ? 'Opening…' : 'Manage Billing & Invoices'}
             </button>
           </div>
         )}

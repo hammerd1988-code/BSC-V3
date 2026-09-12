@@ -1,4 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { createHmac } from 'node:crypto';
+import { isIP } from 'node:net';
 import { createServerSupabaseClient } from './serverSupabase.js';
 import { assertPublicHttpUrl } from './outboundUrl.js';
 
@@ -25,6 +27,34 @@ export async function assertDispatchableWebhookUrl(rawUrl: string): Promise<URL>
   return url;
 }
 
+/**
+ * Validating the hostname and then fetching it by name resolves DNS twice, and a
+ * subscriber controls what the second answer is: a host that is public when
+ * checked can point at 169.254.169.254 microseconds later, and the payload goes
+ * to the internal target instead. Connect to the address the guard actually
+ * approved and carry the original Host header, the way `casperEmbedProbe.ts`
+ * already does for its probes.
+ */
+export function pinUrlToAddress(url: URL, resolvedAddress: string | null): { target: string; hostHeader: string | null } {
+  const hostname = url.hostname.replace(/^\[|\]$/g, '');
+  if (!resolvedAddress || isIP(hostname)) return { target: url.toString(), hostHeader: null };
+
+  const pinned = new URL(url.toString());
+  const hostHeader = pinned.host;
+  pinned.hostname = resolvedAddress.includes(':') ? `[${resolvedAddress}]` : resolvedAddress;
+  return { target: pinned.toString(), hostHeader };
+}
+
+/**
+ * Sign the exact bytes that go on the wire. The header used to carry the shared
+ * secret itself, so a receiver could not tell a genuine delivery from a replay,
+ * and anyone who saw one delivery (plain http is permitted for subscribers who
+ * registered that way) held the credential for every future one.
+ */
+export function signWebhookBody(secret: string, body: string, timestamp: string): string {
+  return createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
+}
+
 
 export async function dispatchWebhookEvent(eventType: string, targetUserId: string, payload: any) {
   try {
@@ -41,7 +71,13 @@ export async function dispatchWebhookEvent(eventType: string, targetUserId: stri
     // Dispatch to all matching subscriptions
     for (const sub of subscriptions) {
       try {
-        await assertDispatchableWebhookUrl(sub.webhook_url);
+        const { url, resolvedAddress } = await assertPublicHttpUrl(sub.webhook_url, {
+          label: 'webhook URL',
+          allowHttp: true,
+        });
+
+        const timestamp = new Date().toISOString();
+        const body = JSON.stringify({ event: eventType, timestamp, data: payload });
 
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
@@ -49,19 +85,20 @@ export async function dispatchWebhookEvent(eventType: string, targetUserId: stri
         };
 
         if (sub.secret) {
-          headers['X-BSC-Signature'] = sub.secret; // In production, use HMAC
+          headers['X-BSC-Timestamp'] = timestamp;
+          headers['X-BSC-Signature'] = `sha256=${signWebhookBody(sub.secret, body, timestamp)}`;
         }
 
+        const { target, hostHeader } = pinUrlToAddress(url, resolvedAddress);
+        if (hostHeader) headers.Host = hostHeader;
+
         // Bot-supplied URLs are arbitrary hosts, so a slow or hanging endpoint
-        // must not hold this dispatch open indefinitely.
-        await fetch(sub.webhook_url, {
+        // must not hold this dispatch open indefinitely. Redirects are refused
+        // because the guard only vetted the first hop.
+        await fetch(target, {
           method: 'POST',
           headers,
-          body: JSON.stringify({
-            event: eventType,
-            timestamp: new Date().toISOString(),
-            data: payload
-          }),
+          body,
           redirect: 'error',
           signal: AbortSignal.timeout(10_000)
         });
