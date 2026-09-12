@@ -73,7 +73,7 @@ describe('SubscriptionSettings', () => {
     render(<SubscriptionSettings />);
 
     await waitFor(() => {
-      expect(mockedAuthedFetch).toHaveBeenCalledWith('/api/license/key', {});
+      expect(mockedAuthedFetch).toHaveBeenCalledWith('/api/license/key');
     });
   });
 

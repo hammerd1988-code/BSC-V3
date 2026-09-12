@@ -4,10 +4,6 @@ import { SUBSCRIPTION_PLANS, useSubscription, TIER_RANK } from '../lib/subscript
 import type { SubscriptionTier } from '../lib/subscription';
 import { authedFetch } from '../lib/authSession';
 
-async function licenseFetch(path: string, opts: RequestInit = {}): Promise<Response> {
-  return authedFetch(path, opts);
-}
-
 export function maskLicenseKey(licenseKey: string): string {
   if (licenseKey.length <= 4) return '•'.repeat(licenseKey.length);
   if (licenseKey.length <= 10) {
@@ -30,7 +26,7 @@ function LocalCoderLicense() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    licenseFetch('/api/license/key')
+    authedFetch('/api/license/key')
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => setHasKey(Boolean(data?.hasKey)))
       .catch(() => setHasKey(false));
@@ -40,7 +36,7 @@ function LocalCoderLicense() {
     setBusy(true);
     setError(null);
     try {
-      const res = await licenseFetch('/api/license/key', {
+      const res = await authedFetch('/api/license/key', {
         method: 'POST',
         body: JSON.stringify({ rotate }),
       });
