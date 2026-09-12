@@ -129,6 +129,7 @@ const RPC_SIGNATURES: Array<[string, string[]]> = [
   ['remove_friend', ['p_friend_id']],
   ['resolve_colosseum_match_server', ['p_actor_auth_uid', 'p_judgement', 'p_match_id', 'p_replay_data', 'p_winner_id']],
   ['respond_friend_request', ['p_accept', 'p_from_id']],
+  ['rotate_license_key', ['p_key_hash', 'p_label', 'p_user_id']],
   ['search_casper_memories', ['p_limit', 'p_memory_types', 'p_user_id', 'query_text']],
   ['send_friend_request', ['p_target_id']],
   ['cancel_friend_request', ['p_target_id']],
@@ -151,6 +152,7 @@ const REQUIRED_FUNCTIONS = [
   'remove_friend',
   'convert_cred_to_compute',
   'complete_colosseum_match',
+  'rotate_license_key',
 ];
 
 describe('supabase migrations', () => {
@@ -565,6 +567,59 @@ describe('supabase migrations', () => {
       `select count(*)::text as count from public.transactions where external_id = 'sq-payment-2'`,
     );
     expect(ledger.rows[0].count).toBe('0');
+  });
+
+  /**
+   * The route used to revoke the active key in one request and insert its
+   * replacement in a second. A failure in between left the account with no
+   * active key even though the API reported the rotation had failed.
+   */
+  it('revokes and mints a license key atomically', async () => {
+    const userId = 'license-user-rotate';
+    await db.query(
+      `insert into public.users (id, username, display_name)
+       values ('${userId}', 'license_user_rotate', 'License User Rotate')
+       on conflict (id) do nothing`,
+    );
+    await db.query(
+      `insert into public.license_keys (user_id, key, label)
+       values ('${userId}', 'hash-original', 'local-coder')`,
+    );
+
+    const rotated = await db.query<{ rotate_license_key: boolean }>(
+      `select public.rotate_license_key('${userId}', 'local-coder', 'hash-second')`,
+    );
+    expect(rotated.rows[0].rotate_license_key).toBe(true);
+
+    const { rows: active } = await db.query<{ key: string }>(
+      `select key from public.license_keys
+        where user_id = '${userId}' and revoked_at is null`,
+    );
+    expect(active).toHaveLength(1);
+    expect(active[0].key).toBe('hash-second');
+
+    // `key` is unique, so re-using a hash makes the insert fail. The revoke has
+    // to go with it — otherwise the account is left with no way to verify.
+    await expect(
+      db.query(`select public.rotate_license_key('${userId}', 'local-coder', 'hash-original')`),
+    ).rejects.toThrow();
+
+    const { rows: afterFailure } = await db.query<{ key: string }>(
+      `select key from public.license_keys
+        where user_id = '${userId}' and revoked_at is null`,
+    );
+    expect(afterFailure).toHaveLength(1);
+    expect(afterFailure[0].key).toBe('hash-second');
+  });
+
+  it('keeps rotate_license_key out of client reach', async () => {
+    const { rows } = await db.query<{ anon: boolean; authed: boolean }>(
+      `select has_function_privilege('anon', 'public.rotate_license_key(text, text, text)', 'execute') as anon,
+              has_function_privilege('authenticated', 'public.rotate_license_key(text, text, text)', 'execute') as authed`,
+    );
+    // A client reaching it directly could mint a key for any user_id it named.
+    expect(rows[0]?.anon).toBe(false);
+    expect(rows[0]?.authed).toBe(false);
   });
 });
 

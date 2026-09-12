@@ -80,19 +80,21 @@ function makeSupabase({
     return chainFor(result);
   };
 
+  const rpc = vi.fn((fn: string) => {
+    const q = rpcQueues[fn];
+    if (!q || q.length === 0) {
+      throw new Error(
+        `Unexpected or exhausted Supabase mock rpc: .rpc("${fn}"). ` +
+        `Registered functions: [${Object.keys(rpcQueues).join(', ')}]`,
+      );
+    }
+    return Promise.resolve(q.shift()!);
+  });
+
   return {
     auth: { getUser: vi.fn().mockResolvedValue(getUserResult) },
     from,
-    rpc: vi.fn((fn: string) => {
-      const q = rpcQueues[fn];
-      if (!q || q.length === 0) {
-        throw new Error(
-          `Unexpected or exhausted Supabase mock RPC: .rpc("${fn}"). ` +
-          `Registered RPCs: [${Object.keys(rpcQueues).join(', ')}]`,
-        );
-      }
-      return Promise.resolve(q.shift()!);
-    }),
+    rpc,
   } as unknown as SupabaseClient;
 }
 
@@ -270,7 +272,7 @@ describe('POST /api/license/key — key reuse', () => {
 // ---------------------------------------------------------------------------
 
 describe('POST /api/license/key — rotation', () => {
-  it('revokes the old key and mints a new one', async () => {
+  it('revokes the old key and mints a new one in a single transaction', async () => {
     const supabase = makeSupabase({
       getUserResult: { data: { user: { id: 'auth-uid-1' } }, error: null },
       fromResponses: {
@@ -295,6 +297,13 @@ describe('POST /api/license/key — rotation', () => {
     expect(body.rotated).toBe(true);
     expect(typeof body.key).toBe('string');
     expect(body.key).toBe('bsc_rotatednewkey');
+
+    const rpc = (supabase as unknown as { rpc: ReturnType<typeof vi.fn> }).rpc;
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc).toHaveBeenCalledWith('issue_license_key', {
+      p_user_id: 'user-1',
+      p_label: 'local-coder',
+    });
   });
 
   it('mints a new key when no prior key exists (rotated:false since nothing was revoked)', async () => {
@@ -341,6 +350,7 @@ describe('POST /api/license/key — rotation', () => {
     const res = mockRes();
     await routes['POST /api/license/key'](req, res as Response);
     expect(res.statusCode).toBe(500);
+    expect((res.body as Record<string, unknown>).key).toBeUndefined();
   });
 
   it('returns 500 when the atomic issuer returns an invalid payload', async () => {
@@ -362,6 +372,7 @@ describe('POST /api/license/key — rotation', () => {
     const res = mockRes();
     await routes['POST /api/license/key'](req, res as Response);
     expect(res.statusCode).toBe(500);
+    expect((res.body as Record<string, unknown>).key).toBeUndefined();
   });
 });
 

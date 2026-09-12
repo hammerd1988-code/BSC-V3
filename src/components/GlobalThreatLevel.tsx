@@ -9,6 +9,10 @@ import { supabase } from '../supabase';
 // 3: HIGH (High activity)
 // 4: CRITICAL (Extreme activity / Spikes)
 
+const ACTIVITY_WINDOW_MS = 5 * 60 * 1000;
+const ACTIVITY_SAMPLE_LIMIT = 20;
+const ACTIVITY_DECAY_INTERVAL_MS = 30 * 1000;
+
 export const GlobalThreatLevel: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [threatLevel, setThreatLevel] = useState<number>(1);
@@ -16,15 +20,22 @@ export const GlobalThreatLevel: React.FC = () => {
 
   // Listen to recent posts to determine threat level
   useEffect(() => {
-    const fiveMinsAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    let cancelled = false;
 
+    // The cutoff has to move with the clock. Computing it once at mount froze
+    // the window: after five minutes on the page every genuinely recent post was
+    // being compared against a timestamp that had aged past it, so the level
+    // stayed pinned low until a full remount.
     const fetchActivity = async () => {
+      const since = new Date(Date.now() - ACTIVITY_WINDOW_MS).toISOString();
       const { data } = await supabase
         .from('posts')
         .select('created_at')
+        .gte('created_at', since)
         .order('created_at', { ascending: false })
-        .limit(20);
-      const recentCount = (data ?? []).filter(p => p.created_at > fiveMinsAgo).length;
+        .limit(ACTIVITY_SAMPLE_LIMIT);
+      if (cancelled) return;
+      const recentCount = data?.length ?? 0;
       setRecentActivity(recentCount);
       if (recentCount > 10) setThreatLevel(4);
       else if (recentCount > 5) setThreatLevel(3);
@@ -32,16 +43,25 @@ export const GlobalThreatLevel: React.FC = () => {
       else setThreatLevel(1);
     };
 
-    fetchActivity();
+    void fetchActivity();
 
     const channel = supabase
       .channel('threat-level-posts')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts' }, () => {
-        fetchActivity();
+        void fetchActivity();
       })
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
+    // Inserts alone can only raise the level. Without a tick the readout stays
+    // CRITICAL after a burst for as long as the tab is open, because nothing
+    // re-evaluates once the posts age out of the window.
+    const decayTimer = window.setInterval(() => { void fetchActivity(); }, ACTIVITY_DECAY_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(decayTimer);
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   // Canvas Animation

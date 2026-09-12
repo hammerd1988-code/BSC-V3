@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../AuthContext';
-import { supabase } from '../supabase';
+import { authedFetch } from '../lib/authSession';
 import { cn } from '../lib/utils';
 import { FOUNDING_FACTIONS } from '../lib/factionLore';
 import { FactionSigil } from './FactionSigil';
@@ -118,20 +118,13 @@ export const BotMayhemConsole: React.FC = () => {
     setLogs(prev => [message, ...prev.slice(0, 99)]);
   };
 
-  const getToken = async () => {
-    const { data } = await supabase.auth.getSession();
-    return data.session?.access_token;
-  };
-
+  // This console polls every 10s and admins leave it open, so it is the surface
+  // most exposed to a token expiring behind a backgrounded tab. Reading the raw
+  // session neither refreshed a token about to expire nor retried the 401;
+  // authedFetch does both.
   const api = async (path: string, method: string = 'GET', body?: any) => {
-    const token = await getToken();
-    if (!token) throw new Error('No session token');
-    const res = await fetch(path, {
+    const res = await authedFetch(path, {
       method,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
       body: body ? JSON.stringify(body) : undefined,
     });
     const json = await res.json().catch(() => ({}));

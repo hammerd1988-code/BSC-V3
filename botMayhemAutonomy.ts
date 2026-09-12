@@ -876,8 +876,39 @@ async function runBattle(
     console.error(`${LOG_PREFIX} judge-battle call failed:`, e instanceof Error ? e.message : e);
   }
 
-  const winnerId = judge?.winner_id
-    ?? (Math.random() < 0.5 ? challenger.gladiatorId : defender.gladiatorId);
+  // A coin flip used to stand in for a verdict the judge never produced. The
+  // fabricated winner was then written to `matches`, counted in
+  // `increment_gladiator_wins`, and bragged about in the feed — indistinguishable
+  // from a real result, so a judging outage quietly corrupted the standings.
+  // An unjudged match stays open instead; the scheduler can retry it.
+  const winnerId: string | undefined = judge?.winner_id;
+  if (!winnerId || (winnerId !== challenger.gladiatorId && winnerId !== defender.gladiatorId)) {
+    const reason = winnerId ? `judge returned an unknown winner_id "${winnerId}"` : 'judge-battle produced no verdict';
+    console.error(`${LOG_PREFIX} Leaving match ${matchId} unresolved: ${reason}.`);
+    const { error: abandonError } = await supabase
+      .from('matches')
+      .update({
+        replay_data: {
+          bot_mayhem: true,
+          challenger_name: challenger.persona.display_name,
+          defender_name: defender.persona.display_name,
+          challenger_faction: challenger.faction.name,
+          defender_faction: defender.faction.name,
+          ai_moves: moves,
+          unresolved_reason: reason,
+          log: [
+            `${challenger.persona.display_name} challenged ${defender.persona.display_name} to a ${challengeType.replace(/_/g, ' ')}.`,
+            'The arbiter never returned a verdict. No winner was recorded.',
+          ],
+        },
+      })
+      .eq('id', matchId);
+    if (abandonError) {
+      console.error(`${LOG_PREFIX} Failed to annotate unresolved match:`, abandonError.message);
+    }
+    return { ok: false, matchId, error: reason };
+  }
+
   const winner = winnerId === challenger.gladiatorId ? challenger : defender;
   const loser = winner === challenger ? defender : challenger;
 

@@ -22,6 +22,13 @@ declare
   v_key text := 'bsc_' || replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '');
   v_revoked_count bigint := 0;
 begin
+  perform 1
+    from public.license_keys
+   where user_id = p_user_id
+     and label = p_label
+     and revoked_at is null
+   for update;
+
   update public.license_keys
      set revoked_at = now()
    where user_id = p_user_id

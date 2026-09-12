@@ -1,4 +1,5 @@
 import { supabase } from "../supabase";
+import { authedFetch } from "./authSession";
 import { maxTokensParam } from "./modelParams";
 
 export type BriefingType = "featured_entity" | "feed_briefing" | "user_summary";
@@ -127,19 +128,11 @@ async function callOpenAICompatible(
 }
 
 async function callServerAi(prompt: string, options: GenerateOptions = {}): Promise<string> {
-  let { data: { session } } = await supabase.auth.getSession();
-  if (!session?.access_token) {
-    const refreshed = await supabase.auth.refreshSession();
-    session = refreshed.data.session;
-  }
-  if (!session?.access_token) return "";
-
-  const response = await fetch(`${apiBaseUrl()}/api/ai/generate-text`, {
+  // Refreshing only when the token is entirely missing still sent tokens that
+  // were seconds from expiry and had no answer for the 401 that came back.
+  // authedFetch refreshes ahead of expiry and retries once.
+  const response = await authedFetch(`${apiBaseUrl()}/api/ai/generate-text`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-      "Content-Type": "application/json",
-    },
     body: JSON.stringify({
       prompt,
       systemPrompt: options.systemPrompt,

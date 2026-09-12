@@ -1705,7 +1705,7 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
     }
     const completedAt = new Date().toISOString();
 
-    await supabase
+    const { error: completionError } = await supabase
       .from('casper_tasks')
       .update({
         status: 'completed',
@@ -1730,6 +1730,15 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
         },
       })
       .eq('id', taskId);
+
+    // The task row is what the console, the queue runner and the routine
+    // scheduler all read. Swallowing this error left the row `running` forever
+    // while the caller was told the directive completed, so the stale-running
+    // sweeper eventually re-ran work that had already happened.
+    if (completionError) {
+      console.error('[casper-control] failed to record task completion:', completionError.message);
+      throw new Error(`Casper directive ran but its result could not be saved: ${completionError.message}`);
+    }
 
     await logActivity(supabase, {
       action_type: 'command_completed',
@@ -1779,10 +1788,16 @@ async function executeCasperCommand(supabase: SupabaseClient, casperMemory: any,
     };
   } catch (error: any) {
     const message = error?.message || 'Casper command execution failed.';
-    await supabase
+    const { error: failureError } = await supabase
       .from('casper_tasks')
       .update({ status: 'failed', progress: 100, completed_at: new Date().toISOString(), result: message })
       .eq('id', taskId);
+    // Nothing left to escalate to — the original error is already on its way to
+    // the caller — but a task stuck in `running` is what the stale sweeper picks
+    // up and re-runs, so it needs to be visible in the logs.
+    if (failureError) {
+      console.error(`[casper-control] task ${taskId} left running; status update failed:`, failureError.message);
+    }
     await logActivity(supabase, {
       action_type: 'command_failed',
       description: message.slice(0, 500),
@@ -1941,27 +1956,49 @@ async function runDueRoutines(supabase: SupabaseClient, casperMemory: any, trigg
 
     const results: any[] = [];
     for (const routine of (routines ?? []) as CasperRoutineRow[]) {
-      const execution = await executeCasperCommand(supabase, casperMemory, {
-        command: routine.directive,
-        source: 'routine',
-        // Routines run unattended on a schedule — they get the autopilot
-        // persona module so output is terse and machine-parseable.
-        surface: 'autopilot',
-        userId: routine.metadata?.owner_id ?? null,
-        routineId: routine.id,
-        metadata: { routine_name: routine.name, trigger },
-      });
+      // A routine that throws used to abort the whole sweep, so the routines
+      // behind it never ran and the failing one — whose `next_run_at` was never
+      // advanced — was picked up again on every poll.
+      let taskId: string | null = null;
+      let lastResult: string;
+      try {
+        const execution = await executeCasperCommand(supabase, casperMemory, {
+          command: routine.directive,
+          source: 'routine',
+          // Routines run unattended on a schedule — they get the autopilot
+          // persona module so output is terse and machine-parseable.
+          surface: 'autopilot',
+          userId: routine.metadata?.owner_id ?? null,
+          routineId: routine.id,
+          metadata: { routine_name: routine.name, trigger },
+        });
+        taskId = execution.taskId;
+        lastResult = execution.response;
+      } catch (err: any) {
+        lastResult = `Routine failed: ${err?.message ?? err}`;
+        console.error(`[casper-control] routine ${routine.id} failed:`, err?.message ?? err);
+      }
+
       const nextRunAt = computeNextRun(routine);
-      await supabase
+      // Advancing the schedule is what stops the routine being due again.
+      // Discarding this error meant a directive that had already done its
+      // (paid, side-effecting) work was re-run on the very next poll.
+      const { error: scheduleError } = await supabase
         .from('casper_routines')
         .update({
           last_run_at: new Date().toISOString(),
           next_run_at: nextRunAt,
-          last_result: execution.response,
+          last_result: lastResult,
           run_count: Number(routine.run_count ?? 0) + 1,
         })
         .eq('id', routine.id);
-      results.push({ routineId: routine.id, taskId: execution.taskId, nextRunAt });
+      if (scheduleError) {
+        console.error(
+          `[casper-control] routine ${routine.id} ran but its schedule did not advance; it will repeat:`,
+          scheduleError.message,
+        );
+      }
+      results.push({ routineId: routine.id, taskId, nextRunAt, ok: taskId !== null, scheduled: !scheduleError });
     }
 
     return { executed: results.length, skipped: false, results };
