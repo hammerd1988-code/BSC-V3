@@ -21,3 +21,9 @@ packages/casper-ssh-mobile/ios/
 # Supabase CLI local runtime state
 supabase/.temp/
 supabase/.branches/
+
+# ── Security vault & retired artifacts ─────────────────────
+secrets/*
+!secrets/README.md
+payload.json
+.claude/settings.local.json
