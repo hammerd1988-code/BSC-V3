@@ -1145,6 +1145,66 @@ async function getUserId(username: string): Promise<string | null> {
   return data?.id ?? null;
 }
 
+/**
+ * Deliver a DM through the `transmissions` + `transmits` pair the Transmissions
+ * UI reads.
+ *
+ * `direct_messages` also exists and is what `sendBotDm` used to write, but no
+ * component in `src/` ever queries it — only `webhookListener` does. Every bot
+ * DM therefore persisted to a table with no reader and the recipient never saw
+ * it. The narrator path had already been written against the right tables by
+ * hand; this is that code, shared, with the unread bump the narrator's copy was
+ * missing (so the thread now actually shows a badge).
+ */
+async function deliverTransmission(
+  senderId: string,
+  recipientId: string,
+  content: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const { data: threads, error: threadError } = await supabase
+    .from('transmissions')
+    .select('id, participant_ids')
+    .contains('participant_ids', [senderId, recipientId]);
+  if (threadError) return { ok: false, error: threadError.message };
+
+  let transmissionId = (threads ?? []).find(
+    (t: { participant_ids?: string[] | null }) => (t.participant_ids ?? []).length === 2
+  )?.id as string | undefined;
+
+  if (!transmissionId) {
+    transmissionId = crypto.randomUUID();
+    const { error: createError } = await supabase.from('transmissions').insert({
+      id: transmissionId,
+      participant_ids: [senderId, recipientId],
+      unread_counts: { [senderId]: 0, [recipientId]: 0 },
+    });
+    if (createError) return { ok: false, error: createError.message };
+  }
+
+  const { error: sendError } = await supabase.from('transmits').insert({
+    transmission_id: transmissionId,
+    sender_id: senderId,
+    receiver_id: recipientId,
+    content,
+    type: 'text',
+    status: 'sent',
+  });
+  if (sendError) return { ok: false, error: sendError.message };
+
+  const { error: unreadError } = await supabase.rpc('bump_transmission_unread', {
+    p_transmission_id: transmissionId,
+    p_recipient_id: recipientId,
+    p_last_transmit: { content, sender_id: senderId, created_at: new Date().toISOString() },
+  });
+  if (unreadError) {
+    // The transmit is stored, so nothing is lost — only the badge and preview
+    // are stale. Same call as casperAutonomy makes, and the same reasoning.
+    console.error(`${LOG_PREFIX} transmission metadata update failed:`, unreadError.message);
+  }
+
+  return { ok: true };
+}
+
 async function sendBotDm(
   sender: ActiveBot,
   recipientUsername: string,
@@ -1165,19 +1225,10 @@ async function sendBotDm(
   }
   if (!message) return { ok: false, error: describeFailure('No message generated', failure) };
 
-  const conversationId = [sender.userId, recipientId].sort().join('_');
-  const { error } = await supabase.from('direct_messages').insert({
-    conversation_id: conversationId,
-    sender_id: sender.userId,
-    recipient_id: recipientId,
-    content: message,
-    created_at: new Date().toISOString(),
-    read: false,
-  });
-
-  if (error) {
-    console.error(`${LOG_PREFIX} DM failed from ${sender.username}:`, error.message);
-    return { ok: false, error: error.message };
+  const delivery = await deliverTransmission(sender.userId, recipientId, message);
+  if (!delivery.ok) {
+    console.error(`${LOG_PREFIX} DM failed from ${sender.username}:`, delivery.error);
+    return delivery;
   }
 
   if (story) {
@@ -1239,10 +1290,13 @@ async function narrateAsCasper(story: Storyline, event: NarrationEvent): Promise
     view_count: 0,
   });
   if (error) {
+    // A beat advances the arc's phase counter, so recording one for a post that
+    // never landed skips the story forward with nothing in the feed to show for
+    // it — the same failure #343 fixed on the other beat-recording paths.
     console.error(`${LOG_PREFIX} narrator post failed:`, error.message);
-  } else {
-    console.log(`${LOG_PREFIX} Casper narrated "${story.title}" (${event})`);
+    return;
   }
+  console.log(`${LOG_PREFIX} Casper narrated "${story.title}" (${event})`);
   await recordStoryBeat(story, NARRATOR_USERNAME, 'narration', generated.text);
   // Narration beats are Casper's own — never let them retrigger narration.
 
@@ -1255,43 +1309,11 @@ async function narrateAsCasper(story: Storyline, event: NarrationEvent): Promise
     const dm = await generateFreshText(NARRATOR_USERNAME, dmPrompt, persona.system_prompt);
     if (!dm.text) return;
 
-    // Send via the transmissions/transmits pair the Transmissions UI reads —
-    // a direct_messages row would be invisible to the recipient.
-    const { data: threads } = await supabase
-      .from('transmissions')
-      .select('id, participant_ids')
-      .contains('participant_ids', [narratorId, targetId]);
-    let transmissionId = (threads ?? []).find(
-      (t: any) => (t.participant_ids ?? []).length === 2
-    )?.id as string | undefined;
-    if (!transmissionId) {
-      transmissionId = crypto.randomUUID();
-      const { error: txErr } = await supabase.from('transmissions').insert({
-        id: transmissionId,
-        participant_ids: [narratorId, targetId],
-        unread_counts: { [narratorId]: 0, [targetId]: 0 },
-      });
-      if (txErr) {
-        console.error(`${LOG_PREFIX} narrator transmission create failed:`, txErr.message);
-        return;
-      }
-    }
-    const { error: dmError } = await supabase.from('transmits').insert({
-      transmission_id: transmissionId,
-      sender_id: narratorId,
-      receiver_id: targetId,
-      content: dm.text,
-      type: 'text',
-      status: 'sent',
-    });
-    if (dmError) {
-      console.error(`${LOG_PREFIX} narrator DM failed:`, dmError.message);
+    const delivery = await deliverTransmission(narratorId, targetId, dm.text);
+    if (!delivery.ok) {
+      console.error(`${LOG_PREFIX} narrator DM failed:`, delivery.error);
       return;
     }
-    await supabase.from('transmissions').update({
-      last_transmit: { content: dm.text, sender_id: narratorId, created_at: new Date().toISOString() },
-      updated_at: new Date().toISOString(),
-    }).eq('id', transmissionId);
     console.log(`${LOG_PREFIX} Casper provoked @${target} in DMs`);
   }
 }

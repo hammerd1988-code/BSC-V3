@@ -2238,7 +2238,11 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       const completedAt = new Date().toISOString();
       if (clientError) {
         const errorMessage = String(clientError).slice(0, 1000);
-        await supabase
+        // supabase-js resolves with `{ error }` rather than throwing, so an
+        // unread result is indistinguishable from a successful write. Reporting
+        // success anyway makes the browser clear its pending state while the row
+        // stays `awaiting_client`, which blocks any retry.
+        const { error: failUpdateError } = await supabase
           .from('casper_tasks')
           .update({
             status: 'failed',
@@ -2254,6 +2258,12 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
             },
           })
           .eq('id', taskId);
+        if (failUpdateError) {
+          return res.status(502).json({
+            success: false,
+            error: `Failed to record the local-LLM failure: ${failUpdateError.message}`,
+          });
+        }
         await logActivity(supabase, {
           action_type: 'command_failed',
           description: `Casper local-LLM execution failed: ${errorMessage.slice(0, 200)}`,
@@ -2269,7 +2279,7 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
         : 'Local LLM returned an empty response.';
       const reportedModel = typeof model === 'string' && model.trim().length > 0 ? model.trim() : 'local-llm';
 
-      await supabase
+      const { error: completeUpdateError } = await supabase
         .from('casper_tasks')
         .update({
           status: 'completed',
@@ -2286,6 +2296,12 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
           },
         })
         .eq('id', taskId);
+      if (completeUpdateError) {
+        return res.status(502).json({
+          success: false,
+          error: `Failed to record the local-LLM result: ${completeUpdateError.message}`,
+        });
+      }
 
       await logActivity(supabase, {
         action_type: 'command_completed',
@@ -2785,20 +2801,35 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       const completedAt = new Date().toISOString();
       if (clientError) {
         const errorMessage = String(clientError).slice(0, 1000);
-        await supabase
+        // An unread `{ error }` here would leave the row `awaiting_client` while
+        // the browser is told the hand-off completed, so the sub-agent could
+        // never be retried or reaped.
+        const { error: failUpdateError } = await supabase
           .from('casper_subagents')
           .update({ status: 'failed', result: errorMessage, completed_at: completedAt })
           .eq('id', subagentId);
+        if (failUpdateError) {
+          return res.status(502).json({
+            success: false,
+            error: `Failed to record the sub-agent failure: ${failUpdateError.message}`,
+          });
+        }
         return res.json({ success: true, id: subagentId, status: 'failed' });
       }
 
       const text = typeof response === 'string' && response.trim().length > 0
         ? response.trim()
         : 'Local LLM returned an empty sub-agent response.';
-      await supabase
+      const { error: completeUpdateError } = await supabase
         .from('casper_subagents')
         .update({ status: 'completed', result: text, completed_at: completedAt })
         .eq('id', subagentId);
+      if (completeUpdateError) {
+        return res.status(502).json({
+          success: false,
+          error: `Failed to record the sub-agent result: ${completeUpdateError.message}`,
+        });
+      }
 
       // Best-effort: durationMs and model live only in activity log;
       // the row schema is intentionally narrow so we don't migrate
@@ -2867,7 +2898,7 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
         // retry later (e.g. after restarting their local LLM). We
         // still write last_followup_error / last_followup_error_at
         // so the UI can surface the failure.
-        await supabase
+        const { error: failUpdateError } = await supabase
           .from('casper_tasks')
           .update({
             metadata: {
@@ -2878,6 +2909,12 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
             },
           })
           .eq('id', taskId);
+        if (failUpdateError) {
+          return res.status(502).json({
+            success: false,
+            error: `Failed to record the follow-up failure: ${failUpdateError.message}`,
+          });
+        }
         return res.json({ success: true, taskId, status: 'failed', error: errorMessage });
       }
 
@@ -2887,7 +2924,9 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       const history = Array.isArray(meta.followups) ? meta.followups : [];
       history.push({ question: pending.question, answer: text, at: completedAt });
 
-      await supabase
+      // The pending entry is only cleared by this write. Reporting success on a
+      // failed one loses the answer and leaves the question pending forever.
+      const { error: followupUpdateError } = await supabase
         .from('casper_tasks')
         .update({
           result: text,
@@ -2900,6 +2939,12 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
           },
         })
         .eq('id', taskId);
+      if (followupUpdateError) {
+        return res.status(502).json({
+          success: false,
+          error: `Failed to record the follow-up answer: ${followupUpdateError.message}`,
+        });
+      }
 
       await logActivity(supabase, {
         action_type: 'task_followup',
