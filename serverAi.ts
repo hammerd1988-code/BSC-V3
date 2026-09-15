@@ -425,6 +425,9 @@ export async function generateServerToolTurn(
     } catch (err: any) {
       const msg = String(err?.message ?? err ?? 'unknown gemini error').slice(0, 240);
       errors.push(`gemini(${model}): ${msg}`);
+      if (err instanceof EmptyCompletionError) {
+        return { provider: 'gemini', model, text: '', toolCalls: [], lastError: errors.join(' | '), emptyCompletion: true };
+      }
       if (msg.includes('429')) {
         geminiCooldownUntil = Date.now() + 5 * 60_000;
         console.warn('[serverAi:tools] Gemini 429 — cooling down for 5 min');
@@ -890,7 +893,7 @@ async function callGemini(
     const candidate = data?.candidates?.[0];
     const text = candidate?.content?.parts?.[0]?.text?.trim() || '';
     if (!text && candidate?.finishReason === 'MAX_TOKENS') {
-      throw new Error(`hit maxOutputTokens=${maxTokens} before producing any text (thinking consumed the budget)`);
+      throw new EmptyCompletionError('length', true, maxTokens);
     }
     return text;
   } finally {
