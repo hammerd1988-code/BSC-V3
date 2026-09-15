@@ -1127,7 +1127,7 @@ async function callOpenAICompatibleWithToolLoop(input: {
   const maxCalls = input.maxToolCalls ?? MAX_TOOL_CALLS_PER_DIRECTIVE;
 
   for (let round = 0; round < maxRounds; round += 1) {
-    const turn = await generateServerToolTurn(messages, {
+    let turn = await generateServerToolTurn(messages, {
       tools: toolSpecs,
       preferredModel: model,
       temperature,
@@ -1135,38 +1135,36 @@ async function callOpenAICompatibleWithToolLoop(input: {
       apiKeyOverride: userSettings.apiKey ?? null,
       baseUrlOverride: userSettings.endpoint ?? null,
     });
+    let firstError = turn.lastError;
+
+    if (turn.toolCalls.length === 0 && !turn.text) {
+      // Neither a tool call nor visible text. With a thinking model this is
+      // usually the reasoning budget running out mid-transcript, so repeat
+      // the same round once with tools still available, low effort and a
+      // larger budget; the model may still need to act, not just wrap up.
+      turn = await generateServerToolTurn(
+        [...messages, { role: 'user', content: EMPTY_TURN_NUDGE }],
+        {
+          tools: toolSpecs,
+          preferredModel: model,
+          temperature,
+          maxTokens: recoveryMaxTokens(maxTokens),
+          reasoningEffort: 'low',
+          apiKeyOverride: userSettings.apiKey ?? null,
+          baseUrlOverride: userSettings.endpoint ?? null,
+        },
+      );
+    }
     provider = turn.provider;
     resolvedModel = turn.model;
 
     if (turn.toolCalls.length === 0) {
-      if (turn.text) {
-        return { provider, model: resolvedModel, text: turn.text, toolCalls: allToolCalls, rounds: round, truncatedReason };
-      }
-      // No tool call and no visible text. With a thinking model this is
-      // almost always the reasoning budget running out on a long
-      // transcript, so ask once more for a plain answer before giving up.
-      const recovered = await recoverFinalAnswer(messages, toolSpecs, {
-        model, temperature, maxTokens, userSettings,
-      });
-      if (recovered.text) {
-        return {
-          provider: recovered.provider || provider,
-          model: recovered.model || resolvedModel,
-          text: recovered.text,
-          toolCalls: allToolCalls,
-          rounds: round + 1,
-          truncatedReason,
-        };
-      }
-      const detail = recovered.lastError || turn.lastError;
       return {
         provider,
         model: resolvedModel,
-        text: allToolCalls.length > 0
-          ? buildToolLimitFallbackText(input.prompt, allToolCalls, `The model returned no final text after its tool calls (${detail || 'no detail'}).`)
-          : buildCasperProviderFailureMessage(resolvedModel, detail),
+        text: turn.text || buildEmptyReplyText(allToolCalls, resolvedModel, turn.lastError || firstError),
         toolCalls: allToolCalls,
-        rounds: round + 1,
+        rounds: round,
         truncatedReason,
       };
     }
@@ -1231,11 +1229,39 @@ async function callOpenAICompatibleWithToolLoop(input: {
   };
 }
 
-// Wrap-up budget for the summary turn. Thinking models bill their hidden
-// reasoning against `max_tokens`, and after a dozen tool rounds the
-// transcript is long enough that the directive's normal budget can be
-// spent entirely on reasoning, leaving `content` empty.
-const FINAL_ANSWER_MIN_MAX_TOKENS = 8192;
+// Thinking models bill hidden reasoning against `max_tokens`, and after a
+// dozen tool rounds the transcript is long enough that the directive's
+// normal budget can be spent entirely on reasoning, leaving `content`
+// empty. Retries get a floor matching the Cognitive Core's default budget.
+const RECOVERY_MIN_MAX_TOKENS = 4096;
+function recoveryMaxTokens(maxTokens: number): number {
+  return Math.max(maxTokens, RECOVERY_MIN_MAX_TOKENS);
+}
+
+const EMPTY_TURN_NUDGE =
+  'Your previous reply was empty. Continue now: either call the next tool you need, or reply with your final answer in plain text.';
+
+// The model produced no text and no tool call even after a retry. Report
+// what actually happened (tool status + provider detail) without claiming a
+// loop limit that was never reached.
+function buildEmptyReplyText(toolCalls: LlmToolCallResult[], model: string, detail?: string): string {
+  if (toolCalls.length === 0) return buildCasperProviderFailureMessage(model, detail);
+  const successful = toolCalls.filter((call) => call.ok);
+  const failed = toolCalls.filter((call) => !call.ok);
+  const recent = toolCalls.slice(-5).map((call) => {
+    const status = call.ok ? 'completed' : `failed${call.error ? `: ${String(call.error).slice(0, 120)}` : ''}`;
+    return `- ${call.name}: ${status}`;
+  });
+  return [
+    'The model stopped without a final reply after running these actions, so here is the state I have.',
+    '',
+    `Actions attempted: ${toolCalls.length} (${successful.length} completed, ${failed.length} failed).`,
+    ...recent,
+    detail ? `\nProvider detail (${model}): ${detail}` : '',
+    '',
+    'Next best move: ask for a summary of these results, or give me one focused follow-up command.',
+  ].filter(Boolean).join('\n');
+}
 
 // Ask the model for a plain-text answer with tools disabled: low reasoning
 // effort so the visible reply is not starved, and a larger completion budget
@@ -1258,7 +1284,7 @@ async function recoverFinalAnswer(
       toolChoice: 'none',
       preferredModel: opts.model,
       temperature: opts.temperature,
-      maxTokens: Math.max(opts.maxTokens, FINAL_ANSWER_MIN_MAX_TOKENS),
+      maxTokens: recoveryMaxTokens(opts.maxTokens),
       reasoningEffort: 'low',
       apiKeyOverride: opts.userSettings.apiKey ?? null,
       baseUrlOverride: opts.userSettings.endpoint ?? null,

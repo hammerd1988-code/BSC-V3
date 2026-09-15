@@ -61,6 +61,8 @@ describe('reasoningParam', () => {
   it('treats Qwen3, DeepSeek R1 and GLM 4.5+ as thinking models on OpenRouter', () => {
     expect(reasoningParam('qwen/qwen3.8-27b', 'low', openRouter)).toEqual({ reasoning: { effort: 'low' } });
     expect(reasoningParam('qwen/qwen3.7-plus', 'medium', openRouter)).toEqual({ reasoning: { effort: 'medium' } });
+    expect(reasoningParam('qwen/qwen3p7-plus', 'medium', openRouter)).toEqual({ reasoning: { effort: 'medium' } });
+    expect(reasoningParam('qwen/qwen3-235b-a22b', 'low', openRouter)).toEqual({ reasoning: { effort: 'low' } });
     expect(reasoningParam('deepseek/deepseek-r1', 'low', openRouter)).toEqual({ reasoning: { effort: 'low' } });
     expect(reasoningParam('z-ai/glm-4.7', 'low', openRouter)).toEqual({ reasoning: { effort: 'low' } });
     expect(reasoningParam('qwen/qwen-2.5-72b-instruct', 'low', openRouter)).toEqual({});

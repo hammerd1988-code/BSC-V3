@@ -173,7 +173,7 @@ export class EmptyCompletionError extends Error {
   constructor(finishReason: string, hadReasoning: boolean, maxTokens: number) {
     super(
       finishReason === 'length'
-        ? `hit max_tokens=${maxTokens} before producing any text (reasoning consumed the budget)`
+        ? `exhausted the ${maxTokens}-token completion budget before producing any text (reasoning consumed it)`
         : hadReasoning
           ? `returned reasoning but no visible answer (finish_reason=${finishReason})`
           : `returned no text and no tool calls (finish_reason=${finishReason})`,
