@@ -58,6 +58,14 @@ describe('reasoningParam', () => {
     expect(reasoningParam('openai/gpt-4.1-mini', 'low', openRouter)).toEqual({});
   });
 
+  it('treats Qwen3, DeepSeek R1 and GLM 4.5+ as thinking models on OpenRouter', () => {
+    expect(reasoningParam('qwen/qwen3.8-27b', 'low', openRouter)).toEqual({ reasoning: { effort: 'low' } });
+    expect(reasoningParam('qwen/qwen3.7-plus', 'medium', openRouter)).toEqual({ reasoning: { effort: 'medium' } });
+    expect(reasoningParam('deepseek/deepseek-r1', 'low', openRouter)).toEqual({ reasoning: { effort: 'low' } });
+    expect(reasoningParam('z-ai/glm-4.7', 'low', openRouter)).toEqual({ reasoning: { effort: 'low' } });
+    expect(reasoningParam('qwen/qwen-2.5-72b-instruct', 'low', openRouter)).toEqual({});
+  });
+
   it('uses reasoning_effort on OpenAI direct for the gpt-5 family and o-series only', () => {
     expect(reasoningParam('gpt-5.4-mini', 'low', 'https://api.openai.com/v1')).toEqual({ reasoning_effort: 'low' });
     expect(reasoningParam('o3-mini', 'minimal')).toEqual({ reasoning_effort: 'minimal' });

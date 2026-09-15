@@ -158,6 +158,32 @@ export interface ServerAIToolResult {
   lastError?: string;
 }
 
+/**
+ * A chat-completions turn with no visible text and no tool calls. Thinking
+ * models spend their hidden reasoning out of the same `max_tokens` budget as
+ * the answer, so a long tool-calling transcript can end with
+ * `finish_reason: "length"` and an empty `content`; a few providers also return
+ * the whole answer in the `reasoning` field. Either way the caller needs to
+ * know it was the budget, not the credential, so it can retry with a bigger
+ * budget instead of telling the user to check their API key.
+ */
+export class EmptyCompletionError extends Error {
+  readonly finishReason: string;
+  readonly hadReasoning: boolean;
+  constructor(finishReason: string, hadReasoning: boolean, maxTokens: number) {
+    super(
+      finishReason === 'length'
+        ? `hit max_tokens=${maxTokens} before producing any text (reasoning consumed the budget)`
+        : hadReasoning
+          ? `returned reasoning but no visible answer (finish_reason=${finishReason})`
+          : `returned no text and no tool calls (finish_reason=${finishReason})`,
+    );
+    this.name = 'EmptyCompletionError';
+    this.finishReason = finishReason;
+    this.hadReasoning = hadReasoning;
+  }
+}
+
 export function isServerAIConfigured(): boolean {
   return Boolean(GEMINI_API_KEY()) || Boolean(OPENAI_API_KEY());
 }
@@ -366,6 +392,7 @@ export async function generateServerToolTurn(
         toolChoice: options.toolChoice ?? 'auto',
         temperature,
         maxTokens,
+        reasoningEffort: options.reasoningEffort,
       });
       return { provider: 'openai-compatible', model, text: result.text, toolCalls: result.toolCalls };
     } catch (err: any) {
@@ -451,6 +478,7 @@ async function callOpenAICompatibleWithTools(input: {
   toolChoice: 'auto' | 'none' | 'required';
   temperature: number;
   maxTokens: number;
+  reasoningEffort?: ReasoningEffort;
 }): Promise<{ text: string; toolCalls: ServerAIToolCall[] }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60_000);
@@ -469,6 +497,7 @@ async function callOpenAICompatibleWithTools(input: {
       messages: input.messages,
       ...temperatureParam(input.model, input.temperature),
       ...maxTokensParam(input.model, input.maxTokens, input.baseUrl),
+      ...reasoningParam(input.model, input.reasoningEffort, input.baseUrl),
     };
     if (input.tools.length > 0) {
       body.tools = input.tools;
@@ -488,7 +517,8 @@ async function callOpenAICompatibleWithTools(input: {
     }
 
     const data = await response.json();
-    const message = data?.choices?.[0]?.message ?? {};
+    const choice = data?.choices?.[0] ?? {};
+    const message = choice.message ?? {};
     const text = typeof message.content === 'string' ? message.content.trim() : '';
     const rawToolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
     const toolCalls: ServerAIToolCall[] = rawToolCalls
@@ -498,6 +528,15 @@ async function callOpenAICompatibleWithTools(input: {
         name: tc.function.name as string,
         arguments: typeof tc.function.arguments === 'string' ? tc.function.arguments : JSON.stringify(tc.function.arguments ?? {}),
       }));
+
+    if (!text && toolCalls.length === 0) {
+      const finishReason = typeof choice.finish_reason === 'string' ? choice.finish_reason : 'unknown';
+      const hadReasoning =
+        (typeof message.reasoning === 'string' && message.reasoning.trim().length > 0)
+        || (typeof message.reasoning_content === 'string' && message.reasoning_content.trim().length > 0)
+        || (Array.isArray(message.reasoning_details) && message.reasoning_details.length > 0);
+      throw new EmptyCompletionError(finishReason, hadReasoning, input.maxTokens);
+    }
 
     return { text, toolCalls };
   } finally {

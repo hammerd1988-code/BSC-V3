@@ -38,7 +38,7 @@ export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high';
 // object; OpenAI's own endpoint takes `reasoning_effort` on the GPT-5/o-series
 // only. Other OpenAI-compatible servers may reject unknown fields, so nothing
 // is sent to them.
-const OPENROUTER_REASONING_MODELS = /(?:^|\/)(?:gpt-5|o[1-4]|gemini-(?:2\.5|3))(?:$|[-.])/i;
+const OPENROUTER_REASONING_MODELS = /(?:^|\/)(?:gpt-5|o[1-4]|gemini-(?:2\.5|3)|qwen3\.\d+|deepseek-r1|glm-(?:4\.[5-9]|5))(?:$|[-.])/i;
 
 function isDirectOpenAiBaseUrl(baseUrl?: string): boolean {
   if (!baseUrl) return true;

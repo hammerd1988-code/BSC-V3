@@ -1139,13 +1139,34 @@ async function callOpenAICompatibleWithToolLoop(input: {
     resolvedModel = turn.model;
 
     if (turn.toolCalls.length === 0) {
-      // Final text answer.
+      if (turn.text) {
+        return { provider, model: resolvedModel, text: turn.text, toolCalls: allToolCalls, rounds: round, truncatedReason };
+      }
+      // No tool call and no visible text. With a thinking model this is
+      // almost always the reasoning budget running out on a long
+      // transcript, so ask once more for a plain answer before giving up.
+      const recovered = await recoverFinalAnswer(messages, toolSpecs, {
+        model, temperature, maxTokens, userSettings,
+      });
+      if (recovered.text) {
+        return {
+          provider: recovered.provider || provider,
+          model: recovered.model || resolvedModel,
+          text: recovered.text,
+          toolCalls: allToolCalls,
+          rounds: round + 1,
+          truncatedReason,
+        };
+      }
+      const detail = recovered.lastError || turn.lastError;
       return {
         provider,
         model: resolvedModel,
-        text: turn.text || buildCasperProviderFailureMessage(resolvedModel, turn.lastError),
+        text: allToolCalls.length > 0
+          ? buildToolLimitFallbackText(input.prompt, allToolCalls, `The model returned no final text after its tool calls (${detail || 'no detail'}).`)
+          : buildCasperProviderFailureMessage(resolvedModel, detail),
         toolCalls: allToolCalls,
-        rounds: round,
+        rounds: round + 1,
         truncatedReason,
       };
     }
@@ -1197,15 +1218,7 @@ async function callOpenAICompatibleWithToolLoop(input: {
   // Round limit hit. Force a final text answer with tool_choice='none'
   // so the model summarizes what it did instead of trying to call
   // another tool.
-  const final = await generateServerToolTurn(messages, {
-    tools: toolSpecs,
-    toolChoice: 'none',
-    preferredModel: model,
-    temperature,
-    maxTokens,
-    apiKeyOverride: userSettings.apiKey ?? null,
-    baseUrlOverride: userSettings.endpoint ?? null,
-  });
+  const final = await recoverFinalAnswer(messages, toolSpecs, { model, temperature, maxTokens, userSettings });
   const fallbackText = buildToolLimitFallbackText(input.prompt, allToolCalls, truncatedReason);
 
   return {
@@ -1216,6 +1229,41 @@ async function callOpenAICompatibleWithToolLoop(input: {
     rounds: maxRounds,
     truncatedReason,
   };
+}
+
+// Wrap-up budget for the summary turn. Thinking models bill their hidden
+// reasoning against `max_tokens`, and after a dozen tool rounds the
+// transcript is long enough that the directive's normal budget can be
+// spent entirely on reasoning, leaving `content` empty.
+const FINAL_ANSWER_MIN_MAX_TOKENS = 8192;
+
+// Ask the model for a plain-text answer with tools disabled: low reasoning
+// effort so the visible reply is not starved, and a larger completion budget
+// than the working rounds used.
+async function recoverFinalAnswer(
+  messages: ServerAIMessage[],
+  toolSpecs: ReturnType<typeof buildToolSpecs>,
+  opts: { model: string; temperature: number; maxTokens: number; userSettings: CasperUserAiSettings },
+) {
+  return generateServerToolTurn(
+    [
+      ...messages,
+      {
+        role: 'user',
+        content: 'Stop calling tools. Reply now with your final answer in plain text: what you did, what you found, and what the user should do next.',
+      },
+    ],
+    {
+      tools: toolSpecs,
+      toolChoice: 'none',
+      preferredModel: opts.model,
+      temperature: opts.temperature,
+      maxTokens: Math.max(opts.maxTokens, FINAL_ANSWER_MIN_MAX_TOKENS),
+      reasoningEffort: 'low',
+      apiKeyOverride: opts.userSettings.apiKey ?? null,
+      baseUrlOverride: opts.userSettings.endpoint ?? null,
+    },
+  );
 }
 
 function buildToolLimitFallbackText(prompt: string, toolCalls: LlmToolCallResult[], truncatedReason?: string): string {
