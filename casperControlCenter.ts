@@ -1135,13 +1135,14 @@ async function callOpenAICompatibleWithToolLoop(input: {
       apiKeyOverride: userSettings.apiKey ?? null,
       baseUrlOverride: userSettings.endpoint ?? null,
     });
-    let firstError = turn.lastError;
+    const firstError = turn.lastError;
 
-    if (turn.toolCalls.length === 0 && !turn.text) {
-      // Neither a tool call nor visible text. With a thinking model this is
-      // usually the reasoning budget running out mid-transcript, so repeat
-      // the same round once with tools still available, low effort and a
-      // larger budget; the model may still need to act, not just wrap up.
+    if (turn.emptyCompletion) {
+      // The model answered with neither a tool call nor visible text (auth,
+      // rate-limit and timeout failures are not retried here). With a thinking
+      // model this is usually the reasoning budget running out mid-transcript,
+      // so repeat the same round once with tools still available, low effort
+      // and a larger budget; the model may still need to act, not just wrap up.
       turn = await generateServerToolTurn(
         [...messages, { role: 'user', content: EMPTY_TURN_NUDGE }],
         {

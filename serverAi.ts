@@ -156,6 +156,8 @@ export interface ServerAIToolResult {
   text: string;
   toolCalls: ServerAIToolCall[];
   lastError?: string;
+  /** The model answered with neither text nor tool calls (see EmptyCompletionError). */
+  emptyCompletion?: boolean;
 }
 
 /**
@@ -399,6 +401,9 @@ export async function generateServerToolTurn(
       const msg = String(err?.message ?? err ?? 'unknown openai error').slice(0, 240);
       errors.push(`openai(${model}): ${msg}`);
       console.warn('[serverAi:tools] OpenAI-compatible call failed:', msg);
+      if (err instanceof EmptyCompletionError) {
+        return { provider: 'openai-compatible', model, text: '', toolCalls: [], lastError: errors.join(' | '), emptyCompletion: true };
+      }
     }
   } else {
     errors.push(target.reason);

@@ -171,6 +171,15 @@ describe('generateServerToolTurn', () => {
     expect(turn.text).toBe('');
     expect(turn.toolCalls).toEqual([]);
     expect(turn.lastError).toContain('exhausted the 1200-token completion budget');
+    expect(turn.emptyCompletion).toBe(true);
+  });
+
+  it('does not flag provider failures as empty completions', async () => {
+    global.fetch = async () => new Response('{"error":{"message":"bad key"}}', { status: 401 });
+    const turn = await generateServerToolTurn([{ role: 'user', content: 'hi' }], { preferredModel: 'qwen/qwen3.8-27b' });
+    expect(turn.text).toBe('');
+    expect(turn.emptyCompletion).toBeUndefined();
+    expect(turn.lastError).toContain('401');
   });
 
   it('reports reasoning-only replies distinctly from a plain empty reply', async () => {
