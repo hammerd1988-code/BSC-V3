@@ -2,6 +2,7 @@
 import { Command } from 'commander';
 import { startRepl } from './cli.js';
 import { startDaemon, stopDaemon, daemonStatus } from './daemon.js';
+import { refreshFromBscIfFollowing } from './bscSync.js';
 import { runOnce } from './exec.js';
 import { getConfig, setConfig, isSecretKey } from './config.js';
 import { validateBaseUrl } from './utils/url.js';
@@ -80,6 +81,7 @@ daemon
   .description('Start the Casper daemon (connects to Railway relay)')
   .option('--relay <url>', 'WebSocket relay URL')
   .action(async (opts) => {
+    await refreshFromBscIfFollowing();
     await startDaemon({ relayUrl: opts.relay });
   });
 
@@ -225,9 +227,10 @@ program
 // Guided first-run setup for new users.
 program
   .command('setup')
-  .description('Guided first-run setup: OpenRouter, OpenAI-compatible APIs, or a local LLM')
-  .action(async () => {
-    await runSetup();
+  .description('Guided first-run setup: the model set in BSC-V3, OpenRouter, OpenAI-compatible APIs, or a local LLM')
+  .option('--from-bsc', 'Use the model/endpoint configured in your BSC-V3 Casper AI Core (needs `casper auth login`)')
+  .action(async (opts) => {
+    await runSetup({ fromBsc: Boolean(opts.fromBsc) });
   });
 
 // Project initialization

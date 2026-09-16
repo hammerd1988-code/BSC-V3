@@ -6,9 +6,12 @@ import {
   generateServerText,
   generateServerToolTurn,
   isServerAiConfigured,
+  openAiModel,
   resolveServerOpenAIConfig,
+  wantsGemini,
   type ServerAIMessage,
 } from './serverAi.js';
+import { summarizeAiSettingsForCli } from './casperAiSettingsSync.js';
 import {
   buildToolSpecs,
   executeTool,
@@ -233,13 +236,20 @@ function clampPositiveInt(raw: unknown, ceiling: number): number | null {
  * fall back to the server's env-var defaults in that case.
  */
 /** Owner-scoped provider key. Read through the service role, so RLS is bypassed. */
-async function loadUserApiKey(supabase: SupabaseClient, userId: string): Promise<string | null> {
+async function loadUserApiKey(
+  supabase: SupabaseClient,
+  userId: string,
+  opts: { strict?: boolean } = {},
+): Promise<string | null> {
   const { data, error } = await supabase
     .from('user_ai_credentials')
     .select('api_key')
     .eq('user_id', userId)
     .maybeSingle();
-  if (error) return null;
+  if (error) {
+    if (opts.strict) throw new Error(`user_ai_credentials read failed: ${error.message}`);
+    return null;
+  }
   const key = (data as { api_key?: string | null } | null)?.api_key;
   return typeof key === 'string' && key.trim() ? key.trim() : null;
 }
@@ -247,6 +257,7 @@ async function loadUserApiKey(supabase: SupabaseClient, userId: string): Promise
 async function loadUserAiSettings(
   supabase: SupabaseClient,
   userId?: string | null,
+  opts: { strict?: boolean } = {},
 ): Promise<CasperUserAiSettings> {
   if (!isUuid(userId)) return {};
   try {
@@ -255,12 +266,15 @@ async function loadUserAiSettings(
       .select('ai_settings')
       .eq('id', userId)
       .maybeSingle();
-    if (error) return {};
+    if (error) {
+      if (opts.strict) throw new Error(`users.ai_settings read failed: ${error.message}`);
+      return {};
+    }
     // The key moved to user_ai_credentials because users is readable by every
     // signed-in session; the ai_settings spellings stay as a fallback for rows
     // written before that migration reached this database. It is loaded even
     // when ai_settings is empty — the two are stored independently now.
-    const storedKey = await loadUserApiKey(supabase, userId);
+    const storedKey = await loadUserApiKey(supabase, userId, opts);
     if (!data?.ai_settings) return storedKey ? { apiKey: storedKey } : {};
     const raw = data.ai_settings as Record<string, any>;
     const apiKey = storedKey ?? raw.apiKey ?? raw.api_key ?? null;
@@ -297,7 +311,8 @@ async function loadUserAiSettings(
       maxToolRounds,
       maxToolCalls,
     };
-  } catch {
+  } catch (error) {
+    if (opts.strict) throw error;
     return {};
   }
 }
@@ -539,8 +554,9 @@ function requireAdmin(profile: CasperProfile | null, res: Response): profile is 
   return false;
 }
 
-async function fetchCognitiveCore(supabase: SupabaseClient) {
-  const { data } = await supabase.from('casper_config').select('value').eq('key', 'cognitive_core').maybeSingle();
+async function fetchCognitiveCore(supabase: SupabaseClient, opts: { strict?: boolean } = {}) {
+  const { data, error } = await supabase.from('casper_config').select('value').eq('key', 'cognitive_core').maybeSingle();
+  if (error && opts.strict) throw new Error(`casper_config read failed: ${error.message}`);
   return (data?.value ?? {}) as Record<string, any>;
 }
 
@@ -3038,6 +3054,47 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
     } catch (error: any) {
       console.error('[casper-control:memory-context]', error);
       res.status(500).json({ success: false, error: error.message || 'Failed to fetch memory context.' });
+    }
+  });
+
+  // Casper CLI (`casper setup --from-bsc`): the caller's own AI Core
+  // model/endpoint, never any API key. Strict load: a DB read failure must
+  // surface as an error rather than as "platform defaults", because the CLI
+  // applies a successful response to its config.
+  app.get('/api/casper/user/ai-settings', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+      const userSettings = await loadUserAiSettings(supabase, profile.id, { strict: true });
+      const resolved = resolveServerOpenAIConfig();
+      // Same precedence as callOpenAICompatible*: user model, else the
+      // cognitive-core model, else the platform default.
+      const cognitiveCore = await fetchCognitiveCore(supabase, { strict: true });
+      const coreModel = cognitiveCore?.response_style?.model;
+      const platform = {
+        baseUrl: resolved.baseUrl,
+        model: typeof coreModel === 'string' && coreModel.trim() ? coreModel.trim() : resolved.model,
+      };
+      const payload = summarizeAiSettingsForCli(userSettings, platform);
+      // Mirrors generateServerTextUnlocked's `geminiFirst`: with no per-user
+      // key, a direct Gemini key wins for gemini-* models or when the platform
+      // has no OpenAI-compatible key. The CLI has no Gemini provider.
+      const geminiFirst = Boolean(process.env.GEMINI_API_KEY?.trim())
+        && !userSettings.apiKey
+        && (wantsGemini(payload.model) || !resolved.apiKey);
+      if (geminiFirst) {
+        res.status(409).json({
+          success: false,
+          error: `Your web Casper runs ${payload.model} on the platform Gemini key, which Local Coder cannot mirror. Set your own endpoint + key in AI Core settings first.`,
+        });
+        return;
+      }
+      payload.model = openAiModel(payload.model, payload.endpoint);
+      res.json({ success: true, ...payload });
+    } catch (error: any) {
+      console.error('[casper-control:user-ai-settings]', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to load AI settings.' });
     }
   });
 

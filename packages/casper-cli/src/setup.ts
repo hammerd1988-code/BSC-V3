@@ -5,6 +5,13 @@ import { getConfig, setConfig, deleteConfig, getConfigPath, type CasperConfig } 
 import { printAllSettings } from './settings.js';
 import { validateBaseUrl } from './utils/url.js';
 import { OPENROUTER_BASE_URL, resolveCloudConfig } from './llm/client.js';
+import {
+  applyBscSyncPlan,
+  describeBscSettings,
+  fetchBscAiSettings,
+  planBscSync,
+  refreshFromBscIfFollowing,
+} from './bscSync.js';
 
 interface LocalProvider {
   name: string;
@@ -218,6 +225,63 @@ async function setupOpenRouter(queue: InputQueue): Promise<void> {
   console.log(chalk.green(`  Model set to ${model}.`));
 }
 
+const BSC_AI_CORE_URL = 'https://bloodsweatcode.org/casper?settings=ai';
+
+/**
+ * Mirror the model/endpoint configured in the web Casper's AI Core. Keys never
+ * leave BSC-V3 (a linked device must not be able to export the user's provider
+ * credential), so a cloud provider still needs a key entered here once; an
+ * existing local key for that provider is kept.
+ */
+async function setupFromBsc(queue: InputQueue): Promise<void> {
+  console.log(chalk.cyan('\n  Using the model set in BSC-V3 (Casper AI Core).'));
+  if (!getConfig('accessToken')) {
+    console.log(chalk.yellow('  This machine is not linked to your BSC account. Run `casper auth login` first.'));
+    return;
+  }
+
+  let settings;
+  try {
+    settings = await fetchBscAiSettings();
+  } catch (err) {
+    console.log(chalk.yellow(`  Could not read your BSC-V3 AI Core settings: ${(err as Error).message}`));
+    return;
+  }
+  console.log(chalk.dim(`  BSC-V3 uses: ${describeBscSettings(settings)}`));
+
+  let plan;
+  try {
+    plan = planBscSync(settings);
+  } catch (err) {
+    console.log(chalk.yellow(`  ${(err as Error).message}`));
+    console.log(chalk.dim(`  Fix the endpoint at ${BSC_AI_CORE_URL} and re-run.`));
+    return;
+  }
+
+  if (plan.keyField) {
+    if (getConfig(plan.keyField)) {
+      console.log(chalk.dim(`  Keeping the ${plan.provider} key already stored on this machine.`));
+    } else {
+      if (settings.hasApiKey && settings.endpointSource === 'user') {
+        console.log(chalk.dim('  API keys are never sent from BSC-V3 to devices; paste the same key here (stored owner-only).'));
+      } else {
+        console.log(chalk.yellow(`  Your BSC-V3 AI Core runs on Casper's platform key, which Local Coder cannot use.`));
+        console.log(chalk.dim(`  Enter your own ${plan.provider} key (you can also save one at ${BSC_AI_CORE_URL}).`));
+      }
+      const key = await askPassword(queue, chalk.white(`  ${plan.provider} API key: `));
+      if (key) {
+        setConfig(plan.keyField, key);
+      } else {
+        console.log(chalk.yellow('  No key entered; the model is set but Casper cannot run until a key is added.'));
+      }
+    }
+  }
+
+  applyBscSyncPlan(plan);
+  console.log(chalk.green(`  Model set to ${plan.model}.`));
+  console.log(chalk.dim('  Casper re-checks BSC-V3 at each start; changing the model here stops following.'));
+}
+
 const OPENROUTER_DEFAULT_MODEL = 'openai/gpt-5.4-mini';
 const MODEL_PICKER_PAGE_SIZE = 15;
 
@@ -338,22 +402,24 @@ async function setupLocal(queue: InputQueue): Promise<void> {
   console.log(chalk.green(`\n  ${sourceName} configured: ${url} → ${model}`));
 }
 
-export async function runSetup(): Promise<void> {
+export async function runSetup(opts: { fromBsc?: boolean } = {}): Promise<void> {
   const rl = createReadline();
   const queue = new InputQueue(rl);
   try {
     console.log(chalk.magenta('\n  🔮 Casper Setup\n'));
     console.log(chalk.dim('  Choose how Casper should talk to its language model.\n'));
 
-    const provider = await choose(
+    const provider = opts.fromBsc ? { value: 'bsc' as const } : await choose(
       queue,
       'How do you want to power Casper?',
       [
+        { label: 'Same model as BSC-V3 (Casper AI Core; needs `casper auth login`)', value: 'bsc' as const },
         { label: 'OpenRouter (cloud — many model providers)', value: 'openrouter' as const },
         { label: 'OpenAI / custom OpenAI-compatible API (cloud)', value: 'openai' as const },
         { label: 'Local LLM — LM Studio / Ollama', value: 'local' as const },
         { label: 'Skip for now (configure later with `casper setup`)', value: 'skip' as const },
       ],
+      getConfig('accessToken') ? 0 : 1,
     );
 
     if (!provider) {
@@ -361,7 +427,9 @@ export async function runSetup(): Promise<void> {
       return;
     }
 
-    if (provider.value === 'openrouter') {
+    if (provider.value === 'bsc') {
+      await setupFromBsc(queue);
+    } else if (provider.value === 'openrouter') {
       await setupOpenRouter(queue);
     } else if (provider.value === 'openai') {
       await setupOpenAI(queue);
@@ -384,6 +452,7 @@ export async function runSetup(): Promise<void> {
 }
 
 export async function ensureConfigured(): Promise<void> {
+  await refreshFromBscIfFollowing();
   if (hasLlmConfig()) return;
 
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
