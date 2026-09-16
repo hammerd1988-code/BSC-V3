@@ -4,15 +4,17 @@ import { getConfig, setConfig, deleteConfig, type BscSyncSnapshot } from './conf
 import { isOpenRouterUrl } from './llm/client.js';
 import { isLoopbackHost, validateBaseUrl } from './utils/url.js';
 
-/** Response of `GET /api/casper/user/ai-settings` on the BSC-V3 server. */
+/**
+ * Response of `GET /api/casper/user/ai-settings` on the BSC-V3 server. Never
+ * carries a key: `hasApiKey` only says whether the web Casper has a personal
+ * one stored, so setup can word its prompt accordingly.
+ */
 export interface BscAiSettings {
   model: string;
   endpoint: string;
   modelSource: 'user' | 'platform';
   endpointSource: 'user' | 'platform';
   hasApiKey: boolean;
-  apiKey?: string;
-  temperature: number | null;
 }
 
 export type BscSyncProvider = 'openrouter' | 'openai-compatible' | 'local';
@@ -28,19 +30,19 @@ function isPrivateHost(hostname: string): boolean {
   const h = hostname.toLowerCase();
   if (isLoopbackHost(h)) return true;
   if (h === '0.0.0.0' || h.endsWith('.local') || h.endsWith('.localhost')) return true;
-  if (/^10\./.test(h) || /^192\.168\./.test(h)) return true;
-  const m = h.match(/^172\.(\d+)\./);
+  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (!m) return false;
-  const second = Number(m[1]);
-  return second >= 16 && second <= 31;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
 }
 
-export async function fetchBscAiSettings(opts: { includeKey?: boolean; timeoutMs?: number } = {}): Promise<BscAiSettings> {
+export async function fetchBscAiSettings(opts: { timeoutMs?: number } = {}): Promise<BscAiSettings> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 8000);
   try {
-    const path = opts.includeKey ? '/api/casper/user/ai-settings?includeKey=1' : '/api/casper/user/ai-settings';
-    const res = await casperApi<{ success: boolean; error?: string } & BscAiSettings>(path, { signal: controller.signal });
+    const res = await casperApi<{ success: boolean; error?: string } & BscAiSettings>('/api/casper/user/ai-settings', {
+      signal: controller.signal,
+    });
     if (!res.success) throw new Error(res.error || 'BSC-V3 did not return AI settings.');
     return res;
   } finally {
@@ -159,8 +161,18 @@ export async function refreshFromBscIfFollowing(): Promise<BscRefreshResult> {
   return { status: 'updated', plan };
 }
 
+/** Endpoint as saved in the web form, minus anything credential-like (userinfo, query). */
+export function redactEndpoint(endpoint: string): string {
+  try {
+    const url = new URL(endpoint);
+    return `${url.protocol}//${url.host}${url.pathname}`;
+  } catch {
+    return '(invalid URL)';
+  }
+}
+
 export function describeBscSettings(settings: BscAiSettings): string {
   const modelNote = settings.modelSource === 'platform' ? ' (Casper platform default)' : '';
   const endpointNote = settings.endpointSource === 'platform' ? ' (Casper platform endpoint)' : '';
-  return `${settings.model}${modelNote} via ${settings.endpoint}${endpointNote}`;
+  return `${settings.model}${modelNote} via ${redactEndpoint(settings.endpoint)}${endpointNote}`;
 }

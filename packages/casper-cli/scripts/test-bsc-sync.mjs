@@ -12,11 +12,12 @@ const {
   applyBscSyncPlan,
   configMatchesSnapshot,
   planBscSync,
+  redactEndpoint,
   refreshFromBscIfFollowing,
 } = await import('../dist/bscSync.js');
 const { getConfig, setConfig, deleteConfig } = await import('../dist/config.js');
 
-const base = { modelSource: 'user', endpointSource: 'user', hasApiKey: true, temperature: null };
+const base = { modelSource: 'user', endpointSource: 'user', hasApiKey: true };
 
 // --- planBscSync -----------------------------------------------------------
 
@@ -42,6 +43,15 @@ assert.equal(local.baseUrl, undefined);
 
 const lan = planBscSync({ ...base, model: 'm', endpoint: 'http://192.168.1.20:11434/v1' });
 assert.equal(lan.provider, 'local');
+assert.equal(planBscSync({ ...base, model: 'm', endpoint: 'http://172.20.0.5/v1' }).provider, 'local');
+// Only IPv4 literals count as private: DNS names that merely start with
+// "10." / "192.168." are public hosts and must not get the plaintext exemption.
+assert.equal(planBscSync({ ...base, model: 'm', endpoint: 'https://10.llm.example.com/v1' }).provider, 'openai-compatible');
+assert.throws(() => planBscSync({ ...base, model: 'm', endpoint: 'http://192.168.llm.example/v1' }), /plaintext/);
+assert.equal(planBscSync({ ...base, model: 'm', endpoint: 'https://172.32.0.1/v1' }).provider, 'openai-compatible');
+
+assert.equal(redactEndpoint('https://user:secret@llm.example.com/v1?token=abc'), 'https://llm.example.com/v1');
+assert.equal(redactEndpoint('not a url'), '(invalid URL)');
 
 assert.throws(() => planBscSync({ ...base, model: '', endpoint: 'https://openrouter.ai/api/v1' }), /no model/);
 assert.throws(() => planBscSync({ ...base, model: 'm', endpoint: 'not a url' }), /not a valid URL/);

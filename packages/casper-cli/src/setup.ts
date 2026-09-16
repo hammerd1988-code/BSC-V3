@@ -228,10 +228,10 @@ async function setupOpenRouter(queue: InputQueue): Promise<void> {
 const BSC_AI_CORE_URL = 'https://bloodsweatcode.org/casper?settings=ai';
 
 /**
- * Mirror the model/endpoint configured in the web Casper's AI Core. The key
- * is only pulled from BSC-V3 when the user says so; the platform's own key is
- * never available to the CLI, so a platform-backed web setup still needs a
- * personal key here.
+ * Mirror the model/endpoint configured in the web Casper's AI Core. Keys never
+ * leave BSC-V3 (a linked device must not be able to export the user's provider
+ * credential), so a cloud provider still needs a key entered here once; an
+ * existing local key for that provider is kept.
  */
 async function setupFromBsc(queue: InputQueue): Promise<void> {
   console.log(chalk.cyan('\n  Using the model set in BSC-V3 (Casper AI Core).'));
@@ -259,29 +259,15 @@ async function setupFromBsc(queue: InputQueue): Promise<void> {
   }
 
   if (plan.keyField) {
-    const existing = getConfig(plan.keyField);
-    if (settings.hasApiKey) {
-      const question = existing
-        ? `  Replace the ${plan.provider} key on this machine with your BSC-V3 key? [y/N]: `
-        : `  Copy your BSC-V3 API key to this machine (stored owner-only)? [Y/n]: `;
-      const answer = (await ask(queue, chalk.white(question))).toLowerCase();
-      const copy = existing ? ['y', 'yes'].includes(answer) : !['n', 'no'].includes(answer);
-      if (copy) {
-        try {
-          const withKey = await fetchBscAiSettings({ includeKey: true });
-          if (withKey.apiKey) {
-            setConfig(plan.keyField, withKey.apiKey);
-            console.log(chalk.green('  Key copied.'));
-          } else {
-            console.log(chalk.yellow('  BSC-V3 did not return a key; keeping the local one.'));
-          }
-        } catch (err) {
-          console.log(chalk.yellow(`  Could not copy the key: ${(err as Error).message}`));
-        }
+    if (getConfig(plan.keyField)) {
+      console.log(chalk.dim(`  Keeping the ${plan.provider} key already stored on this machine.`));
+    } else {
+      if (settings.hasApiKey && settings.endpointSource === 'user') {
+        console.log(chalk.dim('  API keys are never sent from BSC-V3 to devices; paste the same key here (stored owner-only).'));
+      } else {
+        console.log(chalk.yellow(`  Your BSC-V3 AI Core runs on Casper's platform key, which Local Coder cannot use.`));
+        console.log(chalk.dim(`  Enter your own ${plan.provider} key (you can also save one at ${BSC_AI_CORE_URL}).`));
       }
-    } else if (!existing) {
-      console.log(chalk.yellow(`  Your BSC-V3 AI Core runs on Casper's platform key, which Local Coder cannot use.`));
-      console.log(chalk.dim(`  Enter your own ${plan.provider} key (or add one at ${BSC_AI_CORE_URL} and re-run).`));
       const key = await askPassword(queue, chalk.white(`  ${plan.provider} API key: `));
       if (key) {
         setConfig(plan.keyField, key);

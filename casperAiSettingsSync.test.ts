@@ -7,7 +7,7 @@ const platform = { baseUrl: 'https://openrouter.ai/api/v1/', model: 'openai/gpt-
 describe('summarizeAiSettingsForCli', () => {
   it('returns the user model and endpoint when both are set', () => {
     const out = summarizeAiSettingsForCli(
-      { model: 'qwen/qwen3.8-27b', endpoint: 'https://openrouter.ai/api/v1/', apiKey: 'sk-or-user', temperature: 0.4 },
+      { model: 'qwen/qwen3.8-27b', endpoint: 'https://openrouter.ai/api/v1/', apiKey: 'sk-or-user' },
       platform,
     );
     expect(out).toEqual({
@@ -16,7 +16,6 @@ describe('summarizeAiSettingsForCli', () => {
       modelSource: 'user',
       endpointSource: 'user',
       hasApiKey: true,
-      temperature: 0.4,
     });
   });
 
@@ -27,7 +26,6 @@ describe('summarizeAiSettingsForCli', () => {
     expect(out.modelSource).toBe('platform');
     expect(out.endpointSource).toBe('platform');
     expect(out.hasApiKey).toBe(false);
-    expect(out.temperature).toBeNull();
   });
 
   it('treats an empty settings object like platform defaults', () => {
@@ -36,16 +34,17 @@ describe('summarizeAiSettingsForCli', () => {
     expect(out.endpointSource).toBe('platform');
   });
 
-  it('omits the API key unless explicitly requested', () => {
-    const settings = { model: 'qwen/qwen3.8-27b', endpoint: 'https://openrouter.ai/api/v1', apiKey: '  sk-or-user  ' };
-    expect(summarizeAiSettingsForCli(settings, platform)).not.toHaveProperty('apiKey');
-    expect(summarizeAiSettingsForCli(settings, platform, { includeKey: false })).not.toHaveProperty('apiKey');
-    expect(summarizeAiSettingsForCli(settings, platform, { includeKey: true }).apiKey).toBe('sk-or-user');
+  it('never includes the key itself, only whether one is stored', () => {
+    const out = summarizeAiSettingsForCli(
+      { model: 'qwen/qwen3.8-27b', endpoint: 'https://openrouter.ai/api/v1', apiKey: '  sk-or-user  ' },
+      platform,
+    );
+    expect(out.hasApiKey).toBe(true);
+    expect(JSON.stringify(out)).not.toContain('sk-or-user');
   });
 
-  it('never returns a key when the user has none, even if requested', () => {
-    const out = summarizeAiSettingsForCli({ model: 'x', endpoint: null, apiKey: '   ' }, platform, { includeKey: true });
-    expect(out).not.toHaveProperty('apiKey');
+  it('reports a blank key as no key', () => {
+    const out = summarizeAiSettingsForCli({ model: 'x', endpoint: null, apiKey: '   ' }, platform);
     expect(out.hasApiKey).toBe(false);
   });
 });

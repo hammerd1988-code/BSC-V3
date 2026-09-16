@@ -2,6 +2,7 @@
 import { Command } from 'commander';
 import { startRepl } from './cli.js';
 import { startDaemon, stopDaemon, daemonStatus } from './daemon.js';
+import { refreshFromBscIfFollowing } from './bscSync.js';
 import { runOnce } from './exec.js';
 import { getConfig, setConfig, isSecretKey } from './config.js';
 import { validateBaseUrl } from './utils/url.js';
@@ -80,6 +81,7 @@ daemon
   .description('Start the Casper daemon (connects to Railway relay)')
   .option('--relay <url>', 'WebSocket relay URL')
   .action(async (opts) => {
+    await refreshFromBscIfFollowing();
     await startDaemon({ relayUrl: opts.relay });
   });
 
