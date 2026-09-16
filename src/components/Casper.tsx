@@ -841,7 +841,7 @@ export const Casper: React.FC = () => {
       const keyAction = aiCoreForm.apiKey.trim() ? 'stored' : 'removed';
       setAiCoreSaveError(
         profileSaved
-          ? `Settings saved, but the API key could not be ${keyAction} (the previous key is still in use): ${reason}`
+          ? `Settings saved, but the API key could not be ${keyAction}${aiSettings?.apiKey ? ' (the previous key is still in use)' : ''}: ${reason}`
           : `Save failed: ${reason}`,
       );
     } finally {

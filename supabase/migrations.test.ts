@@ -287,13 +287,15 @@ describe('supabase migrations', () => {
    * revoked from authenticated, which turned every profile update into a
    * 42501 and made the Casper AI Core save silently no-op.
    */
-  it('keeps is_admin_user executable by authenticated but not anon', async () => {
-    const { rows } = await db.query<{ anon: boolean; authed: boolean }>(
+  it('keeps is_admin_user executable by authenticated and service_role but not anon', async () => {
+    const { rows } = await db.query<{ anon: boolean; authed: boolean; service: boolean }>(
       `select has_function_privilege('anon', 'public.is_admin_user()', 'execute') as anon,
-              has_function_privilege('authenticated', 'public.is_admin_user()', 'execute') as authed`,
+              has_function_privilege('authenticated', 'public.is_admin_user()', 'execute') as authed,
+              has_function_privilege('service_role', 'public.is_admin_user()', 'execute') as service`,
     );
     expect(rows[0]?.anon).toBe(false);
     expect(rows[0]?.authed).toBe(true);
+    expect(rows[0]?.service).toBe(true);
   });
 
   /**
