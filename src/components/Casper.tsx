@@ -167,11 +167,38 @@ const CASPER_MODEL_GROUPS = [
     ] 
   },
   { 
+    provider: 'Qwen (via OpenRouter)', 
+    models: [
+      { value: 'qwen/qwen3.8-max-0902', label: 'Qwen 3.8 Max' },
+      { value: 'qwen/qwen3.8-2.4t-a95b', label: 'Qwen 3.8 2.4T (A95B)' },
+      { value: 'qwen/qwen3.8-27b', label: 'Qwen 3.8 27B' },
+      { value: 'qwen/qwen3.8-flash', label: 'Qwen 3.8 Flash' },
+      { value: 'qwen/qwen3.7-max', label: 'Qwen 3.7 Max' },
+      { value: 'qwen/qwen3.7-plus', label: 'Qwen 3.7 Plus' },
+      { value: 'qwen/qwen3.7-flash', label: 'Qwen 3.7 Flash' }
+    ] 
+  },
+  { 
     provider: 'Open models (via OpenRouter)', 
     models: [
-      { value: 'qwen/qwen3.7-plus', label: 'Qwen 3.7 Plus' },
       { value: 'deepseek/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
-      { value: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash' }
+      { value: 'deepseek/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash' },
+      { value: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
+      { value: 'moonshotai/kimi-k3', label: 'Kimi K3' },
+      { value: 'moonshotai/kimi-k2.7-code', label: 'Kimi K2.7 Code' },
+      { value: 'z-ai/glm-5.3', label: 'GLM 5.3' },
+      { value: 'z-ai/glm-5.3-flash', label: 'GLM 5.3 Flash' },
+      { value: 'minimax/minimax-m3', label: 'MiniMax M3' },
+      { value: 'mistralai/devstral-2512', label: 'Devstral 2512' },
+      { value: 'mistralai/mistral-large-2512', label: 'Mistral Large 2512' },
+      { value: 'meta-llama/llama-4-maverick', label: 'Llama 4 Maverick' }
+    ] 
+  },
+  { 
+    provider: 'xAI (via OpenRouter)', 
+    models: [
+      { value: 'x-ai/grok-4.6', label: 'Grok 4.6' },
+      { value: 'x-ai/grok-4.5', label: 'Grok 4.5' }
     ] 
   },
   { 
