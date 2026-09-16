@@ -124,11 +124,10 @@ async function choose<T extends { label: string }>(
 
 async function fetchModels(baseUrl: string, timeoutMs = 3000): Promise<string[]> {
   const url = `${baseUrl.replace(/\/$/, '')}/models`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
     const res = await fetch(url, { signal: controller.signal });
-    clearTimeout(timer);
     if (!res.ok) return [];
     const data = (await res.json()) as { data?: Array<{ id: string }> };
     if (Array.isArray(data.data)) {
@@ -137,6 +136,8 @@ async function fetchModels(baseUrl: string, timeoutMs = 3000): Promise<string[]>
     return [];
   } catch {
     return [];
+  } finally {
+    clearTimeout(timer);
   }
 }
 
