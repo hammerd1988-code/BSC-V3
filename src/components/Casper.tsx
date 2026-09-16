@@ -13,7 +13,7 @@ import { generateText } from '../lib/ai';
 import { sendCasperCommand, type CasperCommandResponse, type CasperToolCall } from '../lib/casper';
 import { fromDb, supabase, toDb } from '../supabase';
 import { cn } from '../lib/utils';
-import { saveOwnApiKey, withoutApiKey } from '../lib/aiCredentials';
+import { retainApiKey, saveOwnApiKey, withoutApiKey } from '../lib/aiCredentials';
 import { casperAuthFetch } from '../lib/casperApi';
 import { formatDistanceToNow } from 'date-fns';
 import { AnimatedCasperAvatar } from './AnimatedCasperAvatar';
@@ -830,7 +830,7 @@ export const Casper: React.FC = () => {
       if (error) throw error;
       if (!updatedRows?.length) throw new Error('Your profile row was not updated. Sign out and back in, then try again.');
       profileSaved = true;
-      setAiSettings(withoutApiKey(nextSettings));
+      setAiSettings(retainApiKey(aiSettings, withoutApiKey(nextSettings)));
       await saveOwnApiKey(currentUser.id, aiCoreForm.apiKey);
       setAiSettings(nextSettings);
       setAiCoreOpen(false);
@@ -838,9 +838,10 @@ export const Casper: React.FC = () => {
       console.error('[Casper] Failed to save AI core settings:', error);
       const detail = error instanceof Error ? error.message : (error as { message?: string })?.message;
       const reason = detail || 'check the console for details';
+      const keyAction = aiCoreForm.apiKey.trim() ? 'stored' : 'removed';
       setAiCoreSaveError(
         profileSaved
-          ? `Settings saved, but the API key could not be stored: ${reason}`
+          ? `Settings saved, but the API key could not be ${keyAction} (the previous key is still in use): ${reason}`
           : `Save failed: ${reason}`,
       );
     } finally {

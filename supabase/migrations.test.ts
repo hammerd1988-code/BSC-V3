@@ -267,21 +267,6 @@ describe('supabase migrations', () => {
    * done exactly that.
    */
   /**
-   * users_admin_update (0068) runs is_admin_user() inside RLS for every UPDATE
-   * on users, including the owner's own profile save. Production had EXECUTE
-   * revoked from authenticated, which turned every profile update into a
-   * 42501 and made the Casper AI Core save silently no-op.
-   */
-  it('keeps is_admin_user executable by authenticated but not anon', async () => {
-    const { rows } = await db.query<{ anon: boolean; authed: boolean }>(
-      `select has_function_privilege('anon', 'public.is_admin_user()', 'execute') as anon,
-              has_function_privilege('authenticated', 'public.is_admin_user()', 'execute') as authed`,
-    );
-    expect(rows[0]?.anon).toBe(false);
-    expect(rows[0]?.authed).toBe(true);
-  });
-
-  /**
    * 0065 revokes increment_counter from PUBLIC and grants it back to
    * authenticated only. That holds only as long as nothing grants routines to
    * anon in bulk — 0000 deliberately grants tables and sequences by default and
@@ -291,6 +276,21 @@ describe('supabase migrations', () => {
     const { rows } = await db.query<{ anon: boolean; authed: boolean }>(
       `select has_function_privilege('anon', 'public.increment_counter(text, text, text, integer)', 'execute') as anon,
               has_function_privilege('authenticated', 'public.increment_counter(text, text, text, integer)', 'execute') as authed`,
+    );
+    expect(rows[0]?.anon).toBe(false);
+    expect(rows[0]?.authed).toBe(true);
+  });
+
+  /**
+   * users_admin_update (0068) runs is_admin_user() inside RLS for every UPDATE
+   * on users, including the owner's own profile save. Production had EXECUTE
+   * revoked from authenticated, which turned every profile update into a
+   * 42501 and made the Casper AI Core save silently no-op.
+   */
+  it('keeps is_admin_user executable by authenticated but not anon', async () => {
+    const { rows } = await db.query<{ anon: boolean; authed: boolean }>(
+      `select has_function_privilege('anon', 'public.is_admin_user()', 'execute') as anon,
+              has_function_privilege('authenticated', 'public.is_admin_user()', 'execute') as authed`,
     );
     expect(rows[0]?.anon).toBe(false);
     expect(rows[0]?.authed).toBe(true);
