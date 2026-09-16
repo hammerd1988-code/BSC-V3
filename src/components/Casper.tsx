@@ -459,6 +459,7 @@ export const Casper: React.FC = () => {
   const [showAiCore, setShowAiCore] = useState(() => searchParams.get('settings') === 'ai');
   const [showApiKey, setShowApiKey] = useState(false);
   const [savingAiCore, setSavingAiCore] = useState(false);
+  const [aiCoreSaveError, setAiCoreSaveError] = useState<string | null>(null);
   const [aiCoreForm, setAiCoreForm] = useState(() => initialCasperCore(currentUser?.ai_settings, currentUser?.context_note));
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -783,6 +784,7 @@ export const Casper: React.FC = () => {
   const saveAiCore = async () => {
     if (!currentUser) return;
     setSavingAiCore(true);
+    setAiCoreSaveError(null);
     try {
       const resolvedModel = resolveCasperModel(aiCoreForm.model, aiCoreForm.customModelId);
       const trimmedSystemPrompt = aiCoreForm.systemPromptOverride.trim();
@@ -814,16 +816,20 @@ export const Casper: React.FC = () => {
 
       // The key never goes into users.ai_settings — every signed-in session can
       // read that table. It lives in user_ai_credentials, owner-scoped by RLS.
-      const { error } = await supabase
+      const { data: updatedRows, error } = await supabase
         .from('users')
         .update({ ai_settings: withoutApiKey(nextSettings), context_note: aiCoreForm.contextNote.trim() || null })
-        .eq('id', currentUser.id);
+        .eq('id', currentUser.id)
+        .select('id');
       if (error) throw error;
+      if (!updatedRows?.length) throw new Error('Your profile row was not updated (blocked by row-level security).');
       await saveOwnApiKey(currentUser.id, aiCoreForm.apiKey);
       setAiSettings(nextSettings);
       setShowAiCore(false);
     } catch (error) {
       console.error('[Casper] Failed to save AI core settings:', error);
+      const detail = error instanceof Error ? error.message : (error as { message?: string })?.message;
+      setAiCoreSaveError(detail ? `Save failed: ${detail}` : 'Save failed. Check the console for details.');
     } finally {
       setSavingAiCore(false);
     }
@@ -2129,6 +2135,12 @@ export const Casper: React.FC = () => {
                   Blank uses the default (25).
                 </p>
               </div>
+
+              {aiCoreSaveError && (
+                <p role="alert" className="mt-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs font-semibold text-red-300">
+                  {aiCoreSaveError}
+                </p>
+              )}
 
               <div className="mt-8 flex items-center justify-end gap-3">
                 <button 
