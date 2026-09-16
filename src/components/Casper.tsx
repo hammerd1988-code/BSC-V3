@@ -781,10 +781,16 @@ export const Casper: React.FC = () => {
   // Derive running missions for the live status indicator
   const runningMissions = tasks.filter(t => t.status === 'running');
 
+  const setAiCoreOpen = (open: boolean) => {
+    setAiCoreSaveError(null);
+    setShowAiCore(open);
+  };
+
   const saveAiCore = async () => {
     if (!currentUser) return;
     setSavingAiCore(true);
     setAiCoreSaveError(null);
+    let profileSaved = false;
     try {
       const resolvedModel = resolveCasperModel(aiCoreForm.model, aiCoreForm.customModelId);
       const trimmedSystemPrompt = aiCoreForm.systemPromptOverride.trim();
@@ -823,13 +829,20 @@ export const Casper: React.FC = () => {
         .select('id');
       if (error) throw error;
       if (!updatedRows?.length) throw new Error('Your profile row was not updated (blocked by row-level security).');
+      profileSaved = true;
+      setAiSettings(withoutApiKey(nextSettings));
       await saveOwnApiKey(currentUser.id, aiCoreForm.apiKey);
       setAiSettings(nextSettings);
-      setShowAiCore(false);
+      setAiCoreOpen(false);
     } catch (error) {
       console.error('[Casper] Failed to save AI core settings:', error);
       const detail = error instanceof Error ? error.message : (error as { message?: string })?.message;
-      setAiCoreSaveError(detail ? `Save failed: ${detail}` : 'Save failed. Check the console for details.');
+      const reason = detail || 'check the console for details';
+      setAiCoreSaveError(
+        profileSaved
+          ? `Settings saved, but the API key could not be stored: ${reason}`
+          : `Save failed: ${reason}`,
+      );
     } finally {
       setSavingAiCore(false);
     }
@@ -1904,7 +1917,7 @@ export const Casper: React.FC = () => {
               <Globe className="w-4 h-4" />
             </button>
             <button
-              onClick={() => setShowAiCore(!showAiCore)}
+              onClick={() => setAiCoreOpen(!showAiCore)}
               className={cn(
                 "p-2.5 rounded-xl border transition-all",
                 showAiCore 
@@ -2144,7 +2157,7 @@ export const Casper: React.FC = () => {
 
               <div className="mt-8 flex items-center justify-end gap-3">
                 <button 
-                  onClick={() => setShowAiCore(false)}
+                  onClick={() => setAiCoreOpen(false)}
                   className="px-6 py-3 text-xs font-bold uppercase tracking-widest text-zinc-500 hover:text-white transition-colors"
                 >
                   Cancel
