@@ -282,6 +282,23 @@ describe('supabase migrations', () => {
   });
 
   /**
+   * users_admin_update (0068) runs is_admin_user() inside RLS for every UPDATE
+   * on users, including the owner's own profile save. Production had EXECUTE
+   * revoked from authenticated, which turned every profile update into a
+   * 42501 and made the Casper AI Core save silently no-op.
+   */
+  it('keeps is_admin_user executable by authenticated and service_role but not anon', async () => {
+    const { rows } = await db.query<{ anon: boolean; authed: boolean; service: boolean }>(
+      `select has_function_privilege('anon', 'public.is_admin_user()', 'execute') as anon,
+              has_function_privilege('authenticated', 'public.is_admin_user()', 'execute') as authed,
+              has_function_privilege('service_role', 'public.is_admin_user()', 'execute') as service`,
+    );
+    expect(rows[0]?.anon).toBe(false);
+    expect(rows[0]?.authed).toBe(true);
+    expect(rows[0]?.service).toBe(true);
+  });
+
+  /**
    * The like button writes nothing but the post_likes row and relies entirely on
    * this trigger for the counters, so both columns have to move together and
    * neither may go negative. Before this, nothing wrote post_likes from the
