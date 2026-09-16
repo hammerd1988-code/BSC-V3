@@ -8,6 +8,7 @@ import {
   isServerAiConfigured,
   openAiModel,
   resolveServerOpenAIConfig,
+  wantsGemini,
   type ServerAIMessage,
 } from './serverAi.js';
 import { summarizeAiSettingsForCli } from './casperAiSettingsSync.js';
@@ -553,8 +554,9 @@ function requireAdmin(profile: CasperProfile | null, res: Response): profile is 
   return false;
 }
 
-async function fetchCognitiveCore(supabase: SupabaseClient) {
-  const { data } = await supabase.from('casper_config').select('value').eq('key', 'cognitive_core').maybeSingle();
+async function fetchCognitiveCore(supabase: SupabaseClient, opts: { strict?: boolean } = {}) {
+  const { data, error } = await supabase.from('casper_config').select('value').eq('key', 'cognitive_core').maybeSingle();
+  if (error && opts.strict) throw new Error(`casper_config read failed: ${error.message}`);
   return (data?.value ?? {}) as Record<string, any>;
 }
 
@@ -3065,24 +3067,29 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
       const profile = await requireAuth(req, res, supabase);
       if (!profile) return;
       const userSettings = await loadUserAiSettings(supabase, profile.id, { strict: true });
-      const userHasOwnProvider = Boolean(userSettings.apiKey && userSettings.endpoint);
       const resolved = resolveServerOpenAIConfig();
-      if (!userHasOwnProvider && !resolved.apiKey && process.env.GEMINI_API_KEY?.trim()) {
-        res.status(409).json({
-          success: false,
-          error: 'Your web Casper runs on the platform Gemini key, which Local Coder cannot mirror. Set your own endpoint + key in AI Core settings first.',
-        });
-        return;
-      }
       // Same precedence as callOpenAICompatible*: user model, else the
       // cognitive-core model, else the platform default.
-      const cognitiveCore = await fetchCognitiveCore(supabase);
+      const cognitiveCore = await fetchCognitiveCore(supabase, { strict: true });
       const coreModel = cognitiveCore?.response_style?.model;
       const platform = {
         baseUrl: resolved.baseUrl,
         model: typeof coreModel === 'string' && coreModel.trim() ? coreModel.trim() : resolved.model,
       };
       const payload = summarizeAiSettingsForCli(userSettings, platform);
+      // Mirrors generateServerTextUnlocked's `geminiFirst`: with no per-user
+      // key, a direct Gemini key wins for gemini-* models or when the platform
+      // has no OpenAI-compatible key. The CLI has no Gemini provider.
+      const geminiFirst = Boolean(process.env.GEMINI_API_KEY?.trim())
+        && !userSettings.apiKey
+        && (wantsGemini(payload.model) || !resolved.apiKey);
+      if (geminiFirst) {
+        res.status(409).json({
+          success: false,
+          error: `Your web Casper runs ${payload.model} on the platform Gemini key, which Local Coder cannot mirror. Set your own endpoint + key in AI Core settings first.`,
+        });
+        return;
+      }
       payload.model = openAiModel(payload.model, payload.endpoint);
       res.json({ success: true, ...payload });
     } catch (error: any) {

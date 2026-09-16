@@ -834,7 +834,7 @@ async function callOpenAIVision(
   }
 }
 
-function wantsGemini(preferredModel?: string | null): boolean {
+export function wantsGemini(preferredModel?: string | null): boolean {
   return Boolean(preferredModel?.trim().startsWith('gemini-'));
 }
 
