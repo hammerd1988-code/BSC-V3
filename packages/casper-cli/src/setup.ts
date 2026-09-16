@@ -122,13 +122,12 @@ async function choose<T extends { label: string }>(
   return items[n - 1];
 }
 
-async function fetchModels(baseUrl: string): Promise<string[]> {
+async function fetchModels(baseUrl: string, timeoutMs = 3000): Promise<string[]> {
   const url = `${baseUrl.replace(/\/$/, '')}/models`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3000);
     const res = await fetch(url, { signal: controller.signal });
-    clearTimeout(timer);
     if (!res.ok) return [];
     const data = (await res.json()) as { data?: Array<{ id: string }> };
     if (Array.isArray(data.data)) {
@@ -137,6 +136,8 @@ async function fetchModels(baseUrl: string): Promise<string[]> {
     return [];
   } catch {
     return [];
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -211,12 +212,54 @@ async function setupOpenRouter(queue: InputQueue): Promise<void> {
   setConfig('openrouterApiKey', key);
   setConfig('baseUrl', OPENROUTER_BASE_URL);
 
-  const model = await ask(
-    queue,
-    chalk.white('  OpenRouter model id (default: openai/gpt-5.4-mini): '),
-  );
-  setConfig('model', model || 'openai/gpt-5.4-mini');
+  const model = await pickOpenRouterModel(queue);
+  setConfig('model', model);
   setConfig('preferLocalLlm', false);
+  console.log(chalk.green(`  Model set to ${model}.`));
+}
+
+const OPENROUTER_DEFAULT_MODEL = 'openai/gpt-5.4-mini';
+const MODEL_PICKER_PAGE_SIZE = 15;
+
+async function pickOpenRouterModel(queue: InputQueue): Promise<string> {
+  const catalog = await fetchModels(OPENROUTER_BASE_URL, 8000);
+  if (catalog.length === 0) {
+    console.log(chalk.dim('  Could not load the OpenRouter model catalog; enter a model id manually.'));
+    const input = await ask(
+      queue,
+      chalk.white(`  OpenRouter model id (default: ${OPENROUTER_DEFAULT_MODEL}): `),
+    );
+    return input || OPENROUTER_DEFAULT_MODEL;
+  }
+
+  console.log(chalk.dim(`  ${catalog.length} models available on OpenRouter.`));
+  for (;;) {
+    const query = await ask(
+      queue,
+      chalk.white(`  Search models (e.g. "qwen3", "claude") or paste a model id (blank = ${OPENROUTER_DEFAULT_MODEL}): `),
+    );
+    if (!query) return OPENROUTER_DEFAULT_MODEL;
+    if (catalog.includes(query)) return query;
+
+    const needle = query.toLowerCase();
+    const matches = catalog.filter((id) => id.toLowerCase().includes(needle));
+    if (matches.length === 0) {
+      console.log(chalk.yellow(`  No OpenRouter model matches "${query}".`));
+      continue;
+    }
+
+    const shown = matches.slice(0, MODEL_PICKER_PAGE_SIZE);
+    if (matches.length > shown.length) {
+      console.log(chalk.dim(`  Showing ${shown.length} of ${matches.length} matches; refine the search to see others.`));
+    }
+    const picked = await choose(
+      queue,
+      'Choose a model:',
+      shown.map((m) => ({ label: m, value: m })),
+      0,
+    );
+    if (picked) return picked.value;
+  }
 }
 
 async function setupLocal(queue: InputQueue): Promise<void> {
