@@ -225,9 +225,10 @@ program
 // Guided first-run setup for new users.
 program
   .command('setup')
-  .description('Guided first-run setup: OpenRouter, OpenAI-compatible APIs, or a local LLM')
-  .action(async () => {
-    await runSetup();
+  .description('Guided first-run setup: the model set in BSC-V3, OpenRouter, OpenAI-compatible APIs, or a local LLM')
+  .option('--from-bsc', 'Use the model/endpoint configured in your BSC-V3 Casper AI Core (needs `casper auth login`)')
+  .action(async (opts) => {
+    await runSetup({ fromBsc: Boolean(opts.fromBsc) });
   });
 
 // Project initialization

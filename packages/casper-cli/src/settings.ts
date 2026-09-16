@@ -46,6 +46,7 @@ export function printAllSettings(): void {
     ['Base URL', cfg.baseUrl || chalk.dim('(not set — default: https://api.openai.com/v1)')],
     ['Local LLM URL', cfg.localLlmUrl || chalk.dim('(not set)')],
     ['Model', cfg.model || chalk.dim('(not set)')],
+    ['Follows BSC-V3', cfg.bscSync ? 'yes (re-synced at start; `casper setup --from-bsc` to refresh)' : chalk.dim('no')],
     ['OpenAI API key', mask(cfg.openaiApiKey)],
     ['OpenRouter API key', mask(cfg.openrouterApiKey)],
     ['Anthropic API key', mask(cfg.anthropicApiKey)],

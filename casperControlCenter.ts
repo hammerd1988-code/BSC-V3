@@ -9,6 +9,7 @@ import {
   resolveServerOpenAIConfig,
   type ServerAIMessage,
 } from './serverAi.js';
+import { summarizeAiSettingsForCli } from './casperAiSettingsSync.js';
 import {
   buildToolSpecs,
   executeTool,
@@ -3038,6 +3039,23 @@ export function registerCasperControlRoutes(app: Express, supabase: SupabaseClie
     } catch (error: any) {
       console.error('[casper-control:memory-context]', error);
       res.status(500).json({ success: false, error: error.message || 'Failed to fetch memory context.' });
+    }
+  });
+
+  // Casper CLI (`casper setup --from-bsc`): the caller's own AI Core
+  // model/endpoint. Owner-only — no admin `userId` override, since the
+  // payload can carry the user's provider key when `includeKey=1`.
+  app.get('/api/casper/user/ai-settings', async (req, res) => {
+    try {
+      const profile = await requireAuth(req, res, supabase);
+      if (!profile) return;
+      const includeKey = req.query.includeKey === '1' || req.query.includeKey === 'true';
+      const userSettings = await loadUserAiSettings(supabase, profile.id);
+      const platform = resolveServerOpenAIConfig();
+      res.json({ success: true, ...summarizeAiSettingsForCli(userSettings, platform, { includeKey }) });
+    } catch (error: any) {
+      console.error('[casper-control:user-ai-settings]', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to load AI settings.' });
     }
   });
 

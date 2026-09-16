@@ -2,6 +2,17 @@ import Conf from 'conf';
 import os from 'os';
 import path from 'path';
 
+/**
+ * Model/endpoint last copied from the user's BSC-V3 Casper AI Core. While the
+ * live config still equals this, startup re-syncs from the web app.
+ */
+export interface BscSyncSnapshot {
+  model: string;
+  baseUrl?: string;
+  localLlmUrl?: string;
+  preferLocalLlm: boolean;
+}
+
 export interface CasperConfig {
   // Auth
   accessToken?: string;
@@ -20,6 +31,7 @@ export interface CasperConfig {
   anthropicApiKey?: string;
   baseUrl?: string; // OpenAI-compatible base URL (OpenAI, OpenRouter, etc.)
   localLlmUrl?: string; // LM Studio / Ollama endpoint
+  bscSync?: BscSyncSnapshot;
 
   // Security
   approvalLevel: 'auto' | 'confirm-local' | 'confirm-remote';
