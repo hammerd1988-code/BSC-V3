@@ -1127,7 +1127,7 @@ async function callOpenAICompatibleWithToolLoop(input: {
   const maxCalls = input.maxToolCalls ?? MAX_TOOL_CALLS_PER_DIRECTIVE;
 
   for (let round = 0; round < maxRounds; round += 1) {
-    const turn = await generateServerToolTurn(messages, {
+    let turn = await generateServerToolTurn(messages, {
       tools: toolSpecs,
       preferredModel: model,
       temperature,
@@ -1135,15 +1135,35 @@ async function callOpenAICompatibleWithToolLoop(input: {
       apiKeyOverride: userSettings.apiKey ?? null,
       baseUrlOverride: userSettings.endpoint ?? null,
     });
+    const firstError = turn.lastError;
+
+    if (turn.emptyCompletion) {
+      // The model answered with neither a tool call nor visible text (auth,
+      // rate-limit and timeout failures are not retried here). With a thinking
+      // model this is usually the reasoning budget running out mid-transcript,
+      // so repeat the same round once with tools still available, low effort
+      // and a larger budget; the model may still need to act, not just wrap up.
+      turn = await generateServerToolTurn(
+        [...messages, { role: 'user', content: EMPTY_TURN_NUDGE }],
+        {
+          tools: toolSpecs,
+          preferredModel: model,
+          temperature,
+          maxTokens: recoveryMaxTokens(maxTokens),
+          reasoningEffort: 'low',
+          apiKeyOverride: userSettings.apiKey ?? null,
+          baseUrlOverride: userSettings.endpoint ?? null,
+        },
+      );
+    }
     provider = turn.provider;
     resolvedModel = turn.model;
 
     if (turn.toolCalls.length === 0) {
-      // Final text answer.
       return {
         provider,
         model: resolvedModel,
-        text: turn.text || buildCasperProviderFailureMessage(resolvedModel, turn.lastError),
+        text: turn.text || buildEmptyReplyText(allToolCalls, resolvedModel, turn.lastError || firstError),
         toolCalls: allToolCalls,
         rounds: round,
         truncatedReason,
@@ -1197,15 +1217,7 @@ async function callOpenAICompatibleWithToolLoop(input: {
   // Round limit hit. Force a final text answer with tool_choice='none'
   // so the model summarizes what it did instead of trying to call
   // another tool.
-  const final = await generateServerToolTurn(messages, {
-    tools: toolSpecs,
-    toolChoice: 'none',
-    preferredModel: model,
-    temperature,
-    maxTokens,
-    apiKeyOverride: userSettings.apiKey ?? null,
-    baseUrlOverride: userSettings.endpoint ?? null,
-  });
+  const final = await recoverFinalAnswer(messages, toolSpecs, { model, temperature, maxTokens, userSettings });
   const fallbackText = buildToolLimitFallbackText(input.prompt, allToolCalls, truncatedReason);
 
   return {
@@ -1216,6 +1228,69 @@ async function callOpenAICompatibleWithToolLoop(input: {
     rounds: maxRounds,
     truncatedReason,
   };
+}
+
+// Thinking models bill hidden reasoning against `max_tokens`, and after a
+// dozen tool rounds the transcript is long enough that the directive's
+// normal budget can be spent entirely on reasoning, leaving `content`
+// empty. Retries get a floor matching the Cognitive Core's default budget.
+const RECOVERY_MIN_MAX_TOKENS = 4096;
+function recoveryMaxTokens(maxTokens: number): number {
+  return Math.max(maxTokens, RECOVERY_MIN_MAX_TOKENS);
+}
+
+const EMPTY_TURN_NUDGE =
+  'Your previous reply was empty. Continue now: either call the next tool you need, or reply with your final answer in plain text.';
+
+// The model produced no text and no tool call even after a retry. Report
+// what actually happened (tool status + provider detail) without claiming a
+// loop limit that was never reached.
+function buildEmptyReplyText(toolCalls: LlmToolCallResult[], model: string, detail?: string): string {
+  if (toolCalls.length === 0) return buildCasperProviderFailureMessage(model, detail);
+  const successful = toolCalls.filter((call) => call.ok);
+  const failed = toolCalls.filter((call) => !call.ok);
+  const recent = toolCalls.slice(-5).map((call) => {
+    const status = call.ok ? 'completed' : `failed${call.error ? `: ${String(call.error).slice(0, 120)}` : ''}`;
+    return `- ${call.name}: ${status}`;
+  });
+  return [
+    'The model stopped without a final reply after running these actions, so here is the state I have.',
+    '',
+    `Actions attempted: ${toolCalls.length} (${successful.length} completed, ${failed.length} failed).`,
+    ...recent,
+    detail ? `\nProvider detail (${model}): ${detail}` : '',
+    '',
+    'Next best move: ask for a summary of these results, or give me one focused follow-up command.',
+  ].filter(Boolean).join('\n');
+}
+
+// Ask the model for a plain-text answer with tools disabled: low reasoning
+// effort so the visible reply is not starved, and a larger completion budget
+// than the working rounds used.
+async function recoverFinalAnswer(
+  messages: ServerAIMessage[],
+  toolSpecs: ReturnType<typeof buildToolSpecs>,
+  opts: { model: string; temperature: number; maxTokens: number; userSettings: CasperUserAiSettings },
+) {
+  return generateServerToolTurn(
+    [
+      ...messages,
+      {
+        role: 'user',
+        content: 'Stop calling tools. Reply now with your final answer in plain text: what you did, what you found, and what the user should do next.',
+      },
+    ],
+    {
+      tools: toolSpecs,
+      toolChoice: 'none',
+      preferredModel: opts.model,
+      temperature: opts.temperature,
+      maxTokens: recoveryMaxTokens(opts.maxTokens),
+      reasoningEffort: 'low',
+      apiKeyOverride: opts.userSettings.apiKey ?? null,
+      baseUrlOverride: opts.userSettings.endpoint ?? null,
+    },
+  );
 }
 
 function buildToolLimitFallbackText(prompt: string, toolCalls: LlmToolCallResult[], truncatedReason?: string): string {

@@ -14,12 +14,26 @@
 -- as the table: a cached older bundle keeps sending the key, and without it the
 -- column silently refills.
 
-create table if not exists public.user_ai_credentials (
-    user_id    text primary key references public.users(id) on delete cascade,
-    api_key    text,
-    created_at timestamptz not null default now(),
-    updated_at timestamptz not null default now()
-);
+-- users.id is text in 0001_init but uuid on the live project, so the key
+-- column takes whatever type users.id actually has.
+do $$
+declare
+  id_type text;
+begin
+  select format_type(a.atttypid, a.atttypmod) into id_type
+  from pg_attribute a
+  where a.attrelid = 'public.users'::regclass and a.attname = 'id';
+
+  execute format($ddl$
+    create table if not exists public.user_ai_credentials (
+        user_id    %s primary key references public.users(id) on delete cascade,
+        api_key    text,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+    )
+  $ddl$, id_type);
+end;
+$$;
 
 alter table public.user_ai_credentials enable row level security;
 

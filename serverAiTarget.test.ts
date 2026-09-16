@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { generateServerText, openAiModel, resolveOpenAiTarget } from './serverAi.js';
+import { generateServerText, generateServerToolTurn, openAiModel, resolveOpenAiTarget } from './serverAi.js';
 
 /**
  * The rule these cover: a caller-supplied endpoint may only ever receive a
@@ -112,6 +112,93 @@ describe('resolveOpenAiTarget', () => {
     const result = await generateServerText('say hi', { preferredModel: 'gpt-4.1-mini' });
     expect(result.provider).toBe('gemini');
     expect(result.text).toBe('gemini fallback');
+  });
+});
+
+describe('generateServerToolTurn', () => {
+  const saved = {
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
+    OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+  };
+  const originalFetch = global.fetch;
+  let requestBodies: any[] = [];
+
+  const openRouterReply = (message: Record<string, unknown>, finishReason: string) =>
+    async (input: string | URL | Request, init?: RequestInit) => {
+      expect(String(input)).toBe('https://openrouter.ai/api/v1/chat/completions');
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ choices: [{ message, finish_reason: finishReason }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+  beforeEach(() => {
+    requestBodies = [];
+    process.env.OPENROUTER_API_KEY = 'or-key';
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_BASE_URL;
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+
+  it('sends the OpenRouter reasoning object for Qwen3 when an effort is requested', async () => {
+    global.fetch = openRouterReply({ content: 'done' }, 'stop');
+    const turn = await generateServerToolTurn([{ role: 'user', content: 'hi' }], {
+      preferredModel: 'qwen/qwen3.8-27b',
+      reasoningEffort: 'low',
+      maxTokens: 1200,
+    });
+    expect(turn.text).toBe('done');
+    expect(requestBodies[0]).toMatchObject({ model: 'qwen/qwen3.8-27b', max_tokens: 1200, reasoning: { effort: 'low' } });
+  });
+
+  it('names the exhausted budget when reasoning consumes max_tokens and no text comes back', async () => {
+    global.fetch = openRouterReply({ content: '', reasoning: 'thinking…' }, 'length');
+    const turn = await generateServerToolTurn([{ role: 'user', content: 'hi' }], {
+      preferredModel: 'qwen/qwen3.8-27b',
+      maxTokens: 1200,
+    });
+    expect(turn.text).toBe('');
+    expect(turn.toolCalls).toEqual([]);
+    expect(turn.lastError).toContain('exhausted the 1200-token completion budget');
+    expect(turn.emptyCompletion).toBe(true);
+  });
+
+  it('does not flag provider failures as empty completions', async () => {
+    global.fetch = async () => new Response('{"error":{"message":"bad key"}}', { status: 401 });
+    const turn = await generateServerToolTurn([{ role: 'user', content: 'hi' }], { preferredModel: 'qwen/qwen3.8-27b' });
+    expect(turn.text).toBe('');
+    expect(turn.emptyCompletion).toBeUndefined();
+    expect(turn.lastError).toContain('401');
+  });
+
+  it('reports reasoning-only replies distinctly from a plain empty reply', async () => {
+    global.fetch = openRouterReply({ content: null, reasoning_content: 'I should answer…' }, 'stop');
+    const turn = await generateServerToolTurn([{ role: 'user', content: 'hi' }], { preferredModel: 'qwen/qwen3.8-27b' });
+    expect(turn.lastError).toContain('returned reasoning but no visible answer (finish_reason=stop)');
+  });
+
+  it('still returns tool calls when content is empty', async () => {
+    global.fetch = openRouterReply({
+      content: '',
+      tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'shell', arguments: '{"cmd":"ls"}' } }],
+    }, 'tool_calls');
+    const turn = await generateServerToolTurn([{ role: 'user', content: 'hi' }], {
+      preferredModel: 'qwen/qwen3.8-27b',
+      tools: [{ type: 'function', function: { name: 'shell', description: 'run', parameters: {} } }],
+    });
+    expect(turn.lastError).toBeUndefined();
+    expect(turn.toolCalls).toEqual([{ id: 'call_1', name: 'shell', arguments: '{"cmd":"ls"}' }]);
   });
 });
 
