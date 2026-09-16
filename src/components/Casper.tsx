@@ -828,7 +828,7 @@ export const Casper: React.FC = () => {
         .eq('id', currentUser.id)
         .select('id');
       if (error) throw error;
-      if (!updatedRows?.length) throw new Error('Your profile row was not updated (blocked by row-level security).');
+      if (!updatedRows?.length) throw new Error('Your profile row was not updated. Sign out and back in, then try again.');
       profileSaved = true;
       setAiSettings(withoutApiKey(nextSettings));
       await saveOwnApiKey(currentUser.id, aiCoreForm.apiKey);
